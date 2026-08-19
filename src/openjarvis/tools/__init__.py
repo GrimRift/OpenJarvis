@@ -38,6 +38,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.coding_command  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.web_search  # noqa: F401
 except ImportError:
     pass
