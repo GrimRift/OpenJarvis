@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -23,7 +24,15 @@ class FileWriteTool(BaseTool):
         self,
         allowed_dirs: Optional[List[str]] = None,
     ) -> None:
-        self._allowed_dirs = [Path(d).resolve() for d in (allowed_dirs or [])]
+        if allowed_dirs is None:
+            configured = os.environ.get("OPENJARVIS_FILE_WRITE_DIRS", "")
+            allowed_dirs = [
+                entry.strip()
+                for entry in configured.split(os.pathsep)
+                if entry.strip()
+            ]
+
+        self._allowed_dirs = [Path(d).resolve() for d in allowed_dirs]
 
     @property
     def spec(self) -> ToolSpec:
@@ -66,7 +75,7 @@ class FileWriteTool(BaseTool):
     def _is_path_allowed(self, path: Path) -> bool:
         """Check if path is within allowed directories."""
         if not self._allowed_dirs:
-            return True
+            return False
         resolved = path.resolve()
         return any(
             resolved == d or resolved.is_relative_to(d) for d in self._allowed_dirs
