@@ -33,6 +33,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.directory_list  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.web_search  # noqa: F401
 except ImportError:
     pass
