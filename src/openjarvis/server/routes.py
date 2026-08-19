@@ -98,7 +98,7 @@ def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message
         from openjarvis.prompt.builder import SystemPromptBuilder
 
         builder = SystemPromptBuilder(
-            agent_template=cfg.agent.default_system_prompt or "",
+            agent_template=cfg.agent.system_prompt or cfg.agent.default_system_prompt or "",
             memory_files_config=getattr(cfg, "memory_files", None),
             system_prompt_config=getattr(cfg, "system_prompt", None),
         )
