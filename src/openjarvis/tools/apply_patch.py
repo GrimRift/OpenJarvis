@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -182,6 +183,23 @@ class ApplyPatchTool(BaseTool):
     """Apply a unified diff patch to a file."""
 
     tool_id = "apply_patch"
+    def __init__(self) -> None:
+        configured = os.environ.get("OPENJARVIS_FILE_WRITE_DIRS", "")
+        self._allowed_dirs = [
+            Path(entry.strip()).resolve()
+            for entry in configured.split(os.pathsep)
+            if entry.strip()
+        ]
+
+    def _is_path_allowed(self, path: Path) -> bool:
+        if not self._allowed_dirs:
+            return False
+
+        resolved = path.resolve()
+        return any(
+            resolved == allowed_dir or allowed_dir in resolved.parents
+            for allowed_dir in self._allowed_dirs
+        )
 
     @property
     def spec(self) -> ToolSpec:
@@ -251,6 +269,13 @@ class ApplyPatchTool(BaseTool):
             )
 
         path = Path(target)
+
+        if not self._is_path_allowed(path):
+            return ToolResult(
+                tool_name="apply_patch",
+                content=f"Access denied: {target} is outside allowed write directories.",
+                success=False,
+            )
 
         # Block sensitive files
         from openjarvis.security.file_policy import is_sensitive_file
