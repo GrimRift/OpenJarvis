@@ -126,7 +126,7 @@ def _is_under_allowed_root(
 ) -> bool:
     """Check whether *mount_path* is under any allowed root."""
     if not roots:
-        return True  # No roots configured = allow all non-blocked
+        return False  # No roots configured = deny all mounts
 
     resolved = Path(mount_path).resolve()
     for root in roots:
