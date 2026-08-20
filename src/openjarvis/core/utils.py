@@ -6,9 +6,9 @@ from ``openjarvis.core`` must not pull in heavy modules at package init).
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
-import subprocess
 import webbrowser
 
 
@@ -30,21 +30,17 @@ def get_python_executable() -> str:
 
 
 def open_browser(url: str) -> None:
-    """Open *url* in the user's default browser, with a Windows fast-path.
+    """Open *url* in the user's default browser.
 
-    :func:`webbrowser.open` is the cross-platform default, but on Windows it
-    sometimes blocks or fails inside a console host. ``cmd /c start "" "URL"``
-    is the canonical Windows incantation that hands the URL to the OS shell
-    and returns immediately. We try that first on Windows and fall back to
-    :func:`webbrowser.open` if the subprocess spawn fails.
+    Windows uses :func:`os.startfile` so URL query separators are passed to
+    the browser without ``cmd.exe`` interpreting them as shell operators.
+    Other platforms, and Windows launch failures, use :mod:`webbrowser`.
     """
     if platform.system() == "Windows":
         try:
-            # The empty title argument after ``start`` is required: ``start``
-            # treats a single quoted argument as a window title, not a URL.
-            subprocess.run(["cmd", "/c", "start", "", url], check=False)
+            os.startfile(url)  # type: ignore[attr-defined]
             return
-        except Exception:  # noqa: BLE001 - any spawn failure -> fall back
+        except OSError:
             pass
     webbrowser.open(url)
 
