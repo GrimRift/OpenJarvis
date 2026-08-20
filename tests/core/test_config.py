@@ -29,6 +29,7 @@ class TestDefaults:
         assert cfg.engine.default == "ollama"
         assert cfg.memory.default_backend == "sqlite"
         assert cfg.telemetry.enabled is True
+        assert cfg.connectors.gmail.initial_sync_months == 12
 
     def test_engine_config_defaults(self) -> None:
         ec = EngineConfig()
@@ -105,6 +106,16 @@ class TestTomlLoading:
         assert cfg.engine.default == "lemonade"
         assert cfg.engine.lemonade.host == "http://custom-lemonade:19000"
         assert cfg.engine.lemonade_host == "http://custom-lemonade:19000"
+
+    def test_loads_gmail_initial_sync_window(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text(
+            "[connectors.gmail]\ninitial_sync_months = 18\n", encoding="utf-8"
+        )
+
+        cfg = load_config(toml_file)
+
+        assert cfg.connectors.gmail.initial_sync_months == 18
 
     def test_system_prompt_block_parsed(self, tmp_path: Path) -> None:
         """Regression for #401: the [system_prompt] block (and its prefix)

@@ -27,6 +27,8 @@ class StubConnector(BaseConnector):
 
     def __init__(self, docs: List[Document]) -> None:
         self._docs = docs
+        self.last_since: Optional[datetime] = None
+        self.last_cursor: Optional[str] = None
 
     # BaseConnector abstract methods
 
@@ -42,6 +44,8 @@ class StubConnector(BaseConnector):
         since: Optional[datetime] = None,
         cursor: Optional[str] = None,
     ) -> Iterator[Document]:
+        self.last_since = since
+        self.last_cursor = cursor
         yield from self._docs
 
     def sync_status(self) -> SyncStatus:
@@ -124,6 +128,19 @@ def test_sync_saves_checkpoint(engine: SyncEngine) -> None:
     assert cp["items_synced"] == 3
     assert cp["last_sync"] is not None
     assert cp["error"] is None
+
+
+def test_subsequent_sync_uses_saved_checkpoint(engine: SyncEngine) -> None:
+    """A completed first sync makes the next run incremental by timestamp."""
+    connector = StubConnector([])
+
+    engine.sync(connector)
+    assert connector.last_since is None
+
+    engine.sync(connector)
+
+    assert connector.last_since is not None
+    assert connector.last_cursor is None
 
 
 # ---------------------------------------------------------------------------

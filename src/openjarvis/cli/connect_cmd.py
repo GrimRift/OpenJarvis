@@ -33,6 +33,15 @@ def _save_connector_state(source: str, data: dict) -> None:
     state_file.write_text(json.dumps(data))
 
 
+def _sync_connector(instance: object) -> int:
+    """Run a connector through the shared incremental ingestion pipeline."""
+    from openjarvis.connectors.pipeline import IngestionPipeline
+    from openjarvis.connectors.store import KnowledgeStore
+    from openjarvis.connectors.sync_engine import SyncEngine
+
+    return SyncEngine(IngestionPipeline(KnowledgeStore())).sync(instance)
+
+
 def _list_sources(registry: object) -> None:
     """Print a Rich table of registered connectors and their sync status."""
     console = Console()
@@ -126,13 +135,7 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
 
         if instance.is_connected():
             try:
-                from openjarvis.connectors.pipeline import IngestionPipeline
-                from openjarvis.connectors.store import KnowledgeStore
-                from openjarvis.connectors.sync_engine import SyncEngine
-
-                store = KnowledgeStore()
-                pipeline = IngestionPipeline(store)
-                chunks = SyncEngine(pipeline).sync(instance)
+                chunks = _sync_connector(instance)
             except Exception as exc:  # noqa: BLE001
                 console.print(
                     f"[red]{source} connected at path: {path}, but ingestion"
@@ -160,35 +163,53 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
             save_client_credentials,
         )
 
+        instance = connector_cls()
+        already_connected = instance.is_connected()
+
+        if not already_connected:
+            try:
+                provider = get_provider_for_connector(source)
+                if provider is None:
+                    console.print(
+                        f"[red]No OAuth provider configured for {source}.[/red]"
+                    )
+                    return
+
+                creds = get_client_credentials(provider)
+                client_id = creds[0] if creds else ""
+                client_secret = creds[1] if creds else ""
+
+                if not client_id or not client_secret:
+                    console.print(f"[cyan]First-time setup for {source}.[/cyan]")
+                    console.print(
+                        f"[yellow]Create an OAuth app at: {provider.setup_url}[/yellow]"
+                    )
+                    console.print(f"[dim]{provider.setup_hint}[/dim]")
+                    client_id = click.prompt("Client ID")
+                    client_secret = click.prompt("Client Secret")
+                    save_client_credentials(provider, client_id, client_secret)
+
+                run_connector_oauth(source, client_id, client_secret)
+                instance = connector_cls()
+                if not instance.is_connected():
+                    raise RuntimeError("OAuth completed without a usable access token")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]OAuth flow failed for {source}: {exc}[/red]")
+                return
+
         try:
-            instance = connector_cls()
-            if instance.is_connected():
-                console.print(f"[green]{source} is already connected.[/green]")
-                return
-
-            provider = get_provider_for_connector(source)
-            if provider is None:
-                console.print(f"[red]No OAuth provider configured for {source}.[/red]")
-                return
-
-            creds = get_client_credentials(provider)
-            client_id = creds[0] if creds else ""
-            client_secret = creds[1] if creds else ""
-
-            if not client_id or not client_secret:
-                console.print(f"[cyan]First-time setup for {source}.[/cyan]")
-                console.print(
-                    f"[yellow]Create an OAuth app at: {provider.setup_url}[/yellow]"
-                )
-                console.print(f"[dim]{provider.setup_hint}[/dim]")
-                client_id = click.prompt("Client ID")
-                client_secret = click.prompt("Client Secret")
-                save_client_credentials(provider, client_id, client_secret)
-
-            run_connector_oauth(source, client_id, client_secret)
-            console.print(f"[green]{source} authorised successfully.[/green]")
+            chunks = _sync_connector(instance)
         except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]OAuth flow failed for {source}: {exc}[/red]")
+            console.print(
+                f"[red]{source} is connected, but ingestion failed: {exc}[/red]"
+            )
+            return
+
+        action = "connected" if already_connected else "authorised"
+        console.print(
+            f"[green]{source} {action} — indexed {chunks} chunk"
+            f"{'s' if chunks != 1 else ''}.[/green]"
+        )
 
     elif auth_type == "token":
         # Token-based connectors (e.g. Oura) — prompt for personal access token

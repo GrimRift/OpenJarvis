@@ -51,3 +51,13 @@ checks, and fail-closed behavior. Use `git_tool.py` for Git-specific patterns.
 - Run focused tests and Ruff first, then proportionate regressions/live checks.
 - Check external config before assuming roadmap work needs source changes.
 - Treat milestone/status details in older notes as stale until verified.
+
+## Web parity
+
+For every feature and bug fix, classify Web impact first.
+
+- `none`: state why; no Web work or Web test required.
+- `affected`: use the shared implementation, update only necessary Web wiring,
+  run focused tests, and perform one relevant Web/API smoke test.
+
+Run the consolidated regression suite only before a release, at milestone completion, or after broad shared-core/security changes—not after routine features, bug fixes, configuration changes, or ordinary commits.

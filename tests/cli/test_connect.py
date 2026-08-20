@@ -166,6 +166,93 @@ def test_connect_list_reflects_persisted_filesystem_connection(
     mock_cls.assert_called_once_with(vault_path="/my/vault")
 
 
+def test_connect_oauth_authorizes_and_ingests() -> None:
+    """A first OAuth connection immediately indexes connector documents."""
+    runner = CliRunner()
+
+    mock_cls = mock.MagicMock()
+    mock_cls.auth_type = "oauth"
+    disconnected = mock.MagicMock()
+    disconnected.is_connected.return_value = False
+    connected = mock.MagicMock()
+    connected.is_connected.return_value = True
+    mock_cls.side_effect = [disconnected, connected]
+
+    provider = mock.MagicMock()
+    sync_engine = mock.MagicMock()
+    sync_engine.sync.return_value = 4
+
+    with (
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.contains",
+            return_value=True,
+        ),
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.get",
+            return_value=mock_cls,
+        ),
+        mock.patch(
+            "openjarvis.connectors.oauth.get_provider_for_connector",
+            return_value=provider,
+        ),
+        mock.patch(
+            "openjarvis.connectors.oauth.get_client_credentials",
+            return_value=("client-id", "client-secret"),
+        ),
+        mock.patch("openjarvis.connectors.oauth.run_connector_oauth") as oauth,
+        mock.patch("openjarvis.connectors.store.KnowledgeStore"),
+        mock.patch("openjarvis.connectors.pipeline.IngestionPipeline"),
+        mock.patch(
+            "openjarvis.connectors.sync_engine.SyncEngine",
+            return_value=sync_engine,
+        ),
+    ):
+        result = runner.invoke(cli, ["connect", "gmail"])
+
+    assert result.exit_code == 0
+    assert "gmail authorised — indexed 4 chunks" in result.output
+    oauth.assert_called_once_with("gmail", "client-id", "client-secret")
+    sync_engine.sync.assert_called_once_with(connected)
+
+
+def test_connect_oauth_already_connected_runs_incremental_sync() -> None:
+    """Reconnecting an authorized OAuth source performs an incremental sync."""
+    runner = CliRunner()
+
+    mock_cls = mock.MagicMock()
+    mock_cls.auth_type = "oauth"
+    connected = mock.MagicMock()
+    connected.is_connected.return_value = True
+    mock_cls.return_value = connected
+
+    sync_engine = mock.MagicMock()
+    sync_engine.sync.return_value = 2
+
+    with (
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.contains",
+            return_value=True,
+        ),
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.get",
+            return_value=mock_cls,
+        ),
+        mock.patch("openjarvis.connectors.oauth.run_connector_oauth") as oauth,
+        mock.patch("openjarvis.connectors.store.KnowledgeStore"),
+        mock.patch("openjarvis.connectors.pipeline.IngestionPipeline"),
+        mock.patch(
+            "openjarvis.connectors.sync_engine.SyncEngine",
+            return_value=sync_engine,
+        ),
+    ):
+        result = runner.invoke(cli, ["connect", "gmail"])
+
+    assert result.exit_code == 0
+    assert "gmail connected — indexed 2 chunks" in result.output
+    oauth.assert_not_called()
+    sync_engine.sync.assert_called_once_with(connected)
+
+
 def test_connect_disconnect() -> None:
     """--disconnect gmail exits 0."""
     runner = CliRunner()

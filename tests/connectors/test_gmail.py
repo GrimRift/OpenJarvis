@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 from unittest.mock import patch
@@ -235,19 +236,26 @@ def test_sync_passes_since_as_query(
 
 
 # ---------------------------------------------------------------------------
-# Test 8 — sync without since passes an empty query
+# Test 8 — initial sync uses the configured rolling history window
 # ---------------------------------------------------------------------------
 
 
 @patch("openjarvis.connectors.gmail._gmail_api_list_messages")
 @patch("openjarvis.connectors.gmail._gmail_api_get_message")
-def test_sync_without_since_passes_empty_query(
+@patch("openjarvis.connectors.gmail._utc_now")
+def test_initial_sync_uses_dynamic_twelve_month_window(
+    mock_now,
     mock_get,
     mock_list,
-    connector,
     tmp_path: Path,
 ) -> None:
-    """sync() without since= passes an empty query string."""
+    """A fresh sync starts 12 calendar months before the current date."""
+    from openjarvis.connectors.gmail import GmailConnector  # noqa: PLC0415
+
+    mock_now.return_value = datetime(2026, 8, 21, 9, 30, tzinfo=timezone.utc)
+    connector = GmailConnector(
+        credentials_path=str(tmp_path / "gmail.json"), initial_sync_months=12
+    )
     creds_path = Path(connector._credentials_path)
     creds_path.write_text(json.dumps({"token": "fake-access-token"}), encoding="utf-8")
 
@@ -257,8 +265,34 @@ def test_sync_without_since_passes_empty_query(
 
     mock_list.assert_called_once()
     _, call_kwargs = mock_list.call_args
-    # No since= and no hardcoded category filter → empty query.
-    assert call_kwargs.get("query", "") == ""
+    expected = datetime(2025, 8, 21, 9, 30, tzinfo=timezone.utc)
+    assert call_kwargs["query"] == f"after:{int(expected.timestamp())}"
+
+
+@patch("openjarvis.connectors.gmail._gmail_api_list_messages")
+@patch("openjarvis.connectors.gmail._gmail_api_get_message")
+@patch("openjarvis.connectors.gmail._utc_now")
+def test_initial_sync_window_is_configurable(
+    mock_now,
+    mock_get,
+    mock_list,
+    tmp_path: Path,
+) -> None:
+    from openjarvis.connectors.gmail import GmailConnector  # noqa: PLC0415
+
+    mock_now.return_value = datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc)
+    connector = GmailConnector(
+        credentials_path=str(tmp_path / "gmail.json"), initial_sync_months=6
+    )
+    Path(connector._credentials_path).write_text(
+        json.dumps({"token": "fake-access-token"}), encoding="utf-8"
+    )
+    mock_list.return_value = {"messages": []}
+
+    list(connector.sync())
+
+    expected = datetime(2025, 9, 30, 12, 0, tzinfo=timezone.utc)
+    assert mock_list.call_args.kwargs["query"] == f"after:{int(expected.timestamp())}"
 
 
 # ---------------------------------------------------------------------------

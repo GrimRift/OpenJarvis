@@ -986,6 +986,20 @@ class ToolsConfig:
     enabled: str = ""  # comma-separated default tools
 
 
+@dataclass(slots=True)
+class GmailConnectorConfig:
+    """Gmail ingestion settings."""
+
+    initial_sync_months: int = 12
+
+
+@dataclass(slots=True)
+class ConnectorsConfig:
+    """Data-source connector settings."""
+
+    gmail: GmailConnectorConfig = field(default_factory=GmailConnectorConfig)
+
+
 @dataclass
 class AgentConfig:
     """Agent harness settings — orchestration, tools, system prompt."""
@@ -1597,6 +1611,7 @@ class JarvisConfig:
     intelligence: IntelligenceConfig = field(default_factory=IntelligenceConfig)
     deep_research: DeepResearchConfig = field(default_factory=DeepResearchConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
+    connectors: ConnectorsConfig = field(default_factory=ConnectorsConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -1886,6 +1901,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
             "intelligence",
             "deep_research",
             "learning",
+            "connectors",
             "agent",
             "server",
             "telemetry",
@@ -2066,6 +2082,11 @@ max_turns = 10
 # system_prompt_path = ""      # Path to system prompt file
 context_from_memory = true
 
+# Gmail's first historical import is bounded dynamically from the sync date.
+# Later syncs use the saved checkpoint and retrieve all new mail normally.
+[connectors.gmail]
+initial_sync_months = 12
+
 [tools.storage]
 default_backend = "sqlite"
 
@@ -2224,6 +2245,7 @@ __all__ = [
     "CapabilitiesConfig",
     "ChannelConfig",
     "ConfigurationError",
+    "ConnectorsConfig",
     "DEFAULT_CONFIG_DIR",
     "DEFAULT_CONFIG_PATH",
     "DiscordChannelConfig",
@@ -2235,6 +2257,7 @@ __all__ = [
     "EmailChannelConfig",
     "EngineConfig",
     "FeishuChannelConfig",
+    "GmailConnectorConfig",
     "GoogleChatChannelConfig",
     "GpuInfo",
     "HardwareInfo",

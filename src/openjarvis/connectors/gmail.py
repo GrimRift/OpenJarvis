@@ -8,10 +8,11 @@ to make them trivially mockable in tests.
 from __future__ import annotations
 
 import base64
+import calendar
 import email.utils
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -52,6 +53,19 @@ _DEFAULT_CREDENTIALS_PATH = str(DEFAULT_CONFIG_DIR / "connectors" / "gmail.json"
 # is preserved as a module-level alias for tests/callers that imported it
 # under the historical name.
 GmailAuthError = GoogleAuthError
+
+
+def _utc_now() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def _months_before(value: datetime, months: int) -> datetime:
+    """Return the same wall-clock time *months* earlier."""
+    month_index = value.year * 12 + value.month - 1 - months
+    year, zero_based_month = divmod(month_index, 12)
+    month = zero_based_month + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
 
 
 # ---------------------------------------------------------------------------
@@ -341,16 +355,31 @@ class GmailConnector(BaseConnector):
     credentials_path:
         Path to the JSON file where OAuth tokens are stored.  Defaults to
         ``~/.openjarvis/connectors/gmail.json``.
+    initial_sync_months:
+        Calendar-month history window used only when no sync checkpoint exists.
+        Defaults to ``connectors.gmail.initial_sync_months`` (12 months).
     """
 
     connector_id = "gmail"
     display_name = "Gmail"
     auth_type = "oauth"
 
-    def __init__(self, credentials_path: str = "") -> None:
+    def __init__(
+        self,
+        credentials_path: str = "",
+        *,
+        initial_sync_months: Optional[int] = None,
+    ) -> None:
         self._credentials_path = resolve_google_credentials(
             credentials_path or _DEFAULT_CREDENTIALS_PATH
         )
+        if initial_sync_months is None:
+            from openjarvis.core.config import load_config
+
+            initial_sync_months = load_config().connectors.gmail.initial_sync_months
+        if initial_sync_months < 1:
+            raise ValueError("Gmail initial_sync_months must be at least 1")
+        self._initial_sync_months = initial_sync_months
         self._items_synced: int = 0
         self._items_total: int = 0
         self._last_sync: Optional[datetime] = None
@@ -408,7 +437,9 @@ class GmailConnector(BaseConnector):
         ----------
         since:
             When provided, only messages received after this timestamp are
-            returned.  Translated to a Gmail ``after:<epoch>`` search query.
+            returned. Translated to a Gmail ``after:<epoch>`` search query.
+            When omitted for an initial sync, the configured rolling history
+            window is used instead.
         cursor:
             ``nextPageToken`` from a previous sync to resume pagination.
         query_extra:
@@ -427,9 +458,12 @@ class GmailConnector(BaseConnector):
         # ~95% of a typical mailbox (sent mail, Promotions, Updates, etc.)
         # which made any C2-style "what did I say to X" query impossible.
         query_parts: List[str] = []
-        if since is not None:
+        effective_since = since
+        if effective_since is None:
+            effective_since = _months_before(_utc_now(), self._initial_sync_months)
+        if effective_since is not None:
             # Gmail's after: operator accepts Unix epoch seconds.
-            query_parts.append(f"after:{int(since.timestamp())}")
+            query_parts.append(f"after:{int(effective_since.timestamp())}")
         if query_extra:
             query_parts.append(query_extra)
         query = " ".join(query_parts)
