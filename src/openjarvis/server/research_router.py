@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -43,6 +44,7 @@ from openjarvis.core.types import TelemetryRecord
 from openjarvis.engine._base import InferenceEngine
 from openjarvis.engine._discovery import get_engine
 from openjarvis.telemetry.store import TelemetryStore
+from openjarvis.tools.web_search import WebSearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +426,7 @@ async def _stream_research(
         agent = ResearchAgent(
             engine=engine,
             search=HybridSearch(store, embedder),
+            web_search=WebSearchTool() if os.environ.get("TAVILY_API_KEY") else None,
             model=model,
             clarify_handler=lambda question: _WEB_CLARIFY_RESPONSE,
             on_event=on_event,

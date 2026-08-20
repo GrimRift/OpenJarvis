@@ -330,19 +330,75 @@ class TestGitCommitTool:
         tool = GitCommitTool()
         assert tool.tool_id == "git_commit"
 
-    def test_no_message(self):
-        tool = GitCommitTool()
-        result = tool.execute(message="")
+    def test_no_message(self, tmp_path):
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
+        result = tool.execute(message="", repo_path=str(tmp_path), files="a.txt")
         assert result.success is False
         assert "No commit message" in result.content
 
-    def test_no_message_param(self):
-        tool = GitCommitTool()
-        result = tool.execute()
+    def test_no_message_param(self, tmp_path):
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
+        result = tool.execute(repo_path=str(tmp_path), files="a.txt")
         assert result.success is False
         assert "No commit message" in result.content
 
-    def test_commit_staged_files(self, tmp_path):
+    def test_fails_closed_without_allowed_dirs(self, tmp_path):
+        _init_repo(tmp_path)
+        (tmp_path / "a.txt").write_text("aaa")
+        tool = GitCommitTool(allowed_dirs=[])
+        result = tool.execute(
+            message="Add a",
+            repo_path=str(tmp_path),
+            files="a.txt",
+        )
+        assert result.success is False
+        assert "outside allowed git directories" in result.content
+
+    def test_denies_repo_path_outside_allowed_root(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        _init_repo(outside)
+        (outside / "a.txt").write_text("aaa")
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        tool = GitCommitTool(allowed_dirs=[str(allowed)])
+        result = tool.execute(
+            message="Add a",
+            repo_path=str(outside),
+            files="a.txt",
+        )
+        assert result.success is False
+        assert "outside allowed git directories" in result.content
+
+    def test_denies_file_outside_allowed_root(self, tmp_path):
+        _init_repo(tmp_path)
+        outside = tmp_path.parent / "outside_sibling.txt"
+        outside.write_text("secret")
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
+        try:
+            result = tool.execute(
+                message="Sneak a file in",
+                repo_path=str(tmp_path),
+                files="../outside_sibling.txt",
+            )
+            assert result.success is False
+            assert "outside allowed git directories" in result.content
+        finally:
+            outside.unlink(missing_ok=True)
+
+    def test_denies_sensitive_file(self, tmp_path):
+        _init_repo(tmp_path)
+        (tmp_path / ".env").write_text("SECRET=1")
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
+        result = tool.execute(
+            message="Add env",
+            repo_path=str(tmp_path),
+            files=".env",
+        )
+        assert result.success is False
+        assert "sensitive file" in result.content
+
+    def test_requires_explicit_files(self, tmp_path):
         _init_repo(tmp_path)
         (tmp_path / "new.txt").write_text("hello")
         subprocess.run(
@@ -351,19 +407,19 @@ class TestGitCommitTool:
             capture_output=True,
             check=True,
         )
-        tool = GitCommitTool()
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(
             message="Add new file",
             repo_path=str(tmp_path),
         )
-        assert result.success is True
-        assert result.metadata["returncode"] == 0
+        assert result.success is False
+        assert "explicit" in result.content.lower()
 
     def test_stage_and_commit(self, tmp_path):
         _init_repo(tmp_path)
         (tmp_path / "a.txt").write_text("aaa")
         (tmp_path / "b.txt").write_text("bbb")
-        tool = GitCommitTool()
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(
             message="Add a and b",
             repo_path=str(tmp_path),
@@ -379,30 +435,31 @@ class TestGitCommitTool:
         )
         assert "Add a and b" in log_output.stdout
 
-    def test_stage_all_files(self, tmp_path):
+    def test_rejects_wildcard_staging(self, tmp_path):
         _init_repo(tmp_path)
         (tmp_path / "x.txt").write_text("xxx")
-        tool = GitCommitTool()
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(
             message="Stage all",
             repo_path=str(tmp_path),
             files=".",
         )
-        assert result.success is True
+        assert result.success is False
+        assert "Wildcard staging" in result.content
 
     def test_commit_nothing_staged(self, tmp_path):
         _init_repo(tmp_path)
-        tool = GitCommitTool()
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(
             message="Empty commit attempt",
             repo_path=str(tmp_path),
+            files="does_not_exist_either.txt",
         )
-        # git commit with nothing staged fails
         assert result.success is False
 
     def test_stage_nonexistent_file(self, tmp_path):
         _init_repo(tmp_path)
-        tool = GitCommitTool()
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(
             message="Bad stage",
             repo_path=str(tmp_path),
@@ -413,7 +470,7 @@ class TestGitCommitTool:
 
     def test_empty_files_string(self, tmp_path):
         _init_repo(tmp_path)
-        tool = GitCommitTool()
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(
             message="Empty files",
             repo_path=str(tmp_path),
@@ -422,16 +479,19 @@ class TestGitCommitTool:
         assert result.success is False
         assert "Empty files list" in result.content
 
-    def test_git_not_found(self):
-        tool = GitCommitTool()
+    def test_git_not_found(self, tmp_path):
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
         with patch("openjarvis.tools.git_tool.shutil.which", return_value=None):
-            result = tool.execute(message="test")
+            result = tool.execute(
+                message="test", repo_path=str(tmp_path), files="a.txt"
+            )
         assert result.success is False
         assert "not found" in result.content
 
-    def test_message_required_in_spec(self):
+    def test_message_and_files_required_in_spec(self):
         tool = GitCommitTool()
         assert "message" in tool.spec.parameters["required"]
+        assert "files" in tool.spec.parameters["required"]
 
 
 # ---------------------------------------------------------------------------

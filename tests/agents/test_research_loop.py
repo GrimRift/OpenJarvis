@@ -15,6 +15,7 @@ import pytest
 from openjarvis.agents.research_loop import (
     SEARCH_TOOL_SPEC,
     SYSTEM_PROMPT,
+    WEB_SEARCH_TOOL_SPEC,
     ResearchAgent,
     _hit_url,
     build_sources_for_client,
@@ -22,6 +23,7 @@ from openjarvis.agents.research_loop import (
     shape_results_for_model,
 )
 from openjarvis.connectors.hybrid_search import SearchHit
+from openjarvis.core.types import ToolResult
 
 
 class _MockEngine:
@@ -86,6 +88,33 @@ def stub_search() -> MagicMock:
     s = MagicMock()
     s.search.return_value = []
     return s
+
+
+def _web_search_call(call_id: str, query: str = "anything") -> Dict[str, Any]:
+    return {
+        "content": "",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "name": "web_search",
+                "arguments": json.dumps({"query": query}),
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+@pytest.fixture()
+def stub_web_search() -> MagicMock:
+    """A WebSearchTool stand-in matching .execute(**params) -> ToolResult."""
+    w = MagicMock()
+    w.execute.return_value = ToolResult(
+        tool_name="web_search",
+        content="### Example\nSource: https://example.com\nSummary: stub result",
+        success=True,
+        metadata={"num_results": 1, "engine": "tavily"},
+    )
+    return w
 
 
 def test_forced_synthesis_when_budget_exhausts(stub_search: MagicMock) -> None:
@@ -616,3 +645,133 @@ def test_final_answer_event_carries_renumbered_sources(
     # Two cited sources, in the order they appeared in the synthesis.
     assert [s["ref"] for s in final["sources"]] == [1, 2]
     assert [s["title"] for s in final["sources"]] == ["B", "A"]
+
+
+# ---------------------------------------------------------------------------
+# web_search tool
+# ---------------------------------------------------------------------------
+
+
+def test_web_search_not_offered_when_unconfigured(stub_search: MagicMock) -> None:
+    """No web_search kwarg means the tool never reaches the model."""
+    engine = _MockEngine(responses=[_text_response("no web needed")])
+    agent = ResearchAgent(engine, stub_search, model="mock", max_iterations=5)
+    agent.run("hello")
+
+    offered_names = {t["function"]["name"] for t in engine.calls[0]["tools"]}
+    assert "web_search" not in offered_names
+    assert offered_names == {"search", "clarify"}
+
+
+def test_web_search_offered_when_configured(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    """Passing a web_search tool adds it to the offered tool schemas."""
+    engine = _MockEngine(responses=[_text_response("no web needed")])
+    agent = ResearchAgent(
+        engine, stub_search, web_search=stub_web_search, model="mock", max_iterations=5
+    )
+    agent.run("hello")
+
+    offered = engine.calls[0]["tools"]
+    assert WEB_SEARCH_TOOL_SPEC in offered
+    offered_names = {t["function"]["name"] for t in offered}
+    assert offered_names == {"search", "clarify", "web_search"}
+
+
+def test_web_search_dispatch_calls_tool_and_feeds_content_back(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    """A web_search call invokes .execute() and its content becomes a TOOL message."""
+    engine = _MockEngine(
+        responses=[
+            _web_search_call("w1", query="current rust version"),
+            _text_response("Rust is at 1.97 per https://example.com."),
+        ]
+    )
+    agent = ResearchAgent(
+        engine, stub_search, web_search=stub_web_search, model="mock", max_iterations=5
+    )
+    result = agent.run("what's the latest rust version?")
+
+    stub_web_search.execute.assert_called_once_with(
+        query="current rust version", max_results=5
+    )
+    assert result.tool_calls[0].tool_name == "web_search"
+    assert result.tool_calls[0].num_results == 1
+
+    tool_messages = [m for m in engine.calls[-1]["messages"] if m.role.value == "tool"]
+    assert any("example.com" in m.content for m in tool_messages)
+    assert "Rust is at 1.97" in result.answer
+
+
+def test_web_search_events_emitted(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    captured: list[dict] = []
+    engine = _MockEngine(
+        responses=[
+            _web_search_call("w1", query="anything"),
+            _text_response("done"),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=5,
+        on_event=captured.append,
+    )
+    agent.run("query")
+
+    types = [ev["type"] for ev in captured]
+    assert "web_search_call" in types
+    assert "web_search_result" in types
+
+
+def test_unknown_tool_error_lists_web_search_when_configured(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(
+        responses=[
+            {
+                "content": "",
+                "tool_calls": [
+                    {"id": "x1", "name": "not_a_real_tool", "arguments": "{}"}
+                ],
+                "usage": {},
+            },
+            _text_response("recovered"),
+        ]
+    )
+    agent = ResearchAgent(
+        engine, stub_search, web_search=stub_web_search, model="mock", max_iterations=5
+    )
+    agent.run("query")
+
+    tool_messages = [m for m in engine.calls[-1]["messages"] if m.role.value == "tool"]
+    error_payload = json.loads(tool_messages[0].content)
+    assert "web_search" in error_payload["error"]
+
+
+def test_search_and_web_search_share_the_same_budget(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    """search + web_search calls together count toward max_iterations."""
+    engine = _MockEngine(
+        responses=[
+            _search_call("s1"),
+            _web_search_call("w1"),
+            _text_response("Combined answer."),
+        ]
+    )
+    agent = ResearchAgent(
+        engine, stub_search, web_search=stub_web_search, model="mock", max_iterations=2
+    )
+    result = agent.run("query")
+
+    assert [t.tool_name for t in result.tool_calls] == ["search", "web_search"]
+    # Budget of 2 exhausted after both calls — third engine call gets tools=None.
+    assert engine.calls[-1]["tools"] is None
+    assert "Combined answer." in result.answer

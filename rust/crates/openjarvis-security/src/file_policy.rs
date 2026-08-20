@@ -1,30 +1,42 @@
 //! File sensitivity policy — block access to secrets, credentials, and keys.
 
 use once_cell::sync::Lazy;
-use std::collections::HashSet;
 use std::path::Path;
 
-static SENSITIVE_PATTERNS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    HashSet::from([
+/// Sensitive filename patterns. Each is either an exact name, a `*`-prefixed
+/// suffix match (e.g. `*.env`), or a `*`-suffixed prefix match (e.g.
+/// `credentials.*`). Kept in sync with the Python fallback's
+/// `DEFAULT_SENSITIVE_PATTERNS` in `src/openjarvis/security/file_policy.py`.
+static SENSITIVE_PATTERNS: Lazy<Vec<&'static str>> = Lazy::new(|| {
+    vec![
         ".env",
+        ".env.*",
+        "*.env",
         ".secret",
+        "*.secrets",
+        "credentials.*",
+        "*.pem",
+        "*.key",
+        "*.p12",
+        "*.pfx",
+        "*.jks",
         "id_rsa",
         "id_ed25519",
         ".htpasswd",
         ".pgpass",
         ".netrc",
-    ])
-});
-
-static SENSITIVE_EXTENSIONS: Lazy<Vec<&'static str>> = Lazy::new(|| {
-    vec![
-        ".pem", ".key", ".p12", ".pfx", ".jks", ".secrets",
     ]
 });
 
-static SENSITIVE_PREFIXES: Lazy<Vec<&'static str>> = Lazy::new(|| {
-    vec![".env.", "credentials."]
-});
+fn matches_pattern(name: &str, pattern: &str) -> bool {
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        name.ends_with(suffix)
+    } else if let Some(prefix) = pattern.strip_suffix('*') {
+        name.starts_with(prefix)
+    } else {
+        name == pattern
+    }
+}
 
 /// Return `true` if path matches a sensitive file pattern.
 pub fn is_sensitive_file(path: &Path) -> bool {
@@ -33,23 +45,9 @@ pub fn is_sensitive_file(path: &Path) -> bool {
         None => return false,
     };
 
-    if SENSITIVE_PATTERNS.contains(name) {
-        return true;
-    }
-
-    for ext in SENSITIVE_EXTENSIONS.iter() {
-        if name.ends_with(ext) {
-            return true;
-        }
-    }
-
-    for prefix in SENSITIVE_PREFIXES.iter() {
-        if name.starts_with(prefix) {
-            return true;
-        }
-    }
-
-    false
+    SENSITIVE_PATTERNS
+        .iter()
+        .any(|pattern| matches_pattern(name, pattern))
 }
 
 /// Return only non-sensitive paths.
@@ -76,9 +74,26 @@ mod tests {
     }
 
     #[test]
+    fn test_wildcard_env_suffix() {
+        // Regression test: *.env must match any file ending in .env, not
+        // just the literal ".env" name.
+        assert!(is_sensitive_file(Path::new("test_deny.env")));
+        assert!(is_sensitive_file(Path::new("prod.env")));
+        assert!(is_sensitive_file(Path::new("staging.env")));
+    }
+
+    #[test]
+    fn test_wildcard_secrets_suffix() {
+        assert!(is_sensitive_file(Path::new("app.secrets")));
+    }
+
+    #[test]
     fn test_safe_files() {
         assert!(!is_sensitive_file(Path::new("main.py")));
         assert!(!is_sensitive_file(Path::new("README.md")));
         assert!(!is_sensitive_file(Path::new("config.toml")));
+        // Must not false-positive on names that merely contain "env".
+        assert!(!is_sensitive_file(Path::new("environment.py")));
+        assert!(!is_sensitive_file(Path::new("envfile.txt")));
     }
 }

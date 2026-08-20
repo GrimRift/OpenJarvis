@@ -25,7 +25,7 @@ class TestFileReadTool:
     def test_read_file(self, tmp_path):
         f = tmp_path / "test.txt"
         f.write_text("hello world\nsecond line\n", encoding="utf-8")
-        tool = FileReadTool()
+        tool = FileReadTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(path=str(f))
         assert result.success is True
         assert "hello world" in result.content
@@ -34,7 +34,7 @@ class TestFileReadTool:
     def test_max_lines(self, tmp_path):
         f = tmp_path / "test.txt"
         f.write_text("line1\nline2\nline3\nline4\n", encoding="utf-8")
-        tool = FileReadTool()
+        tool = FileReadTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(path=str(f), max_lines=2)
         assert result.success is True
         assert "line1" in result.content
@@ -90,6 +90,6 @@ class TestFileReadTool:
     def test_allows_normal_py_files(self, tmp_path):
         f = tmp_path / "main.py"
         f.write_text("print('hello')", encoding="utf-8")
-        tool = FileReadTool()
+        tool = FileReadTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(path=str(f))
         assert result.success is True

@@ -189,11 +189,6 @@ def ensure_registries_populated() -> None:
         pass
 
     browser_modules = ("openjarvis.tools.browser", "openjarvis.tools.browser_axtree")
-    for module_name in browser_modules:
-        try:
-            importlib.import_module(module_name)
-        except Exception:
-            pass
 
     if not ChannelRegistry.keys():
         for module_name in list(sys.modules):
@@ -216,6 +211,17 @@ def ensure_registries_populated() -> None:
                     importlib.reload(sys.modules[module_name])
                 except Exception:
                     pass
+
+    # Import browser tool modules *after* the general reload above — these
+    # modules aren't eagerly imported by `openjarvis.tools`, so importing
+    # them here for the first time registers their tools as a side effect.
+    # Doing that before the `if not ToolRegistry.keys()` check would make
+    # the registry look non-empty and skip the reload of everything else.
+    for module_name in browser_modules:
+        try:
+            importlib.import_module(module_name)
+        except Exception:
+            pass
 
     if not any(ToolRegistry.contains(name) for name in BROWSER_SUB_TOOLS):
         for module_name in browser_modules:
@@ -264,7 +270,17 @@ def build_deep_research_tools(
     model: str,
     knowledge_db_path: str | Path | None = None,
 ) -> list[Any]:
-    """Construct the live knowledge tools granted to ``deep_research``."""
+    """Construct the tools granted to ``deep_research``.
+
+    Always includes reasoning (``think``) and live web search (``web_search``)
+    so research isn't limited to the local knowledge base. The knowledge-store
+    tools (``knowledge_search``, ``knowledge_sql``, ``scan_chunks``) are added
+    on top when ``knowledge.db`` exists.
+    """
+    from openjarvis.tools.think import ThinkTool
+    from openjarvis.tools.web_search import WebSearchTool
+
+    tools: list[Any] = [ThinkTool(), WebSearchTool()]
 
     if not knowledge_db_path:
         from openjarvis.core.config import DEFAULT_CONFIG_DIR
@@ -273,24 +289,25 @@ def build_deep_research_tools(
 
     path = Path(knowledge_db_path)
     if not path.exists():
-        return []
+        return tools
 
     from openjarvis.connectors.retriever import TwoStageRetriever
     from openjarvis.connectors.store import KnowledgeStore
     from openjarvis.tools.knowledge_search import KnowledgeSearchTool
     from openjarvis.tools.knowledge_sql import KnowledgeSQLTool
     from openjarvis.tools.scan_chunks import ScanChunksTool
-    from openjarvis.tools.think import ThinkTool
 
     store = KnowledgeStore(str(path))
     try:
         retriever = TwoStageRetriever(store)
-        return [
-            KnowledgeSearchTool(retriever=retriever),
-            KnowledgeSQLTool(store=store),
-            ScanChunksTool(store=store, engine=engine, model=model),
-            ThinkTool(),
-        ]
+        tools.extend(
+            [
+                KnowledgeSearchTool(retriever=retriever),
+                KnowledgeSQLTool(store=store),
+                ScanChunksTool(store=store, engine=engine, model=model),
+            ]
+        )
+        return tools
     except Exception:
         store.close()
         raise

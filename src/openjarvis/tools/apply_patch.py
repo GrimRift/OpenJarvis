@@ -183,13 +183,14 @@ class ApplyPatchTool(BaseTool):
     """Apply a unified diff patch to a file."""
 
     tool_id = "apply_patch"
-    def __init__(self) -> None:
-        configured = os.environ.get("OPENJARVIS_FILE_WRITE_DIRS", "")
-        self._allowed_dirs = [
-            Path(entry.strip()).resolve()
-            for entry in configured.split(os.pathsep)
-            if entry.strip()
-        ]
+
+    def __init__(self, allowed_dirs: Optional[List[str]] = None) -> None:
+        if allowed_dirs is None:
+            configured = os.environ.get("OPENJARVIS_FILE_WRITE_DIRS", "")
+            allowed_dirs = [
+                entry.strip() for entry in configured.split(os.pathsep) if entry.strip()
+            ]
+        self._allowed_dirs = [Path(entry).resolve() for entry in allowed_dirs]
 
     def _is_path_allowed(self, path: Path) -> bool:
         if not self._allowed_dirs:
@@ -273,7 +274,9 @@ class ApplyPatchTool(BaseTool):
         if not self._is_path_allowed(path):
             return ToolResult(
                 tool_name="apply_patch",
-                content=f"Access denied: {target} is outside allowed write directories.",
+                content=(
+                    f"Access denied: {target} is outside allowed write directories."
+                ),
                 success=False,
             )
 

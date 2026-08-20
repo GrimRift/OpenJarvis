@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from openjarvis._rust_bridge import get_rust_module
@@ -248,17 +250,38 @@ class GitDiffTool(BaseTool):
 
 @ToolRegistry.register("git_commit")
 class GitCommitTool(BaseTool):
-    """Stage files and create a git commit."""
+    """Stage explicit files and create a git commit, within an allowed root."""
 
     tool_id = "git_commit"
+
+    def __init__(self, allowed_dirs: list[str] | None = None) -> None:
+        if allowed_dirs is None:
+            configured = os.environ.get("OPENJARVIS_GIT_DIRS", "")
+            allowed_dirs = [
+                entry.strip() for entry in configured.split(os.pathsep) if entry.strip()
+            ]
+        self._allowed_dirs = [Path(entry).resolve() for entry in allowed_dirs]
+
+    def _is_path_allowed(self, path: Path) -> bool:
+        if not self._allowed_dirs:
+            return False
+
+        resolved = path.resolve()
+        return any(
+            resolved == allowed_dir or allowed_dir in resolved.parents
+            for allowed_dir in self._allowed_dirs
+        )
 
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="git_commit",
             description=(
-                "Stage files and create a git commit."
-                " Optionally stage specific files before committing."
+                "Stage explicit files and create a git commit."
+                " Requires a non-empty commit message and an explicit,"
+                ' comma-separated list of files to stage — "." and wildcard'
+                " staging are not supported, and sensitive files"
+                " (credentials, keys, .env, etc.) are always rejected."
             ),
             parameters={
                 "type": "object",
@@ -276,13 +299,13 @@ class GitCommitTool(BaseTool):
                     "files": {
                         "type": "string",
                         "description": (
-                            "Comma-separated files to stage,"
-                            ' or "." for all.'
-                            " If omitted, commits already-staged files."
+                            "Comma-separated list of files to stage and commit."
+                            ' Must name specific files — "." / wildcard staging'
+                            " is not supported."
                         ),
                     },
                 },
-                "required": ["message"],
+                "required": ["message", "files"],
             },
             category="vcs",
             required_capabilities=["file:write"],
@@ -299,28 +322,72 @@ class GitCommitTool(BaseTool):
             )
 
         repo_path = params.get("repo_path", ".")
-        files = params.get("files")
-
-        # Stage files if specified
-        if files:
-            file_list = [f.strip() for f in files.split(",") if f.strip()]
-            if not file_list:
-                return ToolResult(
-                    tool_name="git_commit",
-                    content="Empty files list after parsing.",
-                    success=False,
-                )
-            add_result = _run_git(
-                ["git", "add"] + file_list,
-                cwd=repo_path,
+        repo = Path(repo_path)
+        if not self._is_path_allowed(repo):
+            return ToolResult(
+                tool_name="git_commit",
+                content=(
+                    f"Access denied: {repo_path} is outside allowed git directories."
+                ),
+                success=False,
             )
-            if not add_result.success:
+
+        files = params.get("files")
+        if not files:
+            return ToolResult(
+                tool_name="git_commit",
+                content=(
+                    "No files provided. An explicit, comma-separated file"
+                    " list is required."
+                ),
+                success=False,
+            )
+
+        file_list = [f.strip() for f in files.split(",") if f.strip()]
+        if not file_list:
+            return ToolResult(
+                tool_name="git_commit",
+                content="Empty files list after parsing.",
+                success=False,
+            )
+        if any(f in {".", "*", "-A"} for f in file_list):
+            return ToolResult(
+                tool_name="git_commit",
+                content=(
+                    'Wildcard staging (".", "*", "-A") is not supported.'
+                    " Name specific files."
+                ),
+                success=False,
+            )
+
+        from openjarvis.security.file_policy import is_sensitive_file
+
+        for f in file_list:
+            resolved = (repo / f).resolve()
+            if not self._is_path_allowed(resolved):
                 return ToolResult(
                     tool_name="git_commit",
-                    content=f"git add failed: {add_result.content}",
+                    content=f"Access denied: {f} is outside allowed git directories.",
                     success=False,
-                    metadata=add_result.metadata,
                 )
+            if is_sensitive_file(resolved):
+                return ToolResult(
+                    tool_name="git_commit",
+                    content=f"Access denied: {f} is a sensitive file.",
+                    success=False,
+                )
+
+        add_result = _run_git(
+            ["git", "add"] + file_list,
+            cwd=repo_path,
+        )
+        if not add_result.success:
+            return ToolResult(
+                tool_name="git_commit",
+                content=f"git add failed: {add_result.content}",
+                success=False,
+                metadata=add_result.metadata,
+            )
 
         # Commit
         return _run_git(

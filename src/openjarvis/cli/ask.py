@@ -49,6 +49,7 @@ def _run_research(
     Lazy imports keep the cost of this branch off the cold-path of plain
     ``jarvis ask`` calls.
     """
+    import os
     import re
 
     from rich.markdown import Markdown
@@ -59,6 +60,7 @@ def _run_research(
     from openjarvis.connectors.hybrid_search import HybridSearch
     from openjarvis.connectors.store import KnowledgeStore
     from openjarvis.engine.ollama import OllamaEngine
+    from openjarvis.tools.web_search import WebSearchTool
 
     store_kwargs: dict = {}
     if knowledge_db:
@@ -154,11 +156,25 @@ def _run_research(
         elif etype == "clarify_call":
             q = event.get("question", "") or ""
             trace.print(f"  [dim]↳ Clarifying:[/dim] [dim italic]{q}[/dim italic]")
+        elif etype == "web_search_call":
+            q = event.get("arguments", {}).get("query", "") or ""
+            trace.print(
+                f"  [dim]↳ Searching the web:[/dim] [dim italic]'{q}'[/dim italic]"
+            )
+        elif etype == "web_search_result":
+            n = event.get("num_results", 0)
+            label = "result" if n == 1 else "results"
+            trace.print(f"  [dim]↳ Found {n} web {label}[/dim]")
         # final_answer and clarify_response are handled outside the loop.
+
+    web_search = WebSearchTool() if os.environ.get("TAVILY_API_KEY") else None
+    if web_search is None:
+        logger.debug("research: TAVILY_API_KEY not set — web_search unavailable")
 
     agent = ResearchAgent(
         engine=engine,
         search=HybridSearch(store, embedder),
+        web_search=web_search,
         model=planner_model,
         on_event=on_event,
     )

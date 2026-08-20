@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import click
 from rich.console import Console
 from rich.table import Table
+
+
+def _connector_state_path(source: str) -> Path:
+    from openjarvis.core.config import DEFAULT_CONFIG_DIR
+
+    return Path(DEFAULT_CONFIG_DIR) / "connectors" / f"{source}.json"
+
+
+def _load_connector_state(source: str) -> dict:
+    """Return persisted connector config for ``source``, or ``{}`` if none."""
+    state_file = _connector_state_path(source)
+    if not state_file.exists():
+        return {}
+    try:
+        return json.loads(state_file.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_connector_state(source: str, data: dict) -> None:
+    state_file = _connector_state_path(source)
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(data))
 
 
 def _list_sources(registry: object) -> None:
@@ -22,15 +48,27 @@ def _list_sources(registry: object) -> None:
     table.add_column("Status", style="green")
 
     for key, connector_cls in items:
-        # Try to instantiate with no args to check status (best-effort)
+        auth_type = getattr(connector_cls, "auth_type", "unknown")
         try:
-            instance = connector_cls()
+            if auth_type == "filesystem":
+                # Bare no-args instantiation always reports "disconnected"
+                # for filesystem connectors (empty path) — use the persisted
+                # path from a prior `connect` if one exists.
+                state = _load_connector_state(key)
+                saved_path = state.get("path", "")
+                if saved_path:
+                    try:
+                        instance = connector_cls(vault_path=saved_path)
+                    except TypeError:
+                        instance = connector_cls(saved_path)
+                else:
+                    instance = connector_cls()
+            else:
+                instance = connector_cls()
             connected = instance.is_connected()
             status = "connected" if connected else "disconnected"
-            auth_type = getattr(connector_cls, "auth_type", "unknown")
         except Exception:  # noqa: BLE001
             status = "unknown"
-            auth_type = getattr(connector_cls, "auth_type", "unknown")
 
         table.add_row(key, auth_type, status)
 
@@ -87,7 +125,26 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
                 return
 
         if instance.is_connected():
-            console.print(f"[green]{source} connected at path: {path}[/green]")
+            try:
+                from openjarvis.connectors.pipeline import IngestionPipeline
+                from openjarvis.connectors.store import KnowledgeStore
+                from openjarvis.connectors.sync_engine import SyncEngine
+
+                store = KnowledgeStore()
+                pipeline = IngestionPipeline(store)
+                chunks = SyncEngine(pipeline).sync(instance)
+            except Exception as exc:  # noqa: BLE001
+                console.print(
+                    f"[red]{source} connected at path: {path}, but ingestion"
+                    f" failed: {exc}[/red]"
+                )
+                return
+
+            _save_connector_state(source, {"path": path})
+            console.print(
+                f"[green]{source} connected — indexed {chunks} chunk"
+                f"{'s' if chunks != 1 else ''} from {path}.[/green]"
+            )
         else:
             console.print(
                 f"[red]{source}: path '{path}' does not exist or is not accessible."

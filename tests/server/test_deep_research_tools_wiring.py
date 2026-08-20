@@ -97,7 +97,7 @@ class _ScriptedDeepResearchEngine:
 
 @pytest.mark.skipif(not HAS_FASTAPI, reason="fastapi not installed")
 def test_deep_research_agent_gets_tools(tmp_path: Path) -> None:
-    """When knowledge.db exists, returns 4 tools."""
+    """When knowledge.db exists, returns knowledge tools plus think/web_search."""
     db_path = tmp_path / "knowledge.db"
     store = KnowledgeStore(str(db_path))
     store.store("test content", source="test", doc_type="note")
@@ -115,13 +115,14 @@ def test_deep_research_agent_gets_tools(tmp_path: Path) -> None:
     assert "knowledge_sql" in tool_ids
     assert "scan_chunks" in tool_ids
     assert "think" in tool_ids
-    assert len(tools) == 4
+    assert "web_search" in tool_ids
+    assert len(tools) == 5
     store.close()
 
 
 @pytest.mark.skipif(not HAS_FASTAPI, reason="fastapi not installed")
-def test_deep_research_tools_returns_empty_when_no_db() -> None:
-    """When knowledge.db doesn't exist, returns empty list."""
+def test_deep_research_tools_returns_general_tools_when_no_db() -> None:
+    """When knowledge.db doesn't exist, still returns think + web_search."""
     from openjarvis.server.agent_manager_routes import _build_deep_research_tools
 
     tools = _build_deep_research_tools(
@@ -130,7 +131,8 @@ def test_deep_research_tools_returns_empty_when_no_db() -> None:
         knowledge_db_path="/nonexistent/path/knowledge.db",
     )
 
-    assert tools == []
+    tool_ids = [t.tool_id for t in tools]
+    assert set(tool_ids) == {"think", "web_search"}
 
 
 @pytest.mark.skipif(not HAS_FASTAPI, reason="fastapi not installed")
@@ -208,12 +210,13 @@ async def test_server_deep_research_merges_and_executes_all_tool_sources(
     expected_names = {
         _ConfiguredResearchProbe.tool_id,
         _MCPResearchProbe.tool_id,
+        "think",
+        "web_search",
     }
     knowledge_names = {
         "knowledge_search",
         "knowledge_sql",
         "scan_chunks",
-        "think",
     }
     if with_knowledge_db:
         expected_names.update(knowledge_names)

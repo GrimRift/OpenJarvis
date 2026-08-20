@@ -110,6 +110,7 @@ def test_deep_research_grants_are_live_deduplicated_and_use_selected_model(
             "knowledge_sql",
             "scan_chunks",
             "think",
+            "web_search",
         }
         assert all(count == 1 for count in Counter(names).values())
 

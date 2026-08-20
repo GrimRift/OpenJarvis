@@ -30,7 +30,7 @@ class TestApplyPatchTool:
             "+line2_modified\n"
             " line3\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f), backup=False)
         assert result.success is True
         assert result.metadata["hunks_applied"] == 1
@@ -58,7 +58,7 @@ class TestApplyPatchTool:
             "+ETA\n"
             " theta\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f), backup=False)
         assert result.success is True
         assert result.metadata["hunks_applied"] == 2
@@ -81,7 +81,7 @@ class TestApplyPatchTool:
             "+replaced\n"
             " ccc\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f), backup=False)
         assert result.success is False
         assert "mismatch" in result.content.lower()
@@ -97,7 +97,7 @@ class TestApplyPatchTool:
             "-content\n"
             "+new_content\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f), backup=True)
         assert result.success is True
         assert "backup_path" in result.metadata
@@ -117,7 +117,7 @@ class TestApplyPatchTool:
             "+goodbye\n"
             " world\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f), backup=False)
         assert result.success is True
         assert "backup_path" not in result.metadata
@@ -128,7 +128,7 @@ class TestApplyPatchTool:
         f = tmp_path / ".env"
         f.write_text("SECRET=foo\n", encoding="utf-8")
         patch = "--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-SECRET=foo\n+SECRET=bar\n"
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f))
         assert result.success is False
         assert "sensitive" in result.content.lower()
@@ -139,7 +139,7 @@ class TestApplyPatchTool:
         patch = (
             f"--- a/auto.txt\n+++ b/{f}\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         # No explicit path — should auto-detect from +++ header
         result = tool.execute(patch=patch, backup=False)
         assert result.success is True
@@ -153,7 +153,7 @@ class TestApplyPatchTool:
         assert "malformed" in lower or "no hunks" in lower
 
     def test_file_not_found(self):
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=["/nonexistent/path"])
         patch = (
             "--- a/nonexistent.txt\n+++ b/nonexistent.txt\n@@ -1 +1 @@\n-old\n+new\n"
         )
@@ -172,7 +172,7 @@ class TestApplyPatchTool:
             "+inserted\n"
             " second\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f), backup=False)
         assert result.success is True
         content = f.read_text(encoding="utf-8")
@@ -189,7 +189,7 @@ class TestApplyPatchTool:
             "-remove_me\n"
             " keep_too\n"
         )
-        tool = ApplyPatchTool()
+        tool = ApplyPatchTool(allowed_dirs=[str(tmp_path)])
         result = tool.execute(patch=patch, path=str(f), backup=False)
         assert result.success is True
         content = f.read_text(encoding="utf-8")

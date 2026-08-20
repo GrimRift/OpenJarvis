@@ -373,8 +373,8 @@ def _call_tavily_search(
     """One-shot Tavily search. Returns (text, p_tok=0, c_tok=0, cost, uses).
 
     Token counts are reported as zero (no LLM was billed); the OpenJarvis
-    accounting layer separately tallies tool-call counts. Falls back to
-    DuckDuckGo if Tavily is unreachable (see ``WebSearchTool``).
+    accounting layer separately tallies tool-call counts. Returns a failed
+    result if Tavily is unreachable (see ``WebSearchTool``) — no fallback.
     """
     res = tavily_search_context(query, max_results=max_results)
     return res["text"], 0, 0, float(res["cost_usd"]), int(res["n_searches"])

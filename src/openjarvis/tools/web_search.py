@@ -1,4 +1,4 @@
-"""Web search tool — Tavily API with DuckDuckGo fallback."""
+"""Web search tool — Tavily API."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class WebSearchTool(BaseTool):
                 "required": ["query"],
             },
             category="search",
-            metadata={"requires_api_key": "TAVILY_API_KEY", "fallback": "duckduckgo"},
+            metadata={"requires_api_key": "TAVILY_API_KEY"},
         )
 
     @staticmethod
@@ -115,22 +115,6 @@ class WebSearchTool(BaseTool):
             text = text[:max_chars] + "\n\n[Content truncated]"
         return text
 
-    def _duckduckgo_search(self, query: str, max_results: int) -> str:
-        """Search using DuckDuckGo as fallback."""
-        from ddgs import DDGS
-
-        ddgs = DDGS()
-        raw_results = list(ddgs.text(query, max_results=max_results))
-        results = []
-        for r in raw_results:
-            title = r.get("title", "Untitled")
-            url = r.get("href", "")
-            snippet = r.get("body", "")
-            results.append(f"### {title}\nSource: {url}\nSummary: {snippet}")
-
-        formatted = "\n\n---\n\n".join(results)
-        return formatted
-
     def execute(self, **params: Any) -> ToolResult:
         query = params.get("query", "")
         if not query:
@@ -162,7 +146,24 @@ class WebSearchTool(BaseTool):
 
         try:
             from tavily import TavilyClient
+        except ImportError:
+            return ToolResult(
+                tool_name="web_search",
+                content=(
+                    "tavily-python not installed."
+                    " Install with: pip install tavily-python"
+                ),
+                success=False,
+            )
 
+        if not self._api_key:
+            return ToolResult(
+                tool_name="web_search",
+                content="TAVILY_API_KEY is not configured.",
+                success=False,
+            )
+
+        try:
             client = TavilyClient(api_key=self._api_key)
             response = client.search(
                 query,
@@ -192,31 +193,10 @@ class WebSearchTool(BaseTool):
                 },
             )
         except Exception as exc:
-            logger.debug(
-                "Tavily error (%s), falling back to DuckDuckGo", type(exc).__name__
-            )
-
-        try:
-            formatted = self._duckduckgo_search(query, max_results)
+            logger.debug("Tavily search error: %s", exc)
             return ToolResult(
                 tool_name="web_search",
-                content=formatted or "No results found.",
-                success=True,
-                metadata={"engine": "duckduckgo"},
-            )
-        except ImportError:
-            return ToolResult(
-                tool_name="web_search",
-                content=(
-                    "tavily-python not installed and ddgs not available."
-                    " Install with: pip install tavily-python ddgs"
-                ),
-                success=False,
-            )
-        except Exception as exc:
-            return ToolResult(
-                tool_name="web_search",
-                content=f"Search error: {exc}",
+                content=f"Tavily search error: {exc}",
                 success=False,
             )
 

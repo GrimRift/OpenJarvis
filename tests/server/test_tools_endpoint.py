@@ -49,16 +49,26 @@ def test_browser_meta_group():
     assert "browser_navigate" not in names
 
 
-def test_web_search_available_without_tavily_key(monkeypatch):
-    """DuckDuckGo fallback keeps web search usable without Tavily."""
+def test_web_search_requires_tavily_key_no_fallback(monkeypatch):
+    """No DuckDuckGo fallback: web search is unconfigured without a Tavily key."""
     from openjarvis.server.agent_manager_routes import build_tools_list
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     tools = build_tools_list()
     web_search = next(t for t in tools if t["name"] == "web_search")
 
+    assert web_search["configured"] is False
+    assert web_search["requires_credentials"] is True
+
+
+def test_web_search_configured_with_tavily_key(monkeypatch):
+    from openjarvis.server.agent_manager_routes import build_tools_list
+
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    tools = build_tools_list()
+    web_search = next(t for t in tools if t["name"] == "web_search")
+
     assert web_search["configured"] is True
-    assert web_search["requires_credentials"] is False
 
 
 def test_tool_credentials_browser_lifecycle(tmp_path, monkeypatch):

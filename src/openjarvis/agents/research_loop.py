@@ -4,7 +4,9 @@ A small, self-contained planner-executor loop:
 
 * the planner is supplied by the caller (the web endpoint resolves it from
   config, falling back to ``gemma4:31b`` on Ollama for legacy installs),
-* the only tool it can call is :meth:`HybridSearch.search`,
+* it always has :meth:`HybridSearch.search` over the local personal
+  knowledge corpus, and optionally live web search (Tavily) when a
+  ``WebSearchTool`` is passed in,
 * it gets up to ``max_iterations`` tool calls,
 * tool results are trimmed before re-entering the context window, and
 * the final reply must cite specific hits.
@@ -27,6 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from openjarvis.connectors.hybrid_search import HybridSearch, SearchHit
 from openjarvis.core.types import Message, Role, ToolCall
 from openjarvis.engine._base import InferenceEngine
+from openjarvis.tools.web_search import WebSearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -127,15 +130,33 @@ SEARCH_TOOL_SPEC: Dict[str, Any] = {
 }
 
 
+WEB_SEARCH_TOOL_SPEC: Dict[str, Any] = WebSearchTool().to_openai_function()
+
+# Appended into SYSTEM_PROMPT only when a WebSearchTool was actually passed to
+# ResearchAgent — otherwise the model isn't told about a tool it can't call.
+_WEB_TOOLS_SECTION = "\n    web_search(query, max_results=5)"
+_WEB_TOOLS_STRATEGY = (
+    "\n  10. For current events, external/public information, or anything not"
+    " likely to be in the personal corpus, use web_search instead of (or in"
+    " addition to) search. web_search results are not part of the personal"
+    " corpus — cite their URLs directly in your answer text, not as [N]"
+    " brackets."
+)
+_WEB_TOOLS_SYNTHESIS = (
+    "\n  - For web_search results, cite the source URL directly in the"
+    " answer text instead — do not invent a [N] number for a web result."
+)
+
+
 SYSTEM_PROMPT = """You are a research assistant with access to the user's personal knowledge corpus.
 
 The user's corpus contains data from these sources only:
 {available_sources}
 
-You answer questions by calling two tools:
+You answer questions by calling these tools:
 
     search(query, person=None, time_range=None, sources=None, limit=20)
-    clarify(question)
+    clarify(question){web_tools_section}
 
 Strategy:
   1. If the user names a person, ALWAYS pass `person=` rather than relying on lexical match. Hybrid search will fuzzy-match name or address fragments.
@@ -147,10 +168,10 @@ Strategy:
   6. If the first structured search returns nothing useful, broaden with a semantic query and drop filters one at a time.
   7. You have a clarify tool. Only use it AFTER at least one search attempt. Use it when: you found multiple ambiguous matches (e.g. 3 different people named John), search returned zero results and the query might need reframing, or the scope is too broad to synthesize meaningfully. Never use clarify before searching — always try first.
   8. After receiving a clarify response, use the information to construct a precise search with the correct person, time_range, sources, and query parameters. Only use an empty query when structured filters carry the request; never send a search with no concrete parameters. Extract every concrete signal from the user's reply (names, dates, topics, sources) and put it on the call.
-  9. Tool calls — search AND clarify — share a budget of 5 total. Spend wisely.
+  9. Tool calls — across all available tools — share a budget of 5 total. Spend wisely.{web_tools_strategy}
 
 Synthesis rules:
-  - Cite sources as individual numbers in square brackets. Always separate — write [4] [7] [20], never [4, 7, 20]. Never format citations as markdown links. Just the number in brackets: [1]. The `ref` field on each hit is the citation number.
+  - For personal-corpus `search` hits, cite sources as individual numbers in square brackets. Always separate — write [4] [7] [20], never [4, 7, 20]. Never format citations as markdown links. Just the number in brackets: [1]. The `ref` field on each hit is the citation number.{web_tools_synthesis}
   - Quote sender / date / subject when relevant — the user wants attribution.
   - If the search returned nothing relevant, say so plainly. Do not invent results.
   - Only state facts that appear in the retrieved search results. Never supplement with your own knowledge or training data. If you are unsure whether a fact came from the search results, do not include it.
@@ -415,9 +436,10 @@ def build_sources_for_client(
 class ToolInvocation:
     """One tool call together with what the planner asked for and got.
 
-    ``tool_name`` is ``"search"`` or ``"clarify"``. For search calls,
-    ``num_results``, ``top_titles`` and ``raw_hits`` are populated; for
-    clarify calls, ``response`` holds the user's answer.
+    ``tool_name`` is ``"search"``, ``"clarify"``, or ``"web_search"``. For
+    search calls, ``num_results``, ``top_titles`` and ``raw_hits`` are
+    populated; for clarify calls, ``response`` holds the user's answer; for
+    web_search calls, ``response`` holds the tool's formatted output text.
     """
 
     arguments: Dict[str, Any]
@@ -461,6 +483,11 @@ class ResearchAgent:
         ``generate`` (Ollama with a tool-capable model).
     search:
         The HybridSearch instance the planner can call.
+    web_search:
+        Optional WebSearchTool instance. When ``None`` (default), the
+        planner isn't offered a web_search tool at all — e.g. no
+        TAVILY_API_KEY configured. When provided, the planner can search
+        the live web alongside the personal-corpus search.
     model:
         Planner model tag (default ``gemma4:31b``).
     max_iterations:
@@ -484,6 +511,7 @@ class ResearchAgent:
         engine: InferenceEngine,
         search: HybridSearch,
         *,
+        web_search: Optional[WebSearchTool] = None,
         model: str = DEFAULT_PLANNER_MODEL,
         max_iterations: int = 5,
         temperature: float = 0.3,
@@ -495,6 +523,7 @@ class ResearchAgent:
     ) -> None:
         self._engine = engine
         self._search = search
+        self._web_search = web_search
         self._model = model
         self._max_iterations = int(max_iterations)
         self._temperature = float(temperature)
@@ -582,6 +611,17 @@ class ResearchAgent:
             raw_hits=hits,
         )
 
+    def _execute_web_search(self, args: Dict[str, Any]) -> ToolInvocation:
+        query = str(args.get("query", "") or "")
+        max_results = int(args.get("max_results", 5) or 5)
+        result = self._web_search.execute(query=query, max_results=max_results)
+        return ToolInvocation(
+            tool_name="web_search",
+            arguments={"query": query, "max_results": max_results},
+            num_results=int((result.metadata or {}).get("num_results", 0)),
+            response=result.content,
+        )
+
     def _execute_clarify(self, args: Dict[str, Any]) -> ToolInvocation:
         question = str(args.get("question", "") or "").strip()
         if not question:
@@ -634,6 +674,11 @@ class ResearchAgent:
             content=SYSTEM_PROMPT.format(
                 today=datetime.now().isoformat(timespec="minutes"),
                 available_sources=sources_blurb,
+                web_tools_section=_WEB_TOOLS_SECTION if self._web_search else "",
+                web_tools_strategy=_WEB_TOOLS_STRATEGY if self._web_search else "",
+                web_tools_synthesis=(
+                    _WEB_TOOLS_SYNTHESIS if self._web_search else ""
+                ),
             ),
         )
         messages: List[Message] = [sys_msg, Message(role=Role.USER, content=query)]
@@ -654,11 +699,12 @@ class ResearchAgent:
         iterations = 0
         for _ in range(self._max_iterations + 1):
             iterations += 1
-            tools_arg = (
-                [SEARCH_TOOL_SPEC, CLARIFY_TOOL_SPEC]
-                if len(invocations) < self._max_iterations
-                else None
-            )
+            if len(invocations) < self._max_iterations:
+                tools_arg = [SEARCH_TOOL_SPEC, CLARIFY_TOOL_SPEC]
+                if self._web_search is not None:
+                    tools_arg.append(WEB_SEARCH_TOOL_SPEC)
+            else:
+                tools_arg = None
             result = self._engine.generate(
                 messages,
                 model=self._model,
@@ -797,12 +843,24 @@ class ResearchAgent:
                                 "user_response": inv.response,
                             }
                         )
+                elif name == "web_search" and self._web_search is not None:
+                    self._emit({"type": "web_search_call", "arguments": args})
+                    inv = self._execute_web_search(args)
+                    invocations.append(inv)
+                    self._emit(
+                        {
+                            "type": "web_search_result",
+                            "num_results": inv.num_results,
+                        }
+                    )
+                    tool_output = inv.response
                 else:
                     tool_output = json.dumps(
                         {
                             "error": (
                                 f"unknown tool {name!r}; available tools are "
-                                "'search' and 'clarify'"
+                                "'search', 'clarify'"
+                                + (", 'web_search'" if self._web_search else "")
                             )
                         }
                     )
@@ -821,10 +879,12 @@ class ResearchAgent:
                     Message(
                         role=Role.USER,
                         content=(
-                            "You have used your tool-call budget (search + "
-                            "clarify combined). Write the final synthesis now "
-                            "using only the search results and clarifications "
-                            "above. Cite sources as [1], [2], etc."
+                            "You have used your tool-call budget (search, "
+                            "clarify, and web_search combined). Write the final"
+                            " synthesis now using only the results and"
+                            " clarifications above. Cite personal-corpus"
+                            " sources as [1], [2], etc. and web sources as"
+                            " their URLs."
                         ),
                     )
                 )
@@ -878,6 +938,7 @@ __all__ = [
     "ToolInvocation",
     "SEARCH_TOOL_SPEC",
     "CLARIFY_TOOL_SPEC",
+    "WEB_SEARCH_TOOL_SPEC",
     "SYSTEM_PROMPT",
     "DEFAULT_PLANNER_MODEL",
     "shape_results_for_model",

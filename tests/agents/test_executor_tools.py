@@ -437,6 +437,7 @@ def test_executor_grants_deep_research_live_knowledge_tools(tmp_path):
             "knowledge_sql",
             "scan_chunks",
             "think",
+            "web_search",
         }
         result = _CapturingToolAgent.captured_search_result
         assert result is not None
