@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, Optional
 import httpx
 
 from openjarvis.connectors._stubs import BaseConnector, Document, SyncStatus
+from openjarvis.connectors.spotify_auth import call_with_refresh
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
 from openjarvis.core.registry import ConnectorRegistry
 
@@ -46,12 +47,6 @@ class SpotifyConnector(BaseConnector):
     def __init__(self, *, token_path: str = _DEFAULT_TOKEN_PATH) -> None:
         self._token_path = Path(token_path)
         self._status = SyncStatus()
-
-    def _load_tokens(self) -> Dict[str, str]:
-        return json.loads(self._token_path.read_text(encoding="utf-8"))
-
-    def _get_access_token(self) -> str:
-        return self._load_tokens()["access_token"]
 
     def is_connected(self) -> bool:
         return self._token_path.exists()
@@ -114,11 +109,11 @@ class SpotifyConnector(BaseConnector):
     def sync(
         self, *, since: Optional[datetime] = None, cursor: Optional[str] = None
     ) -> Iterator[Document]:
-        token = self._get_access_token()
         after_ms = int((since or datetime.now() - timedelta(days=1)).timestamp() * 1000)
 
-        data = _spotify_api_get(
-            token,
+        data = call_with_refresh(
+            _spotify_api_get,
+            str(self._token_path),
             "me/player/recently-played",
             params={"limit": "50", "after": str(after_ms)},
         )
