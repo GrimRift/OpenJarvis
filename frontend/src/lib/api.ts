@@ -365,6 +365,29 @@ export async function transcribeAudio(audioBlob: Blob, filename = 'recording.web
   return res.json();
 }
 
+export interface SynthesizeResult {
+  url: string;
+}
+
+export async function synthesizeSpeech(text: string): Promise<SynthesizeResult> {
+  const res = await apiFetch(`/v1/speech/synthesize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = typeof body.detail === 'string' ? body.detail : "";
+    } catch {
+      // Keep the status-only message below when the body is not JSON.
+    }
+    throw new Error(detail || `Speech synthesis failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function fetchSpeechHealth(): Promise<SpeechHealth> {
   if (isTauri()) {
     try {

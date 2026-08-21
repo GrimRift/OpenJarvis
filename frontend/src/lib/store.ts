@@ -199,7 +199,7 @@ interface AppState {
     toolCalls?: ToolCallInfo[],
     usage?: TokenUsage,
     telemetry?: MessageTelemetry,
-    audio?: { url: string },
+    audio?: { url: string; autoPlay?: boolean },
     researchTraces?: ResearchSearchTrace[],
     researchSources?: ResearchSource[],
   ) => void;
@@ -446,7 +446,7 @@ export const useAppStore = create<AppState>((set, get) => {
       toolCalls?: ToolCallInfo[],
       usage?: TokenUsage,
       telemetry?: MessageTelemetry,
-      audio?: { url: string },
+      audio?: { url: string; autoPlay?: boolean },
       researchTraces?: ResearchSearchTrace[],
       researchSources?: ResearchSource[],
     ) => {

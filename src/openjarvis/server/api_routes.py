@@ -6,9 +6,12 @@ import asyncio
 import inspect
 import json
 import logging
+import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -919,6 +922,46 @@ async def transcribe_speech(request: Request):
         "confidence": result.confidence,
         "duration_seconds": result.duration_seconds,
     }
+
+
+# Token -> audio file path, in-memory only (no DB table for ephemeral
+# voice-reply clips — matches the process lifetime, doesn't need to survive
+# a restart, and avoids exposing real filesystem paths in URLs).
+_SYNTHESIZED_AUDIO: Dict[str, str] = {}
+
+
+@speech_router.post("/synthesize")
+async def synthesize_speech(request: Request):
+    """Synthesize text to speech and return a URL to fetch the audio from."""
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Missing text")
+
+    from openjarvis.tools.text_to_speech import TextToSpeechTool
+
+    tool = TextToSpeechTool()
+    result = await asyncio.to_thread(
+        tool.execute,
+        text=text,
+        voice_id=body.get("voice_id", ""),
+        backend=body.get("backend", "cartesia"),
+    )
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.content)
+
+    token = uuid.uuid4().hex
+    _SYNTHESIZED_AUDIO[token] = result.metadata["audio_path"]
+    return {"url": f"/v1/speech/audio/{token}"}
+
+
+@speech_router.get("/audio/{token}")
+async def get_synthesized_audio(token: str):
+    """Serve a previously synthesized audio clip by its token."""
+    path = _SYNTHESIZED_AUDIO.get(token)
+    if not path or not Path(path).exists():
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return FileResponse(path, media_type="audio/mpeg")
 
 
 @speech_router.get("/health")

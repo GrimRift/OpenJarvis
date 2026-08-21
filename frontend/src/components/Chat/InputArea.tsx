@@ -3,7 +3,7 @@ import { Send, Square, Paperclip, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore, generateId } from '../../lib/store';
 import { streamChat, streamResearch } from '../../lib/sse';
-import { fetchSavings, getBase } from '../../lib/api';
+import { fetchSavings, getBase, synthesizeSpeech } from '../../lib/api';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import { MicButton } from './MicButton';
@@ -80,6 +80,10 @@ export function InputArea() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // True from a successful mic transcription until the user edits the box
+  // by hand (cleared in the textarea's onChange) or sends — used to gate
+  // auto-speaking the reply to voice-initiated messages only.
+  const voiceOriginatedRef = useRef(false);
 
   const activeId = useAppStore((s) => s.activeId);
   const selectedModel = useAppStore((s) => s.selectedModel);
@@ -142,6 +146,7 @@ export function InputArea() {
         const text = await stopRecording();
         if (text) {
           setInput((prev) => (prev ? prev + ' ' + text : text));
+          voiceOriginatedRef.current = true;
         }
       } catch {
         // Error is captured in useSpeech
@@ -176,6 +181,8 @@ export function InputArea() {
     }
 
     setInput('');
+    const wasVoice = voiceOriginatedRef.current;
+    voiceOriginatedRef.current = false;
 
     let convId = activeId;
     if (!convId) {
@@ -491,8 +498,12 @@ export function InputArea() {
       // (e.g. morning digest) — carried through the stream's finish event
       // rather than a separate post-hoc /api/digest probe, which used to
       // attach the last digest's audio to any unrelated message sent
-      // afterward on the same day.
-      const audioMeta: { url: string } | undefined = audio;
+      // afterward on the same day. Autoplay only when the question itself
+      // was asked by voice — a typed digest request still gets the player,
+      // just not auto-played.
+      const audioMeta: { url: string; autoPlay?: boolean } | undefined = audio
+        ? { url: audio.url, autoPlay: wasVoice }
+        : undefined;
 
       updateLastAssistant(
         convId,
@@ -514,6 +525,28 @@ export function InputArea() {
         message: `Response: ${accumulatedContent.length} chars`,
       });
       abortRef.current = null;
+
+      // Voice-initiated question with no built-in audio (e.g. a normal
+      // reply, not a digest) — synthesize speech for the reply and patch
+      // it in once ready. Fire-and-forget: text already rendered above,
+      // this shouldn't delay stream cleanup or hold up the UI.
+      if (wasVoice && !audio && accumulatedContent) {
+        synthesizeSpeech(accumulatedContent)
+          .then((meta) => {
+            updateLastAssistant(
+              convId,
+              accumulatedContent,
+              undefined,
+              undefined,
+              undefined,
+              { url: meta.url, autoPlay: true },
+            );
+          })
+          .catch(() => {
+            // TTS failure for a voice reply shouldn't surface as a chat
+            // error — the text answer already rendered fine.
+          });
+      }
 
       // Research path updates session counters optimistically from the
       // `done` event's usage payload — re-fetching here would overwrite
@@ -592,7 +625,10 @@ export function InputArea() {
         <textarea
           ref={textareaRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            voiceOriginatedRef.current = false;
+          }}
           onKeyDown={handleKeyDown}
           placeholder={selectedModel ? 'Message Sage...' : 'Pick a model first (⌘K)...'}
           rows={1}

@@ -3,6 +3,8 @@ import { Play, Pause, Volume2 } from 'lucide-react';
 
 interface AudioPlayerProps {
   src: string;
+  autoPlay?: boolean;
+  label?: string;
 }
 
 function formatTime(seconds: number): string {
@@ -11,11 +13,24 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function AudioPlayer({ src }: AudioPlayerProps) {
+export function AudioPlayer({ src, autoPlay = false, label = 'Morning Digest' }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    if (!autoPlay) return;
+    const el = audioRef.current;
+    if (!el) return;
+    el
+      .play()
+      .then(() => setPlaying(true))
+      .catch(() => {
+        // Browsers can block autoplay outside a fresh user-gesture window —
+        // the manual play button remains the fallback either way.
+      });
+  }, [autoPlay, src]);
 
   const toggle = useCallback(() => {
     const el = audioRef.current;
@@ -88,7 +103,7 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
             className="text-xs font-medium"
             style={{ color: 'var(--color-text-secondary)' }}
           >
-            Morning Digest
+            {label}
           </span>
         </div>
 

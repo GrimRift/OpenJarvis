@@ -100,6 +100,59 @@ def test_transcribe_no_file(client):
     assert response.status_code == 400 or response.status_code == 422
 
 
+def test_synthesize_endpoint_returns_playable_url(client, tmp_path):
+    from openjarvis.core.types import ToolResult
+
+    audio_file = tmp_path / "reply.mp3"
+    audio_file.write_bytes(b"fake-mp3-bytes")
+
+    with patch(
+        "openjarvis.tools.text_to_speech.TextToSpeechTool.execute",
+        return_value=ToolResult(
+            tool_name="text_to_speech",
+            content=str(audio_file),
+            success=True,
+            metadata={"audio_path": str(audio_file)},
+        ),
+    ):
+        synth_resp = client.post("/v1/speech/synthesize", json={"text": "Hello sir."})
+
+    assert synth_resp.status_code == 200
+    url = synth_resp.json()["url"]
+    assert url.startswith("/v1/speech/audio/")
+
+    audio_resp = client.get(url)
+    assert audio_resp.status_code == 200
+    assert audio_resp.content == b"fake-mp3-bytes"
+
+
+def test_synthesize_endpoint_missing_text(client):
+    response = client.post("/v1/speech/synthesize", json={"text": ""})
+    assert response.status_code == 400
+
+
+def test_synthesize_endpoint_backend_failure(client):
+    from openjarvis.core.types import ToolResult
+
+    with patch(
+        "openjarvis.tools.text_to_speech.TextToSpeechTool.execute",
+        return_value=ToolResult(
+            tool_name="text_to_speech",
+            content="CARTESIA_API_KEY not set",
+            success=False,
+        ),
+    ):
+        response = client.post("/v1/speech/synthesize", json={"text": "Hello"})
+
+    assert response.status_code == 500
+    assert "CARTESIA_API_KEY" in response.json()["detail"]
+
+
+def test_get_synthesized_audio_unknown_token(client):
+    response = client.get("/v1/speech/audio/does-not-exist")
+    assert response.status_code == 404
+
+
 def test_health_endpoint(client):
     response = client.get("/v1/speech/health")
     assert response.status_code == 200
