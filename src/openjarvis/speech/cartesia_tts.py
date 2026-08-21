@@ -21,7 +21,7 @@ def _cartesia_synthesize(
     api_key: str,
     text: str,
     voice_id: str,
-    model: str = "sonic",
+    model: str = "sonic-3",
     output_format: str = "mp3",
     speed: float = 1.0,
     language: str = "en",
@@ -58,7 +58,7 @@ class CartesiaTTSBackend(TTSBackend):
     backend_id = "cartesia"
 
     def __init__(
-        self, *, api_key: str = "", model: str = "sonic", language: str = "en"
+        self, *, api_key: str = "", model: str = "sonic-3", language: str = "en"
     ) -> None:
         self._api_key = api_key or os.environ.get("CARTESIA_API_KEY", "")
         self._model = model

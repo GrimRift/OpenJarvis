@@ -823,7 +823,9 @@ class TestDigestIntentRouting:
                 "/v1/chat/completions",
                 json={
                     "model": "test-model",
-                    "messages": [{"role": "user", "content": "give me my morning digest"}],
+                    "messages": [
+                        {"role": "user", "content": "give me my morning digest"}
+                    ],
                 },
             )
 
@@ -836,7 +838,9 @@ class TestDigestIntentRouting:
         digest_agent.run.assert_called_once()
 
     def test_digest_phrase_routes_correctly_when_streaming(self, client_with_agent):
-        digest_agent = _make_digest_agent(content="Sir, here is your streamed briefing.")
+        digest_agent = _make_digest_agent(
+            content="Sir, here is your streamed briefing."
+        )
         with patch(
             "openjarvis.agents.morning_digest.build_morning_digest_agent",
             return_value=digest_agent,
@@ -860,6 +864,65 @@ class TestDigestIntentRouting:
             content += delta.get("content") or ""
         assert content == "Sir, here is your streamed briefing."
         digest_agent.run.assert_called_once()
+
+    def test_streaming_response_carries_audio_when_agent_produced_it(
+        self, client_with_agent, tmp_path
+    ):
+        """Regression: the finish SSE event must carry audio when — and only
+        when — the agent that actually answered produced it."""
+        from openjarvis.agents._stubs import AgentResult
+
+        audio_file = tmp_path / "digest.mp3"
+        audio_file.write_bytes(b"fake-mp3-bytes")
+
+        digest_agent = _make_digest_agent(content="Sir, here is your briefing.")
+        digest_agent.run.return_value = AgentResult(
+            content="Sir, here is your briefing.",
+            turns=1,
+            metadata={"audio_path": str(audio_file)},
+        )
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent",
+            return_value=digest_agent,
+        ):
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "morning digest"}],
+                    "stream": True,
+                },
+            )
+
+        assert resp.status_code == 200
+        audio_urls = []
+        for line in resp.text.strip().split("\n"):
+            if not line.startswith("data:") or "[DONE]" in line:
+                continue
+            data = json.loads(line[5:].strip())
+            if "audio" in data:
+                audio_urls.append(data["audio"]["url"])
+        assert audio_urls == ["/api/digest/audio"]
+
+    def test_streaming_response_no_audio_for_plain_message(self, client_with_agent):
+        """Regression: a plain 'hi' must NOT carry a stale digest audio
+        player — the old bug polled /api/digest for every message, so any
+        message sent after a digest existed for the day incorrectly got one."""
+        resp = client_with_agent.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+        )
+
+        assert resp.status_code == 200
+        for line in resp.text.strip().split("\n"):
+            if not line.startswith("data:") or "[DONE]" in line:
+                continue
+            data = json.loads(line[5:].strip())
+            assert "audio" not in data
 
     def test_non_digest_phrase_does_not_route(self, client_with_agent):
         with patch(
@@ -902,7 +965,9 @@ class TestDigestIntentRouting:
                 "/v1/chat/completions",
                 json={
                     "model": "test-model",
-                    "messages": [{"role": "user", "content": "give me my morning digest"}],
+                    "messages": [
+                        {"role": "user", "content": "give me my morning digest"}
+                    ],
                     "tools": [{"type": "function", "function": {"name": "calc"}}],
                 },
             )

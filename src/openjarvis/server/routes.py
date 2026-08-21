@@ -710,6 +710,9 @@ async def _handle_agent_stream(
         finish_data["usage"] = response.usage.model_dump()
         if complexity_info is not None:
             finish_data["complexity"] = complexity_info.model_dump()
+        response_audio = response.choices[0].message.audio
+        if response_audio is not None:
+            finish_data["audio"] = response_audio.model_dump()
         yield f"data: {_json.dumps(finish_data)}\n\n"
 
         _record_completed_exchange(
