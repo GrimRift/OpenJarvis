@@ -166,7 +166,7 @@ def test_connect_list_reflects_persisted_filesystem_connection(
     mock_cls.assert_called_once_with(vault_path="/my/vault")
 
 
-def test_connect_oauth_authorizes_and_ingests() -> None:
+def test_connect_oauth_authorizes_and_ingests(tmp_path: Path) -> None:
     """A first OAuth connection immediately indexes connector documents."""
     runner = CliRunner()
 
@@ -200,6 +200,7 @@ def test_connect_oauth_authorizes_and_ingests() -> None:
             return_value=("client-id", "client-secret"),
         ),
         mock.patch("openjarvis.connectors.oauth.run_connector_oauth") as oauth,
+        mock.patch("openjarvis.core.config.DEFAULT_CONFIG_DIR", tmp_path),
         mock.patch("openjarvis.connectors.store.KnowledgeStore"),
         mock.patch("openjarvis.connectors.pipeline.IngestionPipeline"),
         mock.patch(
@@ -214,8 +215,13 @@ def test_connect_oauth_authorizes_and_ingests() -> None:
     oauth.assert_called_once_with("gmail", "client-id", "client-secret")
     sync_engine.sync.assert_called_once_with(connected)
 
+    activated = json.loads((tmp_path / "connectors" / "_activated.json").read_text())
+    assert activated == {"sources": ["gmail"]}
 
-def test_connect_oauth_already_connected_runs_incremental_sync() -> None:
+
+def test_connect_oauth_already_connected_runs_incremental_sync(
+    tmp_path: Path,
+) -> None:
     """Reconnecting an authorized OAuth source performs an incremental sync."""
     runner = CliRunner()
 
@@ -238,6 +244,7 @@ def test_connect_oauth_already_connected_runs_incremental_sync() -> None:
             return_value=mock_cls,
         ),
         mock.patch("openjarvis.connectors.oauth.run_connector_oauth") as oauth,
+        mock.patch("openjarvis.core.config.DEFAULT_CONFIG_DIR", tmp_path),
         mock.patch("openjarvis.connectors.store.KnowledgeStore"),
         mock.patch("openjarvis.connectors.pipeline.IngestionPipeline"),
         mock.patch(
@@ -251,6 +258,130 @@ def test_connect_oauth_already_connected_runs_incremental_sync() -> None:
     assert "gmail connected — indexed 2 chunks" in result.output
     oauth.assert_not_called()
     sync_engine.sync.assert_called_once_with(connected)
+
+
+def test_sync_skips_sources_never_explicitly_connected(tmp_path: Path) -> None:
+    """--sync must not touch a source just because it has valid credentials.
+
+    A single Google OAuth grant writes token files for gmail, gcalendar,
+    gdrive, gcontacts, and google_tasks at once (see oauth.py's
+    GOOGLE_ALL_SCOPES). If the user only ever ran `jarvis connect gmail`,
+    --sync must not silently pull calendar/drive/contacts/tasks too, even
+    though those connectors would report is_connected() == True.
+    """
+    runner = CliRunner()
+
+    state_dir = tmp_path / "connectors"
+    state_dir.mkdir()
+    (state_dir / "_activated.json").write_text(json.dumps({"sources": ["gmail"]}))
+
+    gmail_cls = mock.MagicMock()
+    gmail_instance = mock.MagicMock()
+    gmail_instance.is_connected.return_value = True
+    gmail_cls.return_value = gmail_instance
+
+    # gcalendar has a valid token (same shared OAuth grant) but was never
+    # explicitly connected — it must not appear in the sync at all.
+    gcalendar_cls = mock.MagicMock()
+    gcalendar_instance = mock.MagicMock()
+    gcalendar_instance.is_connected.return_value = True
+    gcalendar_cls.return_value = gcalendar_instance
+
+    sync_engine = mock.MagicMock()
+    sync_engine.sync.return_value = 3
+
+    def _get(source: str):
+        return {"gmail": gmail_cls, "gcalendar": gcalendar_cls}[source]
+
+    with (
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.contains",
+            return_value=True,
+        ),
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.get", side_effect=_get
+        ),
+        mock.patch("openjarvis.core.config.DEFAULT_CONFIG_DIR", tmp_path),
+        mock.patch("openjarvis.connectors.store.KnowledgeStore"),
+        mock.patch("openjarvis.connectors.pipeline.IngestionPipeline"),
+        mock.patch(
+            "openjarvis.connectors.sync_engine.SyncEngine",
+            return_value=sync_engine,
+        ),
+    ):
+        result = runner.invoke(cli, ["connect", "--sync"])
+
+    assert result.exit_code == 0
+    assert "gmail" in result.output
+    assert "gcalendar" not in result.output
+    sync_engine.sync.assert_called_once_with(gmail_instance)
+    gcalendar_cls.assert_not_called()
+
+
+def test_sync_continues_after_one_source_fails(tmp_path: Path) -> None:
+    """A failure syncing one source must not stop the others."""
+    runner = CliRunner()
+
+    state_dir = tmp_path / "connectors"
+    state_dir.mkdir()
+    (state_dir / "_activated.json").write_text(
+        json.dumps({"sources": ["gmail", "obsidian"]})
+    )
+    (state_dir / "obsidian.json").write_text(json.dumps({"path": "/vault"}))
+
+    gmail_cls = mock.MagicMock()
+    gmail_instance = mock.MagicMock()
+    gmail_instance.is_connected.return_value = True
+    gmail_cls.return_value = gmail_instance
+    gmail_cls.auth_type = "oauth"
+
+    obsidian_cls = mock.MagicMock()
+    obsidian_cls.auth_type = "filesystem"
+    obsidian_instance = mock.MagicMock()
+    obsidian_instance.is_connected.return_value = True
+    obsidian_cls.return_value = obsidian_instance
+
+    sync_engine = mock.MagicMock()
+    sync_engine.sync.side_effect = [RuntimeError("token expired"), 5]
+
+    def _get(source: str):
+        return {"gmail": gmail_cls, "obsidian": obsidian_cls}[source]
+
+    with (
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.contains",
+            return_value=True,
+        ),
+        mock.patch(
+            "openjarvis.core.registry.ConnectorRegistry.get", side_effect=_get
+        ),
+        mock.patch("openjarvis.core.config.DEFAULT_CONFIG_DIR", tmp_path),
+        mock.patch("openjarvis.connectors.store.KnowledgeStore"),
+        mock.patch("openjarvis.connectors.pipeline.IngestionPipeline"),
+        mock.patch(
+            "openjarvis.connectors.sync_engine.SyncEngine",
+            return_value=sync_engine,
+        ),
+    ):
+        result = runner.invoke(cli, ["connect", "--sync"])
+
+    assert result.exit_code == 0
+    assert "gmail" in result.output
+    assert "token expired" in result.output
+    assert "obsidian" in result.output
+    assert "indexed 5 chunk" in result.output
+    assert sync_engine.sync.call_count == 2
+
+
+def test_sync_with_no_activated_sources_prompts_to_connect_first() -> None:
+    runner = CliRunner()
+    with mock.patch(
+        "openjarvis.cli.connect_cmd._load_activated_sources", return_value=set()
+    ):
+        result = runner.invoke(cli, ["connect", "--sync"])
+
+    assert result.exit_code == 0
+    assert "connect <source>" in result.output
 
 
 def test_connect_disconnect() -> None:

@@ -30,6 +30,7 @@ class TestDefaults:
         assert cfg.memory.default_backend == "sqlite"
         assert cfg.telemetry.enabled is True
         assert cfg.connectors.gmail.initial_sync_months == 12
+        assert cfg.connectors.outlook.initial_sync_months == 12
 
     def test_engine_config_defaults(self) -> None:
         ec = EngineConfig()
@@ -116,6 +117,16 @@ class TestTomlLoading:
         cfg = load_config(toml_file)
 
         assert cfg.connectors.gmail.initial_sync_months == 18
+
+    def test_loads_outlook_initial_sync_window(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text(
+            "[connectors.outlook]\ninitial_sync_months = 6\n", encoding="utf-8"
+        )
+
+        cfg = load_config(toml_file)
+
+        assert cfg.connectors.outlook.initial_sync_months == 6
 
     def test_system_prompt_block_parsed(self, tmp_path: Path) -> None:
         """Regression for #401: the [system_prompt] block (and its prefix)

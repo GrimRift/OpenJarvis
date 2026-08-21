@@ -52,6 +52,16 @@ class OAuthProvider:
     credential_files: Tuple[str, ...] = ()
 
 
+# Combined scopes for Microsoft Graph connectors — currently just Outlook
+# Mail.Read. Structured the same way as GOOGLE_ALL_SCOPES so future
+# connectors (Calendar, OneDrive, Teams) can append scopes here and reuse
+# the same one-consent-covers-everything flow, without a second app
+# registration. Deliberately narrow today: read-only, no send/delete/move.
+MICROSOFT_ALL_SCOPES: List[str] = [
+    "offline_access",
+    "Mail.Read",
+]
+
 # Combined scopes for all Google connectors so a single OAuth consent
 # authorises Drive, Calendar, Contacts, Gmail, and Tasks at once.
 GOOGLE_ALL_SCOPES: List[str] = [
@@ -117,6 +127,26 @@ OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
         token_auth="basic",
         connector_ids=("spotify",),
         credential_files=("spotify.json",),
+    ),
+    "microsoft": OAuthProvider(
+        name="microsoft",
+        display_name="Microsoft",
+        auth_endpoint="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        token_endpoint="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        scopes=MICROSOFT_ALL_SCOPES,
+        setup_url=(
+            "https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/"
+            "CreateApplicationBlade"
+        ),
+        setup_hint=(
+            "Register an app (Azure Portal -> App registrations), platform "
+            "'Mobile and desktop applications', redirect URI "
+            "http://127.0.0.1:8789/callback, grant Mail.Read delegated permission"
+        ),
+        # connector_ids/credential_files extended when Calendar/OneDrive/Teams
+        # connectors land — same one-flow-covers-everything shape as Google.
+        connector_ids=("outlook",),
+        credential_files=("microsoft.json", "outlook.json"),
     ),
 }
 
@@ -238,6 +268,22 @@ def resolve_google_credentials(connector_path: str) -> str:
         return connector_path
     if Path(_SHARED_GOOGLE_CREDENTIALS_PATH).exists():
         return _SHARED_GOOGLE_CREDENTIALS_PATH
+    return connector_path
+
+
+_SHARED_MICROSOFT_CREDENTIALS_PATH: str = str(_CONNECTORS_DIR / "microsoft.json")
+
+
+def resolve_microsoft_credentials(connector_path: str) -> str:
+    """Return the best available Microsoft credentials file path.
+
+    Same fallback shape as :func:`resolve_google_credentials`: checks the
+    connector-specific file first, then the shared ``microsoft.json``.
+    """
+    if Path(connector_path).exists():
+        return connector_path
+    if Path(_SHARED_MICROSOFT_CREDENTIALS_PATH).exists():
+        return _SHARED_MICROSOFT_CREDENTIALS_PATH
     return connector_path
 
 

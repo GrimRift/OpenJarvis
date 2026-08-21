@@ -42,6 +42,62 @@ def _sync_connector(instance: object) -> int:
     return SyncEngine(IngestionPipeline(KnowledgeStore())).sync(instance)
 
 
+def _activated_sources_path() -> Path:
+    from openjarvis.core.config import DEFAULT_CONFIG_DIR
+
+    return Path(DEFAULT_CONFIG_DIR) / "connectors" / "_activated.json"
+
+
+def _load_activated_sources() -> set[str]:
+    """Return the set of connector IDs the user has explicitly run
+    ``jarvis connect <source>`` for.
+
+    This is deliberately separate from "has valid credentials" — a single
+    Google OAuth consent grants tokens for gmail/gcalendar/gdrive/gcontacts/
+    google_tasks all at once (see oauth.py's ``GOOGLE_ALL_SCOPES``), so
+    ``is_connected()`` being true for a source doesn't mean the user ever
+    asked for that specific source to be active. ``--sync`` must only touch
+    sources named here, not everything a shared OAuth grant happens to cover.
+    """
+    state_file = _activated_sources_path()
+    if not state_file.exists():
+        return set()
+    try:
+        data = json.loads(state_file.read_text())
+        return set(data.get("sources", []))
+    except (OSError, ValueError):
+        return set()
+
+
+def _mark_source_activated(source: str) -> None:
+    activated = _load_activated_sources()
+    if source in activated:
+        return
+    activated.add(source)
+    state_file = _activated_sources_path()
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"sources": sorted(activated)}))
+
+
+def _instantiate_for_status(key: str, connector_cls: type) -> object:
+    """Instantiate a connector the same way for both --list and --sync.
+
+    Filesystem connectors need their persisted path (bare instantiation
+    always reports disconnected); everything else reads its own credentials.
+    """
+    auth_type = getattr(connector_cls, "auth_type", "unknown")
+    if auth_type != "filesystem":
+        return connector_cls()
+
+    saved_path = _load_connector_state(key).get("path", "")
+    if not saved_path:
+        return connector_cls()
+    try:
+        return connector_cls(vault_path=saved_path)
+    except TypeError:
+        return connector_cls(saved_path)
+
+
 def _list_sources(registry: object) -> None:
     """Print a Rich table of registered connectors and their sync status."""
     console = Console()
@@ -59,27 +115,54 @@ def _list_sources(registry: object) -> None:
     for key, connector_cls in items:
         auth_type = getattr(connector_cls, "auth_type", "unknown")
         try:
-            if auth_type == "filesystem":
-                # Bare no-args instantiation always reports "disconnected"
-                # for filesystem connectors (empty path) — use the persisted
-                # path from a prior `connect` if one exists.
-                state = _load_connector_state(key)
-                saved_path = state.get("path", "")
-                if saved_path:
-                    try:
-                        instance = connector_cls(vault_path=saved_path)
-                    except TypeError:
-                        instance = connector_cls(saved_path)
-                else:
-                    instance = connector_cls()
-            else:
-                instance = connector_cls()
+            instance = _instantiate_for_status(key, connector_cls)
             connected = instance.is_connected()
             status = "connected" if connected else "disconnected"
         except Exception:  # noqa: BLE001
             status = "unknown"
 
         table.add_row(key, auth_type, status)
+
+    console.print(table)
+
+
+def _sync_all(registry: object) -> None:
+    """Incrementally re-sync every explicitly-activated source.
+
+    Only sources the user has actually run ``jarvis connect <source>`` for
+    are touched — see ``_load_activated_sources`` for why that's not the
+    same as "has a valid token." Failures on one source are logged and don't
+    stop the others.
+    """
+    console = Console()
+    activated = sorted(_load_activated_sources())
+
+    if not activated:
+        console.print(
+            "[yellow]No sources have been explicitly connected yet."
+            " Run `jarvis connect <source>` first.[/yellow]"
+        )
+        return
+
+    table = Table(title="Sync Results")
+    table.add_column("Source", style="cyan")
+    table.add_column("Result", style="green")
+
+    for source in activated:
+        if not registry.contains(source):  # type: ignore[attr-defined]
+            table.add_row(source, "[red]unknown connector — skipped[/red]")
+            continue
+
+        connector_cls = registry.get(source)  # type: ignore[attr-defined]
+        try:
+            instance = _instantiate_for_status(source, connector_cls)
+            if not instance.is_connected():
+                table.add_row(source, "[yellow]not connected — skipped[/yellow]")
+                continue
+            chunks = _sync_connector(instance)
+            table.add_row(source, f"indexed {chunks} chunk{'s' if chunks != 1 else ''}")
+        except Exception as exc:  # noqa: BLE001
+            table.add_row(source, f"[red]failed: {exc}[/red]")
 
     console.print(table)
 
@@ -144,6 +227,7 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
                 return
 
             _save_connector_state(source, {"path": path})
+            _mark_source_activated(source)
             console.print(
                 f"[green]{source} connected — indexed {chunks} chunk"
                 f"{'s' if chunks != 1 else ''} from {path}.[/green]"
@@ -205,6 +289,7 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
             )
             return
 
+        _mark_source_activated(source)
         action = "connected" if already_connected else "authorised"
         console.print(
             f"[green]{source} {action} — indexed {chunks} chunk"
@@ -222,6 +307,7 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
         try:
             instance = connector_cls()
             if instance.is_connected():
+                _mark_source_activated(source)
                 console.print(f"[green]{source} is already connected.[/green]")
                 return
 
@@ -231,6 +317,7 @@ def _connect_source(registry: object, source: str, path: str = "") -> None:
             token_file = token_dir / f"{source}.json"
             token_file.write_text(json.dumps({"token": token}))
             save_tokens(source, {"token": token})
+            _mark_source_activated(source)
             console.print(f"[green]{source} connected successfully.[/green]")
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Token setup failed for {source}: {exc}[/red]")
@@ -290,7 +377,7 @@ def connect(
         return
 
     if trigger_sync:
-        click.echo("Sync not yet implemented in CLI")
+        _sync_all(ConnectorRegistry)
         return
 
     if disconnect_source:

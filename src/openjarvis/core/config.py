@@ -994,10 +994,18 @@ class GmailConnectorConfig:
 
 
 @dataclass(slots=True)
+class OutlookConnectorConfig:
+    """Outlook Mail (Microsoft Graph) ingestion settings."""
+
+    initial_sync_months: int = 12
+
+
+@dataclass(slots=True)
 class ConnectorsConfig:
     """Data-source connector settings."""
 
     gmail: GmailConnectorConfig = field(default_factory=GmailConnectorConfig)
+    outlook: OutlookConnectorConfig = field(default_factory=OutlookConnectorConfig)
 
 
 @dataclass
@@ -2085,6 +2093,10 @@ context_from_memory = true
 # Gmail's first historical import is bounded dynamically from the sync date.
 # Later syncs use the saved checkpoint and retrieve all new mail normally.
 [connectors.gmail]
+initial_sync_months = 12
+
+# Same bounded-first-import behavior as Gmail, for Outlook Mail (Graph).
+[connectors.outlook]
 initial_sync_months = 12
 
 [tools.storage]
