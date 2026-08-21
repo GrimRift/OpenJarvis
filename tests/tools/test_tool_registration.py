@@ -75,6 +75,10 @@ EXPECTED_TOOLS = {
     "knowledge_sql",
     # scan_chunks.py
     "scan_chunks",
+    # notify_windows.py
+    "notify_windows",
+    # check_class_schedule.py
+    "check_class_schedule",
 }
 
 
