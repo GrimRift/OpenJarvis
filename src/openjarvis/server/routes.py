@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -117,6 +118,17 @@ def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message
     return [Message(role=Role.SYSTEM, content=prompt), *messages]
 
 
+# Same pattern as system/orchestrator.py's QueryOrchestrator._detect_agent_intent
+# — that class isn't reachable from this endpoint (the web chat UI calls this
+# route directly against a single pre-built agent), so the regex is
+# duplicated here rather than imported, matching the one already proven by
+# tests/test_query_orchestrator.py::TestDetectAgentIntent.
+_DIGEST_INTENT_RE = re.compile(
+    r"\b(good\s+morning|morning\s+digest|daily\s+briefing|morning\s+briefing)\b",
+    re.IGNORECASE,
+)
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
     """Handle chat completion requests (streaming and non-streaming)."""
@@ -226,6 +238,24 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                 "Complexity analysis failed",
                 exc_info=True,
             )
+
+    # Route digest-phrase queries to a fresh MorningDigestAgent instead of
+    # the default configured agent. Sits before the tools/streaming branches
+    # below and skips entirely when the client supplied their own `tools` —
+    # those requests bypass agent routing per #414 regardless, so building a
+    # digest agent for them would be pure waste (never consulted below).
+    if (
+        not request_body.tools
+        and query_text_for_complexity
+        and _DIGEST_INTENT_RE.search(query_text_for_complexity)
+    ):
+        from openjarvis.agents.morning_digest import build_morning_digest_agent
+
+        digest_agent = build_morning_digest_agent(
+            engine, model, config, bus=getattr(request.app.state, "bus", None)
+        )
+        if digest_agent is not None:
+            agent = digest_agent
 
     if request_body.stream:
         # When the client passes `tools`, stream the model's raw

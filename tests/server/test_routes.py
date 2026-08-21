@@ -791,6 +791,126 @@ def _identity_config():
     return cfg
 
 
+def _make_digest_agent(content="Sir, your digest for this morning."):
+    from openjarvis.agents._stubs import AgentResult
+
+    agent = MagicMock()
+    agent.agent_id = "morning_digest"
+    agent._tools = [MagicMock()]
+    agent.run.return_value = AgentResult(
+        content=content, turns=1, metadata={"audio_path": ""}
+    )
+    return agent
+
+
+class TestDigestIntentRouting:
+    """Chat messages matching digest phrasing route to MorningDigestAgent.
+
+    server/routes.py's chat endpoint is the code path the real web UI calls
+    (unlike system/orchestrator.py's QueryOrchestrator, which has its own
+    intent-detection regex but isn't reachable from here) — these tests
+    cover the routing decision itself, not the regex's phrase coverage
+    (already parametrized in tests/test_query_orchestrator.py).
+    """
+
+    def test_digest_phrase_routes_to_digest_agent(self, client_with_agent):
+        digest_agent = _make_digest_agent(content="Sir, here is your briefing.")
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent",
+            return_value=digest_agent,
+        ) as mock_build:
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "give me my morning digest"}],
+                },
+            )
+
+        assert resp.status_code == 200
+        assert (
+            resp.json()["choices"][0]["message"]["content"]
+            == "Sir, here is your briefing."
+        )
+        mock_build.assert_called_once()
+        digest_agent.run.assert_called_once()
+
+    def test_digest_phrase_routes_correctly_when_streaming(self, client_with_agent):
+        digest_agent = _make_digest_agent(content="Sir, here is your streamed briefing.")
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent",
+            return_value=digest_agent,
+        ):
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "daily briefing please"}],
+                    "stream": True,
+                },
+            )
+
+        assert resp.status_code == 200
+        content = ""
+        for line in resp.text.strip().split("\n"):
+            if not line.startswith("data:") or "[DONE]" in line:
+                continue
+            data = json.loads(line[5:].strip())
+            delta = data.get("choices", [{}])[0].get("delta", {})
+            content += delta.get("content") or ""
+        assert content == "Sir, here is your streamed briefing."
+        digest_agent.run.assert_called_once()
+
+    def test_non_digest_phrase_does_not_route(self, client_with_agent):
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent"
+        ) as mock_build:
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "what's the weather"}],
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["message"]["content"] == "Hello from agent"
+        mock_build.assert_not_called()
+
+    def test_digest_intent_but_agent_unregistered_falls_back(self, client_with_agent):
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent",
+            return_value=None,
+        ) as mock_build:
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "good morning"}],
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["message"]["content"] == "Hello from agent"
+        mock_build.assert_called_once()
+
+    def test_client_supplied_tools_bypass_digest_routing(self, client_with_agent):
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent"
+        ) as mock_build:
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "give me my morning digest"}],
+                    "tools": [{"type": "function", "function": {"name": "calc"}}],
+                },
+            )
+
+        assert resp.status_code == 200
+        mock_build.assert_not_called()
+
+
 class TestIdentityPromptInjection:
     """Regression for #540.
 

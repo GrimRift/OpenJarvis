@@ -56,6 +56,37 @@ def _make_app(db_path: str):
     return app
 
 
+def test_get_digest_audio_available_false_when_no_audio_path(tmp_path):
+    """A digest with audio_path=None (TTS failed/unconfigured) must report
+    audio_available: false rather than crashing or false-positiving."""
+    from fastapi.testclient import TestClient
+
+    db_path = str(tmp_path / "digest.db")
+    s = DigestStore(db_path=db_path)
+    s.save(
+        DigestArtifact(
+            text="Text-only digest.",
+            audio_path=None,
+            sections={},
+            sources_used=["gmail"],
+            generated_at=datetime.now(timezone.utc),
+            model_used="test",
+            voice_used="",
+        )
+    )
+    s.close()
+
+    app = _make_app(db_path)
+    client = TestClient(app)
+
+    resp = client.get("/api/digest")
+    assert resp.status_code == 200
+    assert resp.json()["audio_available"] is False
+
+    audio_resp = client.get("/api/digest/audio")
+    assert audio_resp.status_code == 404
+
+
 def test_get_digest(store, tmp_path):
     from fastapi.testclient import TestClient
 

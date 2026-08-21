@@ -43,7 +43,7 @@ def create_digest_router(*, db_path: str = "") -> APIRouter:
             "model_used": artifact.model_used,
             "voice_used": artifact.voice_used,
             "audio_available": (
-                artifact.audio_path.exists() if artifact.audio_path.name else False
+                artifact.audio_path is not None and artifact.audio_path.exists()
             ),
         }
 
@@ -53,7 +53,7 @@ def create_digest_router(*, db_path: str = "") -> APIRouter:
         artifact = store.get_today()
         if artifact is None:
             raise HTTPException(status_code=404, detail="No digest for today")
-        if not artifact.audio_path.exists():
+        if artifact.audio_path is None or not artifact.audio_path.exists():
             raise HTTPException(status_code=404, detail="Audio not available")
         return FileResponse(
             str(artifact.audio_path),

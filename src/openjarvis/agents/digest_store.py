@@ -17,7 +17,7 @@ class DigestArtifact:
     """A pre-computed morning digest ready for delivery."""
 
     text: str
-    audio_path: Path
+    audio_path: Optional[Path]
     sections: Dict[str, str]
     sources_used: List[str]
     generated_at: datetime
@@ -83,7 +83,7 @@ class DigestStore:
             """,
             (
                 artifact.text,
-                str(artifact.audio_path),
+                str(artifact.audio_path) if artifact.audio_path is not None else "",
                 json.dumps(artifact.sections),
                 json.dumps(artifact.sources_used),
                 artifact.generated_at.isoformat(),
@@ -98,7 +98,7 @@ class DigestStore:
     def _row_to_artifact(self, row: tuple) -> DigestArtifact:
         return DigestArtifact(
             text=row[0],
-            audio_path=Path(row[1]),
+            audio_path=Path(row[1]) if row[1] else None,
             sections=json.loads(row[2]),
             sources_used=json.loads(row[3]),
             generated_at=datetime.fromisoformat(row[4]),

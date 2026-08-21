@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List
 
 from openjarvis.connectors._stubs import Document
@@ -36,6 +37,7 @@ _SECTION_ORDER: List[tuple] = [
     ("CALENDAR", {"gcalendar"}),
     ("WORLD", {"weather", "hackernews", "news_rss"}),
     ("MUSIC", {"spotify", "apple_music"}),
+    ("NOTES", {"obsidian"}),
 ]
 
 _CONNECTOR_TO_SECTION: Dict[str, str] = {}
@@ -322,6 +324,15 @@ def _format_hackernews(doc: Document) -> str:
     return f"[hackernews] {doc.title} (score {score}, {comments} comments)"
 
 
+def _format_obsidian(doc: Document) -> str:
+    """Format a recently-modified Obsidian note — title + brief snippet."""
+    snippet = doc.content[:150].replace("\n", " ").strip() if doc.content else ""
+    line = f"[notes] {doc.title}"
+    if snippet:
+        line += f" — {snippet}"
+    return line
+
+
 def _format_news_rss(doc: Document) -> str:
     """Format an RSS news item."""
     feed_name = doc.metadata.get("feed_name", "")
@@ -353,7 +364,32 @@ _FORMATTERS: Dict[str, Any] = {
     "news_rss": _format_news_rss,
     "spotify": _format_spotify,
     "apple_music": _format_apple_music,
+    "obsidian": _format_obsidian,
 }
+
+
+def _instantiate_filesystem_connector(source: str, connector_cls: Any) -> Any:
+    """Instantiate a filesystem-type connector with its persisted path.
+
+    Mirrors cli/connect_cmd.py's ``_instantiate_for_status`` — filesystem
+    connectors (e.g. obsidian) store their path in ``connectors/<id>.json``
+    but, unlike OAuth connectors, don't read it back automatically.
+    """
+    from openjarvis.core.config import DEFAULT_CONFIG_DIR
+
+    state_file = Path(DEFAULT_CONFIG_DIR) / "connectors" / f"{source}.json"
+    saved_path = ""
+    if state_file.exists():
+        try:
+            saved_path = json.loads(state_file.read_text()).get("path", "")
+        except (OSError, ValueError):
+            saved_path = ""
+    if not saved_path:
+        return connector_cls()
+    try:
+        return connector_cls(vault_path=saved_path)
+    except TypeError:
+        return connector_cls(saved_path)
 
 
 def _format_doc(source: str, doc: Document) -> str:
@@ -491,7 +527,16 @@ class DigestCollectTool(BaseTool):
 
             try:
                 connector_cls = ConnectorRegistry.get(source)
-                connector = connector_cls()
+                # Filesystem-type connectors (e.g. obsidian) don't self-resolve
+                # their persisted config the way OAuth connectors do — bare
+                # instantiation always reports disconnected. Mirror
+                # cli/connect_cmd.py's _instantiate_for_status pattern here.
+                if getattr(connector_cls, "auth_type", "") == "filesystem":
+                    connector = _instantiate_filesystem_connector(
+                        source, connector_cls
+                    )
+                else:
+                    connector = connector_cls()
 
                 if not connector.is_connected():
                     errors.append(

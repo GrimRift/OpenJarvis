@@ -57,6 +57,29 @@ def test_get_today_returns_none_when_empty(tmp_path):
     store.close()
 
 
+def test_none_audio_path_round_trips_as_none(tmp_path):
+    """A digest with no audio (TTS failed/unconfigured) must round-trip as
+    audio_path=None, not a falsy-but-truthy Path("") that always "exists"."""
+    store = DigestStore(db_path=str(tmp_path / "digest.db"))
+
+    artifact = DigestArtifact(
+        text="Text-only digest.",
+        audio_path=None,
+        sections={},
+        sources_used=["gmail"],
+        generated_at=datetime(2026, 4, 1, 6, 0, 0),
+        model_used="test-model",
+        voice_used="",
+    )
+    store.save(artifact)
+    retrieved = store.get_latest()
+
+    assert retrieved is not None
+    assert retrieved.audio_path is None
+
+    store.close()
+
+
 def test_history(tmp_path):
     store = DigestStore(db_path=str(tmp_path / "digest.db"))
     for i in range(3):

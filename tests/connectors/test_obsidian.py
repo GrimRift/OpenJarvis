@@ -72,6 +72,24 @@ def _sync_all(vault_path: Path) -> List[Document]:
 # ---------------------------------------------------------------------------
 
 
+def test_sync_since_accepts_naive_datetime(vault: Path) -> None:
+    """A naive `since` (as digest_collect.py passes) must not raise —
+    regression for 'can't compare offset-naive and offset-aware datetimes'."""
+    from datetime import datetime
+
+    from openjarvis.connectors.obsidian import ObsidianConnector
+
+    conn = ObsidianConnector(vault_path=str(vault))
+
+    # Far in the past: naive `since` must not crash, and everything matches.
+    docs_all = list(conn.sync(since=datetime(2000, 1, 1)))
+    assert len(docs_all) == 3
+
+    # Far in the future: naive `since` must not crash, and nothing matches.
+    docs_none = list(conn.sync(since=datetime(2100, 1, 1)))
+    assert docs_none == []
+
+
 def test_is_connected(vault: Path) -> None:
     from openjarvis.connectors.obsidian import ObsidianConnector
 

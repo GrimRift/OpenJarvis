@@ -23,6 +23,7 @@ _SECTION_PROMPTS = {
     "health": "HEALTH — Describe only supported trends; omit raw measurements.",
     "world": "WORLD — Summarize only provided world items.",
     "music": "MUSIC — Summarize only provided listening information.",
+    "notes": "NOTES — Briefly mention only the provided recently-edited notes.",
 }
 
 
@@ -111,6 +112,7 @@ class MorningDigestAgent(ToolUsingAgent):
             "health": ["oura", "apple_health"],
             "world": ["weather", "hackernews", "news_rss"],
             "music": ["spotify", "apple_music"],
+            "notes": ["obsidian"],
         }
         sources = set()
         for section in self._sections:
@@ -217,7 +219,7 @@ class MorningDigestAgent(ToolUsingAgent):
         # Step 4: Store the artifact
         artifact = DigestArtifact(
             text=narrative,
-            audio_path=Path(audio_path) if audio_path else Path(""),
+            audio_path=Path(audio_path) if audio_path else None,
             sections={},
             sources_used=sources,
             generated_at=datetime.now(),
@@ -241,3 +243,46 @@ class MorningDigestAgent(ToolUsingAgent):
                 "sources_used": sources,
             },
         )
+
+
+def build_morning_digest_agent(
+    engine: Any, model: str, config: Any, *, bus: Any = None
+) -> Optional[MorningDigestAgent]:
+    """Build a ready-to-run MorningDigestAgent from live config, or None.
+
+    Shared factory for the chat-routing bridge in server/routes.py.
+    Mirrors the kwargs-building logic in system/orchestrator.py's
+    ``_run_agent`` (agent_name == "morning_digest" branch) — that class has
+    its own separate copy, kept as-is rather than refactored to avoid risk
+    to its own test suite for a change scoped to the web chat endpoint.
+    """
+    if not AgentRegistry.contains("morning_digest"):
+        return None
+
+    agent_kwargs: dict[str, Any] = {"bus": bus}
+    dc = getattr(config, "digest", None)
+    if dc is not None:
+        section_sources: dict[str, Any] = {}
+        for sec in dc.sections:
+            sc = getattr(dc, sec, None)
+            if sc and hasattr(sc, "sources"):
+                section_sources[sec] = sc.sources
+        agent_kwargs.update(
+            {
+                "persona": dc.persona,
+                "sections": dc.sections,
+                "section_sources": section_sources,
+                "timezone": dc.timezone,
+                "voice_id": dc.voice_id,
+                "voice_speed": dc.voice_speed,
+                "tts_backend": dc.tts_backend,
+                "honorific": dc.honorific,
+            }
+        )
+
+    from openjarvis.tools.digest_collect import DigestCollectTool
+    from openjarvis.tools.text_to_speech import TextToSpeechTool
+
+    agent_kwargs["tools"] = [DigestCollectTool(), TextToSpeechTool()]
+
+    return MorningDigestAgent(engine, model, **agent_kwargs)

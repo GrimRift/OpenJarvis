@@ -141,6 +141,12 @@ class ObsidianConnector(BaseConnector):
             Not used for this filesystem connector (included for API
             compatibility).
         """
+        # Callers vary on whether they pass a naive or tz-aware `since`
+        # (mtime below is always UTC-aware) — normalize once here rather
+        # than letting a naive/aware comparison raise deep in the loop.
+        if since is not None and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+
         vault = Path(self._vault_path)
         vault_name = vault.name
 
