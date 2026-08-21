@@ -228,9 +228,12 @@ def test_executor_uses_tool_loop_for_non_tool_agent_with_configured_tools(tmp_pa
         assert _NonToolAgent.runs == 0
         assert _ExecutorProbeTool.calls == 1
         assert engine.call_count == 2
+        # startswith, not ==: SystemPromptBuilder now appends a fresh
+        # "Current Date and Time" section after the agent_template so the
+        # LLM knows the real date — the sentinel must still lead the prompt.
         assert any(
             message.role is Role.SYSTEM
-            and message.content == "NON_TOOL_SYSTEM_SENTINEL"
+            and message.content.startswith("NON_TOOL_SYSTEM_SENTINEL")
             for message in engine.last_messages or []
         )
         refreshed = manager.get_agent(agent["id"])
@@ -331,9 +334,12 @@ def test_simple_agent_without_tools_keeps_its_custom_system_prompt(tmp_path):
         AgentExecutor(manager, EventBus(), system=system).execute_tick(agent["id"])
 
         assert engine.call_count == 1
+        # startswith, not ==: SystemPromptBuilder now appends a fresh
+        # "Current Date and Time" section after the agent_template so the
+        # LLM knows the real date — the sentinel must still lead the prompt.
         assert any(
             message.role is Role.SYSTEM
-            and message.content == "SIMPLE_CUSTOM_SYSTEM_SENTINEL"
+            and message.content.startswith("SIMPLE_CUSTOM_SYSTEM_SENTINEL")
             for message in engine.last_messages or []
         )
     finally:

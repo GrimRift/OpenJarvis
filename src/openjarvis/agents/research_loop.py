@@ -159,8 +159,8 @@ You answer questions by calling these tools:
     clarify(question){web_tools_section}
 
 Strategy:
-  1. If the user names a person, ALWAYS pass `person=` rather than relying on lexical match. Hybrid search will fuzzy-match name or address fragments.
-  2. When the user mentions ANY time window — "this past week", "recently", "last month", "past few days", "yesterday" — you MUST translate it to a `time_range` parameter. Today is {today}.
+  1. If the user names a specific OTHER person (a real name, or "from Kelly", "with @company.com"), ALWAYS pass `person=` rather than relying on lexical match — hybrid search will fuzzy-match name or address fragments. Do NOT pass `person=` for generic first-person references like "my", "I", or "me" (e.g. "my class schedule", "what do I have today") — plenty of records (notes, reference documents, schedules) have no author/participant metadata at all, so filtering by the user's own identity on those returns zero results even when the content exists. For anything about the user's own notes/documents/schedule, search by content/topic only, with no `person` filter.
+  2. When the user mentions ANY time window — "this past week", "recently", "last month", "past few days", "yesterday" — you MUST translate it to a `time_range` parameter. Today is {today} ({today_weekday}). This only applies to time-bound content (emails, messages, calendar events) where the stored timestamp is when it happened. Reference/informational content (notes, schedules, documents) is stored with an ingestion timestamp, not an "as-of" date — a weekly class schedule note, for example, does not stop matching "today" or "this week" just because it was saved on a different day. Do NOT pass `time_range` when searching for that kind of evergreen reference content; search by content/topic only and let the content's own text (e.g. day names, dates written inside it) answer the time-relative question.
   3. The `time_range` argument is a JSON object: `{{"start": "<ISO 8601>", "end": "<ISO 8601>"}}`. Either bound may be omitted, but pass at least one whenever the user gave you a temporal cue.
   4. When the user names a specific data source — "my Granola notes", "in Slack", "from my email" — you MUST pass `sources=[...]` with the matching connector ID. Only use IDs that appear in the connected-sources list above; do NOT invent or assume sources that are not connected. Common synonyms: "meeting notes"/"meetings"/"transcripts" → granola; "email"/"inbox" → gmail; "DMs"/"channels" → slack. Without this filter the search returns mail/messages ABOUT a tool instead of records FROM that tool.
   4a. Never apologize about sources that aren't in the connected-sources list — if the user asks about "Notion" but Notion isn't connected, just say "Notion isn't connected, but here's what I found in {available_sources}" and answer from what is available.
@@ -176,7 +176,9 @@ Synthesis rules:
   - If the search returned nothing relevant, say so plainly. Do not invent results.
   - Only state facts that appear in the retrieved search results. Never supplement with your own knowledge or training data. If you are unsure whether a fact came from the search results, do not include it.
 
-Today's date is {today}.
+Today's date is {today} ({today_weekday}). Trust this stated weekday over any
+date arithmetic you might otherwise do yourself — do not recompute or guess
+which day of the week {today} falls on.
 """
 
 
@@ -669,10 +671,12 @@ class ResearchAgent:
                 "(no connected sources — tell the user to connect a "
                 "connector before searching)"
             )
+        now = datetime.now()
         sys_msg = Message(
             role=Role.SYSTEM,
             content=SYSTEM_PROMPT.format(
-                today=datetime.now().isoformat(timespec="minutes"),
+                today=now.isoformat(timespec="minutes"),
+                today_weekday=now.strftime("%A"),
                 available_sources=sources_blurb,
                 web_tools_section=_WEB_TOOLS_SECTION if self._web_search else "",
                 web_tools_strategy=_WEB_TOOLS_STRATEGY if self._web_search else "",

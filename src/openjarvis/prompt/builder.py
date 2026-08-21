@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
@@ -54,16 +55,33 @@ class SystemPromptBuilder:
     def build(self) -> str:
         if self._frozen_prefix is None:
             self._frozen_prefix = self._build_frozen_prefix()
-        parts = [self._frozen_prefix]
+        parts = [self._frozen_prefix, f"\n\n{self._current_datetime_content()}"]
         if self._session_context:
             parts.append(f"\n\n## Session Context\n\n{self._session_context}")
         if self._previous_state:
             parts.append(f"\n\n## Previous State\n\n{self._previous_state}")
         return "".join(parts)
 
+    @staticmethod
+    def _current_datetime_content() -> str:
+        # Computed fresh on every call, deliberately kept out of the cached
+        # frozen prefix — the LLM has no real clock, so without this it
+        # guesses at dates/weekdays (and gets them wrong). Caching it would
+        # go stale for the lifetime of this builder instance.
+        now = datetime.now()
+        return f"## Current Date and Time\n\n{now.strftime('%A, %B %d, %Y, %I:%M %p')}"
+
     def sections(self) -> list[PromptSection]:
         """Return prompt sections with lightweight cache/debug metadata."""
-        sections = [*self._get_frozen_sections()]
+        sections = [
+            *self._get_frozen_sections(),
+            PromptSection(
+                name="current_datetime",
+                content=self._current_datetime_content(),
+                source="current_datetime",
+                cache_segment="dynamic_suffix",
+            ),
+        ]
         if self._session_context:
             sections.append(
                 PromptSection(
