@@ -113,7 +113,7 @@ function loadSettings(): Settings {
     apiUrl: '',
     apiKey: '',
     fontSize: 'default',
-    defaultModel: '',
+    defaultModel: 'qwen3.5:4b',
     defaultAgent: '',
     temperature: 0.7,
     maxTokens: 4096,
@@ -122,7 +122,15 @@ function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return defaults;
-    return { ...defaults, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    // An empty string is a legacy/unset value, not a deliberate choice to
+    // clear the default model — fall back to defaults.defaultModel instead
+    // of letting a stale '' persist through the merge below.
+    return {
+      ...defaults,
+      ...parsed,
+      defaultModel: parsed.defaultModel || defaults.defaultModel,
+    };
   } catch {
     return defaults;
   }
