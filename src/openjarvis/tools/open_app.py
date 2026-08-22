@@ -122,8 +122,11 @@ class OpenAppTool(BaseTool):
             name="open_app",
             description=(
                 "Open a desktop application on the user's screen so they can "
-                f"see it. Available apps: {names}. Use when the user asks to "
-                "open, launch, or show an app."
+                f"see it. Available apps: {names}. Use only when the user "
+                "asks to open, launch, or show an app and nothing more. For "
+                "playing or controlling music, use spotify_control instead — "
+                "it opens Spotify itself, so opening the app first is both "
+                "unnecessary and leaves the request unfinished."
             ),
             parameters={
                 "type": "object",

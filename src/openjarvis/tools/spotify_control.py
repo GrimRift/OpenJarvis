@@ -167,7 +167,10 @@ def _wake_spotify_app(token: str, timeout_seconds: float = 30.0) -> str:
     deadline = time.monotonic() + timeout_seconds
     running = False
     while time.monotonic() < deadline:
-        time.sleep(2.0)
+        # 1s rather than a lazier interval: the client usually registers a
+        # few seconds after launch, and this wait sits directly in front of
+        # the user on every "play a song" that starts from a closed app.
+        time.sleep(1.0)
         if not is_app_running("spotify"):
             continue
         running = True
@@ -192,11 +195,13 @@ class SpotifyControlTool(BaseTool):
         return ToolSpec(
             name="spotify_control",
             description=(
-                "Control Spotify playback on the user's active device. "
-                "Actions: 'play' (resume, or start a specific song when "
-                "'query' is given), 'pause', 'next', 'previous'. Requires "
-                "Spotify to be open on some device. Use open_app first if "
-                "the user wants to see the Spotify window."
+                "Play music and control Spotify playback. Use this whenever "
+                "the user asks to play, pause, skip, or go back to a song — "
+                "including 'play <song>' and 'play something'. It opens the "
+                "Spotify app by itself when it is closed, so do NOT call "
+                "open_app first. Actions: 'play' (pass 'query' to start a "
+                "specific song, omit it to resume), 'pause', 'next', "
+                "'previous'."
             ),
             parameters={
                 "type": "object",
