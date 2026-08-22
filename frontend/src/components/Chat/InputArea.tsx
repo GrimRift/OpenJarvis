@@ -3,6 +3,7 @@ import { Send, Square, Paperclip, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore, generateId } from '../../lib/store';
 import { streamChat, streamResearch } from '../../lib/sse';
+import type { ChatRequest } from '../../lib/sse';
 import { fetchSavings, getBase, synthesizeSpeech } from '../../lib/api';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
@@ -216,12 +217,42 @@ export function InputArea() {
     };
     addMessage(convId, userMsg);
 
-    // Build API messages before adding assistant placeholder
+    // Build API messages before adding assistant placeholder.
+    //
+    // A turn that used tools is replayed as the model produced it: an
+    // assistant tool-use message plus its tool results, not just the final
+    // text. Sending only the text made prior turns look like questions
+    // answered from nothing, and the model copied that shape — asked to
+    // open an app a second time it reproduced the earlier "<app> has been
+    // opened for you" verbatim, called no tool, and nothing opened. Results
+    // are truncated because they are replayed on every later turn and some
+    // tools return a lot; the shape is what matters here, not the detail.
     const currentMessages = useAppStore.getState().messages;
-    const apiMessages = currentMessages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const apiMessages: ChatRequest['messages'] = [];
+    for (const m of currentMessages) {
+      const calls = m.role === 'assistant' ? m.toolCalls ?? [] : [];
+      if (calls.length > 0) {
+        apiMessages.push({
+          role: m.role,
+          content: m.content,
+          tool_calls: calls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.tool, arguments: tc.arguments ?? '{}' },
+          })),
+        });
+        for (const tc of calls) {
+          apiMessages.push({
+            role: 'tool',
+            content: (tc.result ?? '').slice(0, 500),
+            tool_call_id: tc.id,
+            name: tc.tool,
+          });
+        }
+      } else {
+        apiMessages.push({ role: m.role, content: m.content });
+      }
+    }
 
     const assistantMsg: ChatMessage = {
       id: generateId(),

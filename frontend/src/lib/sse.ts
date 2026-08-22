@@ -3,7 +3,21 @@ import { getBase, authHeaders } from './api';
 
 export interface ChatRequest {
   model: string;
-  messages: Array<{ role: string; content: string }>;
+  // Tool-using turns are replayed in OpenAI shape — an assistant message
+  // carrying `tool_calls`, then one `role: 'tool'` message per result — so
+  // the model sees that earlier answers came from tools rather than from
+  // nothing. See the history construction in InputArea.
+  messages: Array<{
+    role: string;
+    content: string;
+    name?: string;
+    tool_call_id?: string;
+    tool_calls?: Array<{
+      id: string;
+      type: 'function';
+      function: { name: string; arguments: string };
+    }>;
+  }>;
   stream: true;
   temperature?: number;
   max_tokens?: number;

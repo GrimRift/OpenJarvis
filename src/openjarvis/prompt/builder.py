@@ -127,6 +127,29 @@ class SystemPromptBuilder:
                 cache_segment="dynamic_suffix",
             )
         )
+        # Placed last for the same reason as the date reminder above, and
+        # aimed at a specific observed failure: asked to open an app a
+        # second time, with the earlier "<app> has been opened for you" still
+        # in the conversation, the model reproduced that sentence verbatim
+        # and called nothing — 9 completion tokens, no tool call, nothing
+        # opened. Prior turns read as a template to copy rather than as
+        # history, so the instruction has to say that acting is required
+        # *again*, not merely that tools exist.
+        sections.append(
+            PromptSection(
+                name="tool_use_reminder",
+                content=(
+                    "(Reminder: to do something in the world — open an app, "
+                    "play music, send a notification, write a file — you must "
+                    "call the tool for it. A similar request earlier in this "
+                    "conversation does not count: repeat the tool call. Never "
+                    "say an action is done unless you called its tool in this "
+                    "turn and it succeeded.)"
+                ),
+                source="tool_use_reminder",
+                cache_segment="dynamic_suffix",
+            )
+        )
         return sections
 
     def _get_frozen_sections(self) -> list[PromptSection]:
