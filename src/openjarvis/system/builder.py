@@ -447,8 +447,16 @@ class SystemBuilder:
         from openjarvis.mcp.server import MCPServer
 
         internal_server = MCPServer()
+        retrieval_backend = self._resolve_retrieval_backend(memory_backend)
         for tool in internal_server.get_tools():
-            self._inject_tool_deps(tool, engine, model, memory_backend, channel_backend)
+            self._inject_tool_deps(
+                tool,
+                engine,
+                model,
+                memory_backend,
+                channel_backend,
+                retrieval_backend=retrieval_backend,
+            )
 
         tool_names = self._tool_names
         if tool_names is None:
@@ -497,7 +505,21 @@ class SystemBuilder:
         return tools
 
     @staticmethod
-    def _inject_tool_deps(tool, engine, model, memory_backend, channel_backend):
+    def _resolve_retrieval_backend(memory_backend):
+        from openjarvis.tools.retrieval import resolve_retrieval_backend
+
+        return resolve_retrieval_backend(memory_backend)
+
+    @staticmethod
+    def _inject_tool_deps(
+        tool,
+        engine,
+        model,
+        memory_backend,
+        channel_backend,
+        *,
+        retrieval_backend=None,
+    ):
         name = tool.spec.name
         if name == "llm":
             if hasattr(tool, "_engine"):
@@ -506,7 +528,11 @@ class SystemBuilder:
                 tool._model = model
         elif name == "retrieval":
             if hasattr(tool, "_backend"):
-                tool._backend = memory_backend
+                tool._backend = (
+                    retrieval_backend
+                    if retrieval_backend is not None
+                    else memory_backend
+                )
         elif name.startswith("memory_"):
             if hasattr(tool, "_backend"):
                 tool._backend = memory_backend

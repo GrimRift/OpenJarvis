@@ -115,6 +115,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_kc_natural_key
 # ---------------------------------------------------------------------------
 
 
+def _quote_fts(query: str) -> str:
+    """Make a plain user query safe for FTS5 MATCH.
+
+    FTS5 treats ``?``, ``-``, ``:``, ``"``, ``*`` and bare AND/OR/NOT as query
+    operators, so a natural-language question raises "fts5: syntax error" and
+    (since the caller swallows OperationalError) silently returns zero hits —
+    e.g. "What is my class schedule?" found nothing while "class schedule"
+    found the note fine. Quoting each token and OR-ing them makes any input
+    literal. Mirrors ``hybrid_search._quote_fts``, which already did this.
+    """
+    tokens = [t for t in query.split() if t]
+    if not tokens:
+        return ""
+    return " OR ".join(f'"{t.replace(chr(34), "")}"' for t in tokens)
+
+
 def _to_iso(ts: Optional[Union[datetime, str]]) -> str:
     """Normalise a timestamp to ISO 8601 string (UTC)."""
     if ts is None:
@@ -407,8 +423,12 @@ class KnowledgeStore(MemoryBackend):
             LIMIT ?
         """
 
+        fts_query = _quote_fts(query)
+        if not fts_query:
+            return []
+
         try:
-            rows = self._conn.execute(sql, [query] + params + [top_k]).fetchall()
+            rows = self._conn.execute(sql, [fts_query] + params + [top_k]).fetchall()
         except sqlite3.OperationalError:
             # Malformed FTS query — return empty rather than crash
             return []

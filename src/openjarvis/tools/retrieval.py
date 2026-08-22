@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from openjarvis.core.registry import ToolRegistry
@@ -9,6 +10,34 @@ from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.storage._stubs import MemoryBackend
 from openjarvis.tools.storage.context import format_context
+
+logger = logging.getLogger(__name__)
+
+
+def resolve_retrieval_backend(
+    fallback: Optional[MemoryBackend] = None,
+) -> Optional[MemoryBackend]:
+    """Pick the backend the ``retrieval`` tool should search.
+
+    ``memory.db`` (the generic ``memory_*`` scratchpad) and ``knowledge.db``
+    (everything ``jarvis connect --sync`` ingests: Obsidian notes, mail, etc.)
+    are separate stores. This tool advertises itself as "search the knowledge
+    base" but was wired to the former, which on a real machine held a single
+    stale test document — so every retrieval returned that same irrelevant
+    chunk and the agent burned its remaining turns hunting for a note it could
+    never reach. The ``memory_*`` tools keep using ``memory.db``; only
+    ``retrieval`` moves.
+
+    Shared by every construction site (``SystemBuilder`` for ``jarvis serve``,
+    ``cli/ask.py`` for one-shot CLI runs) so they cannot drift apart.
+    """
+    try:
+        from openjarvis.connectors.store import KnowledgeStore
+
+        return KnowledgeStore()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Falling back to memory backend for retrieval: %s", exc)
+        return fallback
 
 
 @ToolRegistry.register("retrieval")
@@ -89,4 +118,4 @@ class RetrievalTool(BaseTool):
         )
 
 
-__all__ = ["RetrievalTool"]
+__all__ = ["RetrievalTool", "resolve_retrieval_backend"]

@@ -380,7 +380,12 @@ class OrchestratorAgent(ToolUsingAgent):
                                 content=f"Loop guard: {verdict.reason}",
                                 success=False,
                             )
-                    return tc, self._executor.execute(tc)
+                    result = self._executor.execute(tc)
+                    if self._loop_guard:
+                        self._loop_guard.record_result(
+                            tc.name, tc.arguments, result.success
+                        )
+                    return tc, result
 
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(tool_calls),
@@ -430,6 +435,10 @@ class OrchestratorAgent(ToolUsingAgent):
                             continue
 
                     tool_result = self._executor.execute(tc)
+                    if self._loop_guard:
+                        self._loop_guard.record_result(
+                            tc.name, tc.arguments, tool_result.success
+                        )
                     all_tool_results.append(tool_result)
 
                     # Append tool response message

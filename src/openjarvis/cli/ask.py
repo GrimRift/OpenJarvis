@@ -323,6 +323,10 @@ def _build_tools(
                     name,
                     getattr(config.memory, "default_backend", "?"),
                 )
+            if name == "retrieval":
+                from openjarvis.tools.retrieval import resolve_retrieval_backend
+
+                backend = resolve_retrieval_backend(backend)
             tools.append(tool_cls(backend=backend))
         elif name in _CHANNEL_TOOLS:
             if channel is None:

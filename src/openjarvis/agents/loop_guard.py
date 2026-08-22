@@ -20,6 +20,7 @@ class LoopGuardConfig:
     poll_tool_budget: int = 5  # max calls to same polling tool
     max_context_messages: int = 100  # context overflow threshold
     warn_before_block: bool = True  # warn on first cycle, block on second
+    block_repeat_failures: bool = True  # never re-run a call that already failed
 
 
 @dataclass(slots=True)
@@ -53,6 +54,8 @@ class LoopGuard:
         self._per_tool_counts: dict[str, int] = {}
         # Track cycle keys that have already been warned (for warn-before-block)
         self._warned_cycles: set[str] = set()
+        # Call hashes whose execution already came back success=False.
+        self._failed_calls: set[str] = set()
 
         try:
             from openjarvis._rust_bridge import get_rust_module
@@ -68,8 +71,46 @@ class LoopGuard:
         except Exception:
             self._rust_impl = None
 
+    @staticmethod
+    def _hash_call(tool_name: str, arguments: str) -> str:
+        return hashlib.sha256(f"{tool_name}:{arguments}".encode()).hexdigest()[:16]
+
+    def record_result(self, tool_name: str, arguments: str, success: bool) -> None:
+        """Remember whether an executed call succeeded.
+
+        Lets :meth:`check_call` reject a later attempt at the *same* call with
+        the *same* arguments once it is known to fail — re-running it cannot
+        produce a different answer, but the agent will keep trying (observed:
+        the same nonexistent file path read twice, several turns apart) and
+        each attempt costs a full turn with the whole prompt resent.
+        """
+        if not self._config.block_repeat_failures:
+            return
+        call_hash = self._hash_call(tool_name, arguments)
+        if success:
+            self._failed_calls.discard(call_hash)
+        else:
+            self._failed_calls.add(call_hash)
+
     def check_call(self, tool_name: str, arguments: str) -> LoopVerdict:
         """Check whether a tool call should proceed or be blocked."""
+        # Checked ahead of the counting guards, and deliberately exempt from
+        # warn-before-block: a repeat of a known-failing call has no upside to
+        # trade against, unlike a merely-repetitive one that might still be
+        # making progress.
+        if (
+            self._config.block_repeat_failures
+            and self._hash_call(tool_name, arguments) in self._failed_calls
+        ):
+            self._emit_triggered("repeat_failure", tool_name)
+            return LoopVerdict(
+                blocked=True,
+                reason=(
+                    f"'{tool_name}' already failed with these exact arguments. "
+                    "Try different arguments or a different approach."
+                ),
+            )
+
         if self._rust_impl is not None:
             rust_result = self._rust_impl.check(tool_name, arguments)
             # Support both raw Rust return (str | None) and LoopVerdict
@@ -94,7 +135,7 @@ class LoopGuard:
     def _python_check(self, tool_name: str, arguments: str) -> LoopVerdict:
         """Pure-Python fallback when Rust backend is not available."""
         # 1. Hash tracking — identical calls
-        call_hash = hashlib.sha256(f"{tool_name}:{arguments}".encode()).hexdigest()[:16]
+        call_hash = self._hash_call(tool_name, arguments)
         self._call_counts[call_hash] = self._call_counts.get(call_hash, 0) + 1
         if self._call_counts[call_hash] > self._config.max_identical_calls:
             self._emit_triggered("identical_call", tool_name)
@@ -215,6 +256,7 @@ class LoopGuard:
         self._tool_sequence.clear()
         self._per_tool_counts.clear()
         self._warned_cycles.clear()
+        self._failed_calls.clear()
         if self._rust_impl is not None:
             self._rust_impl.reset()
 
