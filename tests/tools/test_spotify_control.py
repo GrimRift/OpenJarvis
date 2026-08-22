@@ -100,6 +100,52 @@ def test_play_uses_existing_device_when_app_is_already_running():
     assert message == "Playback paused."
 
 
+def _two_computers():
+    """An account signed in on this machine and on another one."""
+    return [
+        {"name": "DESKTOP-OTHER", "id": "remote-id", "is_active": True},
+        {"name": "MYBOX", "id": "local-id", "is_active": False},
+    ]
+
+
+def test_play_targets_this_machine_even_when_another_device_is_active():
+    """Otherwise "play a song" starts music on a PC in another room."""
+    from openjarvis.tools import spotify_control
+
+    with patch.object(spotify_control.socket, "gethostname", return_value="MyBox"):
+        with patch.object(
+            spotify_control, "_fetch_devices", return_value=_two_computers()
+        ):
+            chosen = spotify_control._pick_device_id("tok", prefer_local=True)
+
+    assert chosen == "local-id"
+
+
+def test_transport_actions_follow_the_active_device():
+    """"Pause" should stop what is audible, not a silent local client."""
+    from openjarvis.tools import spotify_control
+
+    with patch.object(spotify_control.socket, "gethostname", return_value="MyBox"):
+        with patch.object(
+            spotify_control, "_fetch_devices", return_value=_two_computers()
+        ):
+            chosen = spotify_control._pick_device_id("tok", prefer_local=False)
+
+    assert chosen == "remote-id"
+
+
+def test_local_device_match_is_case_insensitive():
+    """Spotify uppercases the hostname it registers under."""
+    from openjarvis.tools import spotify_control
+
+    with patch.object(spotify_control.socket, "gethostname", return_value="Grim"):
+        matched = spotify_control._local_device_id(
+            [{"name": "GRIM", "id": "local-id", "is_active": False}]
+        )
+
+    assert matched == "local-id"
+
+
 def test_restriction_violated_is_not_reported_as_a_permission_problem():
     """Spotify overloads 403; only one of its meanings warrants re-auth."""
     import httpx

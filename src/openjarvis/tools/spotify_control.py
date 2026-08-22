@@ -18,8 +18,9 @@ not a permission problem; ``execute`` separates the two.
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -86,27 +87,55 @@ def _most_recent_track(token: str) -> Dict[str, Any]:
     return (items[0].get("track") or {}) if items else {}
 
 
-def _pick_device_id(token: str) -> str:
-    """Return a device id to target, preferring the active one.
-
-    An open-but-idle Spotify client is listed as a device with
-    ``is_active: False``, and the transport endpoints answer 404 "no active
-    device" unless playback is explicitly targeted at it. Passing an
-    explicit ``device_id`` transfers playback to that client, which is what
-    makes "play a song" work when Spotify is merely open rather than
-    already playing.
-    """
+def _fetch_devices(token: str) -> List[Dict[str, Any]]:
+    """Return the account's currently visible Spotify Connect devices."""
     try:
         data = _request(token, "GET", "me/player/devices")
     except httpx.HTTPStatusError:
+        return []
+    return data.get("devices") or []
+
+
+def _local_device_id(devices: List[Dict[str, Any]]) -> str:
+    """Return the id of the device that is *this* machine, or "".
+
+    The desktop client registers itself under the machine's hostname, so
+    that is what identifies "here" among the account's devices.
+    """
+    hostname = socket.gethostname().strip().lower()
+    if not hostname:
         return ""
-    devices = data.get("devices") or []
+    for device in devices:
+        if (device.get("name") or "").strip().lower() == hostname:
+            return device.get("id", "")
+    return ""
+
+
+def _pick_device_id(token: str, *, prefer_local: bool = False) -> str:
+    """Choose which device to target, and always name one explicitly.
+
+    An open-but-idle client is listed with ``is_active: False``, and the
+    transport endpoints answer 404 "no active device" unless playback is
+    explicitly targeted — passing a ``device_id`` transfers playback to that
+    client, which is what makes "play" work when Spotify is merely open.
+
+    ``prefer_local`` starts playback on this machine. An account commonly
+    has several clients signed in (another PC, a phone, a TV) and Spotify
+    marks whichever last played as active, so choosing purely by "active"
+    sends "play a song" to a device in another room. Transport actions leave
+    this off deliberately and follow the active device instead, so "pause"
+    stops whatever is actually audible rather than a silent local client.
+    """
+    devices = _fetch_devices(token)
     if not devices:
         return ""
+    local_id = _local_device_id(devices)
+    if prefer_local and local_id:
+        return local_id
     for device in devices:
         if device.get("is_active"):
             return device.get("id", "")
-    return devices[0].get("id", "")
+    return local_id or devices[0].get("id", "")
 
 
 def _wake_spotify_app(token: str, timeout_seconds: float = 30.0) -> str:
@@ -117,10 +146,16 @@ def _wake_spotify_app(token: str, timeout_seconds: float = 30.0) -> str:
     after launch to appear in the devices list, hence polling rather than a
     single fixed sleep.
 
-    The poll waits on the *process* as well as the device id: a stale
-    Connect registration can already be in the device list before the newly
-    launched client is up, and returning that id would send playback to the
-    phantom again — the exact failure this function exists to avoid.
+    The poll waits for *this machine's* entry specifically, not merely for
+    some device to exist. Both weaker checks fail here: the process alone
+    can be up before Connect registration completes, and any-device-will-do
+    matches a stale registration or another computer on the account, which
+    would hand back an id pointing somewhere else entirely — the app opens
+    on screen while the music plays in another room.
+
+    Falls back to any device once the process is up and the wait is spent,
+    so an unexpected hostname mismatch degrades to playing *something*
+    rather than refusing outright.
     """
     import time
 
@@ -130,14 +165,16 @@ def _wake_spotify_app(token: str, timeout_seconds: float = 30.0) -> str:
         return ""
 
     deadline = time.monotonic() + timeout_seconds
+    running = False
     while time.monotonic() < deadline:
         time.sleep(2.0)
         if not is_app_running("spotify"):
             continue
-        device_id = _pick_device_id(token)
-        if device_id:
-            return device_id
-    return ""
+        running = True
+        local_id = _local_device_id(_fetch_devices(token))
+        if local_id:
+            return local_id
+    return _pick_device_id(token) if running else ""
 
 
 @ToolRegistry.register("spotify_control")
@@ -206,8 +243,16 @@ class SpotifyControlTool(BaseTool):
         # device list therefore means never launching at all.
         from openjarvis.tools.open_app import is_app_running
 
+        # "play" means "start music here", so it targets this machine even
+        # when another of the account's devices is the active one. The
+        # transport actions deliberately do not, so "pause" stops whatever
+        # is actually audible instead of a silent local client.
+        prefer_local = action == "play"
+
         if is_app_running("spotify"):
-            device_id = _pick_device_id(token) or _wake_spotify_app(token)
+            device_id = _pick_device_id(
+                token, prefer_local=prefer_local
+            ) or _wake_spotify_app(token)
         else:
             device_id = _wake_spotify_app(token)
         if not device_id:
