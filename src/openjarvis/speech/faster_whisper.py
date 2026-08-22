@@ -157,7 +157,24 @@ class FasterWhisperBackend(SpeechBackend):
                 # silence, and a hallucinated non-empty transcript gets sent
                 # as a real message, triggering a voice reply that re-arms
                 # continuous conversation and sustains an unwanted loop.
-                kwargs = {"vad_filter": True}
+                #
+                # vad_filter alone wasn't enough in practice: a live case
+                # captured only ambient noise (no wake-word-triggered
+                # recording ever has real speech in it if the trigger itself
+                # was a false positive) and Whisper still confidently
+                # hallucinated a full fake exchange ("How are you? I'm
+                # good.") from it — Silero's speech-probability gate judged
+                # the noise "speech-like" enough to pass through.
+                # min_speech_duration_ms rejects brief noise blips outright
+                # before Whisper ever sees them. Tried also tightening
+                # no_speech_threshold/log_prob_threshold below their
+                # faster-whisper defaults (0.6 / -1.0) for extra margin, but
+                # that rejected real manual speech-to-text too — reverted,
+                # not worth the false-negative cost for a rare hallucination.
+                kwargs = {
+                    "vad_filter": True,
+                    "vad_parameters": {"min_speech_duration_ms": 250},
+                }
                 if language:
                     kwargs["language"] = language
                 if initial_prompt:

@@ -654,6 +654,40 @@ export function InputArea() {
   const audioPlaying = useAppStore((s) => s.audioPlaying);
   const wasAudioPlayingRef = useRef(false);
 
+  // Stays false for a beat after audio stops playing, before the
+  // wake-word listener is allowed to re-arm. !audioPlaying alone wasn't
+  // enough: a recorded live test showed the wake word false-triggering
+  // within ~1s of every single voice reply ending, consistently, with
+  // no real speech following — most likely the playback-cutoff
+  // click/pop, or the TTS voice's own tail bleeding through imperfect
+  // echo cancellation. Each false trigger resolves itself (vad_filter
+  // correctly finds silence, so nothing gets sent) but the listener
+  // re-arms and re-triggers again moments later, indefinitely — from
+  // the user's side this looked exactly like "the mic won't turn off."
+  const [wakeWordSettled, setWakeWordSettled] = useState(true);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (settleTimerRef.current) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+    if (audioPlaying) {
+      setWakeWordSettled(false);
+      return;
+    }
+    settleTimerRef.current = setTimeout(() => {
+      setWakeWordSettled(true);
+      settleTimerRef.current = null;
+    }, 1200);
+    return () => {
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+    };
+  }, [audioPlaying]);
+
   const { error: wakeWordError } = useWakeWord(
     beginAutoRecording,
     // !audioPlaying matters as much as speechState === 'idle' here:
@@ -662,8 +696,9 @@ export function InputArea() {
     // Without this, the wake-word mic starts listening again while Sage's
     // own TTS reply is still playing through the speakers — echo
     // cancellation isn't perfect, so it can hear (and re-trigger on)
-    // itself, independent of any toggle.
-    wakeWordEnabled && !micDisabled && speechState === 'idle' && !audioPlaying,
+    // itself, independent of any toggle. wakeWordSettled adds the
+    // post-playback cooldown described above.
+    wakeWordEnabled && !micDisabled && speechState === 'idle' && !audioPlaying && wakeWordSettled,
   );
 
   useEffect(() => {

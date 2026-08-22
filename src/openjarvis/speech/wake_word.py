@@ -21,10 +21,10 @@ SAMPLE_RATE = 16000
 # audio and runs "hot". Calibrated against live measurements through the
 # actual capture pipeline (raw mic input, no browser AGC/noise suppression
 # — see useWakeWord.ts): ambient silence peaked at 0.3, keyboard clicks at
-# 0.6, genuine "Hey Sage" reaching 0.74-1.0 when it fires. 0.76 sits just
-# above the bottom of the real-speech range while staying above every
-# measured false-positive source (silence, keyboard).
-DEFAULT_THRESHOLD = 0.76
+# 0.6, genuine "Hey Sage" reaching 0.74-1.0 when it fires. Raised from 0.76
+# to 0.79 for extra margin above every measured false-positive source
+# (silence, keyboard) after a live false positive on ambient noise.
+DEFAULT_THRESHOLD = 0.79
 # How many consecutive 80ms frames must clear the threshold before a
 # detection counts — a single high-scoring frame from a noise transient is
 # common; a sustained ~160ms run of them is not.
