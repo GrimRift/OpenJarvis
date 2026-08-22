@@ -84,7 +84,11 @@ TRUST_UNTRUSTED = "untrusted"  # scanner flagged the text → quarantined
 
 # "" is the legacy on-disk value, written before provenance existed. It stays
 # recallable so upgrading does not silently erase a user's existing memory.
-_RECALLABLE_TIERS = frozenset({"", TRUST_AUTO, TRUST_TRUSTED})
+# Exported because the same tier vocabulary gates document recall in
+# tools.storage.context — a second, drifting copy of this set would be a
+# security bug waiting to happen.
+RECALLABLE_TRUST_TIERS = frozenset({"", TRUST_AUTO, TRUST_TRUSTED})
+_RECALLABLE_TIERS = RECALLABLE_TRUST_TIERS  # internal alias
 
 
 @contextmanager
@@ -468,6 +472,7 @@ def load_configured_facts(config: Any) -> List[Fact]:
 
 
 __all__ = [
+    "RECALLABLE_TRUST_TIERS",
     "TRUST_AUTO",
     "TRUST_TRUSTED",
     "TRUST_UNTRUSTED",
