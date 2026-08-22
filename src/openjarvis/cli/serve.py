@@ -490,6 +490,18 @@ def serve(
     except Exception as exc:
         logger.debug("Speech backend discovery failed: %s", exc)
 
+    # Set up wake-word detector (optional — no-op until a trained model path
+    # is set in config.toml's [speech] wake_word_model)
+    wake_word_detector = None
+    try:
+        from openjarvis.speech.wake_word import get_wake_word_detector
+
+        wake_word_detector = get_wake_word_detector(config.speech.wake_word_model)
+        if wake_word_detector:
+            console.print("  Wake word: [cyan]enabled[/cyan]")
+    except Exception as exc:
+        logger.debug("Wake word detector setup failed: %s", exc)
+
     # Create app
     from openjarvis.server.app import create_app
 
@@ -709,6 +721,7 @@ def serve(
         own_memory_backend=memory_backend is not None,
         memory_service=memory_service,
         speech_backend=speech_backend,
+        wake_word_detector=wake_word_detector,
         agent_manager=agent_manager,
         agent_scheduler=agent_scheduler,
         mcp_tools=managed_mcp_tools,

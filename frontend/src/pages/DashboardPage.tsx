@@ -1,5 +1,6 @@
 import { EnergyDashboard } from '../components/Dashboard/EnergyDashboard';
 import { CostComparison } from '../components/Dashboard/CostComparison';
+import { LeaderboardCard } from '../components/Dashboard/LeaderboardCard';
 import { TraceDebugger } from '../components/Dashboard/TraceDebugger';
 
 export function DashboardPage() {
@@ -26,6 +27,7 @@ export function DashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
           <EnergyDashboard />
           <CostComparison />
+          <LeaderboardCard />
         </div>
 
         <TraceDebugger />

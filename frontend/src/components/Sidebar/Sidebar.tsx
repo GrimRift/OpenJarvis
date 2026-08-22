@@ -81,7 +81,7 @@ export function Sidebar() {
         className={`
           flex flex-col h-full shrink-0 transition-all duration-200 ease-in-out overflow-hidden
           fixed md:relative z-30
-          ${sidebarOpen ? 'w-[260px]' : 'w-0'}
+          ${sidebarOpen ? 'w-[260px]' : 'w-[0px]'}
         `}
         style={{
           background: 'var(--color-sidebar)',
@@ -201,7 +201,7 @@ export function Sidebar() {
                   onClick={() => navigate(item.path)}
                   className="relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors w-full text-left cursor-pointer"
                   style={{
-                    background: isActive ? 'var(--color-accent-subtle)' : 'transparent',
+                    background: 'transparent',
                     color: isActive ? 'var(--color-text)' : 'var(--color-text-secondary)',
                     fontWeight: isActive ? 500 : 400,
                   }}

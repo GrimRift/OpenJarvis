@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router';
 import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
 import { StreamingDots } from './StreamingDots';
+import { OrbVisual, useOrbState } from './OrbVisual';
 import { useAppStore } from '../../lib/store';
-import { Sparkles, PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
+import { Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
 
 function getGreeting(): string {
@@ -18,8 +19,7 @@ export function ChatArea() {
   const activeId = useAppStore((s) => s.activeId);
   const messages = useAppStore((s) => s.messages);
   const streamState = useAppStore((s) => s.streamState);
-  const systemPanelOpen = useAppStore((s) => s.systemPanelOpen);
-  const toggleSystemPanel = useAppStore((s) => s.toggleSystemPanel);
+  const orbState = useOrbState();
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -27,6 +27,7 @@ export function ChatArea() {
   const lastScrollTop = useRef(0);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
   const currentStreamContent = isCurrentChatStreaming ? streamState.content : '';
+  const orbStateLabel = orbState === 'listening' ? 'Listening' : orbState === 'speaking' ? 'Speaking' : 'Standing by';
 
   // Check if any data sources are connected
   const [hasConnectedSources, setHasConnectedSources] = useState<boolean | null>(null);
@@ -71,22 +72,8 @@ export function ChatArea() {
 
   const isEmpty = messages.length === 0 && !isCurrentChatStreaming;
 
-  const PanelIcon = systemPanelOpen ? PanelRightClose : PanelRightOpen;
-
   return (
     <div className="flex flex-col h-full">
-      {/* Toggle bar */}
-      <div className="flex items-center justify-end px-3 py-1.5 shrink-0">
-        <button
-          onClick={toggleSystemPanel}
-          className="p-1.5 rounded-md transition-colors cursor-pointer"
-          style={{ color: 'var(--color-text-tertiary)' }}
-          title={`${systemPanelOpen ? 'Hide' : 'Show'} system panel (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I)`}
-        >
-          <PanelIcon size={16} />
-        </button>
-      </div>
-
       {/* Data sources banner */}
       {hasConnectedSources === false && !bannerDismissed && (
         <div
@@ -116,33 +103,41 @@ export function ChatArea() {
           </button>
         </div>
       )}
+      {/* Capped at chat-max-width and centered, same as the composer below —
+          so the scroll area (and its scrollbar) hug the actual readable
+          column instead of spanning the full ChatArea width. */}
+      <div className="relative flex-1 min-h-0 w-full max-w-[var(--chat-max-width)] mx-auto">
       <div
         ref={listRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto"
+        className="h-full overflow-y-auto"
       >
         {isEmpty ? (
           <div className="flex flex-col items-center justify-center h-full px-4">
             <div
-              className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4"
-              style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}
+              className="text-[10px] uppercase mb-2"
+              style={{ color: 'var(--color-text-tertiary)', letterSpacing: '0.05em' }}
             >
-              <Sparkles size={24} />
+              {orbStateLabel}
             </div>
-            <h2 className="text-xl font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
+            <OrbVisual state={orbState} />
+            <h2
+              className="font-semibold mt-1"
+              style={{ color: 'var(--color-text)', fontFamily: 'var(--font-display)', fontSize: 26 }}
+            >
               {getGreeting()}
             </h2>
-            <p className="text-sm text-center max-w-sm mb-6" style={{ color: 'var(--color-text-secondary)' }}>
+            <p className="text-sm text-center max-w-sm mt-2 mb-6" style={{ color: 'var(--color-text-secondary)' }}>
               Ask anything. Your AI runs locally — private, fast, and always available.
             </p>
 
             {/* Quick action hints */}
-            <div className="flex gap-3">
+            <div className="flex gap-2 flex-wrap justify-center">
               <button
                 onClick={() => navigate('/data-sources')}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs cursor-pointer transition-colors"
+                className="flex items-center gap-2 px-3.5 py-2 rounded-full text-xs cursor-pointer transition-colors"
                 style={{
-                  background: 'var(--color-bg-secondary)',
+                  background: 'transparent',
                   border: '1px solid var(--color-border)',
                   color: 'var(--color-text-secondary)',
                 }}
@@ -154,9 +149,9 @@ export function ChatArea() {
               </button>
               <button
                 onClick={() => { navigate('/data-sources'); setTimeout(() => window.dispatchEvent(new CustomEvent('switch-tab', { detail: 'messaging' })), 100); }}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs cursor-pointer transition-colors"
+                className="flex items-center gap-2 px-3.5 py-2 rounded-full text-xs cursor-pointer transition-colors"
                 style={{
-                  background: 'var(--color-bg-secondary)',
+                  background: 'transparent',
                   border: '1px solid var(--color-border)',
                   color: 'var(--color-text-secondary)',
                 }}
@@ -169,7 +164,7 @@ export function ChatArea() {
             </div>
           </div>
         ) : (
-          <div className="max-w-[var(--chat-max-width)] mx-auto px-4 py-6">
+          <div className="px-4 py-6">
             {messages.map((msg, i) => {
               const isLastAssistant =
                 i === messages.length - 1 && msg.role === 'assistant';
@@ -196,6 +191,12 @@ export function ChatArea() {
           </div>
         )}
       </div>
+      </div>
+      {!isEmpty && (
+        <div style={{ position: 'fixed', bottom: 24, right: 24, pointerEvents: 'none', zIndex: 5 }}>
+          <OrbVisual state={orbState} />
+        </div>
+      )}
       <InputArea />
     </div>
   );

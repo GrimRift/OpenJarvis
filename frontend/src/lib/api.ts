@@ -331,6 +331,7 @@ export interface SpeechHealth {
   available: boolean;
   backend?: string;
   reason?: string;
+  wake_word_available?: boolean;
 }
 
 export async function transcribeAudio(audioBlob: Blob, filename = 'recording.webm'): Promise<TranscriptionResult> {

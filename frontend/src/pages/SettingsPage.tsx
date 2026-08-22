@@ -240,6 +240,7 @@ export function SettingsPage() {
   const serverInfo = useAppStore((s) => s.serverInfo);
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [speechBackendAvailable, setSpeechBackendAvailable] = useState<boolean | null>(null);
+  const [wakeWordAvailable, setWakeWordAvailable] = useState<boolean | null>(null);
   const [saved, setSaved] = useState(false);
 
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(() => !isAutoUpdateDisabled());
@@ -312,8 +313,14 @@ export function SettingsPage() {
   useEffect(() => {
     checkHealth().then(setHealthy);
     fetchSpeechHealth()
-      .then((h) => setSpeechBackendAvailable(h.available))
-      .catch(() => setSpeechBackendAvailable(false));
+      .then((h) => {
+        setSpeechBackendAvailable(h.available);
+        setWakeWordAvailable(!!h.wake_word_available);
+      })
+      .catch(() => {
+        setSpeechBackendAvailable(false);
+        setWakeWordAvailable(false);
+      });
     getMemoryStats()
       .then(setMemoryStats)
       .catch(() => setMemoryStats(null));
@@ -739,6 +746,44 @@ export function SettingsPage() {
                 </span>
               </div>
             </SettingRow>
+            {wakeWordAvailable && (
+              <>
+                <SettingRow label={'Wake Word ("Hey Sage")'} description="Listen continuously and start recording when you say the wake word">
+                  <button
+                    onClick={() => { updateSettings({ wakeWordEnabled: !settings.wakeWordEnabled }); showSaved(); }}
+                    className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
+                    style={{
+                      background: settings.wakeWordEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                      style={{
+                        transform: settings.wakeWordEnabled ? 'translateX(20px)' : 'translateX(0)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    />
+                  </button>
+                </SettingRow>
+                <SettingRow label="Continuous Conversation" description="After Sage replies, automatically listen for your next turn instead of requiring the wake word again">
+                  <button
+                    onClick={() => { updateSettings({ continuousConversationEnabled: !settings.continuousConversationEnabled }); showSaved(); }}
+                    className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
+                    style={{
+                      background: settings.continuousConversationEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                      style={{
+                        transform: settings.continuousConversationEnabled ? 'translateX(20px)' : 'translateX(0)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    />
+                  </button>
+                </SettingRow>
+              </>
+            )}
             {!speechBackendAvailable && speechBackendAvailable !== null && (
               <div className="text-xs mt-2 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
                 Set up a speech backend to use voice input.

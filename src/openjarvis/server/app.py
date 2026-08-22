@@ -157,6 +157,7 @@ def create_app(
     own_memory_backend: bool = False,
     memory_service=None,
     speech_backend=None,
+    wake_word_detector=None,
     agent_manager=None,
     agent_scheduler=None,
     mcp_tools=None,
@@ -232,6 +233,7 @@ def create_app(
     app.state._owns_memory_backend = bool(own_memory_backend)
     app.state.memory_service = memory_service
     app.state.speech_backend = speech_backend
+    app.state.wake_word_detector = wake_word_detector
     app.state.agent_manager = agent_manager
     app.state.agent_scheduler = agent_scheduler
     app.state.mcp_tools = list(mcp_tools or [])

@@ -27,7 +27,18 @@ export function useSpeech() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Explicit rather than relying on browser defaults — Opera GX and
+      // other Chromium variants don't necessarily apply the same defaults
+      // as Chrome, and a quiet built-in laptop mic needs autoGainControl
+      // to actually be on, not just assumed.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
       streamRef.current = stream;
 
       const recorder = new MediaRecorder(stream);

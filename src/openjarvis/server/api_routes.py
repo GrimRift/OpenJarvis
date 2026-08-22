@@ -656,6 +656,46 @@ def _record_ws_trace(
     )
 
 
+@websocket_router.websocket("/v1/speech/wake-word")
+async def wake_word_stream(websocket: WebSocket):
+    """Continuous local wake-word detection.
+
+    Client streams raw 16-bit 16kHz mono PCM frames (1280 samples / 80ms
+    each — openWakeWord's native chunk size) as binary WebSocket messages.
+    Sends back ``{"type": "detected", "score": <float>}`` the moment the
+    trained wake word crosses threshold, and ``{"type": "score", "value":
+    <float>}`` on every frame otherwise — deliberately chatty rather than
+    silent, so a live score readout in the UI can show whether the pipeline
+    is even hearing anything at all (a real diagnostic need: "nothing
+    happens" is otherwise indistinguishable from a dead mic, a closed
+    socket, or a model that's just never confident enough).
+    """
+    from openjarvis.server.auth_middleware import authenticate_websocket
+
+    expected_key = getattr(websocket.app.state, "api_key", "")
+    authorized, subprotocol = authenticate_websocket(websocket, expected_key)
+    if not authorized:
+        await websocket.close(code=1008)
+        return
+
+    detector = getattr(websocket.app.state, "wake_word_detector", None)
+    if detector is None or not detector.available:
+        await websocket.close(code=1011)
+        return
+
+    await websocket.accept(subprotocol=subprotocol)
+    try:
+        while True:
+            frame = await websocket.receive_bytes()
+            score = await asyncio.to_thread(detector.score, frame)
+            if detector.is_detection(score):
+                await websocket.send_json({"type": "detected", "score": score})
+            else:
+                await websocket.send_json({"type": "score", "value": score})
+    except WebSocketDisconnect:
+        pass
+
+
 @websocket_router.websocket("/v1/chat/stream")
 async def websocket_chat_stream(websocket: WebSocket):
     """Stream chat responses over a WebSocket connection.
@@ -896,11 +936,28 @@ async def transcribe_speech(request: Request):
         raise HTTPException(status_code=400, detail="Missing 'file' field")
 
     audio_bytes = await audio_file.read()
-    language = form.get("language")
+    # Whisper's language auto-detection is unreliable on short clips — a
+    # real user hit consistent misdetection (e.g. English "Hey Sage" heard
+    # as Portuguese and transcribed as unrelated Portuguese words). Forcing
+    # a language fixed it outright (0.57 confidence garbage -> 1.0 correct
+    # on the same audio), so default to config's language instead of
+    # trusting auto-detect, while still letting a caller override per-request.
+    config = getattr(request.app.state, "config", None)
+    speech_config = getattr(config, "speech", None) if config else None
+    default_language = getattr(speech_config, "language", "")
+    language = form.get("language") or default_language or None
+    # Biases decoding toward "Sage" (the assistant's name) — without this,
+    # Whisper has no signal that it's a likely word and readily mishears it.
+    default_prompt = getattr(speech_config, "initial_prompt", "")
+    initial_prompt = form.get("initial_prompt") or default_prompt or None
 
     # Detect format from filename
     filename = getattr(audio_file, "filename", "audio.wav")
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "wav"
+
+    # initial_prompt is faster-whisper-specific — openai/deepgram backends'
+    # transcribe() don't accept it and would TypeError on an unknown kwarg.
+    extra_kwargs = {"initial_prompt": initial_prompt} if backend.backend_id == "faster-whisper" else {}
 
     try:
         result = await asyncio.to_thread(
@@ -908,6 +965,7 @@ async def transcribe_speech(request: Request):
             audio_bytes,
             format=ext,
             language=language or None,
+            **extra_kwargs,
         )
     except Exception as exc:
         logger.exception("Speech transcription failed")
@@ -967,9 +1025,16 @@ async def get_synthesized_audio(token: str):
 @speech_router.get("/health")
 async def speech_health(request: Request):
     """Check if a speech backend is available."""
+    detector = getattr(request.app.state, "wake_word_detector", None)
+    wake_word_available = bool(detector and detector.available)
+
     backend = getattr(request.app.state, "speech_backend", None)
     if backend is None:
-        return {"available": False, "reason": "No speech backend configured"}
+        return {
+            "available": False,
+            "reason": "No speech backend configured",
+            "wake_word_available": wake_word_available,
+        }
     try:
         available = backend.health()
         reason = None
@@ -986,6 +1051,7 @@ async def speech_health(request: Request):
     return {
         "available": available,
         "backend": backend.backend_id,
+        "wake_word_available": wake_word_available,
         **({"reason": reason} if reason else {}),
     }
 
