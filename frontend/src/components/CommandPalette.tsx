@@ -9,6 +9,9 @@ import {
   isTauri,
   getCloudKeyStatus,
   saveCloudKey,
+  fetchToolCredentialStatus,
+  saveToolCredentials,
+  deleteToolCredential,
 } from '../lib/api';
 
 /** Popular models that users can download from the catalogue. */
@@ -31,6 +34,11 @@ const CATALOGUE_MODELS = [
 interface CloudProvider {
   name: string;
   envKey: string;
+  // Maps to core/credentials.py's TOOL_CREDENTIALS -- lets the key be saved
+  // via the generic server-side credential store (writes credentials.toml,
+  // sets os.environ immediately) when not running as the Tauri desktop app,
+  // which is the only place saveCloudKey()/getCloudKeyStatus() work.
+  toolName: string;
   models: Array<{ id: string; desc: string }>;
 }
 
@@ -38,15 +46,18 @@ const CLOUD_PROVIDERS: CloudProvider[] = [
   {
     name: 'OpenAI',
     envKey: 'OPENAI_API_KEY',
+    toolName: 'cloud_openai',
     models: [
       { id: 'gpt-4o', desc: 'GPT-4o — fast, multimodal' },
       { id: 'gpt-4o-mini', desc: 'GPT-4o Mini — cheap, fast' },
       { id: 'o3-mini', desc: 'o3-mini — reasoning' },
+      { id: 'gpt-5.6-luna', desc: 'GPT-5.6 Luna — fast, cheap reasoning, 1M context' },
     ],
   },
   {
     name: 'Anthropic',
     envKey: 'ANTHROPIC_API_KEY',
+    toolName: 'cloud_anthropic',
     models: [
       { id: 'claude-sonnet-4-6', desc: 'Claude Sonnet 4.6 — balanced' },
       { id: 'claude-opus-4-6', desc: 'Claude Opus 4.6 — most capable' },
@@ -56,6 +67,7 @@ const CLOUD_PROVIDERS: CloudProvider[] = [
   {
     name: 'Google',
     envKey: 'GEMINI_API_KEY',
+    toolName: 'cloud_google',
     models: [
       { id: 'gemini-2.5-pro', desc: 'Gemini 2.5 Pro — flagship' },
       { id: 'gemini-2.5-flash', desc: 'Gemini 2.5 Flash — fast' },
@@ -65,6 +77,7 @@ const CLOUD_PROVIDERS: CloudProvider[] = [
   {
     name: 'OpenRouter',
     envKey: 'OPENROUTER_API_KEY',
+    toolName: 'cloud_openrouter',
     models: [
       { id: 'openrouter/auto', desc: 'Auto — best model for the task' },
       { id: 'openrouter/anthropic/claude-sonnet-4', desc: 'Claude Sonnet 4 via OpenRouter' },
@@ -101,12 +114,24 @@ export function CommandPalette() {
   const desktopKeyStorage = isTauri();
 
   const refreshCloudKeyStatus = useCallback(async () => {
-    if (!desktopKeyStorage) {
-      setCloudKeyStatus({});
-      return;
-    }
     try {
-      setCloudKeyStatus(await getCloudKeyStatus());
+      if (desktopKeyStorage) {
+        setCloudKeyStatus(await getCloudKeyStatus());
+      } else {
+        // Web/server deployment: getCloudKeyStatus() only ever checks
+        // Tauri's secure storage and would report every provider as
+        // disconnected regardless of a real key being configured. Ask the
+        // server-side credential store (same one Tavily's key already
+        // uses) per provider instead.
+        const statuses = await Promise.all(
+          CLOUD_PROVIDERS.map((p) => fetchToolCredentialStatus(p.toolName)),
+        );
+        const merged: Record<string, boolean> = {};
+        CLOUD_PROVIDERS.forEach((p, i) => {
+          merged[p.envKey] = !!statuses[i][p.envKey];
+        });
+        setCloudKeyStatus(merged);
+      }
       setCloudKeyError(null);
     } catch (e: any) {
       setCloudKeyError(e?.message || 'Failed to read cloud key status');
@@ -224,7 +249,13 @@ export function CommandPalette() {
     setCloudKeyError(null);
 
     try {
-      await saveCloudKey(provider.envKey, keyValue);
+      if (desktopKeyStorage) {
+        await saveCloudKey(provider.envKey, keyValue);
+      } else if (keyValue) {
+        await saveToolCredentials(provider.toolName, { [provider.envKey]: keyValue });
+      } else {
+        await deleteToolCredential(provider.toolName, provider.envKey);
+      }
       setApiKeys((prev) => ({ ...prev, [provider.envKey]: '' }));
       await refreshCloudKeyStatus();
       useAppStore.getState().addLogEntry({
@@ -459,7 +490,7 @@ export function CommandPalette() {
               <div className="text-[11px] mb-3" style={{ color: 'var(--color-text-tertiary)' }}>
                 {desktopKeyStorage
                   ? 'Add your API keys to use cloud models. Keys are stored in secure desktop storage.'
-                  : 'Configure cloud provider keys in the server environment to use cloud models.'}
+                  : 'Add your API keys to use cloud models. Keys are stored on the server and take effect immediately.'}
               </div>
 
               {CLOUD_PROVIDERS.map((provider) => {
@@ -490,8 +521,8 @@ export function CommandPalette() {
                           value={key}
                           onChange={(e) => setApiKeys((prev) => ({ ...prev, [provider.envKey]: e.target.value }))}
                           onBlur={() => handleKeyBlur(provider)}
-                          placeholder={hasSavedKey ? 'Saved in secure storage' : provider.envKey}
-                          disabled={!desktopKeyStorage || isSaving}
+                          placeholder={hasSavedKey ? (desktopKeyStorage ? 'Saved in secure storage' : 'Saved on server') : provider.envKey}
+                          disabled={isSaving}
                           className="flex-1 text-xs px-2 py-1.5 bg-transparent outline-none font-mono"
                           style={{ color: 'var(--color-text)' }}
                         />

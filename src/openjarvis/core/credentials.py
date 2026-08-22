@@ -28,6 +28,15 @@ def _default_path() -> Path:
 TOOL_CREDENTIALS: dict[str, list[str]] = {
     "web_search": ["TAVILY_API_KEY"],
     "image_generate": ["OPENAI_API_KEY"],
+    # Direct cloud chat-model providers (see server/cloud_router.py). Kept
+    # distinct from "image_generate" despite the shared OPENAI_API_KEY —
+    # save_credential() sets the real os.environ var either way, so which
+    # tool_name is used to set it doesn't change what gets picked up, but a
+    # dedicated entry keeps the Settings/Cloud-Models UI's intent honest.
+    "cloud_openai": ["OPENAI_API_KEY"],
+    "cloud_anthropic": ["ANTHROPIC_API_KEY"],
+    "cloud_google": ["GEMINI_API_KEY"],
+    "cloud_openrouter": ["OPENROUTER_API_KEY"],
     "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
     "telegram": ["TELEGRAM_BOT_TOKEN"],
     "discord": ["DISCORD_BOT_TOKEN"],

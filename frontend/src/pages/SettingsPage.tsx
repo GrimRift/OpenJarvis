@@ -560,16 +560,16 @@ export function SettingsPage() {
           {/* API Keys */}
           <Section title="API Keys">
             <SettingRow label="OpenAI" description="GPT-4, GPT-3.5, etc.">
-              <ApiKeyInput keyName="OPENAI_API_KEY" placeholder="sk-..." />
+              <ApiKeyInput keyName="OPENAI_API_KEY" placeholder="sk-..." toolName="cloud_openai" />
             </SettingRow>
             <SettingRow label="Anthropic" description="Claude models">
-              <ApiKeyInput keyName="ANTHROPIC_API_KEY" placeholder="sk-ant-..." />
+              <ApiKeyInput keyName="ANTHROPIC_API_KEY" placeholder="sk-ant-..." toolName="cloud_anthropic" />
             </SettingRow>
             <SettingRow label="Google" description="Gemini models">
-              <ApiKeyInput keyName="GEMINI_API_KEY" placeholder="AI..." />
+              <ApiKeyInput keyName="GEMINI_API_KEY" placeholder="AI..." toolName="cloud_google" />
             </SettingRow>
             <SettingRow label="OpenRouter" description="Multi-provider routing">
-              <ApiKeyInput keyName="OPENROUTER_API_KEY" placeholder="sk-or-..." />
+              <ApiKeyInput keyName="OPENROUTER_API_KEY" placeholder="sk-or-..." toolName="cloud_openrouter" />
             </SettingRow>
           </Section>
 

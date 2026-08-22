@@ -147,6 +147,18 @@ def _to_google_contents(messages: Sequence[Message]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """OpenAI's reasoning models (o-series, and GPT-5.x's "sol"/"terra"/
+    "luna" tiers) use `reasoning_effort` instead of `temperature` -- they
+    reject a custom temperature outright, and plain chat models reject
+    `reasoning_effort` in turn. Sending the wrong field for the model kind
+    risks a 400, so the payload has to pick one or the other based on this.
+    """
+    if model.startswith(("o1", "o3", "o4")):
+        return True
+    return any(tier in model for tier in ("-sol", "-terra", "-luna"))
+
+
 async def _stream_openai(
     model: str,
     messages: Sequence[Message],
@@ -160,13 +172,21 @@ async def _stream_openai(
     if not api_key:
         raise ValueError(f"{api_key_name} not set — add it in the Cloud Models tab")
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": _to_openai_msgs(messages),
-        "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
     }
+    if _is_reasoning_model(model):
+        # No UI control for this yet -- default to "high" whenever a
+        # reasoning-capable model is selected at all, since choosing one of
+        # these models over a plain chat model already signals wanting its
+        # reasoning capability used, not left at whatever OpenAI's own
+        # unspecified default is.
+        payload["reasoning_effort"] = "high"
+    else:
+        payload["temperature"] = temperature
 
     async with httpx.AsyncClient(timeout=180) as client:
         async with client.stream(

@@ -33,6 +33,7 @@ PRICING: Dict[str, tuple[float, float]] = {
     "gpt-5": (10.00, 30.00),
     "gpt-5.4": (15.00, 60.00),
     "gpt-5-mini": (0.25, 2.00),
+    "gpt-5.6-luna": (0.20, 1.20),
     "o3-mini": (1.10, 4.40),
     "claude-sonnet-4-20250514": (3.00, 15.00),
     "claude-opus-4-20250514": (15.00, 75.00),
@@ -63,6 +64,7 @@ _OPENAI_MODELS = [
     "gpt-5",
     "gpt-5.4",
     "gpt-5-mini",
+    "gpt-5.6-luna",
     "o3-mini",
 ]
 _ANTHROPIC_MODELS = [
@@ -171,12 +173,36 @@ def _is_openai_model(model: str) -> bool:
 
 
 def _is_openai_reasoning_model(model: str) -> bool:
-    """Check if model is an OpenAI reasoning model that restricts temperature."""
+    """Check if model is an OpenAI reasoning model that restricts temperature.
+
+    Also covers GPT-5.6's "sol"/"terra"/"luna" reasoning tiers, which behave
+    like o1/o3/gpt-5-mini here: reject a custom temperature and support
+    `reasoning_effort` instead (kept in sync with
+    ``server/cloud_router.py:_is_reasoning_model``, the parallel
+    implementation used by the no-agent request path).
+    """
     m = model.lower()
     # o1/o3 series and gpt-5-mini (all variants) are reasoning models
     if m.startswith(("o1", "o3")):
         return True
-    return m == "gpt-5-mini" or m.startswith("gpt-5-mini-")
+    if m == "gpt-5-mini" or m.startswith("gpt-5-mini-"):
+        return True
+    return any(tier in m for tier in ("-sol", "-terra", "-luna"))
+
+
+def _reasoning_effort_for(create_kwargs: Dict[str, Any]) -> str:
+    """Pick a reasoning_effort value that won't 400 against Chat Completions.
+
+    OpenAI's Chat Completions endpoint rejects a non-"none" reasoning_effort
+    on requests that also carry function tools for at least the GPT-5.6
+    reasoning tiers (confirmed live: 400 invalid_request_error, "Function
+    tools with reasoning_effort are not supported ... use 'none'"). The
+    orchestrator agent always attaches tools, so "high" by default would
+    break every agent-routed call to one of these models. "none" still
+    lets Chat Completions accept the call; a tool-free direct chat gets
+    the real "high" effort instead.
+    """
+    return "none" if create_kwargs.get("tools") else "high"
 
 
 def _is_unsupported_temperature_error(exc: Exception) -> bool:
@@ -580,6 +606,8 @@ class CloudEngine(InferenceEngine):
         }
         if not _is_openai_reasoning_model(model):
             create_kwargs["temperature"] = temperature
+        else:
+            create_kwargs["reasoning_effort"] = _reasoning_effort_for(create_kwargs)
 
         # Apply structured output / JSON mode
         if response_format is not None:
@@ -1232,6 +1260,8 @@ class CloudEngine(InferenceEngine):
         }
         if not _is_openai_reasoning_model(model):
             create_kwargs["temperature"] = temperature
+        else:
+            create_kwargs["reasoning_effort"] = _reasoning_effort_for(create_kwargs)
         resp = self._openai_client.chat.completions.create(**create_kwargs)
         for chunk in resp:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -1620,6 +1650,8 @@ class CloudEngine(InferenceEngine):
             }
             if not _is_openai_reasoning_model(model):
                 create_kwargs["temperature"] = temperature
+            else:
+                create_kwargs["reasoning_effort"] = _reasoning_effort_for(create_kwargs)
         resp = client.chat.completions.create(**create_kwargs)
         for chunk in resp:
             choice = chunk.choices[0] if chunk.choices else None
