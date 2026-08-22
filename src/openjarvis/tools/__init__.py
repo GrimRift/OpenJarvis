@@ -177,4 +177,14 @@ try:
 except ImportError:
     pass
 
+try:
+    import openjarvis.tools.open_app  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.spotify_control  # noqa: F401
+except ImportError:
+    pass
+
 __all__ = ["BaseTool", "ToolExecutor", "ToolSpec"]

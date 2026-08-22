@@ -120,7 +120,21 @@ OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
         display_name="Spotify",
         auth_endpoint="https://accounts.spotify.com/authorize",
         token_endpoint="https://accounts.spotify.com/api/token",
-        scopes=["user-read-recently-played"],
+        # The two playback scopes are required by tools/spotify_control.py:
+        # -modify- for the transport actions (play/pause/next/previous),
+        # -read- for GET /me/player/devices, which that tool checks before
+        # acting so it can auto-launch the desktop app when no device is
+        # live. Both are playback-only — no library writes, no playlist
+        # edits, no account changes. Adding them invalidates existing
+        # tokens: a token minted under the old scope list gets 403 on the
+        # new endpoints. Re-consent with `scripts/reauth-spotify.py` —
+        # NOT `jarvis connect spotify`, which skips the OAuth flow whenever
+        # a token file already exists and would only re-sync history.
+        scopes=[
+            "user-read-recently-played",
+            "user-modify-playback-state",
+            "user-read-playback-state",
+        ],
         setup_url="https://developer.spotify.com/dashboard",
         setup_hint=("Create an app, add redirect URI: http://127.0.0.1:8888/callback"),
         callback_port=8888,
