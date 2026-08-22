@@ -65,11 +65,16 @@ def _request(
 
 def _find_track(token: str, query: str) -> Dict[str, Any]:
     """Resolve a free-text song name to the top matching track."""
+    # limit=5 rather than 1: Spotify can return an *empty* first page for a
+    # query that plainly matches — "binibini by zack tabudlo" yielded
+    # nothing at limit=1 and two correct hits at limit=3 — so asking for a
+    # single result turns a findable song into "not found". Only the top hit
+    # is used either way; the extra rows exist to stop that empty-page case.
     data = _request(
         token,
         "GET",
         "search",
-        params={"q": query, "type": "track", "limit": 1},
+        params={"q": query, "type": "track", "limit": 5},
     )
     items = (data.get("tracks") or {}).get("items") or []
     return items[0] if items else {}

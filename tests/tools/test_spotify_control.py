@@ -100,6 +100,21 @@ def test_play_uses_existing_device_when_app_is_already_running():
     assert message == "Playback paused."
 
 
+def test_track_search_asks_for_more_than_one_result():
+    """limit=1 can return an empty page for a query that plainly matches.
+
+    "binibini by zack tabudlo" yielded nothing at limit=1 and two correct
+    hits at limit=3, so asking for a single row turns a findable song into
+    "not found". Only the top hit is ever used.
+    """
+    from openjarvis.tools import spotify_control
+
+    with patch.object(spotify_control, "_request", return_value={}) as request:
+        spotify_control._find_track("tok", "binibini by zack tabudlo")
+
+    assert request.call_args.kwargs["params"]["limit"] > 1
+
+
 def _two_computers():
     """An account signed in on this machine and on another one."""
     return [

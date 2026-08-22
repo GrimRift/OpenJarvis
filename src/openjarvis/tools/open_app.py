@@ -38,8 +38,20 @@ _APPS: Dict[str, Dict[str, Any]] = {
         "display": "Obsidian",
         "process": "Obsidian.exe",
         "candidates": [
+            # Electron/Squirrel per-user installs land under Programs\, which
+            # is where Obsidian actually is; the bare LOCALAPPDATA path below
+            # is kept only as a fallback for other layouts.
+            os.path.join(
+                os.environ.get("LOCALAPPDATA", ""),
+                "Programs",
+                "Obsidian",
+                "Obsidian.exe",
+            ),
             os.path.join(
                 os.environ.get("LOCALAPPDATA", ""), "Obsidian", "Obsidian.exe"
+            ),
+            os.path.join(
+                os.environ.get("PROGRAMFILES", ""), "Obsidian", "Obsidian.exe"
             ),
         ],
     },
