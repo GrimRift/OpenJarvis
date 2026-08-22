@@ -23,6 +23,7 @@ from openjarvis.tools._stubs import BaseTool, ToolSpec
 _APPS: Dict[str, Dict[str, Any]] = {
     "spotify": {
         "display": "Spotify",
+        "process": "Spotify.exe",
         "candidates": [
             os.path.join(
                 os.environ.get("LOCALAPPDATA", ""),
@@ -35,6 +36,7 @@ _APPS: Dict[str, Dict[str, Any]] = {
     },
     "obsidian": {
         "display": "Obsidian",
+        "process": "Obsidian.exe",
         "candidates": [
             os.path.join(
                 os.environ.get("LOCALAPPDATA", ""), "Obsidian", "Obsidian.exe"
@@ -43,17 +45,46 @@ _APPS: Dict[str, Dict[str, Any]] = {
     },
     "explorer": {
         "display": "File Explorer",
+        "process": "explorer.exe",
         "candidates": ["explorer.exe"],
     },
     "notepad": {
         "display": "Notepad",
+        "process": "notepad.exe",
         "candidates": ["notepad.exe"],
     },
     "calculator": {
         "display": "Calculator",
+        "process": "CalculatorApp.exe",
         "candidates": ["calc.exe"],
     },
 }
+
+
+def is_app_running(app_key: str) -> bool:
+    """True when *app_key*'s process is actually live on this machine.
+
+    Callers need this to tell "the window is on screen" apart from indirect
+    signals that outlive the process. Spotify is the motivating case: a
+    Connect device registration lingers server-side after the client exits,
+    so the Web API keeps reporting that device as active — and even
+    ``is_playing: true`` — while no window and no audio exist. Trusting the
+    device list as proof of life means never launching the app.
+    """
+    process = _APPS.get(app_key, {}).get("process", "")
+    if not process or os.name != "nt":
+        return False
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {process}", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return process.lower() in (result.stdout or "").lower()
 
 
 def _resolve_target(app_key: str) -> str:

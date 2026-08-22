@@ -109,17 +109,22 @@ def _pick_device_id(token: str) -> str:
     return devices[0].get("id", "")
 
 
-def _wake_spotify_app(token: str, timeout_seconds: float = 20.0) -> str:
-    """Launch the desktop app and wait for it to register; return its id.
+def _wake_spotify_app(token: str, timeout_seconds: float = 30.0) -> str:
+    """Launch the desktop app and wait until it is really ready; return its id.
 
     A bare "play a song" should just work, so rather than telling the user
     to open Spotify first, open it for them. The client takes a few seconds
     after launch to appear in the devices list, hence polling rather than a
     single fixed sleep.
+
+    The poll waits on the *process* as well as the device id: a stale
+    Connect registration can already be in the device list before the newly
+    launched client is up, and returning that id would send playback to the
+    phantom again — the exact failure this function exists to avoid.
     """
     import time
 
-    from openjarvis.tools.open_app import OpenAppTool
+    from openjarvis.tools.open_app import OpenAppTool, is_app_running
 
     if not OpenAppTool().execute(app="spotify").success:
         return ""
@@ -127,6 +132,8 @@ def _wake_spotify_app(token: str, timeout_seconds: float = 20.0) -> str:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         time.sleep(2.0)
+        if not is_app_running("spotify"):
+            continue
         device_id = _pick_device_id(token)
         if device_id:
             return device_id
@@ -190,7 +197,19 @@ class SpotifyControlTool(BaseTool):
         # launched Spotify first, and it also puts the window on screen so
         # they can watch it — the point of doing this via the API rather
         # than by clicking inside the app.
-        device_id = _pick_device_id(token) or _wake_spotify_app(token)
+        #
+        # Liveness is decided by the local process, never by the device
+        # list. Spotify keeps a Connect device registered server-side after
+        # the client exits, so a closed app is still reported as an active
+        # device that accepts commands and reports is_playing — playback
+        # "succeeds" with no window and no sound. Gating the launch on the
+        # device list therefore means never launching at all.
+        from openjarvis.tools.open_app import is_app_running
+
+        if is_app_running("spotify"):
+            device_id = _pick_device_id(token) or _wake_spotify_app(token)
+        else:
+            device_id = _wake_spotify_app(token)
         if not device_id:
             return "__NO_DEVICE__"
         target = {"device_id": device_id}
