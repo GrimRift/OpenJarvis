@@ -524,11 +524,17 @@ export function InputArea() {
       // (e.g. morning digest) — carried through the stream's finish event
       // rather than a separate post-hoc /api/digest probe, which used to
       // attach the last digest's audio to any unrelated message sent
-      // afterward on the same day. Autoplay only when the question itself
-      // was asked by voice — a typed digest request still gets the player,
-      // just not auto-played.
+      // afterward on the same day.
+      //
+      // Such audio always autoplays, unlike the synthesized voice-reply path
+      // below which stays gated on `wasVoice`. The distinction: this audio is
+      // something the agent deliberately produced as the point of the reply
+      // (the digest is meant to be listened to, and is generated either way,
+      // so withholding playback only adds a click), whereas TTS of an
+      // ordinary typed answer would be reading text aloud that the user was
+      // already reading.
       const audioMeta: { url: string; autoPlay?: boolean } | undefined = audio
-        ? { url: audio.url, autoPlay: wasVoice }
+        ? { url: audio.url, autoPlay: true }
         : undefined;
 
       updateLastAssistant(
