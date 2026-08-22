@@ -541,6 +541,53 @@ def _handle_direct(
     )
 
 
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MARKDOWN_MARKER_RE = re.compile(r"[*_#`]+")
+_MARKDOWN_BULLET_RE = re.compile(r"^\s*[-*]\s+", re.MULTILINE)
+
+
+def _clean_for_speech(text: str) -> str:
+    """Strip common markdown syntax so TTS doesn't read literal symbols aloud."""
+    text = _MARKDOWN_LINK_RE.sub(r"\1", text)
+    text = _MARKDOWN_MARKER_RE.sub("", text)
+    text = _MARKDOWN_BULLET_RE.sub("", text)
+    return text.strip()
+
+
+def _synthesize_reply_audio(text: str):
+    """Speak a voice-originated turn's reply back, deterministically.
+
+    Reuses the same TextToSpeechTool and token-based serving already used
+    by POST /v1/speech/synthesize + GET /v1/speech/audio/{token} — just
+    invoked directly here instead of via a model tool call. That mirrors
+    the lesson already applied to notify_class_schedule: a small local
+    model can't be trusted to remember "call text_to_speech" on every
+    voice-originated turn, so the decision is made in code instead.
+    """
+    from openjarvis.server.api_routes import _SYNTHESIZED_AUDIO
+    from openjarvis.server.models import AudioMeta
+    from openjarvis.tools.text_to_speech import TextToSpeechTool
+
+    tool = TextToSpeechTool()
+    try:
+        result = tool.execute(text=_clean_for_speech(text))
+    except Exception:
+        logging.getLogger("openjarvis.server").warning(
+            "Voice-reply TTS synthesis failed", exc_info=True
+        )
+        return None
+
+    if not result.success:
+        logging.getLogger("openjarvis.server").warning(
+            "Voice-reply TTS synthesis failed: %s", result.content
+        )
+        return None
+
+    token = uuid.uuid4().hex
+    _SYNTHESIZED_AUDIO[token] = result.metadata["audio_path"]
+    return AudioMeta(url=f"/v1/speech/audio/{token}")
+
+
 def _handle_agent(
     agent,
     model: str,
@@ -602,6 +649,11 @@ def _handle_agent(
 
         if Path(audio_path).exists():
             audio_meta = AudioMeta(url="/api/digest/audio")
+
+    # A voice-originated turn that didn't already get audio from a tool
+    # (e.g. this isn't a digest request) gets its reply spoken back too.
+    if audio_meta is None and req.voice and result.content:
+        audio_meta = _synthesize_reply_audio(result.content)
 
     return ChatCompletionResponse(
         model=model,

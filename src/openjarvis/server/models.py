@@ -27,6 +27,11 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 1024
     stream: bool = False
+    # True when this turn's user message came in via voice (wake word or
+    # mic dictation) — the reply gets synthesized to speech too, so a
+    # voice question gets a voice answer instead of requiring the user to
+    # read a screen they spoke to specifically to avoid looking at.
+    voice: bool = False
     tools: Optional[List[Dict[str, Any]]] = None
 
 

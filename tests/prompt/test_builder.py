@@ -181,6 +181,7 @@ def test_sections_expose_prompt_metadata(memory_dir: Path):
         "current_datetime",
         "session_context",
         "previous_state",
+        "datetime_reminder",
     ]
     assert sections[1].source == str(memory_dir / "SOUL.md")
     assert sections[1].cache_segment == "frozen_prefix"

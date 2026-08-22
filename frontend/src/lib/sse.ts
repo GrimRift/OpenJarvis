@@ -7,6 +7,9 @@ export interface ChatRequest {
   stream: true;
   temperature?: number;
   max_tokens?: number;
+  // Set when this turn's user message came in via voice (wake word or mic
+  // dictation) — tells the backend to synthesize the reply to speech too.
+  voice?: boolean;
 }
 
 export async function* streamChat(

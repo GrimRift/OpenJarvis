@@ -10,6 +10,37 @@ from typing import List, Optional
 from openjarvis.core.registry import SpeechRegistry
 from openjarvis.speech._stubs import Segment, SpeechBackend, TranscriptionResult
 
+# CTranslate2 (faster-whisper's backend) needs CUDA's cuBLAS/cuDNN DLLs to
+# use device="cuda" — there's no system-wide CUDA Toolkit here, only the
+# pip-installed nvidia-cublas-cu12/nvidia-cudnn-cu12 runtime packages, whose
+# DLLs live under site-packages rather than anywhere Windows searches by
+# default. os.add_dll_directory() alone does NOT fix this: CTranslate2's
+# native code resolves cublas64_12.dll via a bare LoadLibrary call, which
+# only consults the real PATH env var, not Python's DLL-directory registry
+# (confirmed by trial — add_dll_directory left it 500ing with "Library
+# cublas64_12.dll is not found", prepending PATH fixed it outright). Must
+# run before ctranslate2/faster_whisper import below, at process startup.
+if os.name == "nt":
+    try:
+        import nvidia.cublas
+        import nvidia.cudnn
+
+        _dll_dirs = []
+        for _mod in (nvidia.cublas, nvidia.cudnn):
+            # These are PEP 420 namespace packages (no __file__), so the
+            # package directory comes from __path__ instead.
+            _pkg_dir = next(iter(_mod.__path__), None)
+            if not _pkg_dir:
+                continue
+            _bin_dir = os.path.join(_pkg_dir, "bin")
+            if os.path.isdir(_bin_dir):
+                _dll_dirs.append(_bin_dir)
+                os.add_dll_directory(_bin_dir)  # covers Python-level extension loading too
+        if _dll_dirs:
+            os.environ["PATH"] = os.pathsep.join(_dll_dirs) + os.pathsep + os.environ.get("PATH", "")
+    except ImportError:
+        pass
+
 try:
     from faster_whisper import WhisperModel
 except ImportError:
@@ -101,6 +132,7 @@ class FasterWhisperBackend(SpeechBackend):
         *,
         format: str = "wav",
         language: Optional[str] = None,
+        initial_prompt: Optional[str] = None,
     ) -> TranscriptionResult:
         """Transcribe audio bytes using Faster-Whisper."""
         try:
@@ -116,9 +148,20 @@ class FasterWhisperBackend(SpeechBackend):
                 with tmp:
                     tmp.write(audio)
 
-                kwargs = {}
+                # vad_filter=True runs Silero VAD first and skips non-speech
+                # regions entirely. Without it, Whisper is well known to
+                # hallucinate boilerplate text ("Thank you.", etc.) from
+                # silence/background noise instead of returning empty —
+                # which matters here because auto-triggered recordings
+                # (wake word, continuous conversation) often capture mostly
+                # silence, and a hallucinated non-empty transcript gets sent
+                # as a real message, triggering a voice reply that re-arms
+                # continuous conversation and sustains an unwanted loop.
+                kwargs = {"vad_filter": True}
                 if language:
                     kwargs["language"] = language
+                if initial_prompt:
+                    kwargs["initial_prompt"] = initial_prompt
 
                 segments_iter, info = model.transcribe(tmp.name, **kwargs)
                 segments_list = list(segments_iter)

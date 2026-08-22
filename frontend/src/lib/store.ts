@@ -51,6 +51,16 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+// A voice reply's `audio.autoPlay` flag is meant to fire once, at the
+// moment the reply arrives live. It's stored as part of the message
+// though, so without this, reopening a past chat (or just refreshing the
+// page) would replay that stale flag and auto-play old audio every time.
+function withoutAutoPlay(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) =>
+    m.audio?.autoPlay ? { ...m, audio: { ...m.audio, autoPlay: false } } : m,
+  );
+}
+
 function loadConversations(): ConversationStore {
   try {
     const raw = localStorage.getItem(CONVERSATIONS_KEY);
@@ -105,6 +115,8 @@ interface Settings {
   temperature: number;
   maxTokens: number;
   speechEnabled: boolean;
+  wakeWordEnabled: boolean;
+  continuousConversationEnabled: boolean;
 }
 
 function loadSettings(): Settings {
@@ -118,6 +130,8 @@ function loadSettings(): Settings {
     temperature: 0.7,
     maxTokens: 4096,
     speechEnabled: false,
+    wakeWordEnabled: false,
+    continuousConversationEnabled: false,
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -174,8 +188,13 @@ interface AppState {
   // Sidebar
   sidebarOpen: boolean;
 
-  // System panel
-  systemPanelOpen: boolean;
+  // Mirrors useSpeech()'s local state so components outside the composer
+  // (the orb) can react to mic activity without lifting the whole hook.
+  voiceState: 'idle' | 'recording' | 'transcribing';
+  // Mirrors whether any AudioPlayer (TTS voice reply) is actually playing,
+  // so the orb's "speaking" state tracks real spoken audio, not just
+  // token-streaming duration.
+  audioPlaying: boolean;
 
   // Opt-in sharing
   optInEnabled: boolean;
@@ -231,8 +250,8 @@ interface AppState {
   setCommandPaletteOpen: (open: boolean) => void;
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
-  toggleSystemPanel: () => void;
-  setSystemPanelOpen: (open: boolean) => void;
+  setVoiceState: (state: 'idle' | 'recording' | 'transcribing') => void;
+  setAudioPlaying: (playing: boolean) => void;
 
   // Data sources (cached between visits to avoid empty-state flicker)
   cachedConnectors: CachedConnector[] | null;
@@ -279,7 +298,7 @@ export const useAppStore = create<AppState>((set, get) => {
     activeId: initial.activeId,
     messages:
       initial.activeId && initial.conversations[initial.activeId]
-        ? initial.conversations[initial.activeId].messages
+        ? withoutAutoPlay(initial.conversations[initial.activeId].messages)
         : [],
     streamState: INITIAL_STREAM,
 
@@ -293,7 +312,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
     commandPaletteOpen: false,
     sidebarOpen: true,
-    systemPanelOpen: true,
+    voiceState: 'idle',
+    audioPlaying: false,
 
     optInEnabled: localStorage.getItem(OPTIN_KEY) === 'true',
     optInDisplayName: localStorage.getItem(OPTIN_NAME_KEY) || '',
@@ -380,7 +400,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const conv = store.conversations[id];
       set({
         activeId: id,
-        messages: conv ? conv.messages : [],
+        messages: conv ? withoutAutoPlay(conv.messages) : [],
       });
     },
 
@@ -404,7 +424,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         conversations: convList,
         activeId: store.activeId,
-        messages: activeConv ? activeConv.messages : [],
+        messages: activeConv ? withoutAutoPlay(activeConv.messages) : [],
       });
     },
 
@@ -415,7 +435,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       const store = loadConversations();
       const conv = store.conversations[conversationId];
-      set({ messages: conv ? conv.messages : [] });
+      set({ messages: conv ? withoutAutoPlay(conv.messages) : [] });
     },
 
     addMessage: (conversationId: string, message: ChatMessage) => {
@@ -556,8 +576,8 @@ export const useAppStore = create<AppState>((set, get) => {
     setCommandPaletteOpen: (open: boolean) => set({ commandPaletteOpen: open }),
     toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
     setSidebarOpen: (open: boolean) => set({ sidebarOpen: open }),
-    toggleSystemPanel: () => set((s) => ({ systemPanelOpen: !s.systemPanelOpen })),
-    setSystemPanelOpen: (open: boolean) => set({ systemPanelOpen: open }),
+    setVoiceState: (state) => set({ voiceState: state }),
+    setAudioPlaying: (playing) => set({ audioPlaying: playing }),
 
     // ── Agents ─────────────────────────────────────────────────────
 

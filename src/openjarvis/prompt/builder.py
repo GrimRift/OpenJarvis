@@ -53,14 +53,10 @@ class SystemPromptBuilder:
         self._frozen_sections: Optional[list[PromptSection]] = None
 
     def build(self) -> str:
-        if self._frozen_prefix is None:
-            self._frozen_prefix = self._build_frozen_prefix()
-        parts = [self._frozen_prefix, f"\n\n{self._current_datetime_content()}"]
-        if self._session_context:
-            parts.append(f"\n\n## Session Context\n\n{self._session_context}")
-        if self._previous_state:
-            parts.append(f"\n\n## Previous State\n\n{self._previous_state}")
-        return "".join(parts)
+        # Derived from sections() rather than assembled separately, so the
+        # two can never drift out of sync with each other (see
+        # test_sections_expose_prompt_metadata's invariant).
+        return "\n\n".join(section.content for section in self.sections())
 
     @staticmethod
     def _current_datetime_content() -> str:
@@ -68,8 +64,23 @@ class SystemPromptBuilder:
         # frozen prefix — the LLM has no real clock, so without this it
         # guesses at dates/weekdays (and gets them wrong). Caching it would
         # go stale for the lifetime of this builder instance.
+        #
+        # The trailing sentence exists because the date alone wasn't enough
+        # in practice: a small local model, when reading a schedule note
+        # whose rows are labeled by recurring weekday (e.g. "Day: Friday"),
+        # conflated that per-row label with "today" and answered a general
+        # schedule question as if today were Friday when this field said
+        # Saturday — actively contradicting its own system prompt. The two
+        # concepts needed to be named as distinct, not just juxtaposed.
         now = datetime.now()
-        return f"## Current Date and Time\n\n{now.strftime('%A, %B %d, %Y, %I:%M %p')}"
+        return (
+            f"## Current Date and Time\n\n{now.strftime('%A, %B %d, %Y, %I:%M %p')}\n\n"
+            "This is today's real date. When a note or tool result lists a "
+            "recurring weekday (e.g. a class schedule's \"Day\" column), that "
+            "is which weekday the entry happens on, not a claim about today — "
+            "compare it against the date above before saying something is "
+            "\"today\" or happening \"soon.\""
+        )
 
     def sections(self) -> list[PromptSection]:
         """Return prompt sections with lightweight cache/debug metadata."""
@@ -100,6 +111,22 @@ class SystemPromptBuilder:
                     cache_segment="dynamic_suffix",
                 )
             )
+        # Repeated at the very end, not just after the frozen prefix: with a
+        # large persona/skills/retrieved-context prefix (seen in practice at
+        # 45k+ input tokens for a single query), the first mention can be far
+        # enough back in a long prompt that a small model effectively loses
+        # it. Models attend most reliably to the end of a long context,
+        # right before the actual question — repeating it there costs a
+        # dozen tokens and measurably improves the odds it's actually used.
+        now = datetime.now()
+        sections.append(
+            PromptSection(
+                name="datetime_reminder",
+                content=f"(Reminder: today is really {now.strftime('%A, %B %d, %Y')}.)",
+                source="datetime_reminder",
+                cache_segment="dynamic_suffix",
+            )
+        )
         return sections
 
     def _get_frozen_sections(self) -> list[PromptSection]:

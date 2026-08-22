@@ -8,6 +8,7 @@ import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
+import { useWakeWord } from '../../hooks/useWakeWord';
 import type {
   ChatMessage,
   MessageTelemetry,
@@ -84,6 +85,17 @@ export function InputArea() {
   // by hand (cleared in the textarea's onChange) or sends — used to gate
   // auto-speaking the reply to voice-initiated messages only.
   const voiceOriginatedRef = useRef(false);
+  // Persists past voiceOriginatedRef's reset-at-send-time so the
+  // continuous-conversation effect (which fires once the reply's audio
+  // finishes, well after send) can still tell whether that exchange was
+  // voice-initiated.
+  const lastReplyWasVoiceRef = useRef(false);
+  // Distinguishes a hands-free (wake-word / continuous-mode) recording from
+  // a manual mic-button click, so only the hands-free path auto-stops on a
+  // timeout and auto-sends — a manual stop always leaves the transcribed
+  // text in the box for the user to review/edit, same as today.
+  const autoTriggeredRef = useRef(false);
+  const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeId = useAppStore((s) => s.activeId);
   const selectedModel = useAppStore((s) => s.selectedModel);
@@ -140,6 +152,12 @@ export function InputArea() {
     }
   }, [speechError]);
 
+  // Mirror into the store so the orb (rendered in ChatArea, outside this
+  // component) can react to mic activity without lifting useSpeech() up.
+  useEffect(() => {
+    useAppStore.getState().setVoiceState(speechState);
+  }, [speechState]);
+
   const handleMicClick = useCallback(async () => {
     if (speechState === 'recording') {
       try {
@@ -172,8 +190,8 @@ export function InputArea() {
     resetStream();
   }, [resetStream]);
 
-  const sendMessage = useCallback(async () => {
-    const content = input.trim();
+  const sendMessage = useCallback(async (overrideContent?: string) => {
+    const content = (overrideContent ?? input).trim();
     if (!content || streamState.isStreaming) return;
     if (!selectedModel) {
       toast.error('Pick a model first (⌘K)');
@@ -183,6 +201,7 @@ export function InputArea() {
     setInput('');
     const wasVoice = voiceOriginatedRef.current;
     voiceOriginatedRef.current = false;
+    lastReplyWasVoiceRef.current = wasVoice;
 
     let convId = activeId;
     if (!convId) {
@@ -379,7 +398,14 @@ export function InputArea() {
         }
       } else {
       for await (const sseEvent of streamChat(
-        { model: selectedModel, messages: apiMessages, stream: true, temperature, max_tokens: maxTokens },
+        {
+          model: selectedModel,
+          messages: apiMessages,
+          stream: true,
+          temperature,
+          max_tokens: maxTokens,
+          voice: wasVoice,
+        },
         controller.signal,
       )) {
         const eventName = sseEvent.event;
@@ -526,11 +552,22 @@ export function InputArea() {
       });
       abortRef.current = null;
 
-      // Voice-initiated question with no built-in audio (e.g. a normal
-      // reply, not a digest) — synthesize speech for the reply and patch
-      // it in once ready. Fire-and-forget: text already rendered above,
-      // this shouldn't delay stream cleanup or hold up the UI.
+      // Voice-initiated question with no built-in audio (e.g. deep
+      // research, which doesn't go through the backend path that attaches
+      // audio directly) — synthesize speech for the reply and patch it in
+      // once ready. Fire-and-forget: text already rendered above, this
+      // shouldn't delay stream cleanup or hold up the UI.
+      //
+      // setAudioPlaying(true) here, ahead of the actual player mounting,
+      // matters: resetStream() above already dropped isStreaming, which
+      // re-enables the wake-word listener. Without staking this claim
+      // immediately, there's an unguarded window between stream end and
+      // the synthesized audio actually starting — long enough (a network
+      // round trip to the TTS backend) for the wake word to hear ambient
+      // noise, false-trigger, and start a new recording before the reply
+      // has even started speaking.
       if (wasVoice && !audio && accumulatedContent) {
+        useAppStore.getState().setAudioPlaying(true);
         synthesizeSpeech(accumulatedContent)
           .then((meta) => {
             updateLastAssistant(
@@ -545,6 +582,7 @@ export function InputArea() {
           .catch(() => {
             // TTS failure for a voice reply shouldn't surface as a chat
             // error — the text answer already rendered fine.
+            useAppStore.getState().setAudioPlaying(false);
           });
       }
 
@@ -572,6 +610,85 @@ export function InputArea() {
     temperature,
     maxTokens,
   ]);
+
+  // Hands-free stop: transcribes and sends immediately, unlike a manual
+  // mic-click stop (which only populates the box for the user to review).
+  const finishAutoRecording = useCallback(async () => {
+    if (autoStopTimerRef.current) {
+      clearTimeout(autoStopTimerRef.current);
+      autoStopTimerRef.current = null;
+    }
+    try {
+      const text = await stopRecording();
+      if (text && text.trim()) {
+        voiceOriginatedRef.current = true;
+        await sendMessage(text);
+      }
+    } catch {
+      // Error is captured in useSpeech
+    }
+  }, [stopRecording, sendMessage]);
+
+  // Entry point for both the wake word and continuous-conversation re-arm.
+  // A fixed timeout stands in for real silence detection for now — simpler
+  // to ship first, at the cost of not adapting to how long you actually
+  // take to speak.
+  const beginAutoRecording = useCallback(async () => {
+    if (micDisabled || speechState !== 'idle') return;
+    autoTriggeredRef.current = true;
+    await startRecording();
+    autoStopTimerRef.current = setTimeout(() => {
+      finishAutoRecording();
+    }, 7000);
+  }, [micDisabled, speechState, startRecording, finishAutoRecording]);
+
+  useEffect(() => {
+    if (speechState !== 'recording' && autoStopTimerRef.current) {
+      clearTimeout(autoStopTimerRef.current);
+      autoStopTimerRef.current = null;
+    }
+  }, [speechState]);
+
+  const wakeWordEnabled = useAppStore((s) => s.settings.wakeWordEnabled);
+  const continuousConversationEnabled = useAppStore((s) => s.settings.continuousConversationEnabled);
+  const audioPlaying = useAppStore((s) => s.audioPlaying);
+  const wasAudioPlayingRef = useRef(false);
+
+  const { error: wakeWordError } = useWakeWord(
+    beginAutoRecording,
+    // !audioPlaying matters as much as speechState === 'idle' here:
+    // speechState returns to 'idle' as soon as transcription finishes,
+    // well before a reply is generated or its voice playback finishes.
+    // Without this, the wake-word mic starts listening again while Sage's
+    // own TTS reply is still playing through the speakers — echo
+    // cancellation isn't perfect, so it can hear (and re-trigger on)
+    // itself, independent of any toggle.
+    wakeWordEnabled && !micDisabled && speechState === 'idle' && !audioPlaying,
+  );
+
+  useEffect(() => {
+    if (wakeWordError) {
+      toast.error(`Wake word: ${wakeWordError}`, { duration: 8000 });
+    }
+  }, [wakeWordError]);
+
+  // Re-arms listening once a voice-initiated reply finishes actually being
+  // spoken (not just when the text/stream finishes) — matches the real
+  // pace of the conversation instead of jumping in over Sage.
+  useEffect(() => {
+    const wasPlaying = wasAudioPlayingRef.current;
+    wasAudioPlayingRef.current = audioPlaying;
+    if (
+      wasPlaying &&
+      !audioPlaying &&
+      continuousConversationEnabled &&
+      lastReplyWasVoiceRef.current &&
+      !micDisabled &&
+      speechState === 'idle'
+    ) {
+      beginAutoRecording();
+    }
+  }, [audioPlaying, continuousConversationEnabled, micDisabled, speechState, beginAutoRecording]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -654,7 +771,7 @@ export function InputArea() {
               reason={micReason}
             />
             <button
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={streamState.isStreaming || !input.trim() || modelLoading || !selectedModel}
               title={selectedModel ? 'Send message' : 'Pick a model first (⌘K)'}
               className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer disabled:opacity-30 disabled:cursor-default"

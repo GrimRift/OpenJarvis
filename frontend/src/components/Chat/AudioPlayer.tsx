@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { Play, Pause, Volume2 } from 'lucide-react';
+import { useAppStore } from '../../lib/store';
 
 interface AudioPlayerProps {
   src: string;
@@ -15,7 +16,13 @@ function formatTime(seconds: number): string {
 
 export function AudioPlayer({ src, autoPlay = false, label = 'Morning Digest' }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [playing, setPlaying] = useState(false);
+  // Seeded from autoPlay rather than always false: when a caller sets
+  // audioPlaying=true optimistically ahead of this component mounting
+  // (see InputArea.tsx's TTS fallback), starting this at false would
+  // immediately overwrite that via the effect below, reopening the exact
+  // gap the caller was trying to close, until the .play() promise
+  // resolves a beat later.
+  const [playing, setPlaying] = useState(autoPlay);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
@@ -28,7 +35,12 @@ export function AudioPlayer({ src, autoPlay = false, label = 'Morning Digest' }:
       .then(() => setPlaying(true))
       .catch(() => {
         // Browsers can block autoplay outside a fresh user-gesture window —
-        // the manual play button remains the fallback either way.
+        // the manual play button remains the fallback either way. Must
+        // still correct `playing` back to false here: it now starts
+        // seeded to `autoPlay` (true) optimistically, so a blocked
+        // autoplay would otherwise leave it stuck true forever with
+        // nothing actually playing.
+        setPlaying(false);
       });
   }, [autoPlay, src]);
 
@@ -63,6 +75,16 @@ export function AudioPlayer({ src, autoPlay = false, label = 'Morning Digest' }:
       el.removeEventListener('ended', onEnded);
     };
   }, []);
+
+  // Mirror into the store so the orb (rendered elsewhere) can show a
+  // "speaking" state for the actual duration of the spoken audio, not
+  // just the response's text-streaming window.
+  useEffect(() => {
+    useAppStore.getState().setAudioPlaying(playing);
+    return () => {
+      if (playing) useAppStore.getState().setAudioPlaying(false);
+    };
+  }, [playing]);
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
