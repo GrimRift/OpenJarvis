@@ -152,11 +152,33 @@ def _raise_window(hwnd: int) -> None:
     import ctypes
 
     user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
     sw_restore = 9
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, sw_restore)
     user32.BringWindowToTop(hwnd)
-    if not user32.SetForegroundWindow(hwnd):
+
+    # Attaching to the foreground window's input queue for the duration of
+    # the call is what makes it work while the user is actually using the
+    # machine. ForegroundLockTimeout reads 0x7FFFFFFF here, so whatever the
+    # user last typed into — the browser they sent the request from — holds
+    # the lock indefinitely and a plain SetForegroundWindow is refused.
+    # Sharing the input queue makes this process a legitimate caller for
+    # that moment. Detaching again matters: leaving the queues attached
+    # couples the two threads' input state.
+    foreground = user32.GetForegroundWindow()
+    target_thread = user32.GetWindowThreadProcessId(foreground, None)
+    our_thread = kernel32.GetCurrentThreadId()
+    attached = False
+    if target_thread and target_thread != our_thread:
+        attached = bool(user32.AttachThreadInput(our_thread, target_thread, True))
+    try:
+        raised = user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(our_thread, target_thread, False)
+
+    if not raised:
         try:
             user32.SwitchToThisWindow(hwnd, True)
         except Exception:
