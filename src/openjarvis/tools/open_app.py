@@ -240,6 +240,11 @@ def _focus_app_window(process_name: str, timeout_seconds: float = 10.0) -> bool:
             user32.EnumWindows(enum_proc(_callback), 0)
             if found:
                 _raise_window(found[0])
+                # Activation is asynchronous: the foreground window does not
+                # change by the time SetForegroundWindow returns, so reading
+                # it back immediately can miss a raise that did work and send
+                # this loop round again to fight its own previous attempt.
+                time.sleep(0.15)
                 if _foreground_pid() in pids:
                     return True
         time.sleep(0.4)
