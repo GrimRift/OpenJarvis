@@ -191,6 +191,13 @@ def _focus_app_window(process_name: str, timeout_seconds: float = 10.0) -> bool:
     Matches on process name rather than the PID returned by Popen: Store
     shims and Electron launchers exit or hand off to a child, so the window
     frequently belongs to a different process than the one started.
+
+    Success is confirmed by reading the foreground window back, and the
+    raise is retried until it holds. One raise is not enough for an app that
+    builds its window in stages: Obsidian's process appears within a second
+    and briefly owns a window that can be raised, then replaces it with the
+    real one, which comes up unfocused — the app opens, and sits behind the
+    browser exactly as if nothing had been raised at all.
     """
     if os.name != "nt":
         return False
@@ -202,6 +209,13 @@ def _focus_app_window(process_name: str, timeout_seconds: float = 10.0) -> bool:
     enum_proc = ctypes.WINFUNCTYPE(
         wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
     )
+
+    def _foreground_pid() -> int:
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(
+            user32.GetForegroundWindow(), ctypes.byref(pid)
+        )
+        return pid.value
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -226,7 +240,8 @@ def _focus_app_window(process_name: str, timeout_seconds: float = 10.0) -> bool:
             user32.EnumWindows(enum_proc(_callback), 0)
             if found:
                 _raise_window(found[0])
-                return True
+                if _foreground_pid() in pids:
+                    return True
         time.sleep(0.4)
     return False
 
