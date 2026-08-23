@@ -138,33 +138,42 @@ def _pids_for(process_name: str) -> set:
     return pids
 
 
-def _raise_window(hwnd: int) -> None:
-    """Restore and foreground *hwnd*.
+def _raise_window(hwnd: int) -> bool:
+    """Un-minimise *hwnd* and put it on top. True when it is on screen after.
 
-    Windows refuses SetForegroundWindow from a process that does not own the
-    current foreground window — which is exactly our position, since the
-    request arrives over HTTP with the user's browser in front. The call then
-    only flashes the taskbar button, which is what "it opened but stayed
-    minimised" looked like. SwitchToThisWindow is the long-standing fallback
-    the shell itself uses for alt-tab style activation and is not subject to
-    that restriction, so it runs whenever the polite call reports failure.
+    Getting a window seen and giving it the keyboard are different problems,
+    and only the first is what "open the app" asks for. Activation is the
+    part Windows restricts: SetForegroundWindow succeeds only for a process
+    that owns the foreground window or received the last input, and the
+    server is neither — it is detached, has no window of its own, and never
+    sees input. Called from a console the same code worked, because the
+    console inherited those rights; that difference is why this looked fixed
+    while remaining broken for the app.
+
+    Z-order is not restricted. Pinning topmost and immediately releasing it
+    leaves the window drawn above the others without asking permission,
+    which is what actually gets it off the taskbar. Activation is still
+    attempted afterwards, so the window takes the keyboard when allowed.
     """
     import ctypes
 
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
+
     sw_restore = 9
+    hwnd_topmost, hwnd_notopmost = -1, -2
+    swp_nosize, swp_nomove, swp_showwindow = 0x0001, 0x0002, 0x0040
+    flags = swp_nosize | swp_nomove | swp_showwindow
+
     if user32.IsIconic(hwnd):
         user32.ShowWindow(hwnd, sw_restore)
+    user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, flags)
+    user32.SetWindowPos(hwnd, hwnd_notopmost, 0, 0, 0, 0, flags)
     user32.BringWindowToTop(hwnd)
 
-    # Attaching to the foreground window's input queue for the duration of
-    # the call is what makes it work while the user is actually using the
-    # machine. ForegroundLockTimeout reads 0x7FFFFFFF here, so whatever the
-    # user last typed into — the browser they sent the request from — holds
-    # the lock indefinitely and a plain SetForegroundWindow is refused.
-    # Sharing the input queue makes this process a legitimate caller for
-    # that moment. Detaching again matters: leaving the queues attached
+    # Best effort from here. Sharing the foreground window's input queue for
+    # the duration of the call makes this process a legitimate caller while
+    # attached; detaching again matters, since leaving the queues joined
     # couples the two threads' input state.
     foreground = user32.GetForegroundWindow()
     target_thread = user32.GetWindowThreadProcessId(foreground, None)
@@ -173,16 +182,16 @@ def _raise_window(hwnd: int) -> None:
     if target_thread and target_thread != our_thread:
         attached = bool(user32.AttachThreadInput(our_thread, target_thread, True))
     try:
-        raised = user32.SetForegroundWindow(hwnd)
+        if not user32.SetForegroundWindow(hwnd):
+            try:
+                user32.SwitchToThisWindow(hwnd, True)
+            except Exception:
+                pass
     finally:
         if attached:
             user32.AttachThreadInput(our_thread, target_thread, False)
 
-    if not raised:
-        try:
-            user32.SwitchToThisWindow(hwnd, True)
-        except Exception:
-            pass
+    return bool(user32.IsWindowVisible(hwnd)) and not bool(user32.IsIconic(hwnd))
 
 
 def _focus_app_window(process_name: str, timeout_seconds: float = 10.0) -> bool:
@@ -239,13 +248,15 @@ def _focus_app_window(process_name: str, timeout_seconds: float = 10.0) -> bool:
 
             user32.EnumWindows(enum_proc(_callback), 0)
             if found:
-                _raise_window(found[0])
-                # Activation is asynchronous: the foreground window does not
-                # change by the time SetForegroundWindow returns, so reading
-                # it back immediately can miss a raise that did work and send
-                # this loop round again to fight its own previous attempt.
+                on_screen = _raise_window(found[0])
+                # Success is the window being up and visible, not holding the
+                # keyboard. Requiring the foreground window to be ours made
+                # this report failure — and retry for the whole timeout —
+                # whenever Windows withheld activation from the server, even
+                # though the window was by then sitting on top of the browser,
+                # which is all "open the app" asked for.
                 time.sleep(0.15)
-                if _foreground_pid() in pids:
+                if on_screen or _foreground_pid() in pids:
                     return True
         time.sleep(0.4)
     return False

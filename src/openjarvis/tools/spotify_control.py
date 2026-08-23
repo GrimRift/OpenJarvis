@@ -210,13 +210,16 @@ class SpotifyControlTool(BaseTool):
         return ToolSpec(
             name="spotify_control",
             description=(
-                "Play music and control Spotify playback. Use this whenever "
-                "the user asks to play, pause, skip, or go back to a song — "
-                "including 'play <song>' and 'play something'. It opens the "
-                "Spotify app by itself when it is closed, so do NOT call "
-                "open_app first. Actions: 'play' (pass 'query' to start a "
-                "specific song, omit it to resume), 'pause', 'next', "
-                "'previous'."
+                "Spotify playback. 'status' reads what is playing and "
+                "changes nothing — use it to answer questions about the "
+                "current track. The others are audible in the room and must "
+                "only be used when the user asked for them in this message: "
+                "'play' (pass 'query' for a specific song, omit to resume), "
+                "'pause', 'next', 'previous'. Never start playback to find "
+                "out what is playing — that is what 'status' is for — and if "
+                "the user only said hello or asked about something other "
+                "than music, call nothing at all. 'play' opens the Spotify "
+                "app by itself when closed, so do NOT call open_app first."
             ),
             parameters={
                 "type": "object",
@@ -224,7 +227,7 @@ class SpotifyControlTool(BaseTool):
                     "action": {
                         "type": "string",
                         "description": "Playback action to perform.",
-                        "enum": ["play", "pause", "next", "previous"],
+                        "enum": ["status", "play", "pause", "next", "previous"],
                     },
                     "query": {
                         "type": "string",
@@ -249,6 +252,24 @@ class SpotifyControlTool(BaseTool):
 
     def _run_action(self, token: str, action: str, query: str) -> str:
         """Perform *action* and return the message to show the user."""
+        # Answered before anything is launched or targeted, because it must
+        # not change what the user is hearing. It exists to remove the
+        # incentive to call "play" as a way of looking: with no read-only
+        # option, a greeting like "hi" would be answered by starting music
+        # and reporting the track that began, which is exactly what happened
+        # in practice.
+        if action == "status":
+            data = _request(token, "GET", "me/player")
+            track = data.get("item") or {}
+            if not track:
+                return "Nothing is playing on Spotify right now."
+            playing = data.get("is_playing")
+            name = track.get("name", "a track")
+            artists = ", ".join(a.get("name", "") for a in track.get("artists") or [])
+            suffix = f" by {artists}" if artists else ""
+            state = "Playing" if playing else "Paused"
+            return f"{state}: {name}{suffix}"
+
         # Every action needs somewhere to play. Opening the app on demand is
         # what makes a bare "play a song" work without the user having
         # launched Spotify first, and it also puts the window on screen so
@@ -336,12 +357,12 @@ class SpotifyControlTool(BaseTool):
         action = str(params.get("action", "")).strip().lower()
         query = str(params.get("query", "") or "").strip()
 
-        if action not in {"play", "pause", "next", "previous"}:
+        if action not in {"status", "play", "pause", "next", "previous"}:
             return ToolResult(
                 tool_name="spotify_control",
                 content=(
                     f"Unknown action {action!r}. "
-                    "Use play, pause, next, or previous."
+                    "Use status, play, pause, next, or previous."
                 ),
                 success=False,
             )
