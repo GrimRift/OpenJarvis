@@ -132,3 +132,40 @@ class TestLoopGuard:
             guard.check_call("x", '{"a": 1}')
         # Guard is still created but check_call still works
         # (the enabled flag is checked at the ToolUsingAgent level)
+
+
+class TestLoopGuardResetPerRun:
+    """The guard must not carry counts between independent requests.
+
+    Its counters live on the agent, and the server builds one agent at
+    startup and reuses it for every chat message. Without a reset per run
+    the third identical "open obsidian" of the server's lifetime is refused
+    — and every one after it, in any conversation — replying "I cannot
+    repeat the same tool call" while nothing opens.
+    """
+
+    def _agent(self):
+        from unittest.mock import MagicMock
+
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+
+        engine = MagicMock()
+        engine.generate.return_value = {
+            "content": "done",
+            "tool_calls": [],
+            "usage": {},
+        }
+        return OrchestratorAgent(engine, "test-model")
+
+    def test_run_clears_previous_call_counts(self):
+        agent = self._agent()
+        assert agent._loop_guard is not None
+
+        for _ in range(6):
+            agent._loop_guard.check_call("open_app", '{"app": "obsidian"}')
+        assert agent._loop_guard.check_call("open_app", '{"app": "obsidian"}').blocked
+
+        agent.run("open obsidian")
+
+        verdict = agent._loop_guard.check_call("open_app", '{"app": "obsidian"}')
+        assert not verdict.blocked

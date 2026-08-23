@@ -85,6 +85,15 @@ class OrchestratorAgent(ToolUsingAgent):
         context: Optional[AgentContext] = None,
         **kwargs: Any,
     ) -> AgentResult:
+        # The guard exists to stop a single run from looping, but its counters
+        # live on the agent, and the server builds one agent at startup and
+        # reuses it for every request. Without this reset the counts are
+        # cumulative across unrelated conversations: max_identical_calls=3
+        # means the third "open obsidian" of the server's lifetime is refused
+        # and every one after it, in any chat, replying "I cannot repeat the
+        # same tool call" while nothing opens.
+        if self._loop_guard:
+            self._loop_guard.reset()
         if self._mode == "structured":
             return self._run_structured(input, context, **kwargs)
         return self._run_function_calling(input, context, **kwargs)

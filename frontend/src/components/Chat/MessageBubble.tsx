@@ -7,7 +7,6 @@ import remarkMath from 'remark-math';
 import 'katex/dist/katex.min.css';
 import { Copy, Check } from 'lucide-react';
 import { AudioPlayer } from './AudioPlayer';
-import { ToolCallCard } from './ToolCallCard';
 import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
 import { XRayFooter } from './XRayFooter';
@@ -151,14 +150,12 @@ export function MessageBubble({ message, isLive = false }: Props) {
         />
       )}
 
-      {/* Tool calls */}
-      {message.toolCalls && message.toolCalls.length > 0 && (
-        <div className="mb-3 flex flex-col gap-2">
-          {message.toolCalls.map((tc) => (
-            <ToolCallCard key={tc.id} toolCall={tc} />
-          ))}
-        </div>
-      )}
+      {/* Tool calls are recorded on the message but deliberately not shown:
+          they exist so the next turn's history can prove the assistant acted
+          through tools, which is what stops it claiming an app opened when
+          it never called anything. Surfacing every open_app / spotify_control
+          in the transcript is noise for someone who just wanted the app
+          opened. Render ToolCallCard here to bring them back. */}
 
       {/* Audio player — morning digest, or an auto-spoken voice reply */}
       {message.audio?.url && (

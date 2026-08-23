@@ -206,8 +206,14 @@ def test_local_device_match_is_case_insensitive():
     assert matched == "local-id"
 
 
-def test_restriction_violated_is_not_reported_as_a_permission_problem():
-    """Spotify overloads 403; only one of its meanings warrants re-auth."""
+def test_pausing_what_is_already_paused_is_a_success():
+    """Spotify overloads 403; only one of its meanings warrants re-auth.
+
+    Pausing an already-paused track answers 403 "Restriction violated", but
+    the state the user asked for holds. Reporting that as a failure made the
+    agent retry a pause that had already worked — three calls for one
+    request, the last refused by the loop guard.
+    """
     import httpx
 
     from openjarvis.tools import open_app, spotify_control
@@ -233,6 +239,6 @@ def test_restriction_violated_is_not_reported_as_a_permission_problem():
                     ):
                         result = tool.execute(action="pause")
 
-    assert not result.success
+    assert result.success
     assert "Premium" not in result.content
     assert "reauth" not in result.content.lower()

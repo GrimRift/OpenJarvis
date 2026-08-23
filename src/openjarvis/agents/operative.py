@@ -85,6 +85,12 @@ class OperativeAgent(ToolUsingAgent):
         **kwargs: Any,
     ) -> AgentResult:
         """Execute a single operator tick."""
+        # Per tick, not per agent — an Operator is long-lived by design, so
+        # without this the guard's counters accumulate across every tick it
+        # ever runs and eventually refuse ordinary repeated work. Same reason
+        # as OrchestratorAgent.run.
+        if self._loop_guard:
+            self._loop_guard.reset()
         self._emit_turn_start(input)
 
         # 1. Build system prompt with state context

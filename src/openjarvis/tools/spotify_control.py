@@ -379,10 +379,21 @@ class SpotifyControlTool(BaseTool):
                 # body and is not an error worth alarming the user about.
                 body = exc.response.text if exc.response is not None else ""
                 if "Restriction violated" in body:
-                    detail = (
-                        f"Spotify would not {action} right now — it is "
-                        "probably already in that state, or there is no "
-                        "track to move to."
+                    # Reported as success: the user asked for a state and
+                    # that state already holds. Calling it a failure made
+                    # the agent retry a pause that had already worked —
+                    # three calls for one "pause song", the last of them
+                    # stopped by the loop guard.
+                    return ToolResult(
+                        tool_name="spotify_control",
+                        content=(
+                            f"Already {action}d — nothing to change."
+                            if action in {"pause"}
+                            else f"Cannot {action} right now; there is no "
+                            "track to move to."
+                        ),
+                        success=action == "pause",
+                        metadata={"action": action, "no_op": True},
                     )
                 else:
                     detail = (
