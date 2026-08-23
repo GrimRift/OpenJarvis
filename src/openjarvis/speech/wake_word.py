@@ -104,6 +104,24 @@ class WakeWordDetector:
     def is_detection(self, score: float) -> bool:
         return score > self._threshold and self._consecutive_hits >= DETECTION_PATIENCE
 
+    def reset(self) -> None:
+        """Forget all audio heard so far. Call when a listening session starts.
+
+        One detector is built at startup and shared by every session, and the
+        model scores a rolling window of recent audio rather than each frame
+        alone. Listening stops while Sage answers, so the window is still
+        holding the "Hey Sage" that began the exchange when it resumes: the
+        first frames of the new session land in a buffer that already ends
+        with the wake word, and it fires again on the strength of that.
+
+        That is the mechanism behind the mic switching itself on after every
+        spoken reply in silence — no new sound is involved, which is why
+        waiting longer before re-arming never helped.
+        """
+        self._consecutive_hits = 0
+        if self._model is not None:
+            self._model.reset()
+
 
 _DETECTOR: Optional[WakeWordDetector] = None
 

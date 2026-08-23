@@ -684,6 +684,11 @@ async def wake_word_stream(websocket: WebSocket):
         return
 
     await websocket.accept(subprotocol=subprotocol)
+    # The detector is shared by every session and scores a rolling window of
+    # recent audio, so a fresh connection would otherwise start out still
+    # holding the wake word that opened the previous exchange and fire on it
+    # immediately, with nothing said.
+    await asyncio.to_thread(detector.reset)
     try:
         while True:
             frame = await websocket.receive_bytes()
