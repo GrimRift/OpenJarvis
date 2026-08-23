@@ -655,7 +655,7 @@ def _handle_agent(
     if audio_meta is None and req.voice and result.content:
         audio_meta = _synthesize_reply_audio(result.content)
 
-    return ChatCompletionResponse(
+    response = ChatCompletionResponse(
         model=model,
         choices=[
             Choice(
@@ -670,6 +670,12 @@ def _handle_agent(
         usage=usage,
         complexity=complexity_info,
     )
+    # Carried out-of-band rather than added to the OpenAI-shaped body, which
+    # has no field for "tools the server ran on your behalf". The streaming
+    # wrapper turns these into tool events so the client can record that the
+    # turn used tools; see _handle_agent_stream.
+    response._agent_tool_results = list(result.tool_results or [])
+    return response
 
 
 async def _handle_agent_stream(
@@ -740,6 +746,32 @@ async def _handle_agent_stream(
             yield "data: [DONE]\n\n"
             return
 
+        import json as _json
+
+        # The agent's tool loop runs to completion in a worker thread, so
+        # these are reported after the fact rather than live. Emitting them
+        # at all is what lets the client know the turn used tools: without
+        # it, a tool-using turn is indistinguishable from a plain answer,
+        # and replaying that history back makes the model treat "open the
+        # app" as something answered with a sentence — it then repeats the
+        # sentence and opens nothing.
+        for index, tool_result in enumerate(
+            getattr(response, "_agent_tool_results", []) or []
+        ):
+            name = getattr(tool_result, "tool_name", "") or "tool"
+            call_id = f"{chunk_id}-tool-{index}"
+            start = _json.dumps({"id": call_id, "tool": name, "arguments": ""})
+            yield f"event: tool_call_start\ndata: {start}\n\n"
+            end = _json.dumps(
+                {
+                    "id": call_id,
+                    "tool": name,
+                    "success": bool(getattr(tool_result, "success", True)),
+                    "result": str(getattr(tool_result, "content", ""))[:500],
+                }
+            )
+            yield f"event: tool_call_end\ndata: {end}\n\n"
+
         content = _response_content(response)
         if content:
             content_chunk = ChatCompletionChunk(
@@ -748,8 +780,6 @@ async def _handle_agent_stream(
                 choices=[StreamChoice(delta=DeltaMessage(content=content))],
             )
             yield f"data: {content_chunk.model_dump_json()}\n\n"
-
-        import json as _json
 
         finish_chunk = ChatCompletionChunk(
             id=chunk_id,
