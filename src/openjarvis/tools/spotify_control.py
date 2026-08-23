@@ -93,10 +93,20 @@ def _most_recent_track(token: str) -> Dict[str, Any]:
 
 
 def _fetch_devices(token: str) -> List[Dict[str, Any]]:
-    """Return the account's currently visible Spotify Connect devices."""
+    """Return the account's currently visible Spotify Connect devices.
+
+    A 401 is deliberately allowed to propagate: access tokens last an hour,
+    and ``call_with_refresh`` mints a new one and retries when it sees that
+    status. Swallowing it here returned an empty device list instead, which
+    every caller reads as "no device to play on" — so once the hour was up,
+    playback failed with "Spotify didn't start" and waited 30s for an app
+    that was already running.
+    """
     try:
         data = _request(token, "GET", "me/player/devices")
-    except httpx.HTTPStatusError:
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 401:
+            raise
         return []
     return data.get("devices") or []
 

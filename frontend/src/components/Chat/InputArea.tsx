@@ -238,7 +238,13 @@ export function InputArea() {
           tool_calls: calls.map((tc) => ({
             id: tc.id,
             type: 'function',
-            function: { name: tc.tool, arguments: tc.arguments ?? '{}' },
+            // `|| '{}'` rather than `?? '{}'`: an empty string is the case
+            // that matters. Arguments are not always recoverable when the
+            // server reports a tool call after the fact, and conversations
+            // already saved with a blank value would otherwise keep sending
+            // unparseable JSON — the model backend rejects the request and
+            // every later message in that chat fails.
+            function: { name: tc.tool, arguments: tc.arguments || '{}' },
           })),
         });
         for (const tc of calls) {

@@ -760,7 +760,14 @@ async def _handle_agent_stream(
         ):
             name = getattr(tool_result, "tool_name", "") or "tool"
             call_id = f"{chunk_id}-tool-{index}"
-            start = _json.dumps({"id": call_id, "tool": name, "arguments": ""})
+            # "{}" rather than "": this string is stored by the client and
+            # replayed as a tool call's `arguments` on later turns, and an
+            # empty one is not parseable JSON — Ollama rejects the whole
+            # request with "Value looks like object, but can't find closing
+            # '}' symbol", breaking every message after the first tool use.
+            # The real arguments are not recoverable here (the tool loop has
+            # already finished), so an empty object stands in.
+            start = _json.dumps({"id": call_id, "tool": name, "arguments": "{}"})
             yield f"event: tool_call_start\ndata: {start}\n\n"
             end = _json.dumps(
                 {
