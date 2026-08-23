@@ -77,6 +77,20 @@ function loadConversations(): ConversationStore {
               repaired = true;
             }
           }
+          // withoutAutoPlay() below only ever cleaned the in-memory copy for
+          // display — the flag stayed true in what's actually saved here.
+          // addMessage/updateLastAssistant read straight from this function
+          // and set the result directly into `messages`, bypassing that
+          // in-memory cleanup entirely: every reply ever spoken in a chat
+          // would replay at once the moment a new voice message was sent in
+          // it, because the "new" state they installed was this raw,
+          // never-actually-repaired data. Stripping it here, at the one
+          // place every caller reads from, means there is no second copy
+          // left to go stale.
+          if (message.audio?.autoPlay) {
+            message.audio.autoPlay = false;
+            repaired = true;
+          }
         }
       }
       if (repaired) {
