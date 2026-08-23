@@ -76,6 +76,7 @@ memory-colbert = [
     "torch>=2.0",
 ]
 memory-pdf = ["pdfplumber>=0.10"]
+wake-word-training = ["sounddevice>=0.5", "soundfile>=0.12"]
 memory-bm25 = ["rank-bm25>=0.2.2"]
 server = [
     "fastapi>=0.110",
