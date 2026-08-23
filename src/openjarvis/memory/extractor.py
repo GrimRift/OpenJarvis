@@ -25,6 +25,17 @@ _DEFAULT_SYSTEM_PROMPT = (
     "future conversations: preferences, identity, goals, ongoing projects, "
     "constraints, or relationships. Ignore one-off task details, small talk, "
     "and anything the assistant said about itself.\n\n"
+    # These facts are re-injected verbatim into every future prompt, so a
+    # sentence that was only true when written keeps asserting itself long
+    # afterwards. Observed live: "User has a class starting at 11:00 AM
+    # today", captured on a Friday, had the assistant announcing a class on
+    # the following Sunday — and outweighing the schedule tool, which was
+    # correctly reporting none.
+    "Never record anything whose truth depends on when it was said. Drop "
+    "facts containing today, tomorrow, tonight, this morning, currently, "
+    "right now, upcoming, or next — a recurring commitment is only worth "
+    "keeping if you state the actual day and time it recurs, and a one-off "
+    "event is not worth keeping at all.\n\n"
     "Respond with ONLY a JSON array of short fact strings (each under 200 "
     "characters). If there is nothing worth remembering, respond with []."
 )
