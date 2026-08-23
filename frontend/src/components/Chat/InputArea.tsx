@@ -680,16 +680,19 @@ export function InputArea() {
   }, [stopRecording, sendMessage]);
 
   // Entry point for both the wake word and continuous-conversation re-arm.
-  // A fixed timeout stands in for real silence detection for now — simpler
-  // to ship first, at the cost of not adapting to how long you actually
-  // take to speak.
+  // Real silence detection (see useSpeech's VAD) stops the recording as soon
+  // as the user finishes talking — the fixed 12s timer below is only a
+  // fallback for the rare case VAD never sees speech at all (e.g. the
+  // trigger was itself a false positive), not the normal way this ends.
+  // Previously the timer WAS the only mechanism, so every turn waited out
+  // the same multi-second pause no matter how short the question was.
   const beginAutoRecording = useCallback(async () => {
     if (micDisabled || speechState !== 'idle') return;
     autoTriggeredRef.current = true;
-    await startRecording();
+    await startRecording(finishAutoRecording);
     autoStopTimerRef.current = setTimeout(() => {
       finishAutoRecording();
-    }, 7000);
+    }, 12000);
   }, [micDisabled, speechState, startRecording, finishAutoRecording]);
 
   useEffect(() => {
