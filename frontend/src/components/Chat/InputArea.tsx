@@ -161,6 +161,12 @@ export function InputArea() {
 
   const handleMicClick = useCallback(async () => {
     if (speechState === 'recording') {
+      // Stopping by hand also stops listening. Without this the button only
+      // ended the current recording, the wake word re-armed a second later,
+      // and a false trigger started another one — so pressing it repeatedly
+      // appeared to do nothing at all.
+      setWakeWordSuspended(true);
+      toast('Listening paused — tap the mic again to talk.', { duration: 4000 });
       try {
         const text = await stopRecording();
         if (text) {
@@ -171,6 +177,7 @@ export function InputArea() {
         // Error is captured in useSpeech
       }
     } else {
+      setWakeWordSuspended(false);
       await startRecording();
     }
   }, [speechState, startRecording, stopRecording]);
@@ -710,6 +717,12 @@ export function InputArea() {
   const [wakeWordSettled, setWakeWordSettled] = useState(true);
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Set when the user stops a recording by hand, so the wake word does not
+  // immediately re-arm behind them. Cleared when they start one deliberately,
+  // or when the Settings toggle is touched — otherwise pausing here would
+  // silently outlive the switch that is supposed to control it.
+  const [wakeWordSuspended, setWakeWordSuspended] = useState(false);
+
   useEffect(() => {
     if (settleTimerRef.current) {
       clearTimeout(settleTimerRef.current);
@@ -741,8 +754,20 @@ export function InputArea() {
     // cancellation isn't perfect, so it can hear (and re-trigger on)
     // itself, independent of any toggle. wakeWordSettled adds the
     // post-playback cooldown described above.
-    wakeWordEnabled && !micDisabled && speechState === 'idle' && !audioPlaying && wakeWordSettled,
+    wakeWordEnabled &&
+      !wakeWordSuspended &&
+      !micDisabled &&
+      speechState === 'idle' &&
+      !audioPlaying &&
+      wakeWordSettled,
   );
+
+  // The Settings switch is the authority: flipping it either way ends a
+  // pause started from the mic button, so the two controls cannot disagree
+  // about whether Sage is listening.
+  useEffect(() => {
+    setWakeWordSuspended(false);
+  }, [wakeWordEnabled]);
 
   useEffect(() => {
     if (wakeWordError) {
