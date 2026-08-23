@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from typing import Any, Dict, List
 
 from openjarvis.core.registry import ToolRegistry
@@ -112,6 +113,102 @@ def _resolve_target(app_key: str) -> str:
     return ""
 
 
+def _pids_for(process_name: str) -> set:
+    """PIDs currently running under *process_name*."""
+    if os.name != "nt":
+        return set()
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/NH", "/FO", "CSV"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    pids = set()
+    for line in (result.stdout or "").splitlines():
+        fields = [f.strip('"') for f in line.split('","')]
+        if len(fields) > 1 and fields[0].lower().startswith(process_name.lower()):
+            try:
+                pids.add(int(fields[1]))
+            except ValueError:
+                continue
+    return pids
+
+
+def _raise_window(hwnd: int) -> None:
+    """Restore and foreground *hwnd*.
+
+    Windows refuses SetForegroundWindow from a process that does not own the
+    current foreground window — which is exactly our position, since the
+    request arrives over HTTP with the user's browser in front. The call then
+    only flashes the taskbar button, which is what "it opened but stayed
+    minimised" looked like. SwitchToThisWindow is the long-standing fallback
+    the shell itself uses for alt-tab style activation and is not subject to
+    that restriction, so it runs whenever the polite call reports failure.
+    """
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    sw_restore = 9
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, sw_restore)
+    user32.BringWindowToTop(hwnd)
+    if not user32.SetForegroundWindow(hwnd):
+        try:
+            user32.SwitchToThisWindow(hwnd, True)
+        except Exception:
+            pass
+
+
+def _focus_app_window(process_name: str, timeout_seconds: float = 10.0) -> bool:
+    """Wait for *process_name* to show a window, then bring it to the front.
+
+    Matches on process name rather than the PID returned by Popen: Store
+    shims and Electron launchers exit or hand off to a child, so the window
+    frequently belongs to a different process than the one started.
+    """
+    if os.name != "nt":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    enum_proc = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+    )
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        pids = _pids_for(process_name)
+        if pids:
+            found = []
+
+            def _callback(hwnd, _lparam, _pids=pids, _found=found):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                if user32.GetWindow(hwnd, 4):  # GW_OWNER — skip tool windows
+                    return True
+                if not user32.GetWindowTextLengthW(hwnd):
+                    return True
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value in _pids:
+                    _found.append(hwnd)
+                    return False
+                return True
+
+            user32.EnumWindows(enum_proc(_callback), 0)
+            if found:
+                _raise_window(found[0])
+                return True
+        time.sleep(0.4)
+    return False
+
+
 @ToolRegistry.register("open_app")
 class OpenAppTool(BaseTool):
     """Launch or focus a known desktop application."""
@@ -183,6 +280,23 @@ class OpenAppTool(BaseTool):
                 success=False,
             )
 
+        process = _APPS[app].get("process", "")
+
+        # Focus rather than launch when it is already running: starting a
+        # second copy is not what "open X" means, and the duplicate is what
+        # the user would have to close afterwards.
+        if process and is_app_running(app):
+            _focus_app_window(process, timeout_seconds=4.0)
+            return ToolResult(
+                tool_name="open_app",
+                content=(
+                    f"{display} was already running — its window is now at "
+                    "the front of the screen."
+                ),
+                success=True,
+                metadata={"app": app, "launched": False},
+            )
+
         try:
             # Popen, not run(): launching a GUI app should return as soon as
             # the process starts, not block this tool until the user closes
@@ -196,9 +310,20 @@ class OpenAppTool(BaseTool):
                 success=False,
             )
 
+        # A launched window does not come forward on its own here — see
+        # _raise_window. Reporting the outcome rather than a bare "opening"
+        # also matters for the agent loop: an ambiguous in-progress result
+        # invited the model to call this tool again and again until the loop
+        # guard stopped it (observed live, ~14 turns for one request).
+        focused = _focus_app_window(process) if process else False
+        content = (
+            f"{display} is now open and in front of you."
+            if focused
+            else f"{display} was launched."
+        )
         return ToolResult(
             tool_name="open_app",
-            content=f"{display} is opening.",
+            content=content,
             success=True,
             metadata={"app": app},
         )

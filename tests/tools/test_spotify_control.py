@@ -42,12 +42,57 @@ def test_open_app_launches_a_resolved_path_as_an_argument_list():
         with patch.object(
             open_app, "_resolve_target", return_value=r"C:\fake\Spotify.exe"
         ):
-            result = OpenAppTool().execute(app="spotify")
+            with patch.object(open_app, "is_app_running", return_value=False):
+                with patch.object(open_app, "_focus_app_window", return_value=True):
+                    result = OpenAppTool().execute(app="spotify")
 
     assert result.success
     args, kwargs = popen.call_args
     assert args[0] == [r"C:\fake\Spotify.exe"]
     assert kwargs.get("shell") is not True
+
+
+def test_open_app_focuses_instead_of_launching_a_second_copy():
+    """"Open X" when X is already running means show it, not start another."""
+    from openjarvis.tools import open_app
+    from openjarvis.tools.open_app import OpenAppTool
+
+    with patch.object(open_app.subprocess, "Popen") as popen:
+        with patch.object(
+            open_app, "_resolve_target", return_value=r"C:\fake\Obsidian.exe"
+        ):
+            with patch.object(open_app, "is_app_running", return_value=True):
+                with patch.object(
+                    open_app, "_focus_app_window", return_value=True
+                ) as focus:
+                    result = OpenAppTool().execute(app="obsidian")
+
+    popen.assert_not_called()
+    focus.assert_called_once()
+    assert result.success
+    assert result.metadata.get("launched") is False
+
+
+def test_open_app_reports_a_finished_outcome_not_work_in_progress():
+    """An in-progress result invited the agent to retry until the loop guard hit.
+
+    Live, "Obsidian is opening." led the model to call open_app again and
+    again — roughly fourteen turns for one request — because nothing in the
+    result said the work was done.
+    """
+    from openjarvis.tools import open_app
+    from openjarvis.tools.open_app import OpenAppTool
+
+    with patch.object(open_app.subprocess, "Popen"):
+        with patch.object(
+            open_app, "_resolve_target", return_value=r"C:\fake\Obsidian.exe"
+        ):
+            with patch.object(open_app, "is_app_running", return_value=False):
+                with patch.object(open_app, "_focus_app_window", return_value=True):
+                    result = OpenAppTool().execute(app="obsidian")
+
+    assert "opening" not in result.content.lower()
+    assert "now open" in result.content.lower()
 
 
 def test_play_launches_app_when_process_is_not_running():
