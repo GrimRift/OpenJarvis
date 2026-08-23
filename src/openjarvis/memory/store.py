@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -25,6 +26,29 @@ from openjarvis.core.registry import FactStoreRegistry
 def _default_fact_path() -> Path:
     """Return the env-aware default JSONL path for automatic memory facts."""
     return get_config_dir() / "memory_facts.jsonl"
+
+
+# Filler words carry no identifying weight, and the extractor rephrases
+# freely around them.
+_DEDUPE_STOPWORDS = frozenset(
+    """a an and are as at be by for from has have in is it its of on or the
+    that this to user users was were with""".split()
+)
+
+
+def _dedupe_key(text: str) -> str:
+    """Collapse a fact to the words that identify it.
+
+    Exact string matching let the same fact accumulate once per phrasing:
+    one store held "User is currently in the AY 2026-2027, 1st Term.",
+    "User is currently in the 1st Term of AY 2026-2027." and three more
+    variants of the sentence, each re-injected into every prompt. Comparing
+    the set of significant words instead catches rewordings and reorderings,
+    which is how the duplicates actually differed.
+    """
+    cleaned = re.sub(r"[^a-z0-9 ]", " ", text.lower())
+    words = {w for w in cleaned.split() if w not in _DEDUPE_STOPWORDS}
+    return " ".join(sorted(words))
 
 
 @dataclass(slots=True)
@@ -139,8 +163,8 @@ class LocalFactStore(FactStore):
             return False
         with self._lock:
             self._sync_from_disk_locked()
-            lowered = text.lower()
-            if any(f.text.lower() == lowered for f in self._facts):
+            candidate = _dedupe_key(text)
+            if any(_dedupe_key(f.text) == candidate for f in self._facts):
                 return False  # dedupe
             self._facts.append(Fact(text=text, source=source, created_at=time.time()))
             # Enforce the cap by evicting the oldest entries.
