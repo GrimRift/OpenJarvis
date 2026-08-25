@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Wake Word Trainer</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #14151a; color: #e6e6e6; max-width: 640px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 20px; }
+  p.note { color: #9a9a9a; font-size: 13px; line-height: 1.5; }
+  #prompt { font-size: 22px; margin: 24px 0 8px; min-height: 32px; }
+  #sub { color: #9a9a9a; font-size: 13px; margin-bottom: 20px; }
+  button { font-size: 15px; padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer; margin-right: 8px; }
+  #recordBtn { background: #4c8dff; color: white; }
+  #recordBtn:disabled { background: #333; color: #777; cursor: default; }
+  #redoBtn { background: #333; color: #ddd; }
+  #meter { width: 100%; height: 14px; background: #222; border-radius: 7px; overflow: hidden; margin: 14px 0; }
+  #meterFill { height: 100%; width: 0%; background: #4c8dff; transition: width 60ms linear; }
+  #status { margin-top: 14px; font-size: 13px; color: #9a9a9a; white-space: pre-line; }
+  #log { margin-top: 20px; font-size: 12px; color: #777; max-height: 200px; overflow-y: auto; font-family: monospace; white-space: pre-line; }
+  .warn { color: #f0a336; }
+  .ok { color: #4caf78; }
+</style>
+</head>
+<body>
+<h1>Wake Word Trainer</h1>
+<p class="note">
+  Records through the exact same mic pipeline live wake-word listening uses
+  (same getUserMedia settings, same 16kHz resample) — unlike the earlier
+  Python script, whose recordings turned out much quieter than what the
+  browser actually captures. Session: <code id="sessionId"></code>
+</p>
+
+<div id="prompt">Click Start to begin</div>
+<div id="sub"></div>
+<div id="meter"><div id="meterFill"></div></div>
+<button id="recordBtn">Start</button>
+<button id="redoBtn" style="display:none">Redo last</button>
+<div id="status"></div>
+<div id="log"></div>
+
+<script>
+const SAMPLE_RATE = 16000;
+
+function apiBase() {
+  try {
+    const raw = localStorage.getItem('openjarvis-settings');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.apiUrl) return parsed.apiUrl;
+    }
+  } catch {}
+  return '';
+}
+function apiKey() {
+  try {
+    const raw = localStorage.getItem('openjarvis-settings');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.apiKey) return String(parsed.apiKey);
+    }
+  } catch {}
+  return '';
+}
+
+const params = new URLSearchParams(location.search);
+const topupSession = params.get('session');
+const isTopup = params.get('mode') === 'topup' && !!topupSession;
+
+const sessionId = isTopup
+  ? topupSession
+  : 'browser_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+document.getElementById('sessionId').textContent = sessionId + (isTopup ? ' (adding to existing)' : '');
+
+const items = [];
+
+if (isTopup) {
+  // Top-up pass. The first session's negatives were all speech plus two
+  // ambience clips, so the model had never heard a keyboard or a bare
+  // "hey"/"sage" and could not reject either -- both false-fired in use.
+  // Positives here are deliberately fast/casual: the original takes were
+  // all careful and deliberate, which is why only slow speech triggered it.
+  for (let i = 1; i <= 12; i++) {
+    items.push({ label: 'positive', name: `hey_sage_fast_${String(i).padStart(2, '0')}.wav`, prompt: 'Say "Hey Sage" — quickly and casually, like you normally would', durationMs: 1800 });
+  }
+  for (let i = 1; i <= 5; i++) {
+    items.push({ label: 'negative', name: `keyboard_${String(i).padStart(2, '0')}.wav`, prompt: 'Type on your keyboard (do not speak)', durationMs: 5000, isSpeech: false });
+  }
+  for (let i = 1; i <= 5; i++) {
+    items.push({ label: 'negative', name: `silence_${String(i).padStart(2, '0')}.wav`, prompt: 'Stay quiet — normal room noise', durationMs: 8000, isSpeech: false });
+  }
+  // Near-misses: the two halves of the wake word on their own must not fire.
+  const partials = ['hey', 'sage', 'hey there', 'say', 'page', 'hey Siri'];
+  partials.forEach((phrase, i) => {
+    for (let rep = 0; rep < 2; rep++) {
+      items.push({ label: 'negative', name: `partial_${String(i * 2 + rep + 1).padStart(2, '0')}_${phrase.replace(/ /g, '_')}.wav`, prompt: `Say "${phrase}"`, durationMs: 1800 });
+    }
+  });
+  for (let i = 1; i <= 3; i++) {
+    items.push({ label: 'negative', name: `mouse_${String(i).padStart(2, '0')}.wav`, prompt: 'Click your mouse / move things around (do not speak)', durationMs: 4000, isSpeech: false });
+  }
+} else {
+  for (let i = 1; i <= 25; i++) {
+    items.push({ label: 'positive', name: `hey_sage_${String(i).padStart(2, '0')}.wav`, prompt: 'Say "Hey Sage"', durationMs: 1800 });
+  }
+  const reactions = ['no', 'hey', 'wait', 'stop', 'okay', 'what', 'yeah', 'hold on'];
+  let rCount = 0;
+  for (const phrase of reactions) {
+    for (let rep = 0; rep < 2; rep++) {
+      rCount++;
+      items.push({ label: 'negative', name: `reaction_${String(rCount).padStart(2, '0')}_${phrase.replace(' ', '_')}.wav`, prompt: `Say "${phrase}"`, durationMs: 1500 });
+    }
+  }
+  const sentences = [
+    'Can you check the weather for tomorrow.',
+    'I need to leave for work in twenty minutes.',
+    'That meeting got moved to next Thursday.',
+    'Turn the volume down a little please.',
+    "I'm not sure what I want for dinner tonight.",
+  ];
+  sentences.forEach((s, i) => {
+    items.push({ label: 'negative', name: `sentence_${String(i + 1).padStart(2, '0')}.wav`, prompt: `Say: "${s}"`, durationMs: 4000 });
+  });
+  for (let i = 1; i <= 2; i++) {
+    items.push({ label: 'negative', name: `ambience_${String(i).padStart(2, '0')}.wav`, prompt: 'Stay quiet (room ambience)', durationMs: 8000, isSpeech: false });
+  }
+}
+
+let idx = -1;
+let stream, audioCtx, source, processor, silentGain;
+let capturing = false;
+let buffer = [];
+let lastClipBytes = null;
+let lastClipMeta = null;
+
+const promptEl = document.getElementById('prompt');
+const subEl = document.getElementById('sub');
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const recordBtn = document.getElementById('recordBtn');
+const redoBtn = document.getElementById('redoBtn');
+const meterFill = document.getElementById('meterFill');
+
+function log(line) {
+  logEl.textContent = line + '\n' + logEl.textContent;
+}
+
+async function ensureAudio() {
+  if (stream) return;
+  // Same constraints as useWakeWord.ts's live capture -- the whole point is
+  // matching train-time and inference-time signal chains exactly.
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+  });
+  audioCtx = new AudioContext();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  source = audioCtx.createMediaStreamSource(stream);
+  processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  const nativeSampleRate = audioCtx.sampleRate;
+  const resampleRatio = SAMPLE_RATE / nativeSampleRate;
+
+  processor.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    let peak = 0;
+    for (let i = 0; i < input.length; i++) {
+      const abs = Math.abs(input[i]);
+      if (abs > peak) peak = abs;
+    }
+    meterFill.style.width = Math.min(100, peak * 300) + '%';
+    if (!capturing) return;
+
+    const outLength = Math.round(input.length * resampleRatio);
+    for (let i = 0; i < outLength; i++) {
+      const srcIndex = i / resampleRatio;
+      const i0 = Math.floor(srcIndex);
+      const i1 = Math.min(i0 + 1, input.length - 1);
+      const frac = srcIndex - i0;
+      const sample = input[i0] * (1 - frac) + input[i1] * frac;
+      const clamped = Math.max(-1, Math.min(1, sample));
+      buffer.push(Math.round(clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff));
+    }
+  };
+
+  silentGain = audioCtx.createGain();
+  silentGain.gain.value = 0;
+  source.connect(processor);
+  processor.connect(silentGain);
+  silentGain.connect(audioCtx.destination);
+}
+
+function pcmToBytes(samples) {
+  const arr = new Int16Array(samples);
+  return new Uint8Array(arr.buffer);
+}
+
+async function uploadClip(item, bytes) {
+  const base = apiBase();
+  const url = `${base}/v1/speech/wake-word-sample?label=${item.label}&session=${sessionId}&name=${encodeURIComponent(item.name)}`;
+  const headers = { 'Content-Type': 'application/octet-stream' };
+  const key = apiKey();
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+  const res = await fetch(url, { method: 'POST', headers, body: bytes });
+  if (!res.ok) throw new Error(`upload failed: HTTP ${res.status}`);
+}
+
+function peakOf(samples) {
+  let peak = 0;
+  for (const s of samples) { const a = Math.abs(s); if (a > peak) peak = a; }
+  return peak;
+}
+
+async function recordCurrent() {
+  const item = items[idx];
+  recordBtn.disabled = true;
+  redoBtn.style.display = 'none';
+  statusEl.textContent = 'Recording...';
+  buffer = [];
+  capturing = true;
+  await new Promise((r) => setTimeout(r, item.durationMs));
+  capturing = false;
+
+  const samples = buffer;
+  const peak = peakOf(samples);
+  const bytes = pcmToBytes(samples);
+  lastClipBytes = bytes;
+  lastClipMeta = item;
+
+  try {
+    await uploadClip(item, bytes);
+    const quiet = item.isSpeech !== false && peak < 3000;
+    const peakPct = ((peak / 32768) * 100).toFixed(1);
+    statusEl.innerHTML = quiet
+      ? `<span class="warn">Saved, but very quiet (peak ${peakPct}%) — consider "Redo last"</span>`
+      : `<span class="ok">Saved (peak ${peakPct}%)</span>`;
+    log(`[${idx + 1}/${items.length}] ${item.name} peak=${peakPct}%`);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="warn">Upload failed: ${err.message}</span>`;
+    log(`[${idx + 1}/${items.length}] ${item.name} FAILED: ${err.message}`);
+  }
+
+  redoBtn.style.display = 'inline-block';
+  advance();
+}
+
+function advance() {
+  idx++;
+  if (idx >= items.length) {
+    promptEl.textContent = 'All done!';
+    subEl.textContent = `Recorded ${items.length} clips into session ${sessionId}.`;
+    statusEl.innerHTML = `Now run:\n<code>.venv\\Scripts\\python.exe scripts\\wake_word_train.py --train-only --session "${sessionId}"</code>`;
+    recordBtn.style.display = 'none';
+    redoBtn.style.display = 'none';
+    return;
+  }
+  const item = items[idx];
+  promptEl.textContent = item.prompt;
+  subEl.textContent = `${idx + 1} / ${items.length} — ${item.label}`;
+  statusEl.textContent = '';
+  recordBtn.disabled = false;
+  recordBtn.textContent = 'Record';
+}
+
+recordBtn.addEventListener('click', async () => {
+  if (idx === -1) {
+    recordBtn.disabled = true;
+    statusEl.textContent = 'Requesting microphone...';
+    try {
+      await ensureAudio();
+    } catch (err) {
+      statusEl.innerHTML = `<span class="warn">Microphone access denied: ${err.message}</span>`;
+      recordBtn.disabled = false;
+      return;
+    }
+    advance();
+    recordBtn.disabled = false;
+    return;
+  }
+  recordCurrent();
+});
+
+redoBtn.addEventListener('click', () => {
+  idx--;
+  advance();
+});
+</script>
+</body>
+</html>
