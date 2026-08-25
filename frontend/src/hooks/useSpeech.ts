@@ -32,6 +32,26 @@ const VAD_SILENCE_MS = 850;
 // common right after a wake-word trigger) would itself read as "silence
 // after speech" and cut the recording before they said anything.
 const VAD_MIN_SPEECH_MS = 250;
+// Level that counts as "the user has started talking" before the noise floor
+// has been measured — used only for barge-in (cutting the wake-word greeting
+// short), where there is no calibration yet to compare against. Deliberately
+// well above VAD_MIN_THRESHOLD: the greeting is playing out of the speakers
+// while this runs, and although echo cancellation suppresses most of it, a
+// threshold near the floor would let the residue cancel the greeting itself.
+const BARGE_IN_THRESHOLD = 0.06;
+
+export interface RecordingOptions {
+  /** VAD calibration waits for this (the greeting finishing) before arming.
+   *
+   * Without it the noise floor gets measured while the greeting is audible,
+   * so the threshold calibrates against Sage's own voice instead of the
+   * room and real speech never clears it. Audio capture still starts
+   * immediately — only the silence detection is deferred.
+   */
+  deferVadUntil?: Promise<void>;
+  /** Fired once, the first time input looks like speech. */
+  onSpeechStart?: () => void;
+}
 
 /** Pure so the clamping can be unit-tested without mocking AudioContext. */
 export function computeSpeechThreshold(noiseFloor: number): number {
@@ -72,7 +92,10 @@ export function useSpeech() {
       .catch(() => setAvailable(false));
   }, []);
 
-  const startRecording = useCallback(async (onSilence?: () => void): Promise<void> => {
+  const startRecording = useCallback(async (
+    onSilence?: () => void,
+    options?: RecordingOptions,
+  ): Promise<void> => {
     setError(null);
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -133,13 +156,20 @@ export function useSpeech() {
         const processor = audioCtx.createScriptProcessor(2048, 1, 1);
         vadProcessorRef.current = processor;
 
-        const startedAt = performance.now();
+        // Null until the deferred wait (if any) resolves; audio is still
+        // captured meanwhile, so a command spoken straight through the
+        // greeting is recorded in full even though VAD isn't measuring yet.
+        let armedAt: number | null = options?.deferVadUntil ? null : performance.now();
+        options?.deferVadUntil?.then(() => {
+          armedAt = performance.now();
+        });
         let noiseSum = 0;
         let noiseSamples = 0;
         let speechThreshold: number | null = null;
         let hasSpokenAt: number | null = null;
         let lastLoudAt = 0;
         let fired = false;
+        let speechAnnounced = false;
 
         processor.onaudioprocess = (e) => {
           if (fired) return;
@@ -151,6 +181,13 @@ export function useSpeech() {
           }
           const now = performance.now();
 
+          if (!speechAnnounced && peak > BARGE_IN_THRESHOLD) {
+            speechAnnounced = true;
+            options?.onSpeechStart?.();
+          }
+
+          if (armedAt === null) return;
+
           if (speechThreshold === null) {
             // Still sampling this mic's own noise floor — every frame in
             // this window is assumed to be ambient sound, not speech, on
@@ -159,7 +196,7 @@ export function useSpeech() {
             // even starts, so there is normally a brief real gap here.
             noiseSum += peak;
             noiseSamples += 1;
-            if (now - startedAt < VAD_CALIBRATION_MS) return;
+            if (now - armedAt < VAD_CALIBRATION_MS) return;
             const noiseFloor = noiseSamples > 0 ? noiseSum / noiseSamples : 0;
             speechThreshold = computeSpeechThreshold(noiseFloor);
             lastLoudAt = now;

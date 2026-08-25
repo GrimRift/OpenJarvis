@@ -5,6 +5,7 @@ import { useAppStore, generateId } from '../../lib/store';
 import { streamChat, streamResearch } from '../../lib/sse';
 import type { ChatRequest } from '../../lib/sse';
 import { fetchSavings, getBase, synthesizeSpeech } from '../../lib/api';
+import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import { MicButton } from './MicButton';
@@ -695,6 +696,29 @@ export function InputArea() {
     }, 12000);
   }, [micDisabled, speechState, startRecording, finishAutoRecording]);
 
+  // Wake-word variant: acknowledge out loud before listening. Only the wake
+  // word does this — the continuous-conversation re-arm above stays silent,
+  // since greeting after every reply would talk over an ongoing exchange.
+  //
+  // Capture starts immediately, in parallel with the greeting, rather than
+  // after it: "Hey Sage, play a song" is commonly said in one breath, and
+  // waiting for the clip to finish would drop the command. The greeting is
+  // cut the moment the user is heard (onSpeechStart), and VAD calibration
+  // waits for it to be over (deferVadUntil) so Sage's own voice is never
+  // measured as the room's noise floor.
+  const beginWakeWordRecording = useCallback(async () => {
+    if (micDisabled || speechState !== 'idle') return;
+    autoTriggeredRef.current = true;
+    const greeting = playGreeting();
+    await startRecording(finishAutoRecording, {
+      deferVadUntil: greeting.done,
+      onSpeechStart: greeting.cancel,
+    });
+    autoStopTimerRef.current = setTimeout(() => {
+      finishAutoRecording();
+    }, 12000);
+  }, [micDisabled, speechState, startRecording, finishAutoRecording]);
+
   useEffect(() => {
     if (speechState !== 'recording' && autoStopTimerRef.current) {
       clearTimeout(autoStopTimerRef.current);
@@ -703,6 +727,12 @@ export function InputArea() {
   }, [speechState]);
 
   const wakeWordEnabled = useAppStore((s) => s.settings.wakeWordEnabled);
+
+  // Fetch and decode the clips while the wake word is merely armed, so the
+  // first trigger doesn't pay for the download at the moment it matters.
+  useEffect(() => {
+    if (wakeWordEnabled) preloadGreetings();
+  }, [wakeWordEnabled]);
   const continuousConversationEnabled = useAppStore((s) => s.settings.continuousConversationEnabled);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
   const wasAudioPlayingRef = useRef(false);
@@ -748,7 +778,7 @@ export function InputArea() {
   }, [audioPlaying]);
 
   const { error: wakeWordError } = useWakeWord(
-    beginAutoRecording,
+    beginWakeWordRecording,
     // !audioPlaying matters as much as speechState === 'idle' here:
     // speechState returns to 'idle' as soon as transcription finishes,
     // well before a reply is generated or its voice playback finishes.
