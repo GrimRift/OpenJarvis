@@ -109,7 +109,7 @@ if (isGuided) {
         name: `${prefix}_${String(i).padStart(2, '0')}.wav`,
         prompt: 'Say "Hey Sage"',
         note,
-        durationMs: 2000,
+        durationMs: 2300,
       });
     }
   };
@@ -294,9 +294,15 @@ async function recordCurrent() {
   const item = items[idx];
   recordBtn.disabled = true;
   redoBtn.style.display = 'none';
-  statusEl.textContent = 'Recording...';
+  // Short beat before capture actually starts. Recording from the instant
+  // of the click put the mouse click itself at the head of every take —
+  // systematically, and only on takes started by clicking — and left no
+  // moment to draw breath, so the first syllable was easy to clip.
+  statusEl.innerHTML = '<span class="warn">Get ready…</span>';
+  await new Promise((r) => setTimeout(r, 400));
   buffer = [];
   capturing = true;
+  statusEl.innerHTML = '<span style="color:#ff5c5c">● Recording — speak now</span>';
   await new Promise((r) => setTimeout(r, item.durationMs));
   capturing = false;
 
