@@ -38,3 +38,62 @@ def test_reset_is_safe_before_the_model_loads():
     detector.reset()
 
     assert detector._consecutive_hits == 0
+
+
+def test_clone_shares_config_but_not_audio_history():
+    """Each listening session needs its own rolling buffer.
+
+    Two overlapping sessions (the moment of a page refresh: the closing
+    socket's in-flight frames still arriving as the new one opens) sharing
+    one detector interleave audio into a single rolling window, and the
+    hit counter carries across — so the new session can fire on audio that
+    is partly the old session's.
+    """
+    from openjarvis.speech.wake_word import WakeWordDetector
+
+    original = WakeWordDetector(model_path="unused.onnx", threshold=0.83)
+    original._consecutive_hits = 4
+    original._model = object()
+
+    clone = original.clone()
+
+    assert clone._model_path == original._model_path
+    assert clone._threshold == original._threshold
+    assert clone._consecutive_hits == 0
+    assert clone._model is None
+    # Mutating the clone must not disturb the session it was cloned from.
+    clone._consecutive_hits = 9
+    assert original._consecutive_hits == 4
+
+
+def test_detections_are_suppressed_until_the_buffer_warms_up():
+    """A just-reset detector must not fire, no matter how it scores.
+
+    A fresh detector's rolling window needs WARMUP_FRAMES of real history
+    before it means anything, and the underlying model's score spikes right
+    at that fill point regardless of audio content -- measured on this
+    project's own recordings, every quiet-room negative clip peaked there,
+    and in production every page refresh (a fresh WebSocket -> fresh
+    detector) fired on nothing but ordinary room noise.
+    """
+    from openjarvis.speech.wake_word import WARMUP_FRAMES, WakeWordDetector
+
+    detector = WakeWordDetector(model_path="unused.onnx", threshold=0.5)
+    detector._consecutive_hits = 5  # patience already satisfied
+
+    detector._frames_since_reset = WARMUP_FRAMES
+    assert detector.is_detection(0.99) is False
+
+    detector._frames_since_reset = WARMUP_FRAMES + 1
+    assert detector.is_detection(0.99) is True
+
+
+def test_warmup_counter_resets_with_everything_else():
+    from openjarvis.speech.wake_word import WARMUP_FRAMES, WakeWordDetector
+
+    detector = WakeWordDetector(model_path="unused.onnx")
+    detector._frames_since_reset = WARMUP_FRAMES + 10
+
+    detector.reset()
+
+    assert detector._frames_since_reset == 0

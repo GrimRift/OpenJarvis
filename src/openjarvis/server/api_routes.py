@@ -678,17 +678,23 @@ async def wake_word_stream(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
-    detector = getattr(websocket.app.state, "wake_word_detector", None)
-    if detector is None or not detector.available:
+    shared = getattr(websocket.app.state, "wake_word_detector", None)
+    if shared is None or not shared.available:
         await websocket.close(code=1011)
         return
 
+    # Each connection gets its own detector rather than sharing app.state's.
+    # The model scores a rolling window of recent audio and holds that buffer
+    # on the instance, so a shared one is stateful in two ways that both bite
+    # on a page refresh: the new session inherits whatever the old one was
+    # still holding (firing instantly on audio nobody just spoke), and while
+    # the closing socket's in-flight frames are still arriving, two sessions
+    # interleave audio into one buffer -- and, because scoring runs in a
+    # worker thread, can call predict() on the same model concurrently.
+    # Building a fresh one costs ~0.07s once the ONNX runtime is warm.
+    detector = await asyncio.to_thread(shared.clone)
+
     await websocket.accept(subprotocol=subprotocol)
-    # The detector is shared by every session and scores a rolling window of
-    # recent audio, so a fresh connection would otherwise start out still
-    # holding the wake word that opened the previous exchange and fire on it
-    # immediately, with nothing said.
-    await asyncio.to_thread(detector.reset)
     try:
         while True:
             frame = await websocket.receive_bytes()
@@ -985,6 +991,57 @@ async def transcribe_speech(request: Request):
         "confidence": result.confidence,
         "duration_seconds": result.duration_seconds,
     }
+
+
+@speech_router.post("/wake-word-sample")
+async def save_wake_word_sample(request: Request):
+    """Save one training clip for the wake-word verifier.
+
+    Captures from the browser's own wake-word audio pipeline (AudioContext +
+    resample, see useWakeWord.ts), not a separate recorder — a prior attempt
+    used sounddevice/MME to record training clips, which turned out to
+    capture at a much lower level than the browser's getUserMedia stream.
+    The resulting verifier barely recognized real "Hey Sage" speech at
+    inference time even though it scored its own (too-quiet) training clips
+    fine. Matching the capture path removes that train/inference mismatch.
+
+    Body is raw 16kHz mono 16-bit PCM (no WAV header — the client already
+    produces exactly the frames it would otherwise stream to /wake-word).
+    """
+    import re
+    import wave
+
+    from openjarvis.core.paths import get_data_dir
+
+    label = request.query_params.get("label", "")
+    session = request.query_params.get("session", "")
+    name = request.query_params.get("name", "")
+    if label not in ("positive", "negative") or not session or not name:
+        raise HTTPException(
+            status_code=400, detail="Missing/invalid label, session, or name"
+        )
+
+    # session/name are client-supplied strings; strip to a safe charset so
+    # they can't escape the samples directory (e.g. "../../whatever").
+    safe_session = re.sub(r"[^A-Za-z0-9_-]", "", session)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "", name)
+    if not safe_session or not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid session or name")
+
+    pcm_bytes = await request.body()
+    if not pcm_bytes:
+        raise HTTPException(status_code=400, detail="Empty recording")
+
+    dest_dir = get_data_dir() / "wake_word_samples" / safe_session / label
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / safe_name
+    with wave.open(str(dest_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(pcm_bytes)
+
+    return {"saved": str(dest_path)}
 
 
 # Token -> audio file path, in-memory only (no DB table for ephemeral

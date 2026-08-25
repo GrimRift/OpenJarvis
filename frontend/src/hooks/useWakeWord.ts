@@ -16,15 +16,6 @@ function buildWakeWordWsUrl(): string {
 export function useWakeWord(onDetected: () => void, enabled: boolean) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Live score (0-1) from the last frame — lets a debug readout show
-  // whether the pipeline is hearing anything at all, distinct from "the
-  // wake word just wasn't recognized this time."
-  const [lastScore, setLastScore] = useState(0);
-  const [micLevel, setMicLevel] = useState(0);
-  // Increments on every server message — a flat score with a frozen count
-  // means the pipeline stalled somewhere; a flat score with a rising count
-  // means the model genuinely isn't recognizing the audio it's getting.
-  const [scoreMsgCount, setScoreMsgCount] = useState(0);
 
   const onDetectedRef = useRef(onDetected);
   onDetectedRef.current = onDetected;
@@ -77,9 +68,6 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
     wsRef.current = null;
     pendingSamplesRef.current = [];
     setListening(false);
-    setLastScore(0);
-    setMicLevel(0);
-    setScoreMsgCount(0);
   }, []);
 
   // Creates (or re-creates) just the WebSocket leg of the pipeline. Kept
@@ -99,12 +87,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'detected') {
-          setLastScore(data.score);
-          setScoreMsgCount((n) => n + 1);
           onDetectedRef.current();
-        } else if (data.type === 'score') {
-          setLastScore(data.value);
-          setScoreMsgCount((n) => n + 1);
         }
       } catch {
         // ignore malformed payload
@@ -213,16 +196,6 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       processor.onaudioprocess = (e) => {
         const input = e.inputBuffer.getChannelData(0);
 
-        // Raw peak level, independent of the WebSocket/model — a ground
-        // truth for "is real signal even reaching the mic capture at all,"
-        // separate from "did the wake-word model recognize it."
-        let peak = 0;
-        for (let i = 0; i < input.length; i++) {
-          const abs = Math.abs(input[i]);
-          if (abs > peak) peak = abs;
-        }
-        setMicLevel(peak);
-
         // Read the current socket on every callback rather than closing
         // over the one from setup — after a reconnect, wsRef points at a
         // new WebSocket, and audio must keep flowing to it.
@@ -273,5 +246,5 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
-  return { listening, error, lastScore, micLevel, scoreMsgCount };
+  return { listening, error };
 }

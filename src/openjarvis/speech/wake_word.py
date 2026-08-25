@@ -18,17 +18,27 @@ CHUNK_SAMPLES = 1280
 SAMPLE_RATE = 16000
 # 0.5 is openWakeWord's usual default, but the verifier-backed classifier
 # (see custom_verifier_models below) is trained on a small amount of real
-# audio and runs "hot". Calibrated against live measurements through the
-# actual capture pipeline (raw mic input, no browser AGC/noise suppression
-# — see useWakeWord.ts): ambient silence peaked at 0.3, keyboard clicks at
-# 0.6, genuine "Hey Sage" reaching 0.74-1.0 when it fires. Raised from 0.76
-# to 0.79 for extra margin above every measured false-positive source
-# (silence, keyboard) after a live false positive on ambient noise.
-DEFAULT_THRESHOLD = 0.79
+# audio and runs "hot". Dropped in stages as the training set grew and
+# held-out testing kept showing room to trade a little false-positive rate
+# for meaningfully more recall: 0.79 -> 0.75 was free (better recall, same
+# held-out false-fire rate); 0.75 -> 0.71 is a real trade, not free (19/21
+# vs 18/21 held-out positives firing, but 8/15 vs 7/15 held-out negatives
+# false-firing) -- accepted deliberately, not because it looked free.
+DEFAULT_THRESHOLD = 0.71
 # How many consecutive 80ms frames must clear the threshold before a
 # detection counts — a single high-scoring frame from a noise transient is
 # common; a sustained ~160ms run of them is not.
 DETECTION_PATIENCE = 2
+# A freshly reset detector needs `model_inputs` frames (16, ~1.28s) of real
+# history before its rolling window is actually full, and the score spikes
+# right as that happens regardless of what audio is arriving -- confirmed on
+# this verifier's own quiet-room negative recordings, every one of which
+# peaked (0.54-0.62) at exactly that frame, and in production by every page
+# refresh (a fresh WebSocket -> fresh detector) firing on nothing but room
+# noise. Not fixable by better training data since it isn't about audio
+# content, only about the window's own fill state, so it's suppressed here
+# instead: detections don't count until comfortably past that fill point.
+WARMUP_FRAMES = 25
 
 
 class WakeWordDetector:
@@ -46,6 +56,7 @@ class WakeWordDetector:
         # real "Hey Sage" recording). Tracking raw-score history ourselves
         # avoids that self-referential deadlock.
         self._consecutive_hits = 0
+        self._frames_since_reset = 0
 
     @property
     def available(self) -> bool:
@@ -94,6 +105,7 @@ class WakeWordDetector:
         self._model.predict(audio)
         scores = self._model.prediction_buffer.get(self._model_name)
         score = float(scores[-1]) if scores else 0.0
+        self._frames_since_reset += 1
 
         if score > self._threshold:
             self._consecutive_hits += 1
@@ -102,7 +114,22 @@ class WakeWordDetector:
         return score
 
     def is_detection(self, score: float) -> bool:
-        return score > self._threshold and self._consecutive_hits >= DETECTION_PATIENCE
+        return (
+            self._frames_since_reset > WARMUP_FRAMES
+            and score > self._threshold
+            and self._consecutive_hits >= DETECTION_PATIENCE
+        )
+
+    def clone(self) -> "WakeWordDetector":
+        """A fresh detector with the same config and no audio history.
+
+        The rolling-window buffer lives on the instance, so anything that
+        needs its own independent listening session (each wake-word
+        WebSocket connection) needs its own detector rather than sharing
+        one: otherwise sessions inherit each other's buffered audio, and
+        concurrent scoring races on the same model object.
+        """
+        return WakeWordDetector(model_path=self._model_path, threshold=self._threshold)
 
     def reset(self) -> None:
         """Forget all audio heard so far. Call when a listening session starts.
@@ -119,6 +146,7 @@ class WakeWordDetector:
         waiting longer before re-arming never helped.
         """
         self._consecutive_hits = 0
+        self._frames_since_reset = 0
         if self._model is not None:
             self._model.reset()
 
