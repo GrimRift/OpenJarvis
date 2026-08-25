@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -127,6 +127,46 @@ _DIGEST_INTENT_RE = re.compile(
     r"\b(good\s+morning|morning\s+digest|daily\s+briefing|morning\s+briefing)\b",
     re.IGNORECASE,
 )
+
+# Bare Spotify transport commands ("next song", "skip", "pause") reliably
+# get hallucinated by the configured model instead of actually calling
+# spotify_control -- confirmed by checking real playback state before and
+# after: the track never changed, even though the model confidently replied
+# "Skipped to the next track." Unlike "play <song>", which needs a real
+# track name only the tool can provide and so forces a genuine call, these
+# need no specific facts to sound plausible, and a system-prompt warning
+# against exactly this didn't change the behavior. Short and unambiguous
+# enough to route deterministically instead of trusting the model's
+# tool-choice for it -- same technique as _DIGEST_INTENT_RE above.
+_SPOTIFY_TRANSPORT_RE = re.compile(
+    r"^\s*(?:hey\s+sage[,.]?\s*)?"
+    r"(?:please\s+)?"
+    r"(?:"
+    r"(?P<next>skip(?:\s+(?:this\s+)?(?:song|track))?|next(?:\s+(?:song|track))?)"
+    r"|(?P<pause>pause(?:\s+(?:the\s+)?(?:music|song|spotify))?)"
+    r"|(?P<previous>(?:go\s+)?back(?:\s+(?:a\s+)?(?:song|track))?"
+    r"|previous(?:\s+(?:song|track))?)"
+    r")"
+    r"(?:,?\s+please)?[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _spotify_transport_action(text: str) -> Optional[str]:
+    match = _SPOTIFY_TRANSPORT_RE.match(text)
+    if not match:
+        return None
+    for action in ("next", "pause", "previous"):
+        if match.group(action) is not None:
+            return action
+    return None
+
+
+def _run_spotify_transport(action: str) -> str:
+    from openjarvis.tools.spotify_control import SpotifyControlTool
+
+    result = SpotifyControlTool().execute(action=action, query="")
+    return result.content
 
 
 @router.post("/v1/chat/completions")
@@ -256,6 +296,46 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         )
         if digest_agent is not None:
             agent = digest_agent
+
+    # Same reasoning as the digest block above, for a different unreliable
+    # spot: a bare "next"/"skip"/"pause" reliably gets hallucinated by the
+    # model instead of an actual spotify_control call (see
+    # _SPOTIFY_TRANSPORT_RE's comment). Narrow on purpose -- only matches
+    # the whole message, so it never intercepts "pause and think about
+    # this" or a "play <song>" request the model still needs to handle.
+    if not request_body.tools and query_text_for_complexity:
+        transport_action = _spotify_transport_action(query_text_for_complexity)
+        if transport_action is not None:
+            content = await asyncio.to_thread(_run_spotify_transport, transport_action)
+            if request_body.stream:
+                chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+                async def generate_transport_reply():
+                    first = ChatCompletionChunk(
+                        id=chunk_id,
+                        model=model,
+                        choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+                    )
+                    yield f"data: {first.model_dump_json()}\n\n"
+                    body_delta = DeltaMessage(content=content)
+                    body = ChatCompletionChunk(
+                        id=chunk_id,
+                        model=model,
+                        choices=[StreamChoice(delta=body_delta, finish_reason="stop")],
+                    )
+                    yield f"data: {body.model_dump_json()}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(
+                    generate_transport_reply(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+                )
+            return ChatCompletionResponse(
+                model=model,
+                choices=[Choice(message=ChoiceMessage(content=content))],
+                complexity=complexity_info,
+            )
 
     if request_body.stream:
         # When the client passes `tools`, stream the model's raw

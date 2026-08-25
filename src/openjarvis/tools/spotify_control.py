@@ -92,6 +92,36 @@ def _most_recent_track(token: str) -> Dict[str, Any]:
     return (items[0].get("track") or {}) if items else {}
 
 
+def _any_familiar_track(token: str) -> Dict[str, Any]:
+    """Some track the user actually likes, for a bare "play a song".
+
+    Only reached when there is nothing to resume and no listening history —
+    a brand new client, or an account whose history Spotify has not
+    populated. "Play a song" should still put music on rather than come
+    back asking which one, so fall back through the user's own library
+    before giving up. Both endpoints can legitimately be empty (a fresh
+    account saves nothing), hence the chain rather than a single call.
+    """
+    for path, params, extract in (
+        ("me/top/tracks", {"limit": 10}, lambda d: d.get("items") or []),
+        (
+            "me/tracks",
+            {"limit": 10},
+            lambda d: [i.get("track") or {} for i in (d.get("items") or [])],
+        ),
+    ):
+        try:
+            tracks = extract(_request(token, "GET", path, params=params))
+        except httpx.HTTPStatusError:
+            # A missing scope (top-read / library-read are separate grants)
+            # must not sink the whole fallback — try the next source.
+            continue
+        for track in tracks:
+            if track.get("uri"):
+                return track
+    return {}
+
+
 def _fetch_devices(token: str) -> List[Dict[str, Any]]:
     """Return the account's currently visible Spotify Connect devices.
 
@@ -210,14 +240,23 @@ class SpotifyControlTool(BaseTool):
         return ToolSpec(
             name="spotify_control",
             description=(
-                "Spotify playback. 'status' reads what is playing and "
-                "changes nothing — use it to answer questions about the "
-                "current track. The others are audible in the room and must "
-                "only be used when the user asked for them in this message: "
-                "'play' (pass 'query' for a specific song, omit to resume), "
-                "'pause', 'next', 'previous'. Never start playback to find "
-                "out what is playing — that is what 'status' is for — and if "
-                "the user only said hello or asked about something other "
+                "Spotify playback. Pick the action from what the user asked "
+                "for in this message:\n"
+                "- 'play a song' / 'play music' / 'play something' / "
+                "'play' → action='play' with NO query. It resumes what was "
+                "paused, or starts something on its own if nothing was. "
+                "Never answer these by reading status or by asking which "
+                "song — just play.\n"
+                "- 'play <song>' / 'play <song> by <artist>' → action='play' "
+                "with query set to what they named.\n"
+                "- 'what's playing?' / 'what song is this?' → "
+                "action='status'. This one only reads and changes nothing.\n"
+                "- 'pause' / 'next' / 'skip' / 'previous' / 'go back' → that "
+                "action.\n"
+                "'pause', 'next' and 'previous' are audible in the room, so "
+                "only use them when asked. Never start playback merely to "
+                "find out what is playing — that is what 'status' is for. If "
+                "the user only said hello, or asked about something other "
                 "than music, call nothing at all. 'play' opens the Spotify "
                 "app by itself when closed, so do NOT call open_app first."
             ),
@@ -336,7 +375,7 @@ class SpotifyControlTool(BaseTool):
             if status not in (403, 404):
                 raise
 
-        track = _most_recent_track(token)
+        track = _most_recent_track(token) or _any_familiar_track(token)
         if not track:
             return "__NO_HISTORY__"
         _request(

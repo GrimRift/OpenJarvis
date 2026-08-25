@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import httpx
+
 from openjarvis.core.registry import ToolRegistry
 
 
@@ -242,3 +244,62 @@ def test_pausing_what_is_already_paused_is_a_success():
     assert result.success
     assert "Premium" not in result.content
     assert "reauth" not in result.content.lower()
+
+
+def test_bare_play_falls_back_to_library_when_there_is_no_history():
+    """"Play a song" must put music on, not come back asking which one.
+
+    Resume 403s when nothing was paused and recently-played can be empty on
+    a fresh client, which previously left a bare "play" with nothing to do.
+    """
+    from openjarvis.tools import open_app, spotify_control
+    from openjarvis.tools.spotify_control import SpotifyControlTool
+
+    liked = {
+        "uri": "spotify:track:abc",
+        "name": "Familiar",
+        "artists": [{"name": "Someone"}],
+    }
+
+    def fake_request(token, method, path, params=None, json_body=None):
+        if path == "me/player/play" and json_body is None:
+            raise httpx.HTTPStatusError(
+                "no active stream",
+                request=httpx.Request("PUT", "https://api.spotify.com/v1/me/player/play"),
+                response=httpx.Response(403, text="Restriction violated"),
+            )
+        if path == "me/player/recently-played":
+            return {"items": []}
+        if path == "me/top/tracks":
+            return {"items": [liked]}
+        return {}
+
+    with patch.object(spotify_control, "_pick_device_id", return_value="dev"):
+        with patch.object(open_app, "is_app_running", return_value=True):
+            with patch.object(spotify_control, "_request", side_effect=fake_request):
+                message = SpotifyControlTool()._run_action("tok", "play", "")
+
+    assert message == "Now playing: Familiar by Someone"
+
+
+def test_library_fallback_survives_a_missing_scope():
+    """top-read and library-read are separate grants; one 403 must not end it."""
+    from openjarvis.tools import spotify_control
+
+    saved = {"uri": "spotify:track:xyz", "name": "Saved One", "artists": []}
+
+    def fake_request(token, method, path, params=None, json_body=None):
+        if path == "me/top/tracks":
+            raise httpx.HTTPStatusError(
+                "insufficient scope",
+                request=httpx.Request("GET", "https://api.spotify.com/v1/me/top/tracks"),
+                response=httpx.Response(403, text="Insufficient client scope"),
+            )
+        if path == "me/tracks":
+            return {"items": [{"track": saved}]}
+        return {}
+
+    with patch.object(spotify_control, "_request", side_effect=fake_request):
+        track = spotify_control._any_familiar_track("tok")
+
+    assert track["uri"] == "spotify:track:xyz"
