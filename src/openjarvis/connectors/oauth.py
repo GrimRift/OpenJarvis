@@ -130,10 +130,17 @@ OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
         # new endpoints. Re-consent with `scripts/reauth-spotify.py` —
         # NOT `jarvis connect spotify`, which skips the OAuth flow whenever
         # a token file already exists and would only re-sync history.
+        # user-top-read / user-library-read let a bare "play a song" choose
+        # from what the user actually likes rather than replaying whatever
+        # was on last. Both are read-only. Without them those endpoints
+        # answer 403 "Insufficient client scope" and spotify_control falls
+        # back to recently-played, which works but is a narrower signal.
         scopes=[
             "user-read-recently-played",
             "user-modify-playback-state",
             "user-read-playback-state",
+            "user-top-read",
+            "user-library-read",
         ],
         setup_url="https://developer.spotify.com/dashboard",
         setup_hint=("Create an app, add redirect URI: http://127.0.0.1:8888/callback"),
