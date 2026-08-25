@@ -8,7 +8,9 @@
   h1 { font-size: 20px; }
   p.note { color: #9a9a9a; font-size: 13px; line-height: 1.5; }
   #prompt { font-size: 22px; margin: 24px 0 8px; min-height: 32px; }
-  #sub { color: #9a9a9a; font-size: 13px; margin-bottom: 20px; }
+  #sub { color: #9a9a9a; font-size: 13px; margin-bottom: 6px; }
+  #note { color: #4c8dff; font-size: 14px; margin-bottom: 16px; min-height: 20px; }
+  #nextBtn { background: #4caf78; color: white; }
   button { font-size: 15px; padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer; margin-right: 8px; }
   #recordBtn { background: #4c8dff; color: white; }
   #recordBtn:disabled { background: #333; color: #777; cursor: default; }
@@ -32,9 +34,11 @@
 
 <div id="prompt">Click Start to begin</div>
 <div id="sub"></div>
+<div id="note"></div>
 <div id="meter"><div id="meterFill"></div></div>
 <button id="recordBtn">Start</button>
-<button id="redoBtn" style="display:none">Redo last</button>
+<button id="redoBtn" style="display:none">Redo</button>
+<button id="nextBtn" style="display:none">Next &rarr;</button>
 <div id="status"></div>
 <div id="log"></div>
 
@@ -72,17 +76,84 @@ const isTopup = params.get('mode') === 'topup' && !!topupSession;
 // message to Sage on every single "Hey Sage", and would also drop audio
 // while the app was busy responding.
 const isFree = params.get('mode') === 'free';
+const isGuided = params.get('mode') === 'guided';
 
 const sessionId = isTopup
   ? topupSession
-  : isFree
-    ? params.get('session') || 'free_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
+  : (isFree || isGuided)
+    ? params.get('session') || 'session_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
     : 'browser_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
 document.getElementById('sessionId').textContent = sessionId + (isTopup ? ' (adding to existing)' : '');
 
 const items = [];
 
-if (isTopup) {
+if (isGuided) {
+  // Script shaped by what held-out testing actually showed was missing,
+  // not by guesswork:
+  //
+  // - Heavy on delivery variety, especially QUIET/mumbled takes. Every
+  //   remaining false fire was a quiet clip, and the positives collected
+  //   so far are all loud (45-75% peak) while the negatives are all quiet
+  //   (2-8%) — so loudness had become a shortcut the classifier could
+  //   learn instead of the word itself.
+  // - Negatives are recorded in the SAME session at the SAME mic level,
+  //   which is what actually removes that shortcut.
+  // - No "hey there"/"hey guys" near-misses: an ablation showed training
+  //   with and without all 14 of them gave identical results, and they
+  //   risk contradicting real attempts, which transcribe as things like
+  //   "Hey, guys." anyway.
+  const positive = (n, note, prefix) => {
+    for (let i = 1; i <= n; i++) {
+      items.push({
+        label: 'positive',
+        name: `${prefix}_${String(i).padStart(2, '0')}.wav`,
+        prompt: 'Say "Hey Sage"',
+        note,
+        durationMs: 2000,
+      });
+    }
+  };
+  positive(8, 'Normal — exactly how you would really say it', 'g_normal');
+  positive(6, 'Quick and casual, a bit mumbled', 'g_fast');
+  positive(6, 'Quietly — almost under your breath', 'g_quiet');
+  positive(5, 'Sitting back / turned away from the mic', 'g_far');
+  positive(5, 'A little louder, as if from across the room', 'g_loud');
+
+  const negatives = [
+    ['g_typing', 4, 'Type normally — do not speak', 6000],
+    ['g_mouse', 3, 'Click and move your mouse — do not speak', 4000],
+    ['g_quiet_room', 4, 'Stay quiet — just room tone', 8000],
+  ];
+  for (const [prefix, count, note, durationMs] of negatives) {
+    for (let i = 1; i <= count; i++) {
+      items.push({
+        label: 'negative',
+        name: `${prefix}_${String(i).padStart(2, '0')}.wav`,
+        prompt: note,
+        note: 'Same mic, same distance as the takes above',
+        durationMs,
+        isSpeech: false,
+      });
+    }
+  }
+  const sentences = [
+    'What time is my next meeting?',
+    'Can you turn the volume down a bit.',
+    'I think I left my charger downstairs.',
+    'That episode was way better than the last one.',
+    'Remind me to buy coffee tomorrow.',
+    'It has been raining all afternoon.',
+  ];
+  sentences.forEach((s, i) => {
+    items.push({
+      label: 'negative',
+      name: `g_sentence_${String(i + 1).padStart(2, '0')}.wav`,
+      prompt: `Say: "${s}"`,
+      note: 'Ordinary speech — teaches it that talking is not a trigger',
+      durationMs: 4500,
+    });
+  });
+} else if (isTopup) {
   // Top-up pass. The first session's negatives were all speech plus two
   // ambience clips, so the model had never heard a keyboard or a bare
   // "hey"/"sage" and could not reject either -- both false-fired in use.
@@ -143,10 +214,12 @@ let lastClipMeta = null;
 
 const promptEl = document.getElementById('prompt');
 const subEl = document.getElementById('sub');
+const noteEl = document.getElementById('note');
 const statusEl = document.getElementById('status');
 const logEl = document.getElementById('log');
 const recordBtn = document.getElementById('recordBtn');
 const redoBtn = document.getElementById('redoBtn');
+const nextBtn = document.getElementById('nextBtn');
 const meterFill = document.getElementById('meterFill');
 
 function log(line) {
@@ -235,35 +308,53 @@ async function recordCurrent() {
 
   try {
     await uploadClip(item, bytes);
-    const quiet = item.isSpeech !== false && peak < 3000;
     const peakPct = ((peak / 32768) * 100).toFixed(1);
-    statusEl.innerHTML = quiet
-      ? `<span class="warn">Saved, but very quiet (peak ${peakPct}%) — consider "Redo last"</span>`
-      : `<span class="ok">Saved (peak ${peakPct}%)</span>`;
+    // "Too quiet" only makes sense for takes that were meant to have a
+    // voice in them, and only for the ones not deliberately whispered —
+    // a quiet take is the point of the g_quiet block, not a mistake.
+    const expectsVoice = item.isSpeech !== false;
+    const deliberatelyQuiet = item.name.startsWith('g_quiet') || item.name.startsWith('g_far');
+    const tooQuiet = expectsVoice && !deliberatelyQuiet && peak < 3000;
+    const silentTake = !expectsVoice && peak > 12000;
+    statusEl.innerHTML = tooQuiet
+      ? `<span class="warn">Saved, but very quiet (peak ${peakPct}%) — consider Redo</span>`
+      : silentTake
+        ? `<span class="warn">Saved, but loud for a no-speech take (peak ${peakPct}%) — Redo if you spoke</span>`
+        : `<span class="ok">Saved (peak ${peakPct}%)</span>`;
     log(`[${idx + 1}/${items.length}] ${item.name} peak=${peakPct}%`);
   } catch (err) {
     statusEl.innerHTML = `<span class="warn">Upload failed: ${err.message}</span>`;
     log(`[${idx + 1}/${items.length}] ${item.name} FAILED: ${err.message}`);
   }
 
+  // Wait for an explicit Next rather than jumping ahead, so a take can be
+  // judged (and redone) before it's committed to.
+  recordBtn.style.display = 'none';
   redoBtn.style.display = 'inline-block';
-  advance();
+  nextBtn.style.display = 'inline-block';
+  nextBtn.textContent = idx + 1 >= items.length ? 'Finish' : 'Next →';
 }
 
 function advance() {
   idx++;
+  redoBtn.style.display = 'none';
+  nextBtn.style.display = 'none';
   if (idx >= items.length) {
     promptEl.textContent = 'All done!';
     subEl.textContent = `Recorded ${items.length} clips into session ${sessionId}.`;
-    statusEl.innerHTML = `Now run:\n<code>.venv\\Scripts\\python.exe scripts\\wake_word_train.py --train-only --session "${sessionId}"</code>`;
+    noteEl.textContent = '';
+    statusEl.innerHTML = `Tell Claude the session is finished — or run:\n<code>.venv\\Scripts\\python.exe scripts\\wake_word_train.py --train-only --session "${sessionId}"</code>`;
     recordBtn.style.display = 'none';
-    redoBtn.style.display = 'none';
     return;
   }
   const item = items[idx];
   promptEl.textContent = item.prompt;
-  subEl.textContent = `${idx + 1} / ${items.length} — ${item.label}`;
+  const done = items.slice(0, idx);
+  const pos = done.filter((i) => i.label === 'positive').length;
+  subEl.textContent = `${idx + 1} / ${items.length} — ${item.label} · ${pos} positive, ${done.length - pos} negative done`;
+  noteEl.textContent = item.note || '';
   statusEl.textContent = '';
+  recordBtn.style.display = 'inline-block';
   recordBtn.disabled = false;
   recordBtn.textContent = 'Record';
 }
@@ -351,7 +442,16 @@ recordBtn.addEventListener('click', async () => {
 });
 
 redoBtn.addEventListener('click', () => {
-  idx--;
+  // Re-record the current item in place. Uploads use a deterministic
+  // per-item filename, so a redo overwrites the take it replaces rather
+  // than leaving the bad one behind in the training set.
+  redoBtn.style.display = 'none';
+  nextBtn.style.display = 'none';
+  recordBtn.style.display = 'inline-block';
+  recordCurrent();
+});
+
+nextBtn.addEventListener('click', () => {
   advance();
 });
 </script>
