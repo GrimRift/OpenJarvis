@@ -18,13 +18,18 @@ CHUNK_SAMPLES = 1280
 SAMPLE_RATE = 16000
 # 0.5 is openWakeWord's usual default, but the verifier-backed classifier
 # (see custom_verifier_models below) is trained on a small amount of real
-# audio and runs "hot". Dropped in stages as the training set grew and
-# held-out testing kept showing room to trade a little false-positive rate
-# for meaningfully more recall: 0.79 -> 0.75 was free (better recall, same
-# held-out false-fire rate); 0.75 -> 0.71 is a real trade, not free (19/21
-# vs 18/21 held-out positives firing, but 8/15 vs 7/15 held-out negatives
-# false-firing) -- accepted deliberately, not because it looked free.
-DEFAULT_THRESHOLD = 0.71
+# audio and runs "hot". This was walked down to 0.71 while the training set
+# was too small and too uniform to recognise anything but a careful, loud
+# "Hey Sage" -- recall was the binding constraint, so false positives were
+# traded for it.
+#
+# A deliberately varied recording session (normal/fast/quiet/far/loud, with
+# typing, mouse and room tone captured at the same mic level so loudness
+# could not stand in for the word) removed that constraint: held-out recall
+# is 100% anywhere in 0.71-0.83, so the low threshold buys nothing and only
+# widens what can trip it. Back up to 0.79 for margin against audio unlike
+# anything in the training set.
+DEFAULT_THRESHOLD = 0.79
 # How many consecutive 80ms frames must clear the threshold before a
 # detection counts — a single high-scoring frame from a noise transient is
 # common; a sustained ~160ms run of them is not.
