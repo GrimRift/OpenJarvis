@@ -65,10 +65,19 @@ function apiKey() {
 const params = new URLSearchParams(location.search);
 const topupSession = params.get('session');
 const isTopup = params.get('mode') === 'topup' && !!topupSession;
+// Free mode records one continuous take instead of prompting clip by clip.
+// Bulk data is far quicker to collect by just talking for a couple of
+// minutes, and wake_word_autolabel.py splits and labels the result. Doing
+// the same through the live wake word would fire the greeting and send a
+// message to Sage on every single "Hey Sage", and would also drop audio
+// while the app was busy responding.
+const isFree = params.get('mode') === 'free';
 
 const sessionId = isTopup
   ? topupSession
-  : 'browser_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+  : isFree
+    ? params.get('session') || 'free_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
+    : 'browser_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
 document.getElementById('sessionId').textContent = sessionId + (isTopup ? ' (adding to existing)' : '');
 
 const items = [];
@@ -259,7 +268,71 @@ function advance() {
   recordBtn.textContent = 'Record';
 }
 
+let freeRecording = false;
+let freeTimer = null;
+let freeStartedAt = 0;
+
+if (isFree) {
+  promptEl.textContent = 'One continuous take';
+  subEl.textContent =
+    'Mostly "Hey Sage" (vary speed, volume, distance) — plus some "hey there" / ' +
+    '"hey guys", typing, and normal talking. Stop when done.';
+  recordBtn.textContent = 'Start recording';
+  redoBtn.style.display = 'none';
+}
+
+async function toggleFreeRecording() {
+  if (!freeRecording) {
+    recordBtn.disabled = true;
+    statusEl.textContent = 'Requesting microphone...';
+    try {
+      await ensureAudio();
+    } catch (err) {
+      statusEl.innerHTML = `<span class="warn">Microphone access denied: ${err.message}</span>`;
+      recordBtn.disabled = false;
+      return;
+    }
+    buffer = [];
+    capturing = true;
+    freeRecording = true;
+    freeStartedAt = Date.now();
+    recordBtn.disabled = false;
+    recordBtn.textContent = 'Stop & upload';
+    promptEl.textContent = 'Recording — talk naturally';
+    statusEl.textContent = '';
+    freeTimer = setInterval(() => {
+      const s = Math.round((Date.now() - freeStartedAt) / 1000);
+      subEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} recorded`;
+    }, 500);
+    return;
+  }
+
+  capturing = false;
+  freeRecording = false;
+  clearInterval(freeTimer);
+  recordBtn.disabled = true;
+  const seconds = (buffer.length / SAMPLE_RATE).toFixed(1);
+  statusEl.textContent = `Uploading ${seconds}s...`;
+  try {
+    await uploadClip({ label: 'positive', name: `free_${Date.now()}.wav` }, pcmToBytes(buffer));
+    promptEl.textContent = 'Saved';
+    subEl.textContent = `${seconds}s in session ${sessionId}`;
+    statusEl.innerHTML =
+      `<span class="ok">Uploaded.</span> Now run:\n` +
+      `<code>.venv\\Scripts\\python.exe scripts\\wake_word_autolabel.py ` +
+      `"&lt;path printed by the server&gt;" ${sessionId}</code>`;
+  } catch (err) {
+    statusEl.innerHTML = `<span class="warn">Upload failed: ${err.message}</span>`;
+    recordBtn.disabled = false;
+    recordBtn.textContent = 'Retry upload';
+  }
+}
+
 recordBtn.addEventListener('click', async () => {
+  if (isFree) {
+    await toggleFreeRecording();
+    return;
+  }
   if (idx === -1) {
     recordBtn.disabled = true;
     statusEl.textContent = 'Requesting microphone...';

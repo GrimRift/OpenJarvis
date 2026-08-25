@@ -130,6 +130,7 @@ interface Settings {
   maxTokens: number;
   speechEnabled: boolean;
   wakeWordEnabled: boolean;
+  wakeWordGreetingEnabled: boolean;
   continuousConversationEnabled: boolean;
 }
 
@@ -145,6 +146,7 @@ function loadSettings(): Settings {
     maxTokens: 4096,
     speechEnabled: false,
     wakeWordEnabled: false,
+    wakeWordGreetingEnabled: true,
     continuousConversationEnabled: false,
   };
   try {

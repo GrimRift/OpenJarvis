@@ -765,6 +765,23 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
+                <SettingRow label="Greet on Wake Word" description='Say "Hello, sir" before listening, so a trigger is audible. Turn off to start listening silently — also useful when recording wake-word training samples'>
+                  <button
+                    onClick={() => { updateSettings({ wakeWordGreetingEnabled: !settings.wakeWordGreetingEnabled }); showSaved(); }}
+                    className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
+                    style={{
+                      background: settings.wakeWordGreetingEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                      style={{
+                        transform: settings.wakeWordGreetingEnabled ? 'translateX(20px)' : 'translateX(0)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    />
+                  </button>
+                </SettingRow>
                 <SettingRow label="Continuous Conversation" description="After Sage replies, automatically listen for your next turn instead of requiring the wake word again">
                   <button
                     onClick={() => { updateSettings({ continuousConversationEnabled: !settings.continuousConversationEnabled }); showSaved(); }}

@@ -107,6 +107,7 @@ export function InputArea() {
   const streamState = useAppStore((s) => s.streamState);
   const messages = useAppStore((s) => s.messages);
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
+  const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const maxTokens = useAppStore((s) => s.settings.maxTokens);
   const temperature = useAppStore((s) => s.settings.temperature);
   const createConversation = useAppStore((s) => s.createConversation);
@@ -722,10 +723,12 @@ export function InputArea() {
     wakeWordBusyRef.current = true;
     try {
       autoTriggeredRef.current = true;
-      const greeting = playGreeting({
-        onFailure: (reason) =>
-          toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
-      });
+      const greeting = wakeWordGreetingEnabled
+        ? playGreeting({
+            onFailure: (reason) =>
+              toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
+          })
+        : undefined;
       await startRecording(finishAutoRecording, { waitBeforeCapture: greeting });
       autoStopTimerRef.current = setTimeout(() => {
         finishAutoRecording();
@@ -735,7 +738,7 @@ export function InputArea() {
       // ordinary guard above takes over from here.
       wakeWordBusyRef.current = false;
     }
-  }, [micDisabled, speechState, startRecording, finishAutoRecording]);
+  }, [micDisabled, speechState, startRecording, finishAutoRecording, wakeWordGreetingEnabled]);
 
   useEffect(() => {
     if (speechState !== 'recording' && autoStopTimerRef.current) {
@@ -749,8 +752,8 @@ export function InputArea() {
   // Fetch and decode the clips while the wake word is merely armed, so the
   // first trigger doesn't pay for the download at the moment it matters.
   useEffect(() => {
-    if (wakeWordEnabled) preloadGreetings();
-  }, [wakeWordEnabled]);
+    if (wakeWordEnabled && wakeWordGreetingEnabled) preloadGreetings();
+  }, [wakeWordEnabled, wakeWordGreetingEnabled]);
   const continuousConversationEnabled = useAppStore((s) => s.settings.continuousConversationEnabled);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
   const wasAudioPlayingRef = useRef(false);
