@@ -696,24 +696,26 @@ export function InputArea() {
     }, 12000);
   }, [micDisabled, speechState, startRecording, finishAutoRecording]);
 
-  // Wake-word variant: acknowledge out loud before listening. Only the wake
-  // word does this — the continuous-conversation re-arm above stays silent,
-  // since greeting after every reply would talk over an ongoing exchange.
+  // Wake-word variant: acknowledge out loud, then listen. Only the wake word
+  // does this — the continuous-conversation re-arm above stays silent, since
+  // greeting after every reply would talk over an ongoing exchange.
   //
-  // Capture starts immediately, in parallel with the greeting, rather than
-  // after it: "Hey Sage, play a song" is commonly said in one breath, and
-  // waiting for the clip to finish would drop the command. The greeting is
-  // cut the moment the user is heard (onSpeechStart), and VAD calibration
-  // waits for it to be over (deferVadUntil) so Sage's own voice is never
-  // measured as the room's noise floor.
+  // Strictly sequential: the greeting finishes before anything is recorded.
+  // An earlier version overlapped the two and cut the greeting short as soon
+  // as the user was heard, so a command said in one breath wasn't lost —
+  // but that put Sage's voice and the user's in the same recording and made
+  // the greeting's audibility depend on echo cancellation working well.
+  // Waiting is the predictable trade: a beat of latency, in exchange for the
+  // greeting always being heard in full and the recording holding only the
+  // user. The microphone is still opened during the greeting (see
+  // waitBeforeCapture), so speaking the instant it ends loses nothing.
   const beginWakeWordRecording = useCallback(async () => {
     if (micDisabled || speechState !== 'idle') return;
     autoTriggeredRef.current = true;
-    const greeting = playGreeting();
-    await startRecording(finishAutoRecording, {
-      deferVadUntil: greeting.done,
-      onSpeechStart: greeting.cancel,
+    const greeting = playGreeting({
+      onFailure: (reason) => toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
     });
+    await startRecording(finishAutoRecording, { waitBeforeCapture: greeting });
     autoStopTimerRef.current = setTimeout(() => {
       finishAutoRecording();
     }, 12000);

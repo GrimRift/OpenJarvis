@@ -35,16 +35,21 @@ export function preloadGreetings(): void {
   });
 }
 
-export interface GreetingPlayback {
-  /** Resolves when the clip finishes, is cut short, or fails to play. */
-  done: Promise<void>;
-  /** Stop immediately — used when the user talks over the greeting. */
-  cancel: () => void;
+export interface GreetingOptions {
+  /** Called when the clip could not be played at all.
+   *
+   * Playback failure has to stay non-fatal (listening must start either
+   * way), but it must not be silent: a browser refusing autoplay and a
+   * greeting being cancelled instantly look identical from the outside —
+   * both are "it never greeted" — and telling them apart from the console
+   * alone is guesswork.
+   */
+  onFailure?: (reason: string) => void;
 }
 
-export function playGreeting(): GreetingPlayback {
-  let cancel = () => {};
-  const done = loadClips().then(
+/** Resolves when the clip has finished playing (or could not play at all). */
+export function playGreeting(options?: GreetingOptions): Promise<void> {
+  return loadClips().then(
     (clips) =>
       new Promise<void>((resolve) => {
         // Avoid repeating the previous clip so consecutive triggers don't
@@ -60,16 +65,18 @@ export function playGreeting(): GreetingPlayback {
           settled = true;
           resolve();
         };
-        cancel = () => {
-          audio.pause();
-          finish();
-        };
         audio.onended = finish;
         // Never leave the caller waiting on a clip that can't play (missing
         // file, autoplay policy, decode error) — listening must still start.
-        audio.onerror = finish;
-        audio.play().catch(finish);
+        audio.onerror = () => {
+          options?.onFailure?.(`could not load ${clip}`);
+          finish();
+        };
+        audio.play().catch((err: unknown) => {
+          const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+          options?.onFailure?.(reason);
+          finish();
+        });
       }),
   );
-  return { done, cancel: () => cancel() };
 }
