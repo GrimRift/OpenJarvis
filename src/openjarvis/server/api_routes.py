@@ -701,6 +701,14 @@ async def wake_word_stream(websocket: WebSocket):
             score = await asyncio.to_thread(detector.score, frame)
             if detector.is_detection(score):
                 await websocket.send_json({"type": "detected", "score": score})
+                # One utterance must produce one detection. The model scores a
+                # rolling window, so a single "Hey Sage" stays above threshold
+                # for several consecutive frames and every one of them is a
+                # detection — a real trigger sent three in a row. Resetting
+                # consumes the utterance: the window is cleared and the
+                # warm-up gate re-applies, which is also a natural cooldown
+                # before anything can fire again.
+                await asyncio.to_thread(detector.reset)
             else:
                 await websocket.send_json({"type": "score", "value": score})
     except WebSocketDisconnect:

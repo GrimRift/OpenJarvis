@@ -98,6 +98,9 @@ export function InputArea() {
   // text in the box for the user to review/edit, same as today.
   const autoTriggeredRef = useRef(false);
   const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Held from a wake-word trigger until listening has actually started, so
+  // repeat detections of the same utterance can't stack up greetings.
+  const wakeWordBusyRef = useRef(false);
 
   const activeId = useAppStore((s) => s.activeId);
   const selectedModel = useAppStore((s) => s.selectedModel);
@@ -710,15 +713,28 @@ export function InputArea() {
   // user. The microphone is still opened during the greeting (see
   // waitBeforeCapture), so speaking the instant it ends loses nothing.
   const beginWakeWordRecording = useCallback(async () => {
-    if (micDisabled || speechState !== 'idle') return;
-    autoTriggeredRef.current = true;
-    const greeting = playGreeting({
-      onFailure: (reason) => toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
-    });
-    await startRecording(finishAutoRecording, { waitBeforeCapture: greeting });
-    autoStopTimerRef.current = setTimeout(() => {
-      finishAutoRecording();
-    }, 12000);
+    // speechState only becomes 'recording' once the greeting has finished,
+    // so for that whole window it still reads 'idle' and cannot by itself
+    // keep a second trigger out. A ref closes the gap immediately, before
+    // any await — one observed "Hey Sage" started three overlapping
+    // greetings without it.
+    if (micDisabled || speechState !== 'idle' || wakeWordBusyRef.current) return;
+    wakeWordBusyRef.current = true;
+    try {
+      autoTriggeredRef.current = true;
+      const greeting = playGreeting({
+        onFailure: (reason) =>
+          toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
+      });
+      await startRecording(finishAutoRecording, { waitBeforeCapture: greeting });
+      autoStopTimerRef.current = setTimeout(() => {
+        finishAutoRecording();
+      }, 12000);
+    } finally {
+      // By now startRecording has set speechState to 'recording', so the
+      // ordinary guard above takes over from here.
+      wakeWordBusyRef.current = false;
+    }
   }, [micDisabled, speechState, startRecording, finishAutoRecording]);
 
   useEffect(() => {

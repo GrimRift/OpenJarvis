@@ -97,3 +97,30 @@ def test_warmup_counter_resets_with_everything_else():
     detector.reset()
 
     assert detector._frames_since_reset == 0
+
+
+def test_detection_consumes_the_utterance():
+    """A single spoken wake word must not report itself several times.
+
+    The model scores a rolling window, so one "Hey Sage" stays above
+    threshold for several consecutive frames. Every one of those frames is
+    a detection, and a real trigger delivered three in a row — each one
+    starting its own greeting. Resetting after a detection clears the
+    window (and re-arms the warm-up gate) so the same utterance cannot be
+    detected twice.
+    """
+    from openjarvis.speech.wake_word import WARMUP_FRAMES, WakeWordDetector
+
+    detector = WakeWordDetector(model_path="unused.onnx", threshold=0.5)
+    detector._frames_since_reset = WARMUP_FRAMES + 1
+    detector._consecutive_hits = 5
+
+    assert detector.is_detection(0.99) is True
+
+    detector.reset()
+
+    # Straight after a detection the next loud frame must not re-fire: the
+    # counters are back to zero and the warm-up gate is closed again.
+    assert detector.is_detection(0.99) is False
+    assert detector._frames_since_reset == 0
+    assert detector._consecutive_hits == 0
