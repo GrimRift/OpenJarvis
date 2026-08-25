@@ -93,20 +93,38 @@ def _most_recent_track(token: str) -> Dict[str, Any]:
 
 
 def _any_familiar_track(token: str) -> Dict[str, Any]:
-    """Some track the user actually likes, for a bare "play a song".
+    """A track the user actually likes, for a bare "play a song".
 
-    Only reached when there is nothing to resume and no listening history —
-    a brand new client, or an account whose history Spotify has not
-    populated. "Play a song" should still put music on rather than come
-    back asking which one, so fall back through the user's own library
-    before giving up. Both endpoints can legitimately be empty (a fresh
-    account saves nothing), hence the chain rather than a single call.
+    Sources are tried best-first. Top-tracks and saved-tracks are the
+    truest answer to "songs I like listening to", but each needs its own
+    OAuth scope (``user-top-read`` / ``user-library-read``) that a token
+    minted before those scopes existed will not carry — both answer 403
+    "Insufficient client scope" rather than an empty list, which is why the
+    chain treats an HTTP error as "try the next source" rather than fatal.
+
+    Recently-played needs only the scope this tool already has, so it is
+    the source that actually works on such a token, and it is a fair proxy
+    besides: it reflects real listening rather than a genre guess. Sampled
+    across a wide window and de-duplicated so a track played five times in
+    a row does not crowd out everything else.
+
+    Chosen at random rather than taking the first row: picking
+    deterministically means "play a song" starts the *same* track every
+    time, which reads as the assistant ignoring the request rather than
+    choosing something.
     """
+    import random
+
     for path, params, extract in (
-        ("me/top/tracks", {"limit": 10}, lambda d: d.get("items") or []),
+        ("me/top/tracks", {"limit": 50}, lambda d: d.get("items") or []),
         (
             "me/tracks",
-            {"limit": 10},
+            {"limit": 50},
+            lambda d: [i.get("track") or {} for i in (d.get("items") or [])],
+        ),
+        (
+            "me/player/recently-played",
+            {"limit": 50},
             lambda d: [i.get("track") or {} for i in (d.get("items") or [])],
         ),
     ):
@@ -116,9 +134,13 @@ def _any_familiar_track(token: str) -> Dict[str, Any]:
             # A missing scope (top-read / library-read are separate grants)
             # must not sink the whole fallback — try the next source.
             continue
+        unique: Dict[str, Dict[str, Any]] = {}
         for track in tracks:
-            if track.get("uri"):
-                return track
+            uri = track.get("uri")
+            if uri and uri not in unique:
+                unique[uri] = track
+        if unique:
+            return random.choice(list(unique.values()))
     return {}
 
 
@@ -289,6 +311,22 @@ class SpotifyControlTool(BaseTool):
         artists = ", ".join(a.get("name", "") for a in track.get("artists") or [])
         return f"Now playing: {name}" + (f" by {artists}" if artists else "")
 
+    @staticmethod
+    def _play_body(track: Dict[str, Any]) -> Dict[str, Any]:
+        """Playback body that starts *track* but leaves somewhere to skip to.
+
+        ``{"uris": [one_uri]}`` makes Spotify's queue exactly one track long,
+        so a later "next song" succeeds at the API level and then silently
+        does nothing -- there is no next track to move to. Starting the
+        track's album as the context instead (seeking to the track itself)
+        gives the player a real queue, which is what makes next/previous
+        behave the way someone asking for "the next song" expects.
+        """
+        album_uri = (track.get("album") or {}).get("uri")
+        if album_uri:
+            return {"context_uri": album_uri, "offset": {"uri": track["uri"]}}
+        return {"uris": [track["uri"]]}
+
     def _run_action(self, token: str, action: str, query: str) -> str:
         """Perform *action* and return the message to show the user."""
         # Answered before anything is launched or targeted, because it must
@@ -359,14 +397,13 @@ class SpotifyControlTool(BaseTool):
                 "PUT",
                 "me/player/play",
                 params=target,
-                json_body={"uris": [track["uri"]]},
+                json_body=self._play_body(track),
             )
             return self._describe(track)
 
         # Bare "play something": resume whatever was paused. A freshly
         # launched client has nothing to resume (Spotify answers 403
-        # "Restriction violated" rather than an error worth surfacing), so
-        # fall back to replaying the most recent track from history.
+        # "Restriction violated" rather than an error worth surfacing).
         try:
             _request(token, "PUT", "me/player/play", params=target)
             return "Playback resumed."
@@ -375,7 +412,12 @@ class SpotifyControlTool(BaseTool):
             if status not in (403, 404):
                 raise
 
-        track = _most_recent_track(token) or _any_familiar_track(token)
+        # With nothing to resume, prefer a track the user actually likes over
+        # replaying whatever happened to be last. Most-recent is deliberately
+        # the *lower* priority of the two: it is a single deterministic track,
+        # so leading with it made every bare "play a song" start the same
+        # song, including songs that were only played once to test something.
+        track = _any_familiar_track(token) or _most_recent_track(token)
         if not track:
             return "__NO_HISTORY__"
         _request(
@@ -383,7 +425,7 @@ class SpotifyControlTool(BaseTool):
             "PUT",
             "me/player/play",
             params=target,
-            json_body={"uris": [track["uri"]]},
+            json_body=self._play_body(track),
         )
         return self._describe(track)
 
