@@ -172,6 +172,29 @@ def _is_openai_model(model: str) -> bool:
     return m.startswith(_OPENAI_PREFIXES)
 
 
+def is_cloud_model(model: str) -> bool:
+    """Return ``True`` if *model* is a recognized cloud-provider model id.
+
+    Purely name-based, unlike :meth:`CloudEngine.can_serve`, which also
+    requires that provider's client to be configured. Engine *selection*
+    needs the name-only form: local engines accept any model id (their
+    ``can_serve`` returns ``True`` unconditionally, since whether a model is
+    installed is a separate concern), so a caller choosing between engines
+    cannot ask them which one a cloud model belongs to.
+    """
+    return any(
+        (
+            _is_codex_model(model),
+            _is_openrouter_model(model),
+            _is_minimax_model(model),
+            _is_deepseek_model(model),
+            _is_anthropic_model(model),
+            _is_google_model(model),
+            _is_openai_model(model),
+        )
+    )
+
+
 def _is_openai_reasoning_model(model: str) -> bool:
     """Check if model is an OpenAI reasoning model that restricts temperature.
 
@@ -1887,4 +1910,10 @@ class CloudEngine(InferenceEngine):
             self._codex_client = None
 
 
-__all__ = ["CloudEngine", "PRICING", "_annotate_anthropic_cache", "estimate_cost"]
+__all__ = [
+    "CloudEngine",
+    "PRICING",
+    "_annotate_anthropic_cache",
+    "estimate_cost",
+    "is_cloud_model",
+]

@@ -52,9 +52,24 @@ router = APIRouter(prefix="/api", tags=["research"])
 
 _WEB_CLARIFY_RESPONSE = "no clarification available in web session"
 _LEGACY_PLANNER_ENGINE = "ollama"
+_CLOUD_ENGINE_KEY = "cloud"
 
 # Sentinel placed on the queue when the agent thread terminates.
 _DONE = object()
+
+
+def _is_cloud_model(model: str) -> bool:
+    """Whether *model* belongs to a cloud provider, if that engine is present.
+
+    ``openjarvis.engine.cloud`` is an optional module, so a build without it
+    (or without its provider SDKs) simply reports ``False`` and planner
+    resolution falls through to the previous engine order.
+    """
+    try:
+        from openjarvis.engine.cloud import is_cloud_model
+    except ImportError:
+        return False
+    return is_cloud_model(model)
 
 
 def _first_nonempty(*values: str) -> str:
@@ -77,16 +92,19 @@ def _resolve_planner_config(
     Resolution order:
 
     1. explicit ``[deep_research]`` overrides,
-    2. the active chat engine/request model,
-    3. server/config defaults,
-    4. legacy Ollama/gemma4 fallback for unconfigured installs.
+    2. the cloud engine when the resolved model is a cloud model,
+    3. the active chat engine/request model,
+    4. server/config defaults,
+    5. legacy Ollama/gemma4 fallback for unconfigured installs.
+
+    The model resolves first because the engine depends on it. Picking a
+    cloud model in the UI only sets the model; without step 2 the engine
+    stayed on the active chat engine, and local engines answer
+    ``can_serve`` with ``True`` for any id, so the mismatch check in
+    :func:`_build_planner_engine` could not catch it. Deep Research then
+    handed a cloud model to Ollama and failed at inference with a
+    model-not-found error instead of using the cloud engine.
     """
-    engine_key = _first_nonempty(
-        config.deep_research.engine,
-        active_engine_key,
-        config.engine.default,
-        _LEGACY_PLANNER_ENGINE,
-    )
     model = _first_nonempty(
         config.deep_research.model,
         request_model,
@@ -94,6 +112,13 @@ def _resolve_planner_config(
         config.server.model,
         config.intelligence.default_model,
         DEFAULT_PLANNER_MODEL,
+    )
+    engine_key = _first_nonempty(
+        config.deep_research.engine,
+        _CLOUD_ENGINE_KEY if _is_cloud_model(model) else "",
+        active_engine_key,
+        config.engine.default,
+        _LEGACY_PLANNER_ENGINE,
     )
     return engine_key, model
 
@@ -119,7 +144,13 @@ def _build_planner_engine(
         active_model=active_model,
         request_model=request_model,
     )
-    if active_engine is not None and not config.deep_research.engine.strip():
+    # A cloud model must resolve its own engine below: reusing the active chat
+    # engine instance here would hand the model straight back to Ollama.
+    if (
+        active_engine is not None
+        and not config.deep_research.engine.strip()
+        and not _is_cloud_model(model)
+    ):
         if model and not active_engine.can_serve(model):
             raise RuntimeError(
                 "Deep Research planner engine "

@@ -283,3 +283,81 @@ def test_build_planner_engine_rejects_unavailable_engine(
 
     with pytest.raises(RuntimeError, match="local-model"):
         research_router._build_planner_engine(cfg)
+
+
+# -- Cloud model selection ---------------------------------------------------
+
+
+def test_cloud_model_selects_the_cloud_engine() -> None:
+    """A cloud model must not stay on the active local chat engine.
+
+    Local engines answer ``can_serve`` with ``True`` for any id, so the
+    mismatch guard cannot catch this: Deep Research used to hand the cloud
+    model to Ollama and fail at inference with model-not-found.
+    """
+    cfg = JarvisConfig()
+    cfg.engine.default = "ollama"
+
+    assert research_router._resolve_planner_config(
+        cfg,
+        active_engine_key="ollama",
+        active_model="qwen3.5:4b",
+        request_model="gpt-5.6-luna",
+    ) == ("cloud", "gpt-5.6-luna")
+
+
+def test_local_model_still_uses_the_active_engine() -> None:
+    cfg = JarvisConfig()
+    cfg.engine.default = "ollama"
+
+    assert research_router._resolve_planner_config(
+        cfg,
+        active_engine_key="ollama",
+        active_model="qwen3.5:4b",
+        request_model="qwen3.5:4b",
+    ) == ("ollama", "qwen3.5:4b")
+
+
+def test_explicit_deep_research_engine_still_wins_over_cloud_detection() -> None:
+    cfg = JarvisConfig()
+    cfg.engine.default = "ollama"
+    cfg.deep_research.engine = "lmstudio"
+
+    engine_key, model = research_router._resolve_planner_config(
+        cfg,
+        active_engine_key="ollama",
+        request_model="gpt-5.6-luna",
+    )
+    assert engine_key == "lmstudio"
+    assert model == "gpt-5.6-luna"
+
+
+def test_cloud_model_bypasses_the_active_engine_shortcut() -> None:
+    """The shortcut returns the active instance; a cloud model must skip it."""
+    cfg = JarvisConfig()
+    cfg.engine.default = "ollama"
+    local = _DummyEngine(servable=True)
+    cloud = _DummyEngine(servable=True)
+
+    captured: dict = {}
+
+    def fake_get_engine(config, *, engine_key: str, model: str):
+        captured["engine_key"] = engine_key
+        return engine_key, cloud
+
+    original = research_router.get_engine
+    research_router.get_engine = fake_get_engine
+    try:
+        key, engine, model = research_router._build_planner_engine(
+            cfg,
+            active_engine=local,
+            active_engine_key="ollama",
+            active_model="qwen3.5:4b",
+            request_model="gpt-5.6-luna",
+        )
+    finally:
+        research_router.get_engine = original
+
+    assert captured["engine_key"] == "cloud"
+    assert engine is cloud and engine is not local
+    assert (key, model) == ("cloud", "gpt-5.6-luna")
