@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
@@ -377,3 +378,29 @@ class TestSystemBuilderWiring:
         finally:
             sched.stop()
             store.close()
+
+
+class TestResultCoercion:
+    """``system.ask`` returns a dict for tool-calling agents; SQLite cannot bind one."""
+
+    def test_dict_result_is_serialised_not_bound_raw(self, store):
+        mock_system = MagicMock()
+        mock_system.ask.return_value = {"content": "done", "usage": {}}
+        sched = TaskScheduler(store, system=mock_system, poll_interval=1)
+
+        task = sched.create_task("go", "once", "2026-01-01T00:00:00+00:00")
+        sched._execute_task(task)
+
+        logs = store.get_run_logs(task.id)
+        assert logs[0]["success"] == 1
+        assert json.loads(logs[0]["result"])["content"] == "done"
+
+    def test_plain_string_result_is_unchanged(self, store):
+        mock_system = MagicMock()
+        mock_system.ask.return_value = "plain text"
+        sched = TaskScheduler(store, system=mock_system, poll_interval=1)
+
+        task = sched.create_task("go", "once", "2026-01-01T00:00:00+00:00")
+        sched._execute_task(task)
+
+        assert store.get_run_logs(task.id)[0]["result"] == "plain text"

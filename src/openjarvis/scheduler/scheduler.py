@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import uuid
@@ -71,6 +72,18 @@ class ScheduledTask:
 def _now_iso() -> str:
     """Return current UTC time as ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _stringify_result(result: Any) -> str:
+    """Coerce a ``system.ask`` result into a value SQLite can bind.
+
+    ``ask`` returns a dict for tool-calling agents, which the run-log column
+    cannot store. Mirrors the same coercion in ``jarvis scheduler run-task``
+    so both execution paths log an identical shape.
+    """
+    if isinstance(result, (dict, list)):
+        return json.dumps(result, default=str)
+    return str(result) if result is not None else ""
 
 
 class TaskScheduler:
@@ -242,9 +255,11 @@ class TaskScheduler:
                 if meta.get("operator_id"):
                     ask_kwargs["system_prompt"] = meta.get("system_prompt", "")
                     ask_kwargs["operator_id"] = meta["operator_id"]
-                result_text = self._system.ask(
-                    task.prompt,
-                    **ask_kwargs,
+                result_text = _stringify_result(
+                    self._system.ask(
+                        task.prompt,
+                        **ask_kwargs,
+                    )
                 )
             else:
                 result_text = f"[dry-run] Would execute: {task.prompt}"
