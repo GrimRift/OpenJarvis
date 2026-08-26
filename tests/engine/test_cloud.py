@@ -625,3 +625,43 @@ class TestCloudEngineDeepSeek:
             engine.generate(
                 [Message(role=Role.USER, content="Hi")], model="deepseek-v4-pro"
             )
+
+
+# -- Local-only parameters ---------------------------------------------------
+
+
+class TestLocalOnlyParams:
+    """Engine-agnostic callers pass Ollama's num_ctx to whatever engine they hold."""
+
+    def test_num_ctx_is_not_forwarded_to_the_provider(self):
+        from unittest.mock import MagicMock
+
+        from openjarvis.core.types import Message, Role
+        from openjarvis.engine.cloud import CloudEngine
+
+        engine = CloudEngine()
+        engine._openai_client = MagicMock()
+        engine._openai_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok", tool_calls=None))],
+            usage=MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+        engine.generate(
+            [Message(role=Role.USER, content="hi")],
+            model="gpt-4o-mini",
+            num_ctx=16384,
+        )
+
+        sent = engine._openai_client.chat.completions.create.call_args.kwargs
+        assert "num_ctx" not in sent, (
+            "num_ctx reaches the OpenAI SDK and raises TypeError: "
+            "Completions.create() got an unexpected keyword argument"
+        )
+
+    def test_other_kwargs_still_pass_through(self):
+        from openjarvis.engine.cloud import _without_local_only
+
+        assert _without_local_only({"num_ctx": 1, "tools": ["t"], "top_p": 0.9}) == {
+            "tools": ["t"],
+            "top_p": 0.9,
+        }

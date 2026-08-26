@@ -172,6 +172,19 @@ def _is_openai_model(model: str) -> bool:
     return m.startswith(_OPENAI_PREFIXES)
 
 
+# Generation parameters only a local runtime understands. Callers are
+# engine-agnostic — ResearchAgent passes num_ctx on every generate() — and
+# forwarding one to a provider SDK raises TypeError: Completions.create() got
+# an unexpected keyword argument 'num_ctx'. Cloud providers size their own
+# context, so these are dropped rather than translated.
+_LOCAL_ONLY_PARAMS = frozenset({"num_ctx"})
+
+
+def _without_local_only(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip parameters that only a local engine accepts."""
+    return {k: v for k, v in kwargs.items() if k not in _LOCAL_ONLY_PARAMS}
+
+
 def is_cloud_model(model: str) -> bool:
     """Return ``True`` if *model* is a recognized cloud-provider model id.
 
@@ -1154,7 +1167,7 @@ class CloudEngine(InferenceEngine):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            **kwargs,
+            **_without_local_only(kwargs),
         )
         if _is_codex_model(model):
             return self._generate_codex(messages, **kw)
@@ -1183,7 +1196,7 @@ class CloudEngine(InferenceEngine):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            **kwargs,
+            **_without_local_only(kwargs),
         )
         if _is_codex_model(model):
             async for token in self._stream_codex(messages, **kw):
@@ -1804,7 +1817,7 @@ class CloudEngine(InferenceEngine):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            **kwargs,
+            **_without_local_only(kwargs),
         )
         if _is_anthropic_model(model):
             async for chunk in self._stream_full_anthropic(messages, **kw):
