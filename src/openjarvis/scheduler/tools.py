@@ -10,6 +10,10 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
+# A scheduled task normally exists to *do* something, so it needs an agent
+# that can call tools. See ScheduleTaskTool.execute for why not "simple".
+_DEFAULT_TASK_AGENT = "orchestrator"
+
 
 def _utc_offset_hours() -> int:
     """Whole-hour offset of local time from UTC (e.g. 8 for UTC+8)."""
@@ -138,7 +142,11 @@ class ScheduleTaskTool(BaseTool):
                     },
                     "agent": {
                         "type": "string",
-                        "description": "Agent to use for execution (default: simple).",
+                        "description": (
+                            "Agent to run the prompt (default: orchestrator). "
+                            "Leave unset unless the task needs no tools at "
+                            "all — 'simple' is single-turn and cannot call any."
+                        ),
                     },
                     "tools": {
                         "type": "string",
@@ -180,7 +188,11 @@ class ScheduleTaskTool(BaseTool):
                 prompt=prompt,
                 schedule_type=schedule_type,
                 schedule_value=schedule_value,
-                agent=params.get("agent", "simple"),
+                # Not "simple": SimpleAgent is single-turn and cannot call
+                # tools, so a scheduled "check X and notify me" would produce
+                # text and do nothing. Tasks created from chat almost always
+                # need tools, so default to the tool-calling agent.
+                agent=params.get("agent") or _DEFAULT_TASK_AGENT,
                 tools=params.get("tools", ""),
             )
             payload = {

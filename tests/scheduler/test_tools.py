@@ -252,3 +252,44 @@ class TestCronTimezone:
             assert mock_sched.create_task.call_args.kwargs["schedule_value"] == "300"
         finally:
             set_scheduler(None)
+
+
+class TestDefaultAgent:
+    def test_defaults_to_a_tool_calling_agent(self):
+        """SimpleAgent is single-turn: a scheduled 'check X and notify me'
+        would generate text and do nothing."""
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.create_task.return_value = ScheduledTask(
+            id="t1", prompt="p", schedule_type="interval", schedule_value="60"
+        )
+        set_scheduler(mock_sched)
+        try:
+            ScheduleTaskTool().execute(
+                prompt="check my calendar",
+                schedule_type="interval",
+                schedule_value="60",
+            )
+            assert mock_sched.create_task.call_args.kwargs["agent"] == "orchestrator"
+        finally:
+            set_scheduler(None)
+
+    def test_explicit_agent_is_respected(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.create_task.return_value = ScheduledTask(
+            id="t1", prompt="p", schedule_type="interval", schedule_value="60"
+        )
+        set_scheduler(mock_sched)
+        try:
+            ScheduleTaskTool().execute(
+                prompt="p",
+                schedule_type="interval",
+                schedule_value="60",
+                agent="simple",
+            )
+            assert mock_sched.create_task.call_args.kwargs["agent"] == "simple"
+        finally:
+            set_scheduler(None)
