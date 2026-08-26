@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import datetime
 from unittest.mock import MagicMock
 
 from openjarvis.scheduler.scheduler import ScheduledTask
@@ -291,5 +292,50 @@ class TestDefaultAgent:
                 agent="simple",
             )
             assert mock_sched.create_task.call_args.kwargs["agent"] == "simple"
+        finally:
+            set_scheduler(None)
+
+
+class TestOnceTimezone:
+    """get_due_tasks compares next_run to a UTC-aware ISO string as text."""
+
+    def test_naive_datetime_is_converted_to_an_explicit_utc_instant(self):
+        from openjarvis.scheduler.tools import _local_once_to_utc
+
+        converted, note = _local_once_to_utc("2026-08-27T13:00:00")
+        parsed = datetime.fromisoformat(converted)
+        assert parsed.tzinfo is not None, "a naive value is silently read as UTC"
+        assert parsed == datetime(2026, 8, 27, 13, 0).astimezone()
+        assert note
+
+    def test_explicit_offset_is_left_alone(self):
+        from openjarvis.scheduler.tools import _local_once_to_utc
+
+        assert _local_once_to_utc("2026-08-27T13:00:00+05:00") == (
+            "2026-08-27T13:00:00+05:00",
+            "",
+        )
+
+    def test_unparseable_value_is_passed_through(self):
+        from openjarvis.scheduler.tools import _local_once_to_utc
+
+        assert _local_once_to_utc("not-a-date") == ("not-a-date", "")
+
+    def test_once_schedules_are_stored_timezone_aware(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.create_task.return_value = ScheduledTask(
+            id="t1", prompt="p", schedule_type="once", schedule_value="x"
+        )
+        set_scheduler(mock_sched)
+        try:
+            ScheduleTaskTool().execute(
+                prompt="remind me",
+                schedule_type="once",
+                schedule_value="2026-08-27T08:00:00",
+            )
+            stored = mock_sched.create_task.call_args.kwargs["schedule_value"]
+            assert datetime.fromisoformat(stored).tzinfo is not None
         finally:
             set_scheduler(None)

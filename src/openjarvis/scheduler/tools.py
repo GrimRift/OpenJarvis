@@ -72,6 +72,26 @@ def _local_cron_to_utc(expr: str) -> Tuple[str, str]:
     )
 
 
+def _local_once_to_utc(value: str) -> Tuple[str, str]:
+    """Normalise a one-off ISO datetime to an explicit UTC instant.
+
+    ``SchedulerStore.get_due_tasks`` compares ``next_run`` to a UTC-aware ISO
+    string *as text*, so a naive local timestamp is silently read as UTC and
+    fires at the wrong moment (8 hours late at UTC+8). Times written by a
+    caller are local, so attach the local zone before converting.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value, ""
+    if parsed.tzinfo is not None:
+        return value, ""
+    local = parsed.astimezone()
+    return local.astimezone(timezone.utc).isoformat(), (
+        f"Interpreted as {local.strftime('%Y-%m-%d %H:%M')} local time."
+    )
+
+
 def _to_local(iso_utc: Optional[str]) -> str:
     """Render a stored UTC ISO timestamp in local time, for confirmations."""
     if not iso_utc:
@@ -183,6 +203,8 @@ class ScheduleTaskTool(BaseTool):
         note = ""
         if schedule_type == "cron":
             schedule_value, note = _local_cron_to_utc(schedule_value)
+        elif schedule_type == "once":
+            schedule_value, note = _local_once_to_utc(schedule_value)
         try:
             task = self._scheduler.create_task(
                 prompt=prompt,
