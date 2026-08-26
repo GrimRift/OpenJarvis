@@ -243,3 +243,60 @@ class TestProposalValidation:
             ],
         )
         assert len(pending) == 1
+
+
+# -- Configured model / engine -----------------------------------------------
+
+
+class TestConfiguredModel:
+    """A scheduled run reaches this agent via JarvisSystem.ask(), which takes
+    no model argument — so [proactive] model/engine is the only way to judge
+    tiering on something stronger than the server default."""
+
+    @staticmethod
+    def _apply(args, kwargs, model="", engine=""):
+        from openjarvis.agents.proactive_agent import ProactiveAgent
+
+        return ProactiveAgent._apply_configured_model(args, kwargs, model, engine)
+
+    def test_no_config_leaves_arguments_untouched(self):
+        engine = MagicMock()
+        args, kwargs = self._apply((engine, "qwen3.5:4b"), {})
+        assert args == (engine, "qwen3.5:4b")
+
+    def test_model_replaces_the_positional_model(self):
+        engine = MagicMock()
+        args, _ = self._apply((engine, "qwen3.5:4b"), {}, model="gpt-5.6-luna")
+        assert args == (engine, "gpt-5.6-luna")
+
+    def test_model_replaces_a_keyword_model(self):
+        """Tests and scripts construct the agent with keywords, not positionally."""
+        engine = MagicMock()
+        _, kwargs = self._apply(
+            (), {"engine": engine, "model": "qwen3.5:4b"}, model="gpt-5.6-luna"
+        )
+        assert kwargs["model"] == "gpt-5.6-luna"
+
+    def test_engine_is_swapped_when_resolvable(self):
+        cloud = MagicMock()
+        with patch(
+            "openjarvis.engine._discovery.get_engine", return_value=("cloud", cloud)
+        ):
+            args, _ = self._apply(
+                (MagicMock(), "m"), {}, model="gpt-5.6-luna", engine="cloud"
+            )
+        assert args[0] is cloud
+
+    def test_unavailable_engine_falls_back_instead_of_crashing(self):
+        original = MagicMock()
+        with patch("openjarvis.engine._discovery.get_engine", return_value=None):
+            args, _ = self._apply((original, "m"), {}, engine="cloud")
+        assert args[0] is original
+
+    def test_engine_resolution_failure_is_survived(self):
+        original = MagicMock()
+        with patch(
+            "openjarvis.engine._discovery.get_engine", side_effect=RuntimeError("boom")
+        ):
+            args, _ = self._apply((original, "m"), {}, engine="cloud")
+        assert args[0] is original

@@ -1121,6 +1121,14 @@ class ProactiveConfig:
     # Channel to send approval notifications and receive yes/no replies.
     # Format: "{type}:{id}", e.g. "imessage:+15551234567" or "telegram:123456789"
     notification_channel: str = ""
+    # Model/engine this agent classifies overnight items with, overriding the
+    # server's single default (e.g. a cloud model for stronger tiering
+    # judgement than a small local model gives). Empty means use the default.
+    # See ProactiveAgent.__init__: a scheduled run has no other way to ask
+    # for a specific model, since neither schedule_task nor JarvisSystem.ask()
+    # accept one.
+    model: str = ""
+    engine: str = ""
 
 
 @dataclass(slots=True)

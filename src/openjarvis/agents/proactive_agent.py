@@ -324,6 +324,59 @@ class ProactiveAgent(ToolUsingAgent):
 
     agent_id = "proactive"
 
+    @staticmethod
+    def _apply_configured_model(
+        args: tuple,
+        kwargs: Dict[str, Any],
+        model: str,
+        engine_key: str,
+    ) -> tuple:
+        """Swap in ``[proactive]`` model/engine before BaseAgent stores them.
+
+        Callers pass ``(engine, model)`` positionally (the orchestrator) or by
+        keyword (tests, scripts), so handle both. Naming only a model is
+        usually enough: the server's engine is normally a ``MultiEngine``,
+        which routes by model-name prefix and sends a ``gpt-*`` model to the
+        cloud engine on its own. ``engine`` is the escape hatch for a
+        single-backend setup, where swapping the model alone would ask the
+        local runtime for a model it does not have.
+        """
+        if not model and not engine_key:
+            return args, kwargs
+
+        args = list(args)
+        if model:
+            if len(args) > 1:
+                args[1] = model
+            elif "model" in kwargs:
+                kwargs["model"] = model
+
+        if engine_key:
+            try:
+                from openjarvis.engine._discovery import get_engine
+
+                resolved = get_engine(
+                    load_config(), engine_key=engine_key, model=model or None
+                )
+                if resolved is not None and resolved[0] == engine_key:
+                    if args:
+                        args[0] = resolved[1]
+                    elif "engine" in kwargs:
+                        kwargs["engine"] = resolved[1]
+                else:
+                    logger.warning(
+                        "Proactive engine %r unavailable for model %r; "
+                        "keeping the default engine",
+                        engine_key,
+                        model,
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to resolve proactive engine %r", engine_key, exc_info=True
+                )
+
+        return tuple(args), kwargs
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._notification_channel_id: str = kwargs.pop("notification_channel_id", "")
         self._hours_back: int = kwargs.pop("hours_back", 24)
@@ -333,15 +386,27 @@ class ProactiveAgent(ToolUsingAgent):
         self._timezone: str = kwargs.pop("timezone", "America/Los_Angeles")
 
         # Read config defaults before super().__init__ so we can inject tools
+        configured_model = ""
+        configured_engine = ""
         try:
             cfg = load_config()
             p = cfg.proactive
+            configured_model = p.model
+            configured_engine = p.engine
             if not self._notification_channel_id:
                 self._notification_channel_id = p.notification_channel
                 self._hours_back = p.hours_back
                 self._timezone = p.timezone
         except Exception:
             pass
+
+        # A scheduled run reaches this agent through JarvisSystem.ask(), which
+        # takes no model argument, so without this the tiering that decides
+        # what auto-executes is stuck on the server's default. Judging that on
+        # a stronger model is the whole point of [proactive] model/engine.
+        args, kwargs = self._apply_configured_model(
+            args, kwargs, configured_model, configured_engine
+        )
 
         # Build the required tools and inject them into the executor.
         # This must happen before super().__init__ is called because
