@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -143,8 +144,34 @@ User context is provided below — use it to tailor decisions to their patterns.
 """
 
 
+# Digest lines that address a specific fetched item carry an id, e.g.
+# ``[gmail id=gmail:18f9abc] From: someone — "subject" (3h ago)``.
+_DIGEST_ID_RE = re.compile(r"^\[(?P<source>\w+)\s+id=(?P<doc_id>[^\]]+)\]\s*(?P<label>.*)$")
+
+# Actions that act on one specific fetched item, so a wrong doc_id destroys or
+# answers the wrong thing. Proposals for these are dropped unless their doc_id
+# appears in the digest the model was actually shown.
+_ID_BOUND_ACTIONS = frozenset(
+    {"email_delete", "email_archive", "calendar_accept", "calendar_decline"}
+)
+
+
 def _load_md_file(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def _index_digest(digest: str) -> Dict[str, str]:
+    """Map each ``doc_id`` in *digest* to the human-readable rest of its line.
+
+    The label is used to describe queued actions, so what the approval UI
+    shows is derived from the item the action actually targets.
+    """
+    index: Dict[str, str] = {}
+    for raw in digest.splitlines():
+        match = _DIGEST_ID_RE.match(raw.strip())
+        if match:
+            index[match.group("doc_id")] = match.group("label").strip()
+    return index
 
 
 def _extract_json_block(text: str) -> Optional[List[Dict[str, Any]]]:
@@ -462,6 +489,17 @@ class ProactiveAgent(ToolUsingAgent):
         auto_approve_ids: List[str] = []
         pending_actions = []
 
+        # The model's own `description` cannot be trusted to describe its own
+        # `payload`: observed live proposing "Delete Wells Fargo marketing
+        # email" (a subject lifted from this prompt's example, matching no real
+        # message) pointing at an unrelated real one, and naming a second
+        # message while targeting a third. The approval UI shows the
+        # description, so a mismatch means approving one thing and destroying
+        # another. Describe every id-bound action from the digest line its
+        # doc_id actually resolves to, so the two cannot disagree.
+        digest_index = _index_digest(collect_result.content)
+        claimed_ids: Set[str] = set()
+
         for item in proposed:
             action_type = item.get("action_type", "")
             tier = item.get("tier", TIER_MEDIUM)
@@ -471,6 +509,26 @@ class ProactiveAgent(ToolUsingAgent):
 
             if not action_type or action_type == "no_action":
                 continue
+
+            if action_type in _ID_BOUND_ACTIONS:
+                doc_id = (payload or {}).get("doc_id", "")
+                label = digest_index.get(doc_id)
+                if not label:
+                    logger.warning(
+                        "Dropped %s: doc_id %r is not in the collected digest "
+                        "(model description was %r)",
+                        action_type,
+                        doc_id,
+                        description,
+                    )
+                    continue
+                if doc_id in claimed_ids:
+                    logger.warning(
+                        "Dropped duplicate %s for doc_id %r", action_type, doc_id
+                    )
+                    continue
+                claimed_ids.add(doc_id)
+                description = f"{action_type.replace('_', ' ')} — {label}"
 
             # Check remembered permission first
             rule = store.get_permission(permission_key)
