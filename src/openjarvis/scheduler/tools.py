@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, FrozenSet, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
@@ -13,6 +14,73 @@ from openjarvis.tools._stubs import BaseTool, ToolSpec
 # A scheduled task normally exists to *do* something, so it needs an agent
 # that can call tools. See ScheduleTaskTool.execute for why not "simple".
 _DEFAULT_TASK_AGENT = "orchestrator"
+
+
+class ModelNotResolvedError(ValueError):
+    """Raised when a requested model name cannot be matched safely."""
+
+
+def _available_cloud_models() -> List[str]:
+    """Cloud models whose provider is actually configured right now.
+
+    Not the full catalogue in ``engine/cloud.py`` — only entries whose API
+    key is present, matching what a call would really be able to reach.
+    """
+    try:
+        from openjarvis.engine.cloud import CloudEngine
+
+        return CloudEngine().list_models()
+    except Exception:
+        return []
+
+
+def _family_tokens(name: str) -> FrozenSet[str]:
+    """Letters-only words in a model name, e.g. 'gpt-5.6-luna' -> {gpt, luna}.
+
+    Version numbers and single letters ('4o' -> 'o') are dropped since they
+    are what a paraphrase tends to lose ('gpt luna' for 'gpt-5.6-luna').
+    Matching on the remaining words is deliberately strict (exact set
+    equality, not a subset) — see ``_resolve_model``.
+    """
+    return frozenset(t for t in re.split(r"[^a-zA-Z]+", name.lower()) if len(t) >= 2)
+
+
+def _resolve_model(requested: str) -> Tuple[str, str]:
+    """Resolve a possibly-approximate model name to one that really exists.
+
+    Live case this exists for: asked to schedule a task "using gpt luna",
+    the model wrote ``"gpt-luna"`` into the tool call — plausible-looking,
+    not a real model id. Stored verbatim, it would 404 the day the task
+    finally runs, unattended, with the confirmation message having already
+    claimed success. Validate here instead of trusting the string.
+
+    Returns ``(resolved_name, note)``, unchanged with no note on an exact
+    match. Raises :class:`ModelNotResolvedError` — naming the available
+    options — when nothing matches or more than one candidate does, so the
+    tool call fails loudly rather than storing a name that only breaks
+    later.
+    """
+    candidates = _available_cloud_models()
+    if requested in candidates:
+        return requested, ""
+
+    requested_tokens = _family_tokens(requested)
+    matches = [c for c in candidates if _family_tokens(c) == requested_tokens]
+
+    if len(matches) == 1:
+        return matches[0], f"Resolved {requested!r} to the real model {matches[0]!r}."
+
+    available = (
+        ", ".join(candidates) if candidates else "(no cloud provider configured)"
+    )
+    if len(matches) > 1:
+        raise ModelNotResolvedError(
+            f"{requested!r} matches more than one available model "
+            f"({', '.join(matches)}) — use the exact id. Available: {available}."
+        )
+    raise ModelNotResolvedError(
+        f"{requested!r} is not a recognized, available model. Available: {available}."
+    )
 
 
 def _utc_offset_hours() -> int:
@@ -220,10 +288,12 @@ class ScheduleTaskTool(BaseTool):
                     "model": {
                         "type": "string",
                         "description": (
-                            "Model to run this task on, e.g. 'gpt-5.6-luna'. "
-                            "Leave unset to use the server's default. Set it "
-                            "when the task needs stronger reasoning than the "
-                            "local default gives."
+                            "Model to run this task on. Copy the id exactly "
+                            "as listed, e.g. 'gpt-5.6-luna' — an approximate "
+                            "name is rejected rather than guessed at. Leave "
+                            "unset to use the server's default; set it when "
+                            "the task needs stronger reasoning than the local "
+                            "model gives."
                         ),
                     },
                 },
@@ -256,6 +326,27 @@ class ScheduleTaskTool(BaseTool):
             schedule_value, note = _local_cron_to_utc(schedule_value)
         elif schedule_type == "once":
             schedule_value, note = _local_once_to_utc(schedule_value)
+
+        model_note = ""
+        requested_model = params.get("model") or ""
+        if requested_model and ":" not in requested_model:
+            # A ':' marks an Ollama-style local tag (e.g. "qwen3.5:4b"), which
+            # is normally copy-pasted verbatim and has no discovery source to
+            # validate against here. Everything else is a free-text cloud
+            # name a small model can paraphrase — resolve it against what is
+            # actually reachable rather than storing it unchecked. Live case:
+            # "using gpt luna" was written into the tool call as "gpt-luna",
+            # which is not a real model and would 404 whenever the task ran.
+            try:
+                requested_model, resolve_note = _resolve_model(requested_model)
+                model_note = resolve_note
+            except ModelNotResolvedError as exc:
+                return ToolResult(
+                    tool_name="schedule_task",
+                    content=str(exc),
+                    success=False,
+                )
+
         try:
             task = self._scheduler.create_task(
                 prompt=prompt,
@@ -269,9 +360,7 @@ class ScheduleTaskTool(BaseTool):
                 tools=params.get("tools", ""),
                 # TaskScheduler._execute_task reads this back out; it rides in
                 # metadata because scheduled_tasks has no migration path.
-                metadata=(
-                    {"model": params["model"]} if params.get("model") else {}
-                ),
+                metadata=({"model": requested_model} if requested_model else {}),
             )
             payload = {
                 "task_id": task.id,
@@ -281,6 +370,8 @@ class ScheduleTaskTool(BaseTool):
             }
             if note:
                 payload["note"] = note
+            if model_note:
+                payload["model_note"] = model_note
             return ToolResult(
                 tool_name="schedule_task",
                 content=json.dumps(payload),

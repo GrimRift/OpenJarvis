@@ -7,6 +7,8 @@ import sys
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from openjarvis.scheduler.scheduler import ScheduledTask
 from openjarvis.scheduler.tools import (
     CancelScheduledTaskTool,
@@ -397,3 +399,148 @@ class TestScheduleDescriptions:
             set_scheduler(None)
         assert payload[0]["schedule_human"] == "every 10 minutes"
         assert payload[0]["next_run_local"]
+
+
+# -- Model name resolution ---------------------------------------------------
+
+
+class TestModelResolution:
+    """A paraphrased model name must not be stored and 404 later.
+
+    Live case: asked to schedule "using gpt luna", qwen3.5:4b wrote
+    "gpt-luna" into the tool call. Plausible, not a real id, and the
+    confirmation claimed success — it would only have failed when the task
+    finally ran, unattended.
+    """
+
+    @staticmethod
+    def _available(*names):
+        from unittest.mock import patch
+
+        return patch(
+            "openjarvis.scheduler.tools._available_cloud_models",
+            return_value=list(names),
+        )
+
+    def test_exact_name_passes_through_unchanged(self):
+        from openjarvis.scheduler.tools import _resolve_model
+
+        with self._available("gpt-5.6-luna", "gpt-4o"):
+            assert _resolve_model("gpt-5.6-luna") == ("gpt-5.6-luna", "")
+
+    def test_paraphrased_name_resolves_to_the_real_id(self):
+        from openjarvis.scheduler.tools import _resolve_model
+
+        with self._available("gpt-5.6-luna", "gpt-4o"):
+            resolved, note = _resolve_model("gpt-luna")
+        assert resolved == "gpt-5.6-luna"
+        assert note
+
+    def test_resolution_ignores_case_and_separators(self):
+        from openjarvis.scheduler.tools import _resolve_model
+
+        with self._available("gpt-5.6-luna"):
+            assert _resolve_model("GPT Luna")[0] == "gpt-5.6-luna"
+
+    def test_ambiguous_name_is_rejected_not_guessed(self):
+        from openjarvis.scheduler.tools import ModelNotResolvedError, _resolve_model
+
+        with self._available("gpt-4o-mini", "gpt-5-mini"):
+            with pytest.raises(ModelNotResolvedError) as excinfo:
+                _resolve_model("gpt-mini")
+        assert "more than one" in str(excinfo.value)
+
+    def test_unknown_name_is_rejected_and_lists_the_options(self):
+        from openjarvis.scheduler.tools import ModelNotResolvedError, _resolve_model
+
+        with self._available("gpt-5.6-luna"):
+            with pytest.raises(ModelNotResolvedError) as excinfo:
+                _resolve_model("totally-made-up")
+        assert "gpt-5.6-luna" in str(excinfo.value)
+
+    def test_model_from_an_unconfigured_provider_is_rejected(self):
+        """Only providers with a key configured appear, so this would 404."""
+        from openjarvis.scheduler.tools import ModelNotResolvedError, _resolve_model
+
+        with self._available("gpt-5.6-luna"):
+            with pytest.raises(ModelNotResolvedError):
+                _resolve_model("claude-opus-4-6")
+
+
+class TestScheduleTaskModelValidation:
+    @staticmethod
+    def _available(*names):
+        from unittest.mock import patch
+
+        return patch(
+            "openjarvis.scheduler.tools._available_cloud_models",
+            return_value=list(names),
+        )
+
+    def _tool_with_scheduler(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.create_task.return_value = ScheduledTask(
+            id="t1", prompt="p", schedule_type="interval", schedule_value="60"
+        )
+        set_scheduler(mock_sched)
+        return mock_sched
+
+    def test_paraphrased_model_is_corrected_before_storage(self):
+        from openjarvis.scheduler.tools import ScheduleTaskTool, set_scheduler
+
+        mock_sched = self._tool_with_scheduler()
+        try:
+            with self._available("gpt-5.6-luna"):
+                result = ScheduleTaskTool().execute(
+                    prompt="p",
+                    schedule_type="interval",
+                    schedule_value="60",
+                    model="gpt-luna",
+                )
+        finally:
+            set_scheduler(None)
+
+        assert result.success
+        stored = mock_sched.create_task.call_args.kwargs["metadata"]["model"]
+        assert stored == "gpt-5.6-luna"
+
+    def test_unknown_model_fails_the_call_instead_of_scheduling(self):
+        from openjarvis.scheduler.tools import ScheduleTaskTool, set_scheduler
+
+        mock_sched = self._tool_with_scheduler()
+        try:
+            with self._available("gpt-5.6-luna"):
+                result = ScheduleTaskTool().execute(
+                    prompt="p",
+                    schedule_type="interval",
+                    schedule_value="60",
+                    model="made-up-model",
+                )
+        finally:
+            set_scheduler(None)
+
+        assert not result.success
+        mock_sched.create_task.assert_not_called()
+
+    def test_local_ollama_tag_is_not_validated_against_cloud(self):
+        """A ':' marks a local tag; there is no cloud list to check it against."""
+        from openjarvis.scheduler.tools import ScheduleTaskTool, set_scheduler
+
+        mock_sched = self._tool_with_scheduler()
+        try:
+            with self._available("gpt-5.6-luna"):
+                result = ScheduleTaskTool().execute(
+                    prompt="p",
+                    schedule_type="interval",
+                    schedule_value="60",
+                    model="qwen3.5:4b",
+                )
+        finally:
+            set_scheduler(None)
+
+        assert result.success
+        assert mock_sched.create_task.call_args.kwargs["metadata"]["model"] == (
+            "qwen3.5:4b"
+        )

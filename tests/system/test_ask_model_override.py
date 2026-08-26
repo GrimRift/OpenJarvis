@@ -197,12 +197,18 @@ class TestScheduledTaskCarriesModel:
         sched = TaskScheduler(store, poll_interval=60)
         set_scheduler(sched)
         try:
-            ScheduleTaskTool().execute(
-                prompt="summarise my inbox",
-                schedule_type="interval",
-                schedule_value="3600",
-                model="gpt-5.6-luna",
-            )
+            # The tool validates the name against reachable cloud models, so
+            # pin that list rather than depending on live credentials.
+            with patch(
+                "openjarvis.scheduler.tools._available_cloud_models",
+                return_value=["gpt-5.6-luna"],
+            ):
+                ScheduleTaskTool().execute(
+                    prompt="summarise my inbox",
+                    schedule_type="interval",
+                    schedule_value="3600",
+                    model="gpt-5.6-luna",
+                )
         finally:
             set_scheduler(None)
 
