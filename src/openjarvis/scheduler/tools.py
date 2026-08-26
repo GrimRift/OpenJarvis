@@ -92,6 +92,48 @@ def _local_once_to_utc(value: str) -> Tuple[str, str]:
     )
 
 
+def _describe_schedule(schedule_type: str, schedule_value: str) -> str:
+    """Render a schedule in plain local-time English.
+
+    Stored values are machine-facing — a UTC cron expression, a raw second
+    count, a UTC instant — and a small model asked to interpret them gets
+    them wrong (``0 0 * * *`` read as "midnight" when it is 08:00 at UTC+8,
+    ``600`` read as "every hour"). Compute the description here so nothing
+    is left to infer.
+    """
+    if schedule_type == "interval":
+        try:
+            seconds = int(float(schedule_value))
+        except ValueError:
+            return f"every {schedule_value} seconds"
+        if seconds % 3600 == 0 and seconds >= 3600:
+            hours = seconds // 3600
+            return f"every {hours} hour{'s' if hours != 1 else ''}"
+        if seconds % 60 == 0 and seconds >= 60:
+            minutes = seconds // 60
+            return f"every {minutes} minute{'s' if minutes != 1 else ''}"
+        return f"every {seconds} second{'s' if seconds != 1 else ''}"
+
+    if schedule_type == "once":
+        local = _to_local(schedule_value)
+        return f"once at {local}" if local else f"once at {schedule_value}"
+
+    if schedule_type == "cron":
+        fields = schedule_value.split()
+        if len(fields) == 5:
+            minute, hour, dom, month, dow = fields
+            if minute.isdigit() and hour.isdigit():
+                offset = _utc_offset_hours()
+                local_hour = (int(hour) + offset) % 24
+                when = f"{local_hour:02d}:{int(minute):02d} local time"
+                if dom == "*" and month == "*" and dow == "*":
+                    return f"daily at {when}"
+                return f"at {when} (cron {schedule_value} UTC)"
+        return f"cron {schedule_value} (UTC)"
+
+    return f"{schedule_type} {schedule_value}"
+
+
 def _to_local(iso_utc: Optional[str]) -> str:
     """Render a stored UTC ISO timestamp in local time, for confirmations."""
     if not iso_utc:
@@ -249,7 +291,12 @@ class ListScheduledTasksTool(BaseTool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="list_scheduled_tasks",
-            description="List all scheduled tasks, optionally filtered by status.",
+            description=(
+                "List scheduled tasks, optionally filtered by status. Each "
+                "task includes 'schedule_human' and 'next_run_local' — quote "
+                "those when describing a task's timing, and do not convert "
+                "the raw cron, interval seconds, or UTC timestamps yourself."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -275,7 +322,17 @@ class ListScheduledTasksTool(BaseTool):
         try:
             status = params.get("status")
             tasks = self._scheduler.list_tasks(status=status)
-            items = [t.to_dict() for t in tasks]
+            items = []
+            for t in tasks:
+                d = t.to_dict()
+                # Stored fields are UTC/machine-facing; state the local
+                # equivalents outright so they are not re-derived downstream.
+                d["schedule_human"] = _describe_schedule(
+                    t.schedule_type, t.schedule_value
+                )
+                d["next_run_local"] = _to_local(t.next_run)
+                d["last_run_local"] = _to_local(t.last_run)
+                items.append(d)
             return ToolResult(
                 tool_name="list_scheduled_tasks",
                 content=json.dumps(items, default=str),

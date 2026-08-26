@@ -339,3 +339,61 @@ class TestOnceTimezone:
             assert datetime.fromisoformat(stored).tzinfo is not None
         finally:
             set_scheduler(None)
+
+
+class TestScheduleDescriptions:
+    """Stored values are machine-facing; a small model misreads them.
+
+    Live, qwen3.5:4b called `0 0 * * *` "midnight" (it is 08:00 at UTC+8),
+    `600` "every hour", and a tomorrow-morning one-off "today at noon".
+    """
+
+    @staticmethod
+    def _at_plus_eight():
+        from unittest.mock import patch
+
+        return patch("openjarvis.scheduler.tools._utc_offset_hours", return_value=8)
+
+    def test_interval_seconds_render_as_units(self):
+        from openjarvis.scheduler.tools import _describe_schedule
+
+        assert _describe_schedule("interval", "600") == "every 10 minutes"
+        assert _describe_schedule("interval", "3600") == "every 1 hour"
+        assert _describe_schedule("interval", "45") == "every 45 seconds"
+
+    def test_daily_cron_renders_in_local_time(self):
+        from openjarvis.scheduler.tools import _describe_schedule
+
+        with self._at_plus_eight():
+            assert _describe_schedule("cron", "0 0 * * *") == (
+                "daily at 08:00 local time"
+            )
+
+    def test_unconvertible_cron_is_labelled_utc_rather_than_guessed(self):
+        from openjarvis.scheduler.tools import _describe_schedule
+
+        with self._at_plus_eight():
+            assert "UTC" in _describe_schedule("cron", "0 */2 * * *")
+
+    def test_list_includes_derived_local_fields(self):
+        import json
+
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.list_tasks.return_value = [
+            ScheduledTask(
+                id="t1",
+                prompt="p",
+                schedule_type="interval",
+                schedule_value="600",
+                next_run="2026-08-27T00:00:00+00:00",
+            )
+        ]
+        set_scheduler(mock_sched)
+        try:
+            payload = json.loads(ListScheduledTasksTool().execute().content)
+        finally:
+            set_scheduler(None)
+        assert payload[0]["schedule_human"] == "every 10 minutes"
+        assert payload[0]["next_run_local"]
