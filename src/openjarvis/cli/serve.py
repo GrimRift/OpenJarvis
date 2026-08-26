@@ -558,6 +558,9 @@ def serve(
 
     # Set up agent scheduler for cron/interval agents
     agent_scheduler = None
+    # The inline JarvisSystem built below, reused by the task scheduler so it
+    # can execute prompts. Stays None when the agent manager is disabled.
+    scheduler_system = None
     if agent_manager is not None:
         try:
             from openjarvis.agents.executor import AgentExecutor
@@ -629,6 +632,7 @@ def serve(
                 _mcp_clients=mcp_clients,
             )
             executor.set_system(system)
+            scheduler_system = system
 
             agent_scheduler = AgentScheduler(
                 manager=agent_manager,
@@ -646,6 +650,54 @@ def serve(
             console.print("  Scheduler: [cyan]active[/cyan]")
         except Exception as exc:
             logger.debug("Agent scheduler init failed: %s", exc)
+
+    # Set up the task scheduler for cron/interval *prompts* (scheduler.db).
+    # Distinct from AgentScheduler above, which ticks managed agents from
+    # agents.db: this one runs `jarvis scheduler create` tasks and the TOML
+    # operators activated through OperatorManager.
+    task_scheduler = None
+    if config.scheduler.enabled:
+        if scheduler_system is None:
+            console.print(
+                "  [yellow]Tasks: scheduler enabled but no system available "
+                "(needs [agent_manager] enabled) — not started[/yellow]"
+            )
+        else:
+            try:
+                from openjarvis.scheduler.scheduler import TaskScheduler
+                from openjarvis.scheduler.store import SchedulerStore
+
+                _sched_db = config.scheduler.db_path or str(
+                    get_config_dir() / "scheduler.db"
+                )
+                task_scheduler = TaskScheduler(
+                    SchedulerStore(db_path=_sched_db),
+                    poll_interval=config.scheduler.poll_interval,
+                    bus=bus,
+                )
+                task_scheduler.set_system(scheduler_system)
+                task_scheduler.start()
+                console.print(
+                    f"  Tasks:  [cyan]active[/cyan] "
+                    f"(poll {config.scheduler.poll_interval}s)"
+                )
+            except Exception as exc:
+                task_scheduler = None
+                logger.debug("Task scheduler init failed: %s", exc)
+
+    # Self-register the proactive agent's daily cron. Idempotent: it reuses a
+    # matching task, and replaces its own stale ones when the config changes.
+    if task_scheduler is not None and config.proactive.enabled:
+        try:
+            from openjarvis.agents.proactive_agent import register_cron
+
+            _proactive_task = register_cron(task_scheduler)
+            console.print(
+                f"  Proactive: [cyan]{config.proactive.schedule}[/cyan] UTC "
+                f"(next {_proactive_task.next_run})"
+            )
+        except Exception as exc:
+            logger.warning("Proactive cron registration failed: %s", exc)
 
     # --- Channel Gateway: API key, sessions, ChannelBridge ---
     import os as _os

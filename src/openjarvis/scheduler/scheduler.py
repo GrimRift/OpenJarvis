@@ -106,6 +106,14 @@ class TaskScheduler:
 
     # -- Public API ----------------------------------------------------------
 
+    def set_system(self, system: Any) -> None:
+        """Deferred system injection — called after JarvisSystem is constructed.
+
+        The scheduler is built before the system exists, so ``_execute_task``
+        would otherwise never have anything to run prompts against.
+        """
+        self._system = system
+
     def start(self) -> None:
         """Start the background polling daemon thread."""
         if self._thread is not None and self._thread.is_alive():

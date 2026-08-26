@@ -233,6 +233,28 @@ class TestExecuteTask:
         assert logs[0]["success"] == 1
         assert "dry-run" in logs[0]["result"]
 
+    def test_set_system_promotes_dry_run_to_real_execution(self, store):
+        """A scheduler built without a system must run for real once injected.
+
+        The scheduler is constructed before JarvisSystem exists, so without
+        deferred injection every due task silently logged a dry-run instead
+        of executing.
+        """
+        sched = TaskScheduler(store, poll_interval=1)
+        task = sched.create_task("first", "once", "2026-01-01T00:00:00+00:00")
+        sched._execute_task(task)
+        assert "dry-run" in store.get_run_logs(task.id)[0]["result"]
+
+        mock_system = MagicMock()
+        mock_system.ask.return_value = "real result"
+        sched.set_system(mock_system)
+
+        task2 = sched.create_task("second", "once", "2026-01-01T00:00:00+00:00")
+        sched._execute_task(task2)
+
+        mock_system.ask.assert_called_once()
+        assert store.get_run_logs(task2.id)[0]["result"] == "real result"
+
     def test_execute_with_error(self, store):
         mock_system = MagicMock()
         mock_system.ask.side_effect = RuntimeError("engine down")
@@ -318,3 +340,40 @@ class TestLifecycle:
 
         logs = store.get_run_logs(task.id)
         assert len(logs) >= 1
+
+
+# -- SystemBuilder wiring ----------------------------------------------------
+
+
+class TestSystemBuilderWiring:
+    """``_setup_scheduler`` is the only place the in-process scheduler is built."""
+
+    def test_returns_nothing_when_disabled(self):
+        from openjarvis.core.config import JarvisConfig
+        from openjarvis.system import SystemBuilder
+
+        config = JarvisConfig()
+        assert config.scheduler.enabled is False
+        store, sched = SystemBuilder(config)._setup_scheduler(config, None)
+        assert store is None
+        assert sched is None
+
+    def test_builds_scheduler_when_enabled(self, tmp_path):
+        from openjarvis.core.config import JarvisConfig
+        from openjarvis.system import SystemBuilder
+
+        config = JarvisConfig()
+        config.scheduler.enabled = True
+        config.scheduler.db_path = str(tmp_path / "sched.db")
+
+        store, sched = SystemBuilder(config)._setup_scheduler(config, None)
+        assert store is not None
+        assert isinstance(sched, TaskScheduler)
+        try:
+            # Built before JarvisSystem exists, so it starts systemless and
+            # only becomes able to execute once build() injects the system.
+            assert sched._system is None
+            assert sched._thread is None
+        finally:
+            sched.stop()
+            store.close()
