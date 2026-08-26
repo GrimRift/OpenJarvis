@@ -3,11 +3,98 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+
+def _utc_offset_hours() -> int:
+    """Whole-hour offset of local time from UTC (e.g. 8 for UTC+8)."""
+    local_now = datetime.now()
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return round((local_now - utc_now).total_seconds() / 3600)
+
+
+def _local_cron_to_utc(expr: str) -> Tuple[str, str]:
+    """Convert a local-time cron expression to the UTC one the scheduler runs.
+
+    ``TaskScheduler._compute_next_run`` evaluates cron against
+    ``datetime.now(timezone.utc)``, so a caller asking for "8am" must store
+    the UTC equivalent. Doing that arithmetic here rather than in the prompt
+    follows the same reasoning as ``check_class_schedule``: small models are
+    unreliable at date/time math.
+
+    Returns ``(expression, note)``. The expression is unchanged when no
+    conversion is needed or when it cannot be done safely, and *note*
+    explains which happened.
+    """
+    offset = _utc_offset_hours()
+    fields = expr.split()
+    if offset == 0 or len(fields) != 5:
+        return expr, ""
+
+    minute, hour, dom, month, dow = fields
+    if not hour.isdigit():
+        # Ranges/steps/lists shift ambiguously; leave them alone and say so.
+        return expr, (
+            f"Hour field {hour!r} is not a plain number, so it was stored as-is "
+            "and will be interpreted as UTC."
+        )
+
+    shifted = int(hour) - offset
+    utc_hour = shifted % 24
+    day_delta = -1 if shifted < 0 else (1 if shifted > 23 else 0)
+
+    if day_delta and dom != "*":
+        return expr, (
+            "This time crosses a UTC day boundary and the expression pins a "
+            "day of the month, which cannot be shifted safely. Stored as-is "
+            "and interpreted as UTC."
+        )
+    if day_delta and dow != "*":
+        if not dow.isdigit():
+            return expr, (
+                "This time crosses a UTC day boundary and the day-of-week "
+                "field is not a plain number. Stored as-is and interpreted "
+                "as UTC."
+            )
+        dow = str((int(dow) + day_delta) % 7)
+
+    return f"{minute} {utc_hour} {dom} {month} {dow}", (
+        f"Interpreted as {hour}:{minute.zfill(2)} local time (UTC{offset:+d})."
+    )
+
+
+def _to_local(iso_utc: Optional[str]) -> str:
+    """Render a stored UTC ISO timestamp in local time, for confirmations."""
+    if not iso_utc:
+        return ""
+    try:
+        return (
+            datetime.fromisoformat(iso_utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        )
+    except ValueError:
+        return ""
+
+
+def set_scheduler(scheduler: Any) -> None:
+    """Give every scheduler tool the running ``TaskScheduler``.
+
+    The tools are constructed with no arguments by the registry, and read
+    ``self._scheduler`` at call time, so injecting on the classes here works
+    for instances built before the scheduler exists.
+    """
+    for cls in (
+        ScheduleTaskTool,
+        ListScheduledTasksTool,
+        PauseScheduledTaskTool,
+        ResumeScheduledTaskTool,
+        CancelScheduledTaskTool,
+    ):
+        cls._scheduler = scheduler
 
 
 @ToolRegistry.register("schedule_task")
@@ -22,9 +109,11 @@ class ScheduleTaskTool(BaseTool):
         return ToolSpec(
             name="schedule_task",
             description=(
-                "Schedule a task for future or recurring execution. "
-                "Supports cron expressions, interval (seconds), or "
-                "one-time ISO datetime scheduling."
+                "Schedule a prompt to run automatically, later or on a "
+                "repeating schedule. Use for requests like 'every morning at "
+                "8, check X' or 'remind me in 30 minutes'. Write cron times in "
+                "the user's LOCAL time — the conversion to UTC is handled for "
+                "you, so do not adjust the hour yourself."
             ),
             parameters={
                 "type": "object",
@@ -83,6 +172,9 @@ class ScheduleTaskTool(BaseTool):
                 ),
                 success=False,
             )
+        note = ""
+        if schedule_type == "cron":
+            schedule_value, note = _local_cron_to_utc(schedule_value)
         try:
             task = self._scheduler.create_task(
                 prompt=prompt,
@@ -91,15 +183,17 @@ class ScheduleTaskTool(BaseTool):
                 agent=params.get("agent", "simple"),
                 tools=params.get("tools", ""),
             )
+            payload = {
+                "task_id": task.id,
+                "next_run": task.next_run,
+                "next_run_local": _to_local(task.next_run),
+                "status": task.status,
+            }
+            if note:
+                payload["note"] = note
             return ToolResult(
                 tool_name="schedule_task",
-                content=json.dumps(
-                    {
-                        "task_id": task.id,
-                        "next_run": task.next_run,
-                        "status": task.status,
-                    }
-                ),
+                content=json.dumps(payload),
                 success=True,
             )
         except Exception as exc:

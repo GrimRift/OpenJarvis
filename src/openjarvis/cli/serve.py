@@ -677,6 +677,11 @@ def serve(
                 )
                 task_scheduler.set_system(scheduler_system)
                 task_scheduler.start()
+                # Hand it to the schedule_task/list/pause/resume/cancel tools,
+                # which are built before this point and read it at call time.
+                from openjarvis.scheduler.tools import set_scheduler
+
+                set_scheduler(task_scheduler)
                 console.print(
                     f"  Tasks:  [cyan]active[/cyan] "
                     f"(poll {config.scheduler.poll_interval}s)"

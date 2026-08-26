@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from unittest.mock import MagicMock
 
 from openjarvis.scheduler.scheduler import ScheduledTask
@@ -136,3 +138,117 @@ class TestWithScheduler:
         result = tool.execute()  # missing task_id
         assert not result.success
         assert "Missing" in result.content
+
+
+# -- Registration ------------------------------------------------------------
+
+
+class TestRegistration:
+    def test_importing_the_tools_package_registers_them(self):
+        """These live under openjarvis.scheduler, so tools/__init__ imports them.
+
+        Run in a subprocess: conftest clears ToolRegistry before each test and
+        the modules are already cached, so an in-process import would neither
+        re-run the decorators nor prove the wiring. Reloading instead would
+        rebind the tool classes and break other tests in this file.
+        """
+        code = (
+            "import openjarvis.tools;"
+            "from openjarvis.core.registry import ToolRegistry;"
+            "missing=[n for n in ('schedule_task','list_scheduled_tasks',"
+            "'pause_scheduled_task','resume_scheduled_task',"
+            "'cancel_scheduled_task') if n not in ToolRegistry.keys()];"
+            "raise SystemExit('unregistered: %s' % missing if missing else 0)"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# -- Deferred scheduler injection -------------------------------------------
+
+
+class TestSetScheduler:
+    def test_injection_reaches_instances_built_beforehand(self):
+        """Tools are constructed at startup before the scheduler exists."""
+        from openjarvis.scheduler.tools import set_scheduler
+
+        tool = ScheduleTaskTool()
+        assert not tool.execute(
+            prompt="p", schedule_type="interval", schedule_value="60"
+        ).success
+
+        mock_sched = MagicMock()
+        mock_sched.create_task.return_value = ScheduledTask(
+            id="t1", prompt="p", schedule_type="interval", schedule_value="60"
+        )
+        set_scheduler(mock_sched)
+        try:
+            assert tool.execute(
+                prompt="p", schedule_type="interval", schedule_value="60"
+            ).success
+        finally:
+            set_scheduler(None)
+
+
+# -- Cron timezone conversion ------------------------------------------------
+
+
+class TestCronTimezone:
+    """Cron is evaluated against UTC, so a local time must be converted."""
+
+    @staticmethod
+    def _at_plus_eight():
+        from unittest.mock import patch
+
+        return patch("openjarvis.scheduler.tools._utc_offset_hours", return_value=8)
+
+    def test_converts_local_hour_to_utc(self):
+        from openjarvis.scheduler.tools import _local_cron_to_utc
+
+        with self._at_plus_eight():
+            assert _local_cron_to_utc("0 8 * * *")[0] == "0 0 * * *"
+            assert _local_cron_to_utc("30 14 * * *")[0] == "30 6 * * *"
+
+    def test_shifts_day_of_week_when_crossing_a_utc_day_boundary(self):
+        from openjarvis.scheduler.tools import _local_cron_to_utc
+
+        with self._at_plus_eight():
+            # Monday 05:00 local is Sunday 21:00 UTC.
+            assert _local_cron_to_utc("0 5 * * 1")[0] == "0 21 * * 0"
+
+    def test_no_conversion_when_local_is_utc(self):
+        from unittest.mock import patch
+
+        from openjarvis.scheduler.tools import _local_cron_to_utc
+
+        with patch("openjarvis.scheduler.tools._utc_offset_hours", return_value=0):
+            assert _local_cron_to_utc("0 5 * * *") == ("0 5 * * *", "")
+
+    def test_ambiguous_expressions_are_left_alone_with_an_explanation(self):
+        """Storing as-is and saying so beats shifting it wrongly."""
+        from openjarvis.scheduler.tools import _local_cron_to_utc
+
+        with self._at_plus_eight():
+            for expr in ("0 */2 * * *", "0 2 15 * *"):
+                converted, note = _local_cron_to_utc(expr)
+                assert converted == expr
+                assert note
+
+    def test_interval_schedules_are_never_converted(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.create_task.return_value = ScheduledTask(
+            id="t1", prompt="p", schedule_type="interval", schedule_value="300"
+        )
+        set_scheduler(mock_sched)
+        try:
+            with self._at_plus_eight():
+                ScheduleTaskTool().execute(
+                    prompt="p", schedule_type="interval", schedule_value="300"
+                )
+            assert mock_sched.create_task.call_args.kwargs["schedule_value"] == "300"
+        finally:
+            set_scheduler(None)
