@@ -255,6 +255,11 @@ class TaskScheduler:
                 if meta.get("operator_id"):
                     ask_kwargs["system_prompt"] = meta.get("system_prompt", "")
                     ask_kwargs["operator_id"] = meta["operator_id"]
+                # Carried in metadata rather than a column: the table is
+                # created with CREATE TABLE IF NOT EXISTS and has no migration
+                # path, so a new column would silently skip existing databases.
+                if meta.get("model"):
+                    ask_kwargs["model"] = meta["model"]
                 result_text = _stringify_result(
                     self._system.ask(
                         task.prompt,

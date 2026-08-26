@@ -217,6 +217,15 @@ class ScheduleTaskTool(BaseTool):
                             "(e.g. 'calculator,think')."
                         ),
                     },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "Model to run this task on, e.g. 'gpt-5.6-luna'. "
+                            "Leave unset to use the server's default. Set it "
+                            "when the task needs stronger reasoning than the "
+                            "local default gives."
+                        ),
+                    },
                 },
                 "required": ["prompt", "schedule_type", "schedule_value"],
             },
@@ -258,6 +267,11 @@ class ScheduleTaskTool(BaseTool):
                 # need tools, so default to the tool-calling agent.
                 agent=params.get("agent") or _DEFAULT_TASK_AGENT,
                 tools=params.get("tools", ""),
+                # TaskScheduler._execute_task reads this back out; it rides in
+                # metadata because scheduled_tasks has no migration path.
+                metadata=(
+                    {"model": params["model"]} if params.get("model") else {}
+                ),
             )
             payload = {
                 "task_id": task.id,

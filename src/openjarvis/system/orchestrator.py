@@ -14,6 +14,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _is_cloud_model(model: str) -> bool:
+    """Whether *model* belongs to a cloud provider, if that engine is present.
+
+    ``openjarvis.engine.cloud`` is optional, so a build without it reports
+    ``False`` and engine selection falls back to the active engine.
+    """
+    try:
+        from openjarvis.engine.cloud import is_cloud_model
+    except ImportError:
+        return False
+    return is_cloud_model(model)
+
+
 class QueryOrchestrator:
     def __init__(self, system: OrchestratorDeps) -> None:
         self._system = system
@@ -30,8 +43,15 @@ class QueryOrchestrator:
         system_prompt: Optional[str] = None,
         operator_id: Optional[str] = None,
         prior_messages: Optional[List[Message]] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Execute a query through the system and return a result dict."""
+        """Execute a query through the system and return a result dict.
+
+        *model* overrides the system's configured model for this call only,
+        resolving a different engine when the current one cannot serve it.
+        Scheduled tasks rely on this: they run with no request context, so
+        without it every task is pinned to the server default.
+        """
         s = self._system
         if temperature is None:
             temperature = s.config.intelligence.temperature
@@ -64,6 +84,8 @@ class QueryOrchestrator:
             except Exception as exc:
                 logger.warning("Failed to inject memory context: %s", exc)
 
+        engine, run_model, run_engine_key = self._engine_for_model(model)
+
         use_agent = agent or s.agent_name
         if not agent and use_agent != "none":
             detected = self._detect_agent_intent(query)
@@ -80,20 +102,58 @@ class QueryOrchestrator:
                 system_prompt=system_prompt,
                 operator_id=operator_id,
                 prior_messages=prior_messages,
+                engine=engine,
+                model=run_model,
+                engine_key=run_engine_key,
             )
 
-        result = s.engine.generate(
+        result = engine.generate(
             messages,
-            model=s.model,
+            model=run_model,
             temperature=temperature,
             max_tokens=max_tokens,
         )
         return {
             "content": result.get("content", ""),
             "usage": result.get("usage", {}),
-            "model": s.model,
-            "engine": s.engine_key,
+            "model": run_model,
+            "engine": run_engine_key,
         }
+
+    def _engine_for_model(self, model: Optional[str]):
+        """Pick the engine that can actually serve *model*.
+
+        The system engine is usually a ``MultiEngine`` that already routes by
+        model-name prefix, so ask it first. When it is a single backend,
+        handing it a cloud model name fails at call time — a local engine
+        answers ``can_serve`` with ``True`` for anything — so resolve the
+        cloud engine explicitly instead.
+        """
+        s = self._system
+        if not model or model == s.model:
+            return s.engine, s.model, s.engine_key
+
+        try:
+            if model in s.engine.list_models():
+                return s.engine, model, s.engine_key
+        except Exception:
+            logger.debug("Could not list models on the active engine")
+
+        try:
+            from openjarvis.engine._discovery import get_engine
+
+            if _is_cloud_model(model):
+                resolved = get_engine(s.config, engine_key="cloud", model=model)
+                if resolved is not None and resolved[0] == "cloud":
+                    return resolved[1], model, resolved[0]
+                logger.warning(
+                    "Cloud engine unavailable for model %r; using the active engine",
+                    model,
+                )
+        except Exception:
+            logger.warning("Failed to resolve an engine for %r", model, exc_info=True)
+
+        return s.engine, model, s.engine_key
 
     def _detect_agent_intent(self, query: str) -> Optional[str]:
         """Detect if a query should be routed to a specific agent."""
@@ -123,6 +183,9 @@ class QueryOrchestrator:
         system_prompt=None,
         operator_id=None,
         prior_messages=None,
+        engine=None,
+        model=None,
+        engine_key=None,
     ) -> Dict[str, Any]:
         """Run through an agent."""
         from openjarvis.agents._stubs import AgentContext
@@ -196,11 +259,14 @@ class QueryOrchestrator:
             existing = agent_kwargs.get("tools", [])
             agent_kwargs["tools"] = digest_tools + list(existing)
 
+        run_engine = engine if engine is not None else s.engine
+        run_model = model if model is not None else s.model
+
         try:
-            ag = agent_cls(s.engine, s.model, **agent_kwargs)
+            ag = agent_cls(run_engine, run_model, **agent_kwargs)
         except TypeError:
             try:
-                ag = agent_cls(s.engine, s.model)
+                ag = agent_cls(run_engine, run_model)
             except TypeError:
                 ag = agent_cls()
 
@@ -289,8 +355,10 @@ class QueryOrchestrator:
             ],
             "turns": getattr(result, "turns", 1),
             "metadata": getattr(result, "metadata", {}),
-            "model": s.model,
-            "engine": s.engine_key,
+            # The model that actually ran, not the system default, so telemetry
+            # and the UI footer do not misreport an overridden run.
+            "model": run_model,
+            "engine": engine_key if engine_key is not None else s.engine_key,
             "_telemetry": _telemetry,
         }
 

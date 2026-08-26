@@ -145,6 +145,7 @@ class JarvisSystem:
         system_prompt: Optional[str] = None,
         operator_id: Optional[str] = None,
         prior_messages: Optional[List[Message]] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self._get_orchestrator().ask(
             query,
@@ -156,6 +157,7 @@ class JarvisSystem:
             system_prompt=system_prompt,
             operator_id=operator_id,
             prior_messages=prior_messages,
+            model=model,
         )
 
     def _detect_agent_intent(self, query: str) -> Optional[str]:
