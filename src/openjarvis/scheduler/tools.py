@@ -20,6 +20,54 @@ class ModelNotResolvedError(ValueError):
     """Raised when a requested model name cannot be matched safely."""
 
 
+def _is_registered_agent(name: str) -> bool:
+    """Whether *name* is an agent the executor could actually build.
+
+    An empty registry means agents have not been registered in this process
+    rather than that *name* is wrong, so treat it as unknown and allow it —
+    refusing every agent because the registry has not loaded would be worse
+    than the mistake this guards against.
+    """
+    try:
+        import openjarvis.agents  # noqa: F401  trigger registration
+        from openjarvis.core.registry import AgentRegistry
+
+        known = AgentRegistry.keys()
+        if not known:
+            return True
+        return name in known
+    except Exception:
+        # Cannot tell, so do not block scheduling on it.
+        return True
+
+
+def _known_agents_hint(limit: int = 8) -> str:
+    try:
+        import openjarvis.agents  # noqa: F401
+        from openjarvis.core.registry import AgentRegistry
+
+        names = sorted(AgentRegistry.keys())
+    except Exception:
+        return _DEFAULT_TASK_AGENT
+    shown = ", ".join(names[:limit])
+    return f"{shown}, ..." if len(names) > limit else shown
+
+
+def _looks_like_a_model(name: str) -> bool:
+    """Whether *name* is a model id rather than an agent name.
+
+    A local Ollama tag carries a ':' version suffix; a cloud id is
+    recognised by provider prefix.
+    """
+    if ":" in name:
+        return True
+    try:
+        from openjarvis.engine.cloud import is_cloud_model
+    except ImportError:
+        return False
+    return is_cloud_model(name)
+
+
 def _available_cloud_models() -> List[str]:
     """Cloud models whose provider is actually configured right now.
 
@@ -327,8 +375,45 @@ class ScheduleTaskTool(BaseTool):
         elif schedule_type == "once":
             schedule_value, note = _local_once_to_utc(schedule_value)
 
-        model_note = ""
+        requested_agent = params.get("agent") or ""
         requested_model = params.get("model") or ""
+        agent_note = ""
+        if requested_agent and not _is_registered_agent(requested_agent):
+            # Live case: asked to schedule "using gpt-5.6-luna", the model put
+            # the model id in `agent`. Nothing validated it, so the task
+            # stored agent="gpt-5.6-luna" and would have returned "Unknown
+            # agent" at run time — silently, unattended. Recover the obvious
+            # confusion, and refuse anything else rather than scheduling a
+            # task that cannot run.
+            if _looks_like_a_model(requested_agent):
+                if requested_model and requested_model != requested_agent:
+                    return ToolResult(
+                        tool_name="schedule_task",
+                        content=(
+                            f"agent={requested_agent!r} is a model, not an agent, "
+                            f"and model={requested_model!r} was also given. Pass "
+                            "the model as 'model' and leave 'agent' unset."
+                        ),
+                        success=False,
+                    )
+                requested_model = requested_agent
+                requested_agent = ""
+                agent_note = (
+                    f"{params['agent']!r} is a model, not an agent — used it as "
+                    f"the model and ran on the default agent."
+                )
+            else:
+                return ToolResult(
+                    tool_name="schedule_task",
+                    content=(
+                        f"{requested_agent!r} is not a known agent. Leave 'agent' "
+                        "unset to use the default, or pick one of: "
+                        f"{_known_agents_hint()}."
+                    ),
+                    success=False,
+                )
+
+        model_note = ""
         if requested_model and ":" not in requested_model:
             # A ':' marks an Ollama-style local tag (e.g. "qwen3.5:4b"), which
             # is normally copy-pasted verbatim and has no discovery source to
@@ -356,7 +441,7 @@ class ScheduleTaskTool(BaseTool):
                 # tools, so a scheduled "check X and notify me" would produce
                 # text and do nothing. Tasks created from chat almost always
                 # need tools, so default to the tool-calling agent.
-                agent=params.get("agent") or _DEFAULT_TASK_AGENT,
+                agent=requested_agent or _DEFAULT_TASK_AGENT,
                 tools=params.get("tools", ""),
                 # TaskScheduler._execute_task reads this back out; it rides in
                 # metadata because scheduled_tasks has no migration path.
@@ -372,6 +457,8 @@ class ScheduleTaskTool(BaseTool):
                 payload["note"] = note
             if model_note:
                 payload["model_note"] = model_note
+            if agent_note:
+                payload["agent_note"] = agent_note
             return ToolResult(
                 tool_name="schedule_task",
                 content=json.dumps(payload),

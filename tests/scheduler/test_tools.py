@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from datetime import datetime
@@ -544,3 +545,117 @@ class TestScheduleTaskModelValidation:
         assert mock_sched.create_task.call_args.kwargs["metadata"]["model"] == (
             "qwen3.5:4b"
         )
+
+
+class TestAgentValidation:
+    """A model id in the `agent` field would fail silently at run time.
+
+    Live case: asked to schedule "using gpt-5.6-luna", qwen3.5:4b set
+    agent="gpt-5.6-luna" and left model empty. Nothing checked it, so the
+    task would have returned "Unknown agent" when it fired, unattended.
+    """
+
+    def _sched(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.create_task.return_value = ScheduledTask(
+            id="t1", prompt="p", schedule_type="interval", schedule_value="60"
+        )
+        set_scheduler(mock_sched)
+        return mock_sched
+
+    @staticmethod
+    def _available(*names):
+        from unittest.mock import patch
+
+        return patch(
+            "openjarvis.scheduler.tools._available_cloud_models",
+            return_value=list(names),
+        )
+
+    @staticmethod
+    def _registry(*valid):
+        """conftest clears AgentRegistry, and an empty one skips validation."""
+        from unittest.mock import patch
+
+        return patch(
+            "openjarvis.scheduler.tools._is_registered_agent",
+            side_effect=lambda name: name in valid,
+        )
+
+    def _run(self, **extra):
+        from openjarvis.scheduler.tools import ScheduleTaskTool
+
+        with self._registry("orchestrator", "simple"):
+            return ScheduleTaskTool().execute(
+                prompt="p", schedule_type="interval", schedule_value="60", **extra
+            )
+
+    def test_a_model_id_in_agent_is_moved_to_model(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = self._sched()
+        try:
+            with self._available("gpt-5.6-luna"):
+                result = self._run(agent="gpt-5.6-luna")
+        finally:
+            set_scheduler(None)
+
+        assert result.success
+        kwargs = mock_sched.create_task.call_args.kwargs
+        assert kwargs["agent"] == "orchestrator"
+        assert kwargs["metadata"]["model"] == "gpt-5.6-luna"
+        assert "agent_note" in json.loads(result.content)
+
+    def test_a_local_tag_in_agent_is_also_recovered(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = self._sched()
+        try:
+            result = self._run(agent="qwen3.5:4b")
+        finally:
+            set_scheduler(None)
+
+        assert result.success
+        kwargs = mock_sched.create_task.call_args.kwargs
+        assert kwargs["agent"] == "orchestrator"
+        assert kwargs["metadata"]["model"] == "qwen3.5:4b"
+
+    def test_conflicting_agent_and_model_is_refused(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = self._sched()
+        try:
+            with self._available("gpt-5.6-luna", "gpt-4o"):
+                result = self._run(agent="gpt-4o", model="gpt-5.6-luna")
+        finally:
+            set_scheduler(None)
+
+        assert not result.success
+        mock_sched.create_task.assert_not_called()
+
+    def test_an_unknown_agent_is_refused_with_options(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = self._sched()
+        try:
+            result = self._run(agent="not-an-agent")
+        finally:
+            set_scheduler(None)
+
+        assert not result.success
+        assert "not a known agent" in result.content
+        mock_sched.create_task.assert_not_called()
+
+    def test_a_real_agent_still_passes_through(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = self._sched()
+        try:
+            result = self._run(agent="orchestrator")
+        finally:
+            set_scheduler(None)
+
+        assert result.success
+        assert mock_sched.create_task.call_args.kwargs["agent"] == "orchestrator"
