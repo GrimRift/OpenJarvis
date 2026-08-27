@@ -1111,6 +1111,17 @@ class TracesConfig:
 
 
 @dataclass(slots=True)
+class NotificationsConfig:
+    """Where tool notifications are delivered, besides the local desktop."""
+
+    # "{type}:{id}", e.g. "telegram:123456789". Empty means desktop only.
+    # A toast is no use when the user is away from the machine, so
+    # notifications fan out to this as well rather than instead.
+    channel: str = ""
+    desktop: bool = True
+
+
+@dataclass(slots=True)
 class ProactiveConfig:
     """Proactive agent — autonomous action scheduling and approval routing."""
 
@@ -1489,7 +1500,8 @@ class SpeechConfig:
     language: str = ""  # Empty = auto-detect
     device: str = "auto"  # "auto", "cpu", "cuda"
     compute_type: str = "float16"  # "float16", "int8", "float32"
-    wake_word_model: str = ""  # Path to a trained openWakeWord .onnx file; empty = disabled
+    # Path to a trained openWakeWord .onnx file; empty = disabled
+    wake_word_model: str = ""
     # Primes Whisper's decoder toward expected vocabulary — otherwise it has
     # no way to know "Sage" (the assistant's name) is even a likely word,
     # and readily mishears it as something phonetically closer to common
@@ -1660,6 +1672,7 @@ class JarvisConfig:
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     mining: Optional["MiningConfig"] = None
 
     @property
@@ -1946,6 +1959,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
             "agent_manager",
             "digest",
             "proactive",
+            "notifications",
             "memory_files",
             "system_prompt",
             "compression",

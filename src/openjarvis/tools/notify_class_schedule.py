@@ -22,7 +22,7 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.check_class_schedule import CheckClassScheduleTool
-from openjarvis.tools.notify_windows import _send_toast
+from openjarvis.tools.notify_windows import deliver
 
 
 @ToolRegistry.register("notify_class_schedule")
@@ -97,7 +97,7 @@ class NotifyClassScheduleTool(BaseTool):
                 f"{cls['start_time']} in {cls['room']} ({cls['mode']})"
             )
             try:
-                _send_toast("Class starting soon", message, duration="long")
+                deliver("Class starting soon", message, duration="long")
             except Exception as exc:
                 return ToolResult(
                     tool_name="notify_class_schedule",
