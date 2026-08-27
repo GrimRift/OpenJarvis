@@ -191,7 +191,7 @@ class JarvisSystem:
             prior_messages=prior_messages,
         )
 
-    def wire_channel(self, channel_bridge: Any) -> None:
+    def wire_channel(self, channel_bridge: Any, *, model: str = "") -> None:
         """Register a message handler on *channel_bridge* that routes every
         incoming message through this system (agent or engine) and replies.
 
@@ -203,6 +203,11 @@ class JarvisSystem:
         channel_bridge:
             A connected :class:`~openjarvis.channels._stubs.BaseChannel`
             instance whose ``on_message`` method accepts a callable.
+        model:
+            Model to answer with, overriding the system default. If a call
+            with it fails — no signal, provider down, rate limit — the reply
+            is retried once on the system default, because a weaker answer
+            beats silence on a phone.
         """
         from openjarvis.core.types import Message
         from openjarvis.sessions.session import SessionStore
@@ -234,26 +239,36 @@ class JarvisSystem:
                     role = Role.USER
                 prior_msgs.append(Message(role=role, content=sm.content))
 
+            def _ask(use_model: str) -> str:
+                kwargs: Dict[str, Any] = {
+                    "context": False,
+                    "prior_messages": prior_msgs,
+                }
+                if _system.agent_name and _system.agent_name != "none":
+                    kwargs["agent"] = _system.agent_name
+                if use_model:
+                    kwargs["model"] = use_model
+                return _system.ask(cm.content, **kwargs).get("content", "")
+
             reply = ""
             try:
-                if _system.agent_name and _system.agent_name != "none":
-                    result = _system.ask(
-                        cm.content,
-                        context=False,
-                        agent=_system.agent_name,
-                        prior_messages=prior_msgs,
-                    )
-                    reply = result.get("content", "")
-                else:
-                    result = _system.ask(
-                        cm.content,
-                        context=False,
-                        prior_messages=prior_msgs,
-                    )
-                    reply = result.get("content", "")
+                reply = _ask(model)
             except Exception:
                 logger.exception("Channel message handler error")
-                reply = "Sorry, I encountered an error processing your message."
+                if model:
+                    # Retry on the default rather than leaving the sender with
+                    # nothing: this arrives on a phone, where a weaker answer
+                    # is more useful than an error.
+                    logger.warning(
+                        "Channel model %r failed; retrying on the system default",
+                        model,
+                    )
+                    try:
+                        reply = _ask("")
+                    except Exception:
+                        logger.exception("Channel fallback also failed")
+                if not reply:
+                    reply = "Sorry, I encountered an error processing your message."
 
             try:
                 _system.session_store.save_message(

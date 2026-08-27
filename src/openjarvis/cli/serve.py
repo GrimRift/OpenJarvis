@@ -492,7 +492,16 @@ def serve(
             trace_store=_channel_trace_store,
             _mcp_clients=mcp_clients,
         )
-        _wire_system.wire_channel(channel_bridge)
+        # Per-channel model override, e.g. [channel.telegram] model. Only some
+        # channel configs define one, so read it defensively.
+        _chan_cfg = getattr(config.channel, config.channel.default_channel, None)
+        _chan_model = (getattr(_chan_cfg, "model", "") or "").strip()
+        if _chan_model:
+            console.print(
+                f"  Channel model: [cyan]{_chan_model}[/cyan] "
+                f"(falls back to {model_name})"
+            )
+        _wire_system.wire_channel(channel_bridge, model=_chan_model)
 
     # Set up speech backend
     speech_backend = None

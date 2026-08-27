@@ -1138,6 +1138,9 @@ class TelegramChannelConfig:
     bot_token: str = ""
     allowed_chat_ids: str = ""
     parse_mode: str = "Markdown"
+    # Overrides the server default for messages arriving here. Empty keeps the
+    # default. A failed call falls back to the default rather than erroring.
+    model: str = ""
 
 
 @dataclass(slots=True)

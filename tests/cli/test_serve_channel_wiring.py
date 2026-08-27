@@ -440,3 +440,65 @@ class TestChannelConversationsAreTraced:
         _fire(channel, _make_channel_message(content="hello"))
 
         channel.send.assert_called()
+
+
+class TestChannelModelOverride:
+    """A channel can answer on a different model than the server default."""
+
+    def test_configured_model_is_passed_to_ask(self, tmp_path):
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.ask = MagicMock(return_value={"content": "pong"})
+
+        channel = MagicMock()
+        system.wire_channel(channel, model="gpt-5.6-luna")
+        _fire(channel, _make_channel_message(content="ping"))
+
+        assert system.ask.call_args.kwargs["model"] == "gpt-5.6-luna"
+
+    def test_no_model_configured_leaves_ask_on_the_default(self, tmp_path):
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.ask = MagicMock(return_value={"content": "pong"})
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+        _fire(channel, _make_channel_message(content="ping"))
+
+        assert "model" not in system.ask.call_args.kwargs
+
+    def test_failure_retries_on_the_default_model(self, tmp_path):
+        """A phone reply on a weaker model beats an error message."""
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.ask = MagicMock(
+            side_effect=[RuntimeError("cloud down"), {"content": "local answer"}]
+        )
+
+        channel = MagicMock()
+        system.wire_channel(channel, model="gpt-5.6-luna")
+        _fire(channel, _make_channel_message(content="ping"))
+
+        assert system.ask.call_count == 2
+        assert system.ask.call_args_list[0].kwargs["model"] == "gpt-5.6-luna"
+        assert "model" not in system.ask.call_args_list[1].kwargs
+        channel.send.assert_called_once_with("42", "local answer", conversation_id="1")
+
+    def test_both_attempts_failing_still_replies(self, tmp_path):
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.ask = MagicMock(side_effect=RuntimeError("everything is down"))
+
+        channel = MagicMock()
+        system.wire_channel(channel, model="gpt-5.6-luna")
+        _fire(channel, _make_channel_message(content="ping"))
+
+        sent = channel.send.call_args[0][1]
+        assert "error" in sent.lower()
+
+    def test_no_pointless_retry_when_no_override_is_set(self, tmp_path):
+        """Without an override the retry would repeat the identical call."""
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.ask = MagicMock(side_effect=RuntimeError("down"))
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+        _fire(channel, _make_channel_message(content="ping"))
+
+        assert system.ask.call_count == 1
