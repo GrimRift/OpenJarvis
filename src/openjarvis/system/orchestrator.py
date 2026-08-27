@@ -30,6 +30,38 @@ def _is_cloud_model(model: str) -> bool:
 class QueryOrchestrator:
     def __init__(self, system: OrchestratorDeps) -> None:
         self._system = system
+        self._prompt_builder: Optional[Any] = None
+        self._prompt_builder_tried = False
+
+    def _shared_prompt_builder(self) -> Optional[Any]:
+        """Build the configured prompt builder once and reuse it.
+
+        ``serve.py`` gives the web chat agent one of these, but nothing did
+        for ``ask()`` — so Telegram, scheduled tasks and the proactive
+        summary all ran without the persona, without SOUL/MEMORY/USER.md,
+        and without the system-prompt rules. Asked who it was over Telegram,
+        Sage answered "I'm OpenJarvis ... running locally on your hardware",
+        which is both the wrong identity and, on a cloud model, untrue.
+
+        Cached because ``SystemPromptBuilder`` freezes a prefix per instance
+        for prompt-cache stability; a fresh one per request would defeat it.
+        """
+        if self._prompt_builder_tried:
+            return self._prompt_builder
+        self._prompt_builder_tried = True
+        try:
+            from openjarvis.prompt.builder import SystemPromptBuilder
+
+            cfg = self._system.config
+            self._prompt_builder = SystemPromptBuilder(
+                agent_template=cfg.agent.default_system_prompt or "",
+                memory_files_config=cfg.memory_files,
+                system_prompt_config=cfg.system_prompt,
+            )
+        except Exception:
+            logger.warning("Could not build the system prompt", exc_info=True)
+            self._prompt_builder = None
+        return self._prompt_builder
 
     def ask(
         self,
@@ -226,6 +258,23 @@ class QueryOrchestrator:
                 agent_kwargs["skill_few_shot_examples"] = examples
         if system_prompt is not None:
             agent_kwargs["system_prompt"] = system_prompt
+        else:
+            # An explicit system_prompt (operators pass one) wins; otherwise
+            # give the agent the configured persona, the same one serve.py
+            # hands the web chat agent.
+            import inspect as _inspect
+
+            try:
+                accepts = (
+                    "prompt_builder"
+                    in _inspect.signature(agent_cls.__init__).parameters
+                )
+            except (TypeError, ValueError):
+                accepts = False
+            if accepts:
+                builder = self._shared_prompt_builder()
+                if builder is not None:
+                    agent_kwargs["prompt_builder"] = builder
         if s.capability_policy is not None:
             agent_kwargs["capability_policy"] = s.capability_policy
         if operator_id is not None:

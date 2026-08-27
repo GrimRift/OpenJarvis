@@ -266,3 +266,84 @@ class TestEngineReporting:
         orch = QueryOrchestrator(_system(engine))
 
         assert orch.ask("hi")["engine"] == "ollama"
+
+
+class TestPersonaReachesAsk:
+    """serve.py gives the web agent a prompt builder; ask() got none.
+
+    So Telegram, scheduled tasks and the proactive summary all ran without
+    the persona, without SOUL/MEMORY/USER.md, and without the configured
+    system-prompt rules. Asked who it was over Telegram, Sage replied "I'm
+    OpenJarvis ... running locally on your hardware".
+    """
+
+    def _orchestrator_with_agent(self, accepts_builder: bool):
+        from openjarvis.agents._stubs import AgentResult
+        from openjarvis.core.registry import AgentRegistry
+
+        captured = {}
+
+        if accepts_builder:
+
+            class _Agent:
+                agent_id = "probe"
+                accepts_tools = False
+
+                def __init__(self, engine, model, *, prompt_builder=None, **kw):
+                    captured["prompt_builder"] = prompt_builder
+
+                def run(self, input, context=None, **kw):
+                    return AgentResult(content="ok", turns=1)
+        else:
+
+            class _Agent:  # type: ignore[no-redef]
+                agent_id = "probe"
+                accepts_tools = False
+
+                def __init__(self, engine, model, **kw):
+                    captured["kwargs"] = kw
+
+                def run(self, input, context=None, **kw):
+                    return AgentResult(content="ok", turns=1)
+
+        AgentRegistry.register("probe")(_Agent)
+        from openjarvis.core.config import JarvisConfig
+
+        engine = _FakeEngine(["qwen3.5:4b"])
+        system = _system(engine)
+        # SystemPromptBuilder validates these, so a MagicMock config makes it
+        # raise and the builder degrade to None.
+        real = JarvisConfig()
+        system.config.memory_files = real.memory_files
+        system.config.system_prompt = real.system_prompt
+        system.config.agent.default_system_prompt = ""
+        system.agent_name = "probe"
+        system.tools = []
+        system.capability_policy = None
+        system.session_store = None
+        system.trace_store = None
+        return QueryOrchestrator(system), captured
+
+    def test_agent_receives_the_configured_prompt_builder(self):
+        orch, captured = self._orchestrator_with_agent(accepts_builder=True)
+        orch.ask("who are you", agent="probe")
+        assert captured["prompt_builder"] is not None
+
+    def test_builder_is_reused_across_calls(self):
+        """SystemPromptBuilder freezes a prefix per instance for cache stability."""
+        orch, captured = self._orchestrator_with_agent(accepts_builder=True)
+        orch.ask("one", agent="probe")
+        first = captured["prompt_builder"]
+        orch.ask("two", agent="probe")
+        assert captured["prompt_builder"] is first
+
+    def test_agents_without_the_parameter_are_untouched(self):
+        orch, captured = self._orchestrator_with_agent(accepts_builder=False)
+        orch.ask("hi", agent="probe")
+        assert "prompt_builder" not in captured.get("kwargs", {})
+
+    def test_explicit_system_prompt_still_wins(self):
+        """Operators pass their own prompt; it must not be overridden."""
+        orch, captured = self._orchestrator_with_agent(accepts_builder=True)
+        orch.ask("hi", agent="probe", system_prompt="OPERATOR PROMPT")
+        assert captured.get("prompt_builder") is None
