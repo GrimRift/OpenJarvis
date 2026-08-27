@@ -388,3 +388,55 @@ class TestPerChatSessionIsolation:
             channel_user_id="42",
         )
         assert [m.content for m in reloaded.messages] == ["first", "reply"]
+
+
+class TestChannelConversationsAreTraced:
+    """A channel conversation left no trace at all before this.
+
+    QueryOrchestrator only wraps the agent in a TraceCollector when the
+    system carries a trace_store, and serve.py built the channel's system
+    without one — so whole Telegram conversations were invisible to
+    telemetry and to anything reading trace history.
+    """
+
+    def test_orchestrator_records_when_a_store_is_present(self, tmp_path):
+        """Only the agent path is traced, which is what channels configure."""
+        from openjarvis.agents._stubs import AgentResult
+        from openjarvis.core.registry import AgentRegistry
+        from openjarvis.traces.store import TraceStore
+
+        class _StubAgent:
+            agent_id = "stub"
+            accepts_tools = False
+
+            def __init__(self, engine, model, **kwargs):
+                pass
+
+            def run(self, input, context=None, **kwargs):
+                return AgentResult(content="pong", turns=1)
+
+        AgentRegistry.register("stub")(_StubAgent)
+
+        store = TraceStore(db_path=str(tmp_path / "traces.db"))
+        system = _make_system(agent_name="stub", tmp_path=tmp_path)
+        system.trace_store = store
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+        _fire(channel, _make_channel_message(content="hello"))
+
+        assert store.list_traces(limit=10), "no trace recorded for a channel message"
+
+    def test_no_store_still_replies(self, tmp_path):
+        """Tracing is additive — a missing store must not break the channel."""
+        engine = MagicMock()
+        engine.generate.return_value = {"content": "hi there", "usage": {}}
+
+        system = _make_system(engine=engine, tmp_path=tmp_path)
+        assert system.trace_store is None
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+        _fire(channel, _make_channel_message(content="hello"))
+
+        channel.send.assert_called()

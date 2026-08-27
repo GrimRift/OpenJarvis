@@ -466,6 +466,20 @@ def serve(
             except Exception as exc:
                 logger.warning("Channel tools failed to load: %s", exc)
 
+        # Without a store, QueryOrchestrator skips the TraceCollector entirely,
+        # so a whole conversation held over Telegram or Slack left no trace at
+        # all — invisible to telemetry and to anything that reads trace
+        # history. Built here rather than reused from the agent-manager block
+        # below, which runs later in startup.
+        _channel_trace_store = None
+        try:
+            if config.traces.enabled:
+                from openjarvis.traces.store import TraceStore
+
+                _channel_trace_store = TraceStore(db_path=config.traces.db_path)
+        except Exception:
+            logger.debug("Channel trace store init failed", exc_info=True)
+
         _wire_system = JarvisSystem(
             config=config,
             bus=bus,
@@ -475,6 +489,7 @@ def serve(
             agent_name=channel_agent,
             tools=_channel_tools,
             mcp_tools=managed_mcp_tools,
+            trace_store=_channel_trace_store,
             _mcp_clients=mcp_clients,
         )
         _wire_system.wire_channel(channel_bridge)
