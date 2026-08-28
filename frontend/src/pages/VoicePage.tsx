@@ -27,7 +27,9 @@ export function VoicePage() {
   const messages = useAppStore((s) => s.messages);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const startNewChat = useAppStore((s) => s.startNewChat);
-  const [showTranscript, setShowTranscript] = useState(true);
+  // Closed on arrival: this surface is for speaking, and the transcript is
+  // something you reach for when reading is easier than listening.
+  const [showTranscript, setShowTranscript] = useState(false);
   const startedRef = useRef(false);
 
   useEffect(() => {

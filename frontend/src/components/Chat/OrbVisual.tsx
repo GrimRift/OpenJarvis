@@ -5,6 +5,7 @@ import {
   particleCountFor,
   stepRotation,
 } from '../../lib/orb-motion';
+import { getSpeechLevel } from '../../lib/audio-level';
 import { useAppStore } from '../../lib/store';
 
 export type OrbState = 'idle' | 'listening' | 'speaking';
@@ -164,10 +165,25 @@ function drawOrb(
 
   ctx.clearRect(0, 0, w, h);
 
-  let targetScale = orbState === 'idle' ? 0.88 : 1.0;
+  // Idle sits 20% below the active states so standing by reads as quiet.
+  let targetScale = orbState === 'idle' ? 0.704 : 1.0;
+  let speech = 0;
   if (orbState === 'speaking') {
-    const talk = Math.sin(t * 0.06) * 0.5 + Math.sin(t * 0.13 + 1.3) * 0.3 + Math.sin(t * 0.22 + 2.1) * 0.2;
-    targetScale = 1.1 + talk * 0.16;
+    speech = getSpeechLevel();
+    if (speech > 0) {
+      // Driven by the actual waveform Sage is speaking, so the orb swells on
+      // loud syllables instead of flickering to a sine wave that never had
+      // anything to do with the audio.
+      targetScale = 1.02 + speech * 0.34;
+    } else {
+      // No analyser on this path, or silence between clips: keep the old
+      // motion rather than freezing the orb solid.
+      const talk =
+        Math.sin(t * 0.06) * 0.5 +
+        Math.sin(t * 0.13 + 1.3) * 0.3 +
+        Math.sin(t * 0.22 + 2.1) * 0.2;
+      targetScale = 1.1 + talk * 0.16;
+    }
   }
   scaleRef.current = approach(
     scaleRef.current,
@@ -185,7 +201,12 @@ function drawOrb(
   speedRef.current = stepped.speed;
 
   const brightBoost =
-    (BRIGHT_MAP[orbState] || 0.85) * (orbState === 'speaking' ? 0.9 + (scaleRef.current - 1.08) * 1.5 : 1);
+    (BRIGHT_MAP[orbState] || 0.85) *
+    (orbState === 'speaking'
+      ? speech > 0
+        ? 0.85 + speech * 0.5
+        : 0.9 + (scaleRef.current - 1.08) * 1.5
+      : 1);
   const flickerSpeed = orbState === 'speaking' ? 0.09 : orbState === 'listening' ? 0.06 : 0.035;
   const breathe = 0.75 + 0.25 * Math.sin(t * 0.02);
   const scaledR = R * scaleRef.current;

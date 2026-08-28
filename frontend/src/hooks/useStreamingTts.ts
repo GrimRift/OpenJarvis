@@ -6,6 +6,7 @@ import {
   interpretTtsMessage,
   nextStartTime,
 } from '../lib/pcm-playback';
+import { analyseInto } from '../lib/speech-analyser';
 
 /**
  * Speak a reply by streaming PCM from the server and scheduling it into Web
@@ -25,6 +26,10 @@ export function useStreamingTts() {
   const scheduledUntilRef = useRef(0);
   const sampleRateRef = useRef(24000);
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  // Every scheduled chunk feeds this, so the orb reacts to the real waveform
+  // instead of a sine wave pretending to be speech.
+  const gainRef = useRef<GainNode | null>(null);
+  const stopAnalyserRef = useRef<(() => void) | null>(null);
 
   const teardown = useCallback(() => {
     for (const src of sourcesRef.current) {
@@ -35,6 +40,9 @@ export function useStreamingTts() {
       }
     }
     sourcesRef.current = [];
+    stopAnalyserRef.current?.();
+    stopAnalyserRef.current = null;
+    gainRef.current = null;
     try {
       socketRef.current?.close();
     } catch {
@@ -85,6 +93,14 @@ export function useStreamingTts() {
           return;
         }
         ctxRef.current = ctx;
+        const gain = ctx.createGain();
+        gainRef.current = gain;
+        try {
+          stopAnalyserRef.current = analyseInto(ctx, gain);
+        } catch {
+          // Analysis is decoration; never let it cost the reply.
+          gain.connect(ctx.destination);
+        }
 
         const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
         let socket: WebSocket;
@@ -143,7 +159,7 @@ export function useStreamingTts() {
           buffer.copyToChannel(samples, 0);
           const source = ctx.createBufferSource();
           source.buffer = buffer;
-          source.connect(ctx.destination);
+          source.connect(gainRef.current ?? ctx.destination);
 
           const startAt = nextStartTime(ctx.currentTime, scheduledUntilRef.current);
           source.start(startAt);

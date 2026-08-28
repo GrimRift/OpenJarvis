@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { Play, Pause } from 'lucide-react';
 import { useAppStore } from '../../lib/store';
+import { analyseInto } from '../../lib/speech-analyser';
 
 interface AudioPlayerProps {
   src: string;
@@ -78,6 +79,45 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
       el.removeEventListener('error', onError);
     };
   }, [src]);
+
+  // Feed the orb the real waveform while this clip plays.
+  //
+  // createMediaElementSource re-routes the element's output through Web Audio,
+  // so a mistake here is silence rather than a missing animation. It is
+  // therefore attached only once playback is actually running, wrapped, and
+  // skipped entirely if anything throws — the element keeps playing normally
+  // in that case. It can only ever be called once per element, hence the ref.
+  const analyserCleanupRef = useRef<(() => void) | null>(null);
+  const graphRef = useRef<{ ctx: AudioContext; src: MediaElementAudioSourceNode } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !playing) return;
+
+    try {
+      if (!graphRef.current) {
+        const Ctor =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext })
+            .webkitAudioContext;
+        const ctx = new Ctor();
+        graphRef.current = { ctx, src: ctx.createMediaElementSource(el) };
+      }
+      const { ctx, src } = graphRef.current;
+      void ctx.resume();
+      analyserCleanupRef.current = analyseInto(ctx, src);
+    } catch {
+      // No analysis for this clip; playback is untouched.
+      analyserCleanupRef.current = null;
+    }
+
+    return () => {
+      analyserCleanupRef.current?.();
+      analyserCleanupRef.current = null;
+    };
+  }, [playing]);
 
   // Mirror into the store so the orb (rendered elsewhere) can show a
   // "speaking" state for the actual duration of the spoken audio, not
