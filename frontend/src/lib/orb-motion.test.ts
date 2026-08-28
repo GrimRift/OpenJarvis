@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_FRAME_STEP, approach, frameDelta, stepRotation } from './orb-motion';
+import {
+  MAX_FRAME_STEP,
+  PARTICLE_BASELINE_COUNT,
+  PARTICLE_BASELINE_SIZE,
+  approach,
+  frameDelta,
+  particleCountFor,
+  stepRotation,
+} from './orb-motion';
 
 const SPEAKING = 0.013;
 const IDLE = 0.0035;
@@ -96,5 +104,22 @@ describe('approach', () => {
 
   it('is a no-op when already at the target', () => {
     expect(approach(0.88, 0.88, 0.08, 1)).toBeCloseTo(0.88, 10);
+  });
+});
+
+describe('particleCountFor', () => {
+  it('is the tuned count at the tuned size', () => {
+    expect(particleCountFor(PARTICLE_BASELINE_SIZE)).toBe(PARTICLE_BASELINE_COUNT);
+  });
+
+  it('scales with area, not width, so density holds', () => {
+    // Growing the orb 15% adds 32% more area; a constant count thinned it out.
+    expect(particleCountFor(328)).toBeCloseTo(PARTICLE_BASELINE_COUNT * (328 / 285) ** 2, 0);
+    expect(particleCountFor(328)).toBeGreaterThan(PARTICLE_BASELINE_COUNT);
+  });
+
+  it('falls back to the baseline for a nonsense size', () => {
+    expect(particleCountFor(0)).toBe(PARTICLE_BASELINE_COUNT);
+    expect(particleCountFor(Number.NaN)).toBe(PARTICLE_BASELINE_COUNT);
   });
 });

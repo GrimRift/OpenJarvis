@@ -57,3 +57,19 @@ export function stepRotation(
   const next = approach(speed, targetSpeed, SPEED_EASE, dt);
   return { angle: angle + next * dt, speed: next };
 }
+
+/** Size the particle count was tuned at, and the count itself. */
+export const PARTICLE_BASELINE_SIZE = 285;
+export const PARTICLE_BASELINE_COUNT = 2200;
+
+/**
+ * Particle count that holds density constant as the orb grows.
+ *
+ * The count was a constant while the canvas was not, so enlarging the orb
+ * 15% spread the same 2,200 particles over 32% more area and thinned it out.
+ */
+export function particleCountFor(size: number): number {
+  if (!(size > 0)) return PARTICLE_BASELINE_COUNT;
+  const scale = size / PARTICLE_BASELINE_SIZE;
+  return Math.round(PARTICLE_BASELINE_COUNT * scale * scale);
+}

@@ -1,5 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { approach, frameDelta, stepRotation } from '../../lib/orb-motion';
+import {
+  approach,
+  frameDelta,
+  particleCountFor,
+  stepRotation,
+} from '../../lib/orb-motion';
 import { useAppStore } from '../../lib/store';
 
 export type OrbState = 'idle' | 'listening' | 'speaking';
@@ -77,7 +82,7 @@ export function OrbVisual({ state, size = 328 }: { state: OrbState; size?: numbe
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    particlesRef.current = makeParticles(2200);
+    particlesRef.current = makeParticles(particleCountFor(size));
 
     // Every motion term below is expressed per 60Hz frame, so without this
     // the orb's speed is whatever the display's refresh rate happens to be —
@@ -108,7 +113,7 @@ export function OrbVisual({ state, size = 328 }: { state: OrbState; size?: numbe
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [size]);
 
   return (
     <div style={{ position: 'relative', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
