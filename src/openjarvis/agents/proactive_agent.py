@@ -513,6 +513,36 @@ class ProactiveAgent(ToolUsingAgent):
                 turns=1,
             )
 
+        # A source that failed to fetch is not a source with nothing in it.
+        # An expired Google token made every connector fail and this agent
+        # still reported "Nothing to report", which reads exactly like a
+        # quiet inbox — the one summary a user would act on by doing nothing.
+        collect_meta = collect_result.metadata or {}
+        failed_sources = list(collect_meta.get("sources_failed") or [])
+        items_collected = int(collect_meta.get("total_items") or 0)
+        if failed_sources:
+            logger.warning(
+                "Proactive collection had %d failing source(s)", len(failed_sources)
+            )
+        if failed_sources and items_collected == 0:
+            # Nothing was read at all, so any conclusion drawn here would be
+            # about silence, not about the user's mail.
+            self._emit_turn_end(turns=1)
+            return AgentResult(
+                content=(
+                    "Could not read anything this run — every source failed, so "
+                    "this is not a report that your inbox is clear.\n\n"
+                    + "\n".join(f"  {err}" for err in failed_sources)
+                ),
+                turns=1,
+                metadata={
+                    "auto_executed": 0,
+                    "pending_approval": 0,
+                    "sources_failed": failed_sources,
+                    "collection_failed": True,
+                },
+            )
+
         # --- Step 2: Ask LLM to classify items and propose actions ---
         messages = [
             Message(role=Role.SYSTEM, content=self._build_system_prompt()),
@@ -651,12 +681,20 @@ class ProactiveAgent(ToolUsingAgent):
                 store.update_status(action.id, action.status, notification_sent=True)
 
         self._emit_turn_end(turns=1)
+        # Say which sources were unreadable even when others worked, so a
+        # short summary is not mistaken for a complete one.
+        summary = notification or "Nothing to report."
+        if failed_sources:
+            summary += "\n\nCouldn't read " + ", ".join(
+                err.split("'")[1] if "'" in err else err for err in failed_sources
+            ) + " this run, so this may be incomplete."
         return AgentResult(
-            content=notification or "Nothing to report.",
+            content=summary,
             turns=1,
             metadata={
                 "auto_executed": len(executed_results),
                 "pending_approval": len(pending_actions),
+                "sources_failed": failed_sources,
             },
         )
 

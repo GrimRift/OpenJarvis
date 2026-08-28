@@ -300,3 +300,82 @@ class TestConfiguredModel:
         ):
             args, _ = self._apply((original, "m"), {}, engine="cloud")
         assert args[0] is original
+
+
+class TestConnectorFailuresAreReported:
+    """A source that failed to fetch is not a source with nothing in it.
+
+    An expired Google token made every connector fail and this agent still
+    reported "Nothing to report" — which reads exactly like a quiet inbox,
+    the one summary a user acts on by doing nothing.
+    """
+
+    def _agent_with_collect(self, content: str, metadata: dict):
+        from openjarvis.agents.proactive_agent import ProactiveAgent
+        from openjarvis.tools.approval_store import ApprovalStore
+
+        agent = ProactiveAgent(
+            engine=MagicMock(),
+            model="test-model",
+            approval_store=ApprovalStore(db_path=":memory:"),
+        )
+        agent._executor = MagicMock()
+        agent._executor.execute.return_value = MagicMock(
+            success=True, content=content, metadata=metadata
+        )
+        agent._generate = MagicMock(return_value={"content": "```json\n[]\n```"})
+        return agent
+
+    def test_total_failure_does_not_claim_the_inbox_is_clear(self):
+        agent = self._agent_with_collect(
+            "=== ERRORS ===\nError fetching from 'gmail': invalid_grant",
+            {
+                "sources_failed": ["Error fetching from 'gmail': invalid_grant"],
+                "total_items": 0,
+            },
+        )
+
+        result = agent.run()
+
+        assert "not a report that your inbox is clear" in result.content
+        assert "gmail" in result.content
+        assert result.metadata["collection_failed"] is True
+
+    def test_total_failure_queues_nothing(self):
+        agent = self._agent_with_collect(
+            "=== ERRORS ===\nError fetching from 'gmail': invalid_grant",
+            {
+                "sources_failed": ["Error fetching from 'gmail': invalid_grant"],
+                "total_items": 0,
+            },
+        )
+
+        result = agent.run()
+
+        assert result.metadata["pending_approval"] == 0
+        assert result.metadata["auto_executed"] == 0
+
+    def test_partial_failure_is_flagged_alongside_the_summary(self):
+        agent = self._agent_with_collect(
+            "=== MESSAGES ===\n[gmail id=gmail:1] From: a — \"b\" (1h ago)",
+            {
+                "sources_failed": ["Error fetching from 'gcalendar': invalid_grant"],
+                "total_items": 1,
+            },
+        )
+
+        result = agent.run()
+
+        assert "may be incomplete" in result.content
+        assert "gcalendar" in result.content
+
+    def test_a_clean_run_says_nothing_about_failures(self):
+        agent = self._agent_with_collect(
+            "=== MESSAGES ===\n[gmail id=gmail:1] From: a — \"b\" (1h ago)",
+            {"sources_failed": [], "total_items": 1},
+        )
+
+        result = agent.run()
+
+        assert "incomplete" not in result.content
+        assert result.metadata["sources_failed"] == []
