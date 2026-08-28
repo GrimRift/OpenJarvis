@@ -145,19 +145,38 @@ def route_tools(
     return kept
 
 
+def _role_of(item: Any) -> str:
+    role = getattr(item, "role", None)
+    if role is None and isinstance(item, dict):
+        role = item.get("role")
+    return str(getattr(role, "value", role) or "").lower()
+
+
+def _content_of(item: Any) -> str:
+    content = getattr(item, "content", None)
+    if content is None and isinstance(item, dict):
+        content = item.get("content")
+    return content if isinstance(content, str) else ""
+
+
 def routing_text(message: str, prior: Iterable[Any] = ()) -> str:
-    """Join the newest message with recent context for matching.
+    """Join the newest message with recent *user* turns for matching.
 
     A follow-up like "next one" carries no signal by itself; the turn that set
     the topic does.
+
+    Only user turns count. The server injects retrieved memory as a system
+    message before dispatch, and a blob pulled from a 64k-chunk corpus matches
+    essentially every group -- which silently selected the whole toolset on
+    every request and made routing a no-op. Assistant turns are excluded for
+    the same reason: what Sage said is not what the user asked for.
     """
-    parts: List[str] = []
-    for item in list(prior)[-_CONTEXT_MESSAGES:]:
-        content = getattr(item, "content", None)
-        if content is None and isinstance(item, dict):
-            content = item.get("content")
-        if isinstance(content, str) and content:
-            parts.append(content)
+    user_turns = [
+        _content_of(item)
+        for item in prior
+        if _role_of(item) == "user" and _content_of(item)
+    ]
+    parts = user_turns[-_CONTEXT_MESSAGES:]
     parts.append(message or "")
     return "\n".join(parts)
 

@@ -113,7 +113,7 @@ class TestNothingIsHidden:
         assert "brand_new_tool" in kept
 
     def test_a_follow_up_inherits_the_topic(self):
-        prior = [MagicMock(content="open spotify")]
+        prior = [{"role": "user", "content": "open spotify"}]
         text = routing_text("do it", prior)
         assert "spotify_control" in {
             s["function"]["name"] for s in route_tools(ALL_SCHEMAS, text)
@@ -125,6 +125,57 @@ class TestNothingIsHidden:
         assert "git_commit" in {
             s["function"]["name"] for s in route_tools(ALL_SCHEMAS, text)
         }
+
+    def test_enum_shaped_roles_are_understood(self):
+        from openjarvis.core.types import Message, Role
+
+        prior = [Message(role=Role.USER, content="play some music")]
+        text = routing_text("go on", prior)
+        assert "spotify_control" in {
+            s["function"]["name"] for s in route_tools(ALL_SCHEMAS, text)
+        }
+
+
+class TestOnlyUserIntentRoutes:
+    """The server injects retrieved memory as a system message before
+    dispatch. A blob pulled from a 64k-chunk corpus matches essentially every
+    group, which silently selected the whole toolset on every request and made
+    routing a measured no-op against the live server."""
+
+    MEMORY_BLOB = (
+        "[memory] Re: invoice - the file was attached. Meeting scheduled "
+        "for next week in room 3. Open the project folder and run the "
+        "script. Spotify playlist for the commute."
+    )
+
+    def test_injected_memory_context_does_not_select_tools(self):
+        prior = [{"role": "system", "content": self.MEMORY_BLOB}]
+        kept = {
+            s["function"]["name"]
+            for s in route_tools(ALL_SCHEMAS, routing_text("who are you?", prior))
+        }
+        assert "spotify_control" not in kept
+        assert "git_commit" not in kept
+        assert "schedule_task" not in kept
+
+    def test_an_assistant_turn_does_not_select_tools(self):
+        prior = [{"role": "assistant", "content": "I could open Spotify for you."}]
+        kept = {
+            s["function"]["name"]
+            for s in route_tools(ALL_SCHEMAS, routing_text("no thanks", prior))
+        }
+        assert "spotify_control" not in kept
+
+    def test_the_users_own_words_still_count(self):
+        prior = [
+            {"role": "system", "content": self.MEMORY_BLOB},
+            {"role": "user", "content": "play some music"},
+        ]
+        kept = {
+            s["function"]["name"]
+            for s in route_tools(ALL_SCHEMAS, routing_text("go on", prior))
+        }
+        assert "spotify_control" in kept
 
 
 class TestItActuallyTrims:
