@@ -18,8 +18,18 @@ export function useOrbState(): OrbState {
   const voiceState = useAppStore((s) => s.voiceState);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
-  if (isCurrentChatStreaming || audioPlaying) return 'speaking';
-  if (voiceState === 'recording' || voiceState === 'transcribing') return 'listening';
+  // "speaking" is reserved for actually speaking. Generating text used to
+  // claim it too, so the orb looked identical whether Sage was thinking or
+  // talking — and since text now streams well ahead of speech, that covered
+  // most of a turn.
+  if (audioPlaying) return 'speaking';
+  if (
+    isCurrentChatStreaming ||
+    voiceState === 'recording' ||
+    voiceState === 'transcribing'
+  ) {
+    return 'listening';
+  }
   return 'idle';
 }
 
