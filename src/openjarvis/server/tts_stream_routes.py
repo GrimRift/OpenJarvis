@@ -17,6 +17,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from openjarvis.speech.spoken_text import to_spoken_text
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["speech"])
@@ -76,7 +78,9 @@ async def tts_stream(websocket: WebSocket) -> None:
     try:
         while True:
             request = await websocket.receive_json()
-            text = (request.get("text") or "").strip()
+            # Flattened before the length check so a markdown table is not
+            # refused for characters that would never be spoken anyway.
+            text = to_spoken_text(request.get("text") or "")
             if not text:
                 await websocket.send_json({"type": "error", "reason": "empty text"})
                 continue

@@ -257,13 +257,11 @@ class MorningDigestAgent(ToolUsingAgent):
             pass  # Evaluator failure shouldn't block digest delivery
 
         # Step 3: Generate audio via TTS
-        # Strip any markdown that slipped through (##, *, -, etc.)
-        import re
+        from openjarvis.speech.spoken_text import to_spoken_text
 
-        tts_text = re.sub(r"^#{1,6}\s+", "", narrative, flags=re.MULTILINE)
-        tts_text = re.sub(r"^\s*[-*•]\s+", "", tts_text, flags=re.MULTILINE)
-        tts_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", tts_text)
-        tts_text = tts_text.strip()
+        # Was three inline regexes covering headings, bullets and emphasis but
+        # not tables, which a speech backend reads as a run of "vertical bar".
+        tts_text = to_spoken_text(narrative)
 
         tts_result = None
         audio_path = ""

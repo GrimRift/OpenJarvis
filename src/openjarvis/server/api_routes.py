@@ -1062,7 +1062,12 @@ _SYNTHESIZED_AUDIO: Dict[str, str] = {}
 async def synthesize_speech(request: Request):
     """Synthesize text to speech and return a URL to fetch the audio from."""
     body = await request.json()
-    text = (body.get("text") or "").strip()
+
+    from openjarvis.speech.spoken_text import to_spoken_text
+
+    # Without this the backend reads markdown punctuation aloud: a table
+    # becomes "vertical bar Task vertical bar Schedule".
+    text = to_spoken_text(body.get("text") or "")
     if not text:
         raise HTTPException(status_code=400, detail="Missing text")
 
