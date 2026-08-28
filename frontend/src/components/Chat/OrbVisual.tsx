@@ -165,25 +165,32 @@ function drawOrb(
 
   ctx.clearRect(0, 0, w, h);
 
-  // Idle sits 20% below the active states so standing by reads as quiet.
-  let targetScale = orbState === 'idle' ? 0.704 : 1.0;
+  // Each state has its own resting size, so the three read differently at a
+  // glance rather than only by motion.
+  let targetScale: number;
   let speech = 0;
   if (orbState === 'speaking') {
     speech = getSpeechLevel();
     if (speech > 0) {
       // Driven by the actual waveform Sage is speaking, so the orb swells on
       // loud syllables instead of flickering to a sine wave that never had
-      // anything to do with the audio.
-      targetScale = 1.02 + speech * 0.34;
+      // anything to do with the audio. 1.00 at rest, 1.40 at full level.
+      targetScale = 1.0 + speech * 0.4;
     } else {
       // No analyser on this path, or silence between clips: keep the old
-      // motion rather than freezing the orb solid.
+      // motion rather than freezing the orb solid. Centred and scaled to
+      // cover the same 1.00-1.40 range so the fallback is not a visible
+      // change in size.
       const talk =
         Math.sin(t * 0.06) * 0.5 +
         Math.sin(t * 0.13 + 1.3) * 0.3 +
         Math.sin(t * 0.22 + 2.1) * 0.2;
-      targetScale = 1.1 + talk * 0.16;
+      targetScale = 1.2 + talk * 0.2;
     }
+  } else if (orbState === 'listening') {
+    targetScale = 0.95;
+  } else {
+    targetScale = 0.73;
   }
   scaleRef.current = approach(
     scaleRef.current,
