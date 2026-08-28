@@ -206,6 +206,55 @@ A **server-side default model** does not exist. The chat model picker is browser
 
 **Verified live:** messages from Telegram reach the orchestrator with tools (a "Play a song" request ran Spotify control), replies arrive on the phone, conversations persist per-chat in `sessions.db`, and traces now record with `model=gpt-5.6-luna, engine=multi`. `notify_windows` returned `delivered: ['desktop', 'channel']`. The sleep-reminder task fired at 22:00 on `gpt-5.6-luna` and really called `notify_windows` (`success: true`) — the user did not see the toast, and settings checked out (`ToastEnabled=1`, no Focus Assist), so the likely cause was `duration: "short"` (~5s) during a restart; unresolved, and the reason the channel fan-out matters.
 
+## Deepgram Flux STT, and three bugs found under it (2026-08-28)
+
+### Flux: three voice modes, off by default
+
+Local faster-whisper is unchanged and remains the default and the fallback. Two new modes sit beside it: **Flux Standard** (streaming, model-decided `EndOfTurn`) and **Flux Ultra** (adds speculative `EagerEndOfTurn`).
+
+**Protocol, verified against Deepgram's live docs — do not re-derive it.** `wss://api.deepgram.com/v2/listen`, header `Authorization: Token <key>`, `model=flux-general-en`, `encoding=linear16`, `sample_rate=16000`. `eot_threshold` 0.5–0.9 (default 0.7); `eager_eot_threshold` 0.3–0.9 and **must be ≤ `eot_threshold` or Deepgram rejects the connection**; `eot_timeout_ms` 500–60000. Events arrive as `TurnInfo` with `event ∈ StartOfTurn|Update|EagerEndOfTurn|TurnResumed|EndOfTurn`. **Confidences are strings** (`"0.85"`), not numbers.
+
+- `speech/flux.py` — client. Thresholds are validated **locally** so a misconfiguration is a clear error rather than an opaque mid-turn socket close, and `build_url()` **omits `eager_eot_threshold` entirely** in Standard mode, since its presence is what enables speculation.
+- `speech/speculative.py` — the safety core. **The tool boundary is structural**: `generate_speculative()` calls `engine.generate()` with no executor, no agent and no `tools=` argument, so there is nothing to invoke. `SpeculativeManager` gates release on turn index, not-cancelled, and a normalised transcript match, allows exactly one release per turn, and `looks_tool_capable()` discards anything action-shaped — biased toward discarding, since a wasted speculation costs latency while a wrongly-released one costs an action.
+- `server/flux_routes.py` — authenticated proxy at `/v1/speech/flux`. The key never reaches the browser. **Speculation runs server-side**, so speculative text never crosses the wire until released: `EagerEndOfTurn` starts a task, `TurnResumed` cancels it, and `speculative_answer` is attached **only** inside the `event.is_final` branch after `release()` verifies identity.
+- Frontend: `hooks/useFluxSpeech.ts` (per-session socket, audio sent only between `beginTurn()`/`endTurn()` so idle mic audio is never transmitted, a `"stop"` frame between turns instead of a reconnect, a rolling 30s fallback buffer, and the `useWakeWord` session-token guard); Settings toggles with Ultra dependent on Flux; `InputArea.tsx` branching the hands-free entry points.
+
+**Event interpretation is a pure `interpretFluxMessage()`** returning a discriminated action, because the frontend has **no jsdom and no testing-library** — only vitest with pure-logic tests, so a hook cannot be rendered. That made 25 real state-machine tests possible (duplicate/out-of-order finals, `TurnResumed`, malformed JSON, unknown events, released-answer handling).
+
+**Measured live**, same clip, from last speech sample: Flux Standard `EndOfTurn` **+797 ms**; Flux Ultra `EagerEndOfTurn` **+328 ms**, `EndOfTurn` **+735 ms**; local **850 ms silence + ~660–700 ms warm transcription** (~6 s cold). A real speculative generation on `gpt-5.6-luna` took **~3000 ms**, so the ~400 ms eager lead absorbs part of it — **the Ultra win is real but partial, not "instant"**, and it still pays for a discarded call on `TurnResumed`. Re-measure before recommending Ultra on a faster model.
+
+### `serve.py` misses whatever `SystemBuilder` wires — third instance
+
+`jarvis serve` deliberately avoids `SystemBuilder.build()` (~30–40 s double build, #263) and hand-assembles inline, so **every dependency the builder injects is silently absent**. Previously this hid a systemless `TaskScheduler` and an untraced channel system. This time: **`RetrievalTool` was built as a bare `tool_cls()` with no backend**, so every retrieval in the web UI answered "the memory backend isn't currently configured" and **the user's 64k-chunk Gmail corpus was unreachable from chat**. Fixed with a shared `_build_tool()` helper applied at **both** construction sites (web agent and channel agent). **When adding anything to `SystemBuilder`, check `serve.py` separately.**
+
+Even with the backend fixed, *"check my inbox"* still produced "no email tool is available" with **no tool call at all**, while *"search my knowledge base"* worked. The description said only "Search the knowledge base", with nothing linking *inbox/email/Gmail* to it — **a tool the model cannot name, it will not call.** Rewritten to name the actual contents and to state there is no separate email tool. Same class of fix as the `open_app`/`spotify_control` rewrite.
+
+### Google OAuth expired after 7 days, and the failure was reported as good news
+
+The first real proactive run (05:00) reported **"Nothing to report"** having fetched **nothing at all** — `gmail`, `gcalendar` and `google_tasks` all failed with `invalid_grant — Token has been expired or revoked` (confirmed directly against Google's token endpoint). A refresh token from an OAuth app in **Testing** publishing status expires after seven days; Gmail was connected on the 21st and this broke on the 28th. **Publishing the app is the durable fix, or this recurs weekly.**
+
+`jarvis connect gmail` cannot repair it — it skips OAuth whenever a token file exists, and an expired refresh token leaves that file in place, so it goes straight to a failing sync. New `scripts/reauth-google.py` calls `run_connector_oauth` directly (same pattern as `reauth-spotify.py`), preserving stored client credentials; one consent covers all five Google connectors. **Re-authed and synced successfully: token refresh 200, gmail 64,703 → 64,982 chunks, and `gcalendar` indexed for the first time at 30 chunks.**
+
+**The dangerous part was the reporting, not the token.** `ProactiveAgent` now reads `digest_collect`'s `sources_failed`/`total_items` metadata: a total failure returns early with "this is not a report that your inbox is clear" plus the errors, and a partial failure appends which sources were unreadable. A clean run says nothing extra. **A source that failed to fetch is not a source with nothing in it** — and "nothing to report" is the one summary a user acts on by doing nothing.
+
+### Verification
+
+**1,051 passed** across `tests/agents/ tests/tools/ tests/speech/ tests/server/`; **1,706 passed** on a wider run including `tests/cli/`. Frontend: **69 vitest**, `tsc --noEmit` clean. Ruff clean on every new and changed file — `config.py`'s long-standing `wake_word_model` E501 was also cleared, so that file finally lints clean. Pre-existing failures left alone and confirmed identical on a stashed clean tree: `test_base_agent::test_default_max_turns`, two `test_claude_code::TestEnsureRunner` cases, `test_manager::test_checkpoint_retention_max_5`, `test_cli::test_importing_cli_does_not_import_numpy`, `test_scan::test_run_quick_returns_subset`, `test_credentials::test_file_permissions` (POSIX modes on Windows), and four `TestGemmaCppLive` needing Kaggle weights.
+
+**Four bugs were found by the user speaking to it live, none reachable by these tests** — all in `InputArea.tsx`, which has no renderable test harness here:
+1. The Settings toggle could never be switched on: `flux_available` was `is_available() AND config.flux_enabled`, but that config is *server* state while the toggle is *client* state. **A capability flag must never be gated on the choice flag it exists to enable.** `flux_enabled`/`flux_eager_enabled` are now server-side kill switches defaulting **True**; capability is the key's presence.
+2. The wake word re-fired mid-question and the mic button never lit: **in Flux mode `speechState` never leaves `'idle'`**, so the wake word stayed armed through the whole utterance. Fixed with one `effectiveSpeechState` used at every site that asks "is the mic live".
+3. The mic button could not pause a Flux turn — same cause, one site missed, and pressing it fell into the *start* branch, un-suspending the wake word and beginning a competing local recording.
+4. `retrieval` had no backend (above).
+
+**Lesson worth carrying: when a new mode bypasses an existing state variable, grep every read of it.**
+
+### Open
+
+**Deepgram credentials note:** the key lives in `OpenJarvis-Data/credentials.toml` under `[deepgram] DEEPGRAM_API_KEY`. It was first saved as `[Deepgram Flux]` / `Api_key_deepgram` — an **unquoted space makes the whole file invalid TOML**, which broke *every* credential including OpenAI and Tavily, and the key name never reached `DEEPGRAM_API_KEY`.
+
+Not done: live smoke tests for **Ultra** specifically, mid-turn interruption, and Flux-fails-mid-turn fallback. Standard mode is confirmed working by real speech. The `[proactive] model = "gpt-5.6-luna"` setting is configured but the 05:00 run reported `qwen3.5:4b` — that may be the wrapper reporting the system model rather than the agent's own, but it is **unverified**; check before trusting Ultra or proactive to be on the cloud model.
+
 ## Unfinished work and exact next action
 
 `jarvis connect --sync` is implemented, tested, and live-verified — not a stub anymore. Outlook/Microsoft Graph OAuth is implemented, tested, and live-verified up to a real external blocker (NU tenant admin-consent requirement) — waiting on NU's IT or a non-NU mailbox, nothing more to build here. Spotify is connected and working (401-on-refresh bug found and fixed this session, live-verified). M26's class-schedule reminder and the morning-digest chat bridge (with a new Obsidian notes section) are both fully implemented, tested, and live-verified. Wake word, the voice-conversation loop, general voice-reply TTS, and the date-hallucination mitigation are all implemented and tested — **the user was mid-live-test when this was written, about to restart their laptop and retest fresh** (clears any lingering process/browser-cache state; all fixes are already committed and built into `server/static/`, nothing further needed from that restart alone).
@@ -216,4 +265,4 @@ Next, in order (as of the entry directly below this one — **items 1 and 2 abov
 1. Do NOT build Microsoft Calendar/OneDrive yet — they'd hit the identical NU admin-consent wall against the same mailbox, no point until Outlook clears. Teams is lower priority for the same reason. `ProactiveAgent` (`agents/proactive_agent.py` — the daily-digest-with-tiered-approval-and-chat-notification agent, distinct from `morning_digest.py`) is still real, tested, but never wired to a real startup path — a candidate for further M26 work if the user wants to keep going in that direction, but confirm with them before starting, per `AGENTS.md`'s "ask before assuming roadmap status" guidance.
 2. ~~A separate, undocumented body of work was flagged as sitting uncommitted in the tree back at `167ebb3`~~ Resolved: that work (orb visualization, dashboard leaderboard card, M26 tools) is committed — `5dbc371`, `feat: wake-word backend wiring, UI redesign (orb visual, dashboard), M26 tools`. Verified via `git log -- frontend/src/components/Chat/OrbVisual.tsx`. No longer a concern.
 
-**For anything past this point, read "Telegram: Sage on a phone (2026-08-27 to 2026-08-28)" above — it is the current state, this list is not.**
+**For anything past this point, read "Deepgram Flux STT, and three bugs found under it (2026-08-28)" above — it is the current state, this list is not.**
