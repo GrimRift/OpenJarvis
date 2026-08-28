@@ -91,15 +91,25 @@ async def flux_stream(websocket: WebSocket) -> None:
         await session.connect()
     except Exception as exc:
         logger.warning("Flux connect failed: %s", exc)
-        await websocket.send_json(
-            {"type": "FluxUnavailable", "reason": f"connect failed: {exc}"}
-        )
-        await websocket.close(code=CLOSE_UNAVAILABLE)
+        with contextlib.suppress(Exception):
+            await websocket.send_json(
+                {"type": "FluxUnavailable", "reason": f"connect failed: {exc}"}
+            )
+            await websocket.close(code=CLOSE_UNAVAILABLE)
         return
 
-    await websocket.send_json(
-        {"type": "FluxReady", "eager": eager_threshold is not None}
-    )
+    # Guarded separately from the main loop below, whose own
+    # `except WebSocketDisconnect` starts only after this point. A client that
+    # navigates away between accept() and this first frame — routine when
+    # switching between the Chat and Voice pages — escaped that guard and
+    # surfaced as an unhandled ASGI exception in the server log.
+    try:
+        await websocket.send_json(
+            {"type": "FluxReady", "eager": eager_threshold is not None}
+        )
+    except WebSocketDisconnect:
+        await session.close()
+        return
 
     async def pump_audio() -> None:
         """Browser -> Deepgram. Ends when the client stops or disconnects."""
