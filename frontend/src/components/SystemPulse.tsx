@@ -21,6 +21,11 @@ const PULSE_CONFIG: Record<Exclude<PulseState, 'hidden'>, { color: string; anima
 
 export function SystemPulse({ apiReachable }: { apiReachable: boolean | null }) {
   const isStreaming = useAppStore((s) => s.streamState.isStreaming);
+  // Text now streams ahead of speech, so isStreaming drops while the reply is
+  // still being synthesized and spoken. Watching it alone left this bar dim
+  // through the audio half of a turn while the orb was still lit — two
+  // indicators of the same turn disagreeing.
+  const audioPlaying = useAppStore((s) => s.audioPlaying);
   const [hasRunningAgent, setHasRunningAgent] = useState(false);
 
   // Poll for running agents every 30s
@@ -39,7 +44,7 @@ export function SystemPulse({ apiReachable }: { apiReachable: boolean | null }) 
 
   // Priority: agent-active > inferencing > idle
   let state: PulseState = 'idle';
-  if (isStreaming) state = 'inferencing';
+  if (isStreaming || audioPlaying) state = 'inferencing';
   if (hasRunningAgent) state = 'agent-active';
 
   const config = PULSE_CONFIG[state];

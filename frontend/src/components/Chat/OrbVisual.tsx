@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { approach, frameDelta, stepRotation } from '../../lib/orb-motion';
 import { useAppStore } from '../../lib/store';
 
 export type OrbState = 'idle' | 'listening' | 'speaking';
@@ -57,6 +58,8 @@ export function OrbVisual({ state, size = 285 }: { state: OrbState; size?: numbe
   const tRef = useRef(0);
   const angleRef = useRef(0);
   const scaleRef = useRef(1);
+  const speedRef = useRef(SPEED_MAP.idle);
+  const lastFrameRef = useRef(0);
 
   useEffect(() => {
     stateRef.current = state;
@@ -69,12 +72,30 @@ export function OrbVisual({ state, size = 285 }: { state: OrbState; size?: numbe
     if (!ctx) return;
     particlesRef.current = makeParticles(2200);
 
-    const draw = () => {
-      tRef.current += 1;
-      drawOrb(ctx, canvas, particlesRef.current!, stateRef.current, tRef, angleRef, scaleRef);
+    // Every motion term below is expressed per 60Hz frame, so without this
+    // the orb's speed is whatever the display's refresh rate happens to be —
+    // a 144Hz monitor spins it 2.4x faster than the rate these constants
+    // were tuned against. Clamped so returning to a backgrounded tab eases
+    // back in rather than jumping a second of rotation in one frame.
+    const draw = (now: number) => {
+      const previous = lastFrameRef.current || now;
+      lastFrameRef.current = now;
+      const dt = frameDelta(now, previous);
+      tRef.current += dt;
+      drawOrb(
+        ctx,
+        canvas,
+        particlesRef.current!,
+        stateRef.current,
+        tRef,
+        angleRef,
+        scaleRef,
+        speedRef,
+        dt,
+      );
       rafRef.current = requestAnimationFrame(draw);
     };
-    draw();
+    rafRef.current = requestAnimationFrame(draw);
 
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -109,6 +130,8 @@ function drawOrb(
   tRef: React.MutableRefObject<number>,
   angleRef: React.MutableRefObject<number>,
   scaleRef: React.MutableRefObject<number>,
+  speedRef: React.MutableRefObject<number>,
+  dt: number,
 ) {
   const w = canvas.width;
   const h = canvas.height;
@@ -124,8 +147,20 @@ function drawOrb(
     const talk = Math.sin(t * 0.06) * 0.5 + Math.sin(t * 0.13 + 1.3) * 0.3 + Math.sin(t * 0.22 + 2.1) * 0.2;
     targetScale = 1.1 + talk * 0.16;
   }
-  scaleRef.current += (targetScale - scaleRef.current) * (orbState === 'speaking' ? 0.12 : 0.08);
-  angleRef.current += SPEED_MAP[orbState] || 0.0035;
+  scaleRef.current = approach(
+    scaleRef.current,
+    targetScale,
+    orbState === 'speaking' ? 0.12 : 0.08,
+    dt,
+  );
+  const stepped = stepRotation(
+    angleRef.current,
+    speedRef.current,
+    SPEED_MAP[orbState] || 0.0035,
+    dt,
+  );
+  angleRef.current = stepped.angle;
+  speedRef.current = stepped.speed;
 
   const brightBoost =
     (BRIGHT_MAP[orbState] || 0.85) * (orbState === 'speaking' ? 0.9 + (scaleRef.current - 1.08) * 1.5 : 1);
