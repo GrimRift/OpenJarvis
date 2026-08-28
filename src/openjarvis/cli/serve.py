@@ -50,6 +50,23 @@ def _resolve_allowed_tools(config: object) -> tuple[set[str], bool]:
     return allowed, True
 
 
+def _build_tool(tool_cls: type) -> object:
+    """Construct one tool, supplying dependencies it cannot resolve itself.
+
+    ``serve.py`` deliberately avoids ``SystemBuilder.build()`` (#263), so the
+    injection that builder does is not applied here — every tool was built as
+    a bare ``tool_cls()``. ``RetrievalTool`` needs a backend, and without one
+    it reports "the memory backend isn't currently configured" for every
+    query, which in the web UI made the whole ingested corpus (mail, notes)
+    unreachable while looking like the model had simply declined to search.
+    """
+    from openjarvis.tools.retrieval import RetrievalTool, resolve_retrieval_backend
+
+    if tool_cls is RetrievalTool:
+        return tool_cls(backend=resolve_retrieval_backend())
+    return tool_cls()
+
+
 def _unique_model_ids(model_ids: list[str]) -> list[str]:
     """Return model ids in first-seen order without duplicates."""
     unique: list[str] = []
@@ -339,7 +356,7 @@ def serve(
                         if isinstance(tool_cls, type) and issubclass(
                             tool_cls, BaseTool
                         ):
-                            tools.append(tool_cls())
+                            tools.append(_build_tool(tool_cls))
                         elif isinstance(tool_cls, BaseTool):
                             tools.append(tool_cls)
 
@@ -444,7 +461,7 @@ def serve(
                                 continue
                             _tcls = ToolRegistry.get(_tname)
                             if isinstance(_tcls, type) and issubclass(_tcls, BaseTool):
-                                _channel_tools.append(_tcls())
+                                _channel_tools.append(_build_tool(_tcls))
                             elif isinstance(_tcls, BaseTool):
                                 _channel_tools.append(_tcls)
 

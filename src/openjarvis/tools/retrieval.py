@@ -60,8 +60,15 @@ class RetrievalTool(BaseTool):
         return ToolSpec(
             name="retrieval",
             description=(
-                "Search the knowledge base for relevant"
-                " information. Returns context with sources."
+                "Search everything the user has connected and ingested: "
+                "their email/Gmail inbox, Obsidian notes, calendar entries, "
+                "documents and listening history. Use this for any question "
+                "about the user's own mail, messages, notes or files — "
+                "including 'check my inbox', 'what emails do I have', or "
+                "'find that note'. This is the only way to reach that "
+                "content; there is no separate email or file tool, so do not "
+                "say you lack access without searching here first. Returns "
+                "matching excerpts with their source."
             ),
             parameters={
                 "type": "object",
