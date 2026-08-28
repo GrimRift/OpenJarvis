@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from openjarvis.tools.retrieval import RetrievalTool
@@ -15,6 +16,7 @@ class _FakeBackend(MemoryBackend):
 
     def __init__(self, results: Optional[List[RetrievalResult]] = None) -> None:
         self._results = results or []
+        self.last_retrieve: Dict[str, Any] = {}
 
     def store(
         self,
@@ -32,6 +34,7 @@ class _FakeBackend(MemoryBackend):
         top_k: int = 5,
         **kwargs: Any,
     ) -> List[RetrievalResult]:
+        self.last_retrieve = {"query": query, "top_k": top_k, **kwargs}
         return self._results[:top_k]
 
     def delete(self, doc_id: str) -> bool:
@@ -57,6 +60,15 @@ class TestRetrievalTool:
         tool = RetrievalTool()
         assert tool.spec.name == "retrieval"
         assert tool.spec.category == "memory"
+
+    def test_spec_exposes_structured_recency_filters(self):
+        properties = RetrievalTool().spec.parameters["properties"]
+
+        assert "source" in properties
+        assert "days_back" in properties
+        assert "since" in properties
+        assert "until" in properties
+        assert "check my inbox" in properties["days_back"]["description"]
 
     def test_no_backend(self):
         tool = RetrievalTool()
@@ -86,6 +98,43 @@ class TestRetrievalTool:
         assert "Answer 1" in result.content
         assert "[Source: doc.md]" in result.content
         assert result.metadata["num_results"] == 2
+
+    def test_forwards_source_and_relative_recency_to_backend(self):
+        backend = _FakeBackend(
+            [RetrievalResult(content="Recent mail", source="gmail")]
+        )
+        before = datetime.now() - timedelta(days=7, seconds=1)
+
+        result = RetrievalTool(backend=backend).execute(
+            query="urgent inbox messages",
+            source="gmail",
+            days_back=7,
+        )
+
+        after = datetime.now() - timedelta(days=7) + timedelta(seconds=1)
+        assert result.success is True
+        assert backend.last_retrieve["source"] == "gmail"
+        assert before <= backend.last_retrieve["since"] <= after
+
+    def test_result_exposes_date_and_subject_to_the_model(self):
+        result = RetrievalTool(
+            backend=_FakeBackend(
+                [
+                    RetrievalResult(
+                        content="Security alert",
+                        source="gmail",
+                        metadata={
+                            "timestamp": "2018-07-01T10:00:00",
+                            "title": "New device signed in",
+                        },
+                    )
+                ]
+            )
+        ).execute(query="security alert")
+
+        assert "Date: 2018-07-01T10:00:00" in result.content
+        assert "ago" in result.content
+        assert "Subject: New device signed in" in result.content
 
     def test_top_k_override(self):
         results = [
