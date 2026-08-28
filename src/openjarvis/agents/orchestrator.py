@@ -62,6 +62,7 @@ class OrchestratorAgent(ToolUsingAgent):
         parallel_tools: bool = True,
         interactive: bool = False,
         confirm_callback=None,
+        route_tools: Optional[bool] = None,
     ) -> None:
         super().__init__(
             engine,
@@ -78,6 +79,14 @@ class OrchestratorAgent(ToolUsingAgent):
         self._mode = mode
         self._system_prompt = system_prompt
         self._parallel_tools = parallel_tools
+        if route_tools is None:
+            try:
+                from openjarvis.core.config import load_config
+
+                route_tools = bool(load_config().agent.route_tools)
+            except Exception:  # noqa: BLE001
+                route_tools = True
+        self._route_tools = route_tools
 
     def run(
         self,
@@ -310,8 +319,20 @@ class OrchestratorAgent(ToolUsingAgent):
             system_prompt=self._system_prompt,
         )
 
-        # Get OpenAI-format tool definitions
+        # Get OpenAI-format tool definitions. Routed once per request, never
+        # per turn, so the serialized payload stays byte-identical across the
+        # loop and a provider's prompt cache keeps hitting.
         openai_tools = self._executor.get_openai_tools() if self._tools else []
+        if openai_tools and self._route_tools:
+            from openjarvis.agents.tool_routing import route_tools, routing_text
+
+            openai_tools = route_tools(
+                openai_tools,
+                routing_text(
+                    input,
+                    getattr(getattr(context, "conversation", None), "messages", ()),
+                ),
+            )
 
         all_tool_results: list[ToolResult] = []
         turns = 0

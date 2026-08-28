@@ -1019,6 +1019,12 @@ class AgentConfig:
     system_prompt: str = ""  # inline system prompt (takes precedence if set)
     system_prompt_path: str = ""  # path to system prompt file (.txt, .md)
     context_from_memory: bool = True  # inject relevant memory context into prompts
+    # Send only the tool schemas a request could plausibly need. Schemas are
+    # the largest part of the input context (3,791 tokens vs 1,540 for the
+    # whole system prompt on the live 23-tool setup) and are re-sent every
+    # turn. Set false to send all tools and rule routing out when debugging a
+    # "Sage says it can't do X" report.
+    route_tools: bool = True
     default_system_prompt: str = (
         "You are OpenJarvis, a helpful AI assistant running locally on the "
         "user's own hardware. You are not a cloud service, and you are not "
