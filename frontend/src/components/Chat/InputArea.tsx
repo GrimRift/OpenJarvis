@@ -829,13 +829,26 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // Same ordering as the streamed path: claim playback before the TTS
       // round trip, or the wake word re-arms into the gap and false-triggers
       // on ambient noise before the reply starts speaking.
-      if (wasVoice && answer) {
+      //
+      // This used to call synthesizeSpeech directly, so every Ultra-mode
+      // reply took the batch endpoint and left a player behind — the streamed
+      // path was never reached on the one route a voice turn actually takes
+      // when Flux Ultra is on. It also ignored voiceRepliesEnabled, so muting
+      // Sage did not mute this.
+      if (wasVoice && answer && voiceRepliesEnabled) {
         useAppStore.getState().setAudioPlaying(true);
-        synthesizeSpeech(answer)
-          .then((meta) => {
-            updateLastAssistant(convId, answer, undefined, undefined, undefined, {
-              url: meta.url,
-              autoPlay: true,
+        speakStreaming(answer)
+          .then((spoke) => {
+            if (spoke) return;
+            return synthesizeSpeech(answer).then((meta) => {
+              updateLastAssistant(
+                convId,
+                answer,
+                undefined,
+                undefined,
+                undefined,
+                { url: meta.url, autoPlay: true },
+              );
             });
           })
           .catch(() => {
@@ -851,6 +864,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       selectedModel,
       streamState.isStreaming,
       updateLastAssistant,
+          speakStreaming,
+      voiceRepliesEnabled,
     ],
   );
 
