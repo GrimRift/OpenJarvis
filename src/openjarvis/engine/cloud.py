@@ -683,12 +683,22 @@ class CloudEngine(InferenceEngine):
         usage = resp.usage
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
+        # A tool-calling turn re-sends the whole prefix every turn: measured on
+        # this setup, three turns cost 3.00x one turn while the genuinely new
+        # content per turn was 3 tokens. Whether that is expensive depends
+        # entirely on the provider serving the repeat from its prompt cache,
+        # and without surfacing this there is no way to tell.
+        cached_tokens = 0
+        details = getattr(usage, "prompt_tokens_details", None) if usage else None
+        if details is not None:
+            cached_tokens = getattr(details, "cached_tokens", 0) or 0
         result = {
             "content": choice.message.content or "",
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": (usage.total_tokens if usage else 0),
+                "cached_tokens": cached_tokens,
             },
             "model": resp.model,
             "finish_reason": choice.finish_reason or "stop",

@@ -169,3 +169,83 @@ class TestLoopGuardResetPerRun:
 
         verdict = agent._loop_guard.check_call("open_app", '{"app": "obsidian"}')
         assert not verdict.blocked
+
+
+class TestTokenAwareCompression:
+    """Message count is a poor proxy for cost. A tool-calling turn re-sends the
+    whole conversation every turn, so 20 prior exchanges — 41 messages, far
+    under the 100-message threshold — took one request from 7,296 to 31,416
+    tokens."""
+
+    @staticmethod
+    def _msg(role, content):
+        from openjarvis.core.types import Message, Role
+
+        return Message(role=getattr(Role, role.upper()), content=content)
+
+    def _history(self, pairs: int, chars: int = 2000):
+        msgs = [self._msg("system", "You are Sage.")]
+        for i in range(pairs):
+            msgs.append(self._msg("user", f"q{i} " + "x" * chars))
+            msgs.append(self._msg("assistant", f"a{i} " + "y" * chars))
+        return msgs
+
+    def _guard(self, **overrides):
+        from openjarvis.agents.loop_guard import LoopGuard, LoopGuardConfig
+
+        return LoopGuard(LoopGuardConfig(**overrides))
+
+    def test_a_long_history_under_the_message_cap_is_compressed(self):
+        guard = self._guard(max_context_tokens=2000)
+        messages = self._history(20)
+
+        out = guard.compress_context(messages)
+
+        assert len(messages) < 100  # would never have triggered on count
+        assert len(out) < len(messages)
+        assert guard._approx_tokens(out) <= 2000
+
+    def test_the_newest_exchange_always_survives(self):
+        guard = self._guard(max_context_tokens=100)
+        messages = self._history(10)
+
+        out = guard.compress_context(messages)
+
+        assert out[-1] is messages[-1]
+
+    def test_a_single_oversized_message_is_still_kept(self):
+        """Never return a conversation with nothing in it."""
+        guard = self._guard(max_context_tokens=10)
+        messages = [self._msg("system", "sys"), self._msg("user", "z" * 40_000)]
+
+        out = guard.compress_context(messages)
+
+        assert any(not m.role.value == "system" for m in out)
+
+    def test_the_system_message_is_preserved(self):
+        guard = self._guard(max_context_tokens=500)
+        messages = self._history(20)
+
+        out = guard.compress_context(messages)
+
+        assert out[0].content == "You are Sage."
+
+    def test_a_short_conversation_is_untouched(self):
+        guard = self._guard(max_context_tokens=8000)
+        messages = self._history(2, chars=50)
+
+        assert guard.compress_context(messages) is messages
+
+    def test_zero_disables_the_token_check(self):
+        guard = self._guard(max_context_tokens=0)
+        messages = self._history(20)
+
+        assert guard.compress_context(messages) is messages
+
+    def test_the_count_threshold_still_applies(self):
+        guard = self._guard(max_context_tokens=0, max_context_messages=10)
+        messages = self._history(30, chars=1)
+
+        out = guard.compress_context(messages)
+
+        assert len(out) <= 10

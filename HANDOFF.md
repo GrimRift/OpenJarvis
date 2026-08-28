@@ -329,7 +329,7 @@ Verification: **104 backend tests passed** across the changed server, speech, di
 3. **One Luna digest attempt returned empty content** after consuming exactly 1,024 completion tokens with `finish_reason=length`; the next attempt succeeded. Add a bounded fail-closed retry/headroom policy for an empty reasoning-model result, with a regression test, rather than treating an empty generation as a valid digest.
 4. The global Jarvis-like Sage persona is deployed everywhere, but the user has not yet made a final qualitative judgment on its personality. Do not rewrite it again without asking what specifically feels wrong.
 
-## Context payload, two rendering defects, and the empty digest (2026-08-28, latest)
+## Context payload, two rendering defects, and the empty digest (2026-08-28)
 
 Picks up items 1-3 of the previous section's "concrete next work".
 
@@ -507,6 +507,76 @@ tests passed on both, as they should. Routing is new code, so its wiring
 tests are the control pair instead — trimmed-payload and routing-off assert
 opposite payloads through the same path.
 
+## The rest of the latency floor: turns and history (2026-08-28, latest)
+
+Profiled first, again, by driving the real `OrchestratorAgent` loop with a
+fake engine that records every payload.
+
+### Turns are almost pure re-send
+
+| tool calls | engine calls | billed tokens | vs 1 turn |
+|---|---|---|---|
+| 0 | 1 | 2,429 | 1.00x |
+| 1 | 2 | 4,861 | 2.00x |
+| 2 | 3 | 7,296 | 3.00x |
+| 4 | 5 | 12,211 | 5.03x |
+
+Exactly linear, and the message content across those three turns grows
+**1547 → 1550 → 1553 tokens**. The genuinely new information per turn is about
+**3 tokens**; everything else is the same prefix sent again.
+
+**That makes it a prompt-cache problem, not a payload problem**, and nothing
+in the repo could tell us whether the cache was working: `CloudEngine` never
+surfaced `prompt_tokens_details.cached_tokens`, so the live API reported only
+prompt/completion/total. It is passed through now. **Check it before
+attempting anything else here** — if the provider is serving that repeated
+prefix from cache, the 5x is already mostly paid for and the remaining work is
+elsewhere. Routing was deliberately built to make this cacheable: tools are
+filtered once per request, never per turn, so the prefix is byte-identical
+across the loop.
+
+### History was unbounded, and multiplied by turns
+
+`LoopGuard.compress_context` triggered on **message count only**
+(`max_context_messages = 100`). Twenty prior exchanges is 41 messages — far
+under it — so nothing compressed while the bill went 7,296 → 31,416 (4.31x),
+because the whole history is re-sent on every turn of the loop.
+
+Compression now also triggers on approximate size
+(`max_context_tokens = 8000`, 0 restores count-only behaviour), and stage 2
+walks backwards from the newest message keeping what fits, so the turn the
+user is actually in always survives even if one message exceeds the budget.
+
+**Cost now plateaus instead of growing:**
+
+| prior pairs | 20 | 40 | 80 | 160 |
+|---|---|---|---|---|
+| billed | 26,592 | 26,289 | 26,289 | 25,386 |
+
+Token counting there is deliberately `len(content) // 4`, not tiktoken: it
+decides how much to drop, not what to bill, and a hard tokenizer dependency in
+the loop guard is not worth the accuracy.
+
+### What is left, in order
+
+1. **Read `cached_tokens` from a live turn.** It decides whether the 5x turn
+   multiplier is real. Everything else here is speculation until it is known.
+2. **Consider lowering `max_context_tokens`.** 8,000 is a safe default that
+   only bounds the worst case; a tighter budget trades recall for latency, and
+   that is the user's call, not a default worth guessing at.
+3. **Summarising history rather than dropping it** was an explicit earlier
+   request ("rather than the entire chat history we should create a summary").
+   The window is the cheap version; a rolling summary is the real one.
+
+### Verification
+
+19 loop-guard tests including the plateau behaviour, the newest-exchange
+guarantee, and a single oversized message still leaving a non-empty
+conversation. `1,504 passed` across `tests/agents tests/engine tests/server`;
+the 8 failures are all on the known list above (`test_default_max_turns`, two
+`test_claude_code`, `test_manager` checkpoint retention, four
+`TestGemmaCppLive` needing Kaggle weights).
+
 ## Unfinished work and exact next action
 
 The current state and exact next candidates are in **"Sage persona, Web parity, and latency pass (2026-08-28, latest)" immediately above**. Nothing is mid-implementation; the old uncommitted orb/dashboard warning below was resolved long ago and is retained only as historical context. All current source and handoff work is committed locally, not pushed; confirm with the user before pushing.
@@ -515,4 +585,4 @@ Next, in order (as of the entry directly below this one — **items 1 and 2 abov
 1. Do NOT build Microsoft Calendar/OneDrive yet — they'd hit the identical NU admin-consent wall against the same mailbox, no point until Outlook clears. Teams is lower priority for the same reason. `ProactiveAgent` (`agents/proactive_agent.py` — the daily-digest-with-tiered-approval-and-chat-notification agent, distinct from `morning_digest.py`) is still real, tested, but never wired to a real startup path — a candidate for further M26 work if the user wants to keep going in that direction, but confirm with them before starting, per `AGENTS.md`'s "ask before assuming roadmap status" guidance.
 2. ~~A separate, undocumented body of work was flagged as sitting uncommitted in the tree back at `167ebb3`~~ Resolved: that work (orb visualization, dashboard leaderboard card, M26 tools) is committed — `5dbc371`, `feat: wake-word backend wiring, UI redesign (orb visual, dashboard), M26 tools`. Verified via `git log -- frontend/src/components/Chat/OrbVisual.tsx`. No longer a concern.
 
-**For anything past this point, use "Context payload, two rendering defects, and the empty digest (2026-08-28, latest)" above as the current state; this numbered list is historical.**
+**For anything past this point, use "The rest of the latency floor: turns and history (2026-08-28, latest)" above as the current state; this numbered list is historical.**

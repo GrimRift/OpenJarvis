@@ -19,6 +19,12 @@ class LoopGuardConfig:
     ping_pong_window: int = 6  # detect A-B-A-B cycling
     poll_tool_budget: int = 5  # max calls to same polling tool
     max_context_messages: int = 100  # context overflow threshold
+    # Message count alone is a poor proxy for cost: a tool-calling turn
+    # re-sends the whole conversation on every turn, so 20 prior exchanges
+    # (41 messages, far under the count threshold) took one request from
+    # 7,296 to 31,416 tokens. Compression has to trigger on size too.
+    # 0 disables the token check and restores count-only behaviour.
+    max_context_tokens: int = 8000
     warn_before_block: bool = True  # warn on first cycle, block on second
     block_repeat_failures: bool = True  # never re-run a call that already failed
 
@@ -186,16 +192,32 @@ class LoopGuard:
         """Check if a message has role == tool."""
         return getattr(msg, "role", None) == "tool"
 
+    @staticmethod
+    def _approx_tokens(messages: list) -> int:
+        """Rough token count. Deliberately dependency-free — this decides how
+        much to drop, not what to bill, so ~4 chars per token is enough."""
+        return sum(len(getattr(m, "content", "") or "") for m in messages) // 4
+
+    def _needs_compression(self, messages: list) -> bool:
+        if len(messages) > self._config.max_context_messages:
+            return True
+        budget = self._config.max_context_tokens
+        return budget > 0 and self._approx_tokens(messages) > budget
+
     def compress_context(self, messages: list) -> list:
         """Apply 4-stage context overflow recovery to message list.
 
+        Triggered by message count or by approximate token size, whichever
+        goes first. Size matters because the whole context is re-sent on every
+        turn of a tool loop, so a long history is paid for repeatedly.
+
         Stages:
         1. Summarize old tool results (replace content with "[Tool result truncated]")
-        2. Sliding window — keep only recent messages
+        2. Sliding window — keep system + the most recent messages that fit
         3. Drop tool call/result pairs from the middle
         4. Truncate to system + last 2 exchanges
         """
-        if len(messages) <= self._config.max_context_messages:
+        if not self._needs_compression(messages):
             return messages
 
         # Stage 1: Truncate old tool result messages
@@ -220,18 +242,31 @@ class LoopGuard:
             else:
                 compressed.append(msg)
 
-        if len(compressed) <= self._config.max_context_messages:
+        if not self._needs_compression(compressed):
             return compressed
 
-        # Stage 2: Sliding window — keep system + recent
+        # Stage 2: Sliding window — keep system + the most recent that fit.
+        # Walks from the newest backwards so the turn the user is actually in
+        # always survives, even when a single message exceeds the budget.
         system_msgs = [m for m in compressed if self._is_system(m)]
         non_system = [m for m in compressed if not self._is_system(m)]
-        window_size = self._config.max_context_messages - len(system_msgs)
-        if len(non_system) > window_size:
-            non_system = non_system[-window_size:]
-        compressed = system_msgs + non_system
+        max_msgs = max(0, self._config.max_context_messages - len(system_msgs))
+        budget = self._config.max_context_tokens
+        if budget > 0:
+            budget = max(0, budget - self._approx_tokens(system_msgs))
+        kept: list = []
+        used = 0
+        for msg in reversed(non_system):
+            if len(kept) >= max_msgs:
+                break
+            cost = self._approx_tokens([msg])
+            if budget > 0 and kept and used + cost > budget:
+                break
+            kept.append(msg)
+            used += cost
+        compressed = system_msgs + list(reversed(kept))
 
-        if len(compressed) <= self._config.max_context_messages:
+        if not self._needs_compression(compressed):
             return compressed
 
         # Stage 3: Drop tool call/result pairs from middle
@@ -242,7 +277,7 @@ class LoopGuard:
         keep_end = len(compressed) // 2
         compressed = compressed[:keep_start] + compressed[-keep_end:]
 
-        if len(compressed) <= self._config.max_context_messages:
+        if not self._needs_compression(compressed):
             return compressed
 
         # Stage 4: Extreme — system + last 2 exchanges
