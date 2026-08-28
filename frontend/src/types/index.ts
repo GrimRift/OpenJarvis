@@ -42,6 +42,7 @@ export interface ToolCallInfo {
   status: 'running' | 'success' | 'error';
   result?: string;
   latency?: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TokenUsage {

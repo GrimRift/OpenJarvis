@@ -169,14 +169,28 @@ class WebSearchTool(BaseTool):
                 query,
                 max_results=max_results,
                 search_depth="advanced",
+                include_images=True,
                 include_usage=True,
             )
             results = response.get("results", [])
             formatted_parts = []
+            source_metadata = []
             for r in results:
                 title = r.get("title", "Untitled")
                 url = r.get("url", "")
                 content = r.get("content", "") or r.get("snippet", "")
+                images = r.get("images") or []
+                first_image = images[0] if images else None
+                if isinstance(first_image, dict):
+                    first_image = first_image.get("url")
+                source_metadata.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "summary": content[:500],
+                        "image_url": first_image if isinstance(first_image, str) else None,
+                    }
+                )
                 formatted_parts.append(
                     f"### {title}\nSource: {url}\nSummary: {content}"
                 )
@@ -190,6 +204,7 @@ class WebSearchTool(BaseTool):
                     "num_results": len(results),
                     "engine": "tavily",
                     "credits": (response.get("usage") or {}).get("credits"),
+                    "sources": source_metadata,
                 },
             )
         except Exception as exc:

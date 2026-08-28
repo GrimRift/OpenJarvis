@@ -574,6 +574,9 @@ export function InputArea() {
               tc.status = data.success ? 'success' : 'error';
               tc.latency = data.latency;
               tc.result = data.result;
+              if (data.metadata && typeof data.metadata === 'object') {
+                tc.metadata = data.metadata;
+              }
             }
             setStreamState({
               phase: 'Generating...',

@@ -10,6 +10,8 @@ import { AudioPlayer } from './AudioPlayer';
 import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
 import { XRayFooter } from './XRayFooter';
+import { LinkPreviewCard } from './LinkPreviewCard';
+import { externalLinkAttributes, selectLinkPreview } from '../../lib/link-preview';
 import type { ChatMessage } from '../../types';
 
 function stripThinkTags(text: string): string {
@@ -103,6 +105,7 @@ export function MessageBubble({ message, isLive = false }: Props) {
   const isUser = message.role === 'user';
 
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
+  const linkPreview = useMemo(() => selectLinkPreview(message), [message]);
 
   // Build a ref→source lookup once per render. Memoized so the rehype plugin
   // identity stays stable until the source list actually changes.
@@ -174,12 +177,19 @@ export function MessageBubble({ message, isLive = false }: Props) {
             rehypePlugins={rehypePlugins}
             components={{
               pre: CodeBlockPre,
+              a: ({ href, children, node: _node, ...props }) => (
+                <a href={href} {...externalLinkAttributes(href)} {...props}>
+                  {children}
+                </a>
+              ),
             }}
           >
             {cleanContent}
           </ReactMarkdown>
         </div>
       )}
+
+      {linkPreview && <LinkPreviewCard preview={linkPreview} />}
 
       {/* Footer: copy + x-ray */}
       <div className="flex items-center gap-2 mt-1.5">

@@ -855,6 +855,15 @@ async def _handle_agent_stream(
                     "tool": name,
                     "success": bool(getattr(tool_result, "success", True)),
                     "result": str(getattr(tool_result, "content", ""))[:500],
+                    "metadata": (
+                        {
+                            "sources": getattr(tool_result, "metadata", {}).get(
+                                "sources", []
+                            )
+                        }
+                        if isinstance(getattr(tool_result, "metadata", {}), dict)
+                        else {}
+                    ),
                 }
             )
             yield f"event: tool_call_end\ndata: {end}\n\n"

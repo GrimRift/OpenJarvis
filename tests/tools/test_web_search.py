@@ -91,6 +91,7 @@ class TestWebSearchTool:
                         "title": "Example",
                         "url": "https://example.com",
                         "content": "Example summary",
+                        "images": ["https://example.com/preview.jpg"],
                     }
                 ],
                 "usage": {"credits": 1},
@@ -103,9 +104,19 @@ class TestWebSearchTool:
         assert result.metadata["engine"] == "tavily"
         assert result.metadata["num_results"] == 1
         assert result.metadata["credits"] == 1
+        assert result.metadata["sources"] == [
+            {
+                "title": "Example",
+                "url": "https://example.com",
+                "summary": "Example summary",
+                "image_url": "https://example.com/preview.jpg",
+            }
+        ]
         assert "Example" in result.content
         assert "example.com" in result.content
         mock_client_cls.assert_called_once_with(api_key="key")
+        _, search_kwargs = mock_client_cls.return_value.search.call_args
+        assert search_kwargs["include_images"] is True
 
     def test_tavily_error_returns_failure_not_duckduckgo(self):
         fake_module, _ = _fake_tavily_module(
