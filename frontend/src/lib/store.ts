@@ -341,11 +341,12 @@ export const useAppStore = create<AppState>((set, get) => {
 
   return {
     conversations: convList,
-    activeId: initial.activeId,
-    messages:
-      initial.activeId && initial.conversations[initial.activeId]
-        ? withoutAutoPlay(initial.conversations[initial.activeId].messages)
-        : [],
+    // Opening or refreshing the UI starts a fresh chat rather than dropping
+    // you back into whatever was on screen days ago. The history is still in
+    // `conversations` and reachable from the sidebar; only the landing point
+    // changes.
+    activeId: null,
+    messages: [],
     streamState: INITIAL_STREAM,
 
     models: [],

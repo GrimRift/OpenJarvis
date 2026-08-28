@@ -112,6 +112,7 @@ describe('stale audio.autoPlay on old voice replies', () => {
     localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(chatWithPastVoiceReplies()));
 
     const { useAppStore } = await import('./store');
+    useAppStore.getState().selectConversation('old-chat');
 
     useAppStore.getState().addMessage('old-chat', {
       id: 'assistant-4',

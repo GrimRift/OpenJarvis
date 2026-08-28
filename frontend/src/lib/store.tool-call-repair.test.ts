@@ -65,6 +65,9 @@ describe('persisted tool calls', () => {
     );
 
     const { useAppStore } = await import('./store');
+    // Opening the app now lands on a fresh chat, so reach the repaired
+    // conversation the way the sidebar does.
+    useAppStore.getState().selectConversation('conversation-1');
 
     expect(useAppStore.getState().messages[0].toolCalls?.[0].arguments).toBe(
       '{"query":"python"}',
@@ -114,6 +117,12 @@ describe('persisted tool calls', () => {
 
     const { useAppStore } = await import('./store');
 
+    // The failing writeback is what this test is about, and it has already
+    // happened during load. Restore setItem before selecting, so the
+    // assertion is about repaired state surviving in memory rather than about
+    // selectConversation's own save.
+    vi.restoreAllMocks();
+    useAppStore.getState().selectConversation('conversation-1');
     expect(useAppStore.getState().messages).toHaveLength(1);
     expect(useAppStore.getState().messages[0].toolCalls?.[0].arguments).toBe(
       '{"query":"python"}',
