@@ -73,7 +73,7 @@ const SPEED_MAP: Record<OrbState, number> = {
 };
 const BRIGHT_MAP: Record<OrbState, number> = { idle: 0.85, listening: 1.05, speaking: 1.3 };
 
-export function OrbVisual({ state, size = 328 }: { state: OrbState; size?: number }) {
+export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
   const particlesRef = useRef<Particle[] | undefined>(undefined);
@@ -174,18 +174,18 @@ function drawOrb(
     if (speech > 0) {
       // Driven by the actual waveform Sage is speaking, so the orb swells on
       // loud syllables instead of flickering to a sine wave that never had
-      // anything to do with the audio. 1.00 at rest, 1.40 at full level.
-      targetScale = 1.0 + speech * 0.4;
+      // anything to do with the audio. 0.95 at rest, 1.40 at full level.
+      targetScale = 0.95 + speech * 0.45;
     } else {
       // No analyser on this path, or silence between clips: keep the old
       // motion rather than freezing the orb solid. Centred and scaled to
-      // cover the same 1.00-1.40 range so the fallback is not a visible
+      // cover the same 0.95-1.40 range so the fallback is not a visible
       // change in size.
       const talk =
         Math.sin(t * 0.06) * 0.5 +
         Math.sin(t * 0.13 + 1.3) * 0.3 +
         Math.sin(t * 0.22 + 2.1) * 0.2;
-      targetScale = 1.2 + talk * 0.2;
+      targetScale = 1.175 + talk * 0.225;
     }
   } else if (orbState === 'listening') {
     targetScale = 0.95;
