@@ -207,7 +207,11 @@ class BaseAgent(ABC):
     def _generate(self, messages: list[Message], **extra_kwargs: Any) -> dict:
         """Call ``engine.generate()`` with stored defaults.
 
-        Extra kwargs (e.g. ``tools``) are forwarded to the engine.
+        Extra kwargs (e.g. ``tools``) are forwarded to the engine, and may
+        override a stored default -- passing ``max_tokens`` used to raise
+        "got multiple values for keyword argument" rather than doing the
+        obvious thing, which made a one-off retry with more headroom
+        impossible without mutating the agent.
         Publishes INFERENCE_START/END events on the bus when the engine
         does not publish its own (i.e. non-instrumented engines).
         """
@@ -218,13 +222,13 @@ class BaseAgent(ABC):
                 {"model": self._model, "engine": engine_id},
             )
 
-        result = self._engine.generate(
-            messages,
-            model=self._model,
-            temperature=self._temperature,
-            max_tokens=self._max_tokens,
-            **extra_kwargs,
-        )
+        call_kwargs: dict[str, Any] = {
+            "model": self._model,
+            "temperature": self._temperature,
+            "max_tokens": self._max_tokens,
+        }
+        call_kwargs.update(extra_kwargs)
+        result = self._engine.generate(messages, **call_kwargs)
 
         if self._bus and not getattr(self._engine, "_publishes_events", False):
             usage = result.get("usage", {})

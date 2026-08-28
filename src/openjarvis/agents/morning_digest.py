@@ -7,6 +7,7 @@ the LLM (narrative synthesis), and text_to_speech (audio generation).
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
@@ -16,6 +17,12 @@ from openjarvis.agents.digest_store import DigestArtifact, DigestStore
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import Message, Role, ToolCall
+
+logger = logging.getLogger(__name__)
+
+# Floor for the single retry after an empty generation. A briefing is ~200
+# words, so this is headroom for a reasoning model's thinking, not for output.
+_EMPTY_RETRY_MAX_TOKENS = 4096
 
 _SECTION_PROMPTS = {
     "messages": "MESSAGES — Prioritize provided messages or tasks needing action.",
@@ -131,6 +138,39 @@ class MorningDigestAgent(ToolUsingAgent):
             sources.update(section_sources)
         return list(sources)
 
+    def _generate_narrative(self, messages: List[Message]) -> str:
+        """Generate the briefing, retrying once with real headroom if empty.
+
+        A reasoning model can spend its entire completion budget thinking and
+        return no content at all: one live ``gpt-5.6-luna`` digest consumed
+        exactly 1,024 tokens and finished with ``finish_reason="length"``
+        having produced nothing, and the very next attempt succeeded. The same
+        shape occurs when a model puts everything inside ``<think>`` tags,
+        which strip to empty.
+
+        Bounded to a single retry, and deliberately reports emptiness rather
+        than papering over it -- the caller must be able to tell "the model
+        said nothing" apart from "there was nothing to say".
+        """
+        result = self._generate(messages)
+        narrative = self._strip_think_tags(result.get("content", ""))
+        if narrative:
+            return narrative
+
+        headroom = max(self._max_tokens * 4, _EMPTY_RETRY_MAX_TOKENS)
+        if headroom <= self._max_tokens:
+            return ""
+
+        logger.warning(
+            "Digest generation returned no content (finish_reason=%r, "
+            "max_tokens=%s); retrying once with %s.",
+            result.get("finish_reason", ""),
+            self._max_tokens,
+            headroom,
+        )
+        retry = self._generate(messages, max_tokens=headroom)
+        return self._strip_think_tags(retry.get("content", ""))
+
     def run(
         self,
         input: str,
@@ -166,8 +206,23 @@ class MorningDigestAgent(ToolUsingAgent):
             ),
         ]
 
-        result = self._generate(messages)
-        narrative = self._strip_think_tags(result.get("content", ""))
+        narrative = self._generate_narrative(messages)
+        if not narrative:
+            # An empty generation is not an empty news day. Delivering it as
+            # one would read as "nothing happened", which is the single
+            # summary a user acts on by doing nothing. Stop before the
+            # artifact is stored or spoken.
+            self._emit_turn_end(turns=1)
+            return AgentResult(
+                content=(
+                    "I could not generate your briefing — the model returned "
+                    "nothing, twice. This is not a report that you have "
+                    "nothing waiting."
+                ),
+                tool_results=[collect_result],
+                turns=1,
+                metadata={"error": "empty_generation", "sources_used": sources},
+            )
 
         # Step 2b: Self-evaluate and optionally regenerate
         quality_score = 0.0
@@ -192,8 +247,12 @@ class MorningDigestAgent(ToolUsingAgent):
                         ),
                     )
                 )
-                result = self._generate(messages)
-                narrative = self._strip_think_tags(result.get("content", ""))
+                # Keep the original if the revision comes back empty --
+                # a failed rewrite must not cost a briefing that was merely
+                # scored low.
+                revised = self._generate_narrative(messages)
+                if revised:
+                    narrative = revised
         except Exception:  # noqa: BLE001
             pass  # Evaluator failure shouldn't block digest delivery
 

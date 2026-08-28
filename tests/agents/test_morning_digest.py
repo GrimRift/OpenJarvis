@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 from openjarvis.agents._stubs import AgentResult
@@ -250,3 +252,157 @@ def test_build_morning_digest_agent_can_disable_eager_audio():
 
     assert agent is not None
     assert agent._generate_audio is False
+
+
+class TestEmptyGeneration:
+    """A reasoning model can burn its whole completion budget thinking and
+    return nothing. One live gpt-5.6-luna digest did exactly that at 1,024
+    tokens with finish_reason="length"; the next attempt succeeded. An empty
+    generation must never be delivered as an empty news day."""
+
+    def _agent(self, tmp_path, engine):
+        from openjarvis.agents.morning_digest import MorningDigestAgent
+
+        return MorningDigestAgent(
+            engine,
+            "test-model",
+            tools=[],
+            persona="jarvis",
+            sections=["world"],
+            section_sources={"world": ["hackernews"]},
+            digest_store_path=str(tmp_path / "digest.db"),
+            generate_audio=False,
+        )
+
+    def _collect(self):
+        return ToolResult(
+            tool_name="digest_collect",
+            content="=== WORLD ===\n[hackernews] AtlasDB 1.0 — 241 points\n",
+            success=True,
+            metadata={"total_items": 1},
+        )
+
+    def test_an_empty_first_attempt_is_retried_with_more_headroom(self, tmp_path):
+        engine = MagicMock()
+        engine.generate.side_effect = [
+            {"content": "", "finish_reason": "length", "usage": {}},
+            {"content": "Good morning sir.", "finish_reason": "stop", "usage": {}},
+        ]
+        agent = self._agent(tmp_path, engine)
+
+        with patch.object(agent._executor, "execute", side_effect=[self._collect()]):
+            result = agent.run("Generate morning digest")
+
+        assert result.content == "Good morning sir."
+        assert engine.generate.call_count == 2
+        first, second = engine.generate.call_args_list
+        assert second.kwargs["max_tokens"] > first.kwargs["max_tokens"]
+
+    def test_a_successful_first_attempt_is_not_retried(self, tmp_path):
+        engine = MagicMock()
+        engine.generate.return_value = {
+            "content": "Good morning sir.",
+            "finish_reason": "stop",
+            "usage": {},
+        }
+        agent = self._agent(tmp_path, engine)
+
+        with patch.object(agent._executor, "execute", side_effect=[self._collect()]):
+            agent.run("Generate morning digest")
+
+        assert engine.generate.call_count == 1
+
+    def test_content_that_is_only_thinking_counts_as_empty(self, tmp_path):
+        engine = MagicMock()
+        engine.generate.side_effect = [
+            {"content": "<think>planning</think>", "finish_reason": "stop"},
+            {"content": "Good morning sir.", "finish_reason": "stop"},
+        ]
+        agent = self._agent(tmp_path, engine)
+
+        with patch.object(agent._executor, "execute", side_effect=[self._collect()]):
+            result = agent.run("Generate morning digest")
+
+        assert result.content == "Good morning sir."
+
+    def test_two_empty_attempts_fail_closed(self, tmp_path):
+        """No artifact, no speech, and a message that cannot be mistaken for
+        'you have nothing waiting'."""
+        engine = MagicMock()
+        engine.generate.return_value = {"content": "", "finish_reason": "length"}
+        agent = self._agent(tmp_path, engine)
+
+        with patch.object(agent._executor, "execute", side_effect=[self._collect()]):
+            result = agent.run("Generate morning digest")
+
+        assert result.metadata["error"] == "empty_generation"
+        assert "not a report" in result.content
+        assert engine.generate.call_count == 2
+        assert not (tmp_path / "digest.db").exists()
+
+    def test_the_retry_is_bounded_to_one(self, tmp_path):
+        engine = MagicMock()
+        engine.generate.return_value = {"content": "", "finish_reason": "length"}
+        agent = self._agent(tmp_path, engine)
+
+        with patch.object(agent._executor, "execute", side_effect=[self._collect()]):
+            agent.run("Generate morning digest")
+
+        assert engine.generate.call_count == 2
+
+    def test_an_empty_revision_keeps_the_scored_briefing(self, tmp_path):
+        """A low quality score must not be able to cost the whole briefing.
+
+        ``openjarvis.agents.digest_evaluator`` does not exist -- the import in
+        ``run()`` raises ImportError on every real run and is swallowed, so the
+        evaluate/regenerate branch is currently dead. A stub module is
+        installed here so the guard is actually exercised rather than skipped
+        by the same ImportError.
+        """
+        evaluator = MagicMock()
+        evaluator.evaluate.return_value = (3.0, "Too terse.")
+        stub = ModuleType("openjarvis.agents.digest_evaluator")
+        stub.DigestEvaluator = MagicMock(return_value=evaluator)
+
+        engine = MagicMock()
+        engine.generate.side_effect = [
+            {"content": "Good morning sir.", "finish_reason": "stop"},
+            {"content": "", "finish_reason": "length"},
+            {"content": "", "finish_reason": "length"},
+        ]
+        agent = self._agent(tmp_path, engine)
+
+        with (
+            patch.object(agent._executor, "execute", side_effect=[self._collect()]),
+            patch.dict(
+                sys.modules,
+                {"openjarvis.agents.digest_evaluator": stub},
+            ),
+        ):
+            result = agent.run("Generate morning digest")
+
+        evaluator.evaluate.assert_called_once()
+        assert result.content == "Good morning sir."
+
+    def test_the_evaluator_module_is_absent_and_the_digest_still_ships(
+        self, tmp_path
+    ):
+        """Documents live behaviour: the evaluate/regenerate step never runs,
+        so every stored digest carries quality_score 0.0. Delete this test if
+        digest_evaluator is ever actually written."""
+        import importlib.util
+
+        assert importlib.util.find_spec("openjarvis.agents.digest_evaluator") is None
+
+        engine = MagicMock()
+        engine.generate.return_value = {
+            "content": "Good morning sir.",
+            "finish_reason": "stop",
+        }
+        agent = self._agent(tmp_path, engine)
+
+        with patch.object(agent._executor, "execute", side_effect=[self._collect()]):
+            result = agent.run("Generate morning digest")
+
+        assert result.content == "Good morning sir."
+        assert engine.generate.call_count == 1
