@@ -49,12 +49,6 @@ export function useStreamingTts() {
       // Already closing.
     }
     socketRef.current = null;
-    try {
-      void ctxRef.current?.close();
-    } catch {
-      // Already closed.
-    }
-    ctxRef.current = null;
     scheduledUntilRef.current = 0;
     // The orb and the top pulse both read this, and the wake-word listener
     // stays suspended while it is true. Leaving it set after a manual stop
@@ -62,7 +56,18 @@ export function useStreamingTts() {
     useAppStore.getState().setAudioPlaying(false);
   }, []);
 
-  useEffect(() => teardown, [teardown]);
+  useEffect(
+    () => () => {
+      teardown();
+      try {
+        void ctxRef.current?.close();
+      } catch {
+        // Already closed.
+      }
+      ctxRef.current = null;
+    },
+    [teardown],
+  );
 
   const speak = useCallback(
     (text: string): Promise<boolean> =>
@@ -80,19 +85,29 @@ export function useStreamingTts() {
           resolve(spoke);
         };
 
+        // Reused for the hook's lifetime. Building one per reply orphaned the
+        // previous context, and browsers cap how many can exist at once — so
+        // after a handful of replies construction threw, and every reply after
+        // that silently fell back to the batch player.
         let ctx: AudioContext;
         try {
-          const Ctor =
-            window.AudioContext ||
-            (window as unknown as { webkitAudioContext: typeof AudioContext })
-              .webkitAudioContext;
-          // Matching Cartesia's rate avoids resampling every chunk.
-          ctx = new Ctor({ sampleRate: 24000 });
+          const existing = ctxRef.current;
+          if (existing && existing.state !== 'closed') {
+            ctx = existing;
+          } else {
+            const Ctor =
+              window.AudioContext ||
+              (window as unknown as { webkitAudioContext: typeof AudioContext })
+                .webkitAudioContext;
+            // Matching Cartesia's rate avoids resampling every chunk.
+            ctx = new Ctor({ sampleRate: 24000 });
+          }
         } catch {
           finish(false);
           return;
         }
         ctxRef.current = ctx;
+        stopAnalyserRef.current?.();
         const gain = ctx.createGain();
         gainRef.current = gain;
         try {
@@ -118,12 +133,41 @@ export function useStreamingTts() {
         const setPlaying = (playing: boolean) =>
           useAppStore.getState().setAudioPlaying(playing);
 
-        socket.onopen = () => socket.send(JSON.stringify({ text }));
+        // A fresh AudioContext starts suspended under the browser's autoplay
+        // policy. Without this the buffers below are scheduled and simply
+        // never heard.
+        socket.onopen = () => {
+          void ctx.resume().catch(() => {});
+          socket.send(JSON.stringify({ text }));
+        };
+
+        // Clears the flag once whatever is already scheduled has finished.
+        // Every exit path uses it: leaving audioPlaying set strands the orb in
+        // its speaking state and keeps the wake word suspended.
+        const settlePlaying = () => {
+          const remaining = Math.max(
+            0,
+            scheduledUntilRef.current - ctx.currentTime,
+          );
+          window.setTimeout(
+            () => setPlaying(false),
+            Math.ceil(remaining * 1000) + 50,
+          );
+        };
 
         socket.onmessage = (event) => {
           if (typeof event.data === 'string') {
             const msg = interpretTtsMessage(event.data);
             if (msg.kind === 'start') {
+              if (ctx.state !== 'running') {
+                // Resume was refused — no user gesture yet. Nothing would be
+                // audible, so report "not spoken" and let the caller fall
+                // back to the <audio> element, which has its own autoplay
+                // handling. Silence here used to look like a hung reply.
+                finish(false);
+                setPlaying(false);
+                return;
+              }
               sampleRateRef.current = msg.sampleRate;
               scheduledUntilRef.current = 0;
               started = true;
@@ -134,18 +178,15 @@ export function useStreamingTts() {
               finish(true);
             } else if (msg.kind === 'error') {
               // Recoverable only before audio began.
-              if (!msg.started && !started) finish(false);
-              else finish(true);
+              if (!msg.started && !started) {
+                finish(false);
+                setPlaying(false);
+              } else {
+                finish(true);
+                settlePlaying();
+              }
             } else if (msg.kind === 'done') {
-              // Let queued audio finish; the last source clears the flag.
-              const remaining = Math.max(
-                0,
-                scheduledUntilRef.current - ctx.currentTime,
-              );
-              window.setTimeout(
-                () => setPlaying(false),
-                Math.ceil(remaining * 1000) + 50,
-              );
+              settlePlaying();
               finish(true);
             }
             return;
@@ -172,9 +213,16 @@ export function useStreamingTts() {
           };
         };
 
-        socket.onerror = () => finish(started);
+        socket.onerror = () => {
+          finish(started);
+          if (started) settlePlaying();
+          else setPlaying(false);
+        };
         socket.onclose = () => {
-          if (!started) setPlaying(false);
+          // Also on the started path: a socket that drops mid-reply used to
+          // leave the orb speaking forever.
+          if (started) settlePlaying();
+          else setPlaying(false);
           finish(started);
         };
       }),
