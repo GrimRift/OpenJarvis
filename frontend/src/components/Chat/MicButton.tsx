@@ -35,6 +35,11 @@ export function MicButton({ state, onClick, disabled, reason }: MicButtonProps) 
       <button
         onClick={onClick}
         disabled={isInactive}
+        // The label already exists for the hover tooltip; without these it
+        // reaches sighted mouse users only. That matters more on the voice
+        // page, where this is one of three controls and there is no text.
+        aria-label={tooltipText}
+        title={tooltipText}
         className="p-2 rounded-xl transition-all shrink-0"
         style={{
           background: state === 'recording'

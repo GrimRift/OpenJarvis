@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Square, Paperclip, Search, VolumeX } from 'lucide-react';
+import { Send, Square, Paperclip, Search, VolumeX, Volume2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore, generateId } from '../../lib/store';
 import { streamChat, streamResearch } from '../../lib/sse';
@@ -119,7 +119,14 @@ function useResearchCorpusSync(enabled: boolean): {
   return state;
 }
 
-export function InputArea() {
+/**
+ * `voiceOnly` renders just the controls — Deep Research, microphone, and a
+ * speech mute — with no text field, send button or keyboard hint. The voice
+ * page uses it so that surface stays purely spoken while still driving the
+ * same wake word, transcription, sending and streaming-speech logic that
+ * lives in this component.
+ */
+export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -1107,6 +1114,67 @@ export function InputArea() {
       sendMessage();
     }
   };
+
+  if (voiceOnly) {
+    const iconButton = (
+      active: boolean,
+      onClick: () => void,
+      label: string,
+      icon: React.ReactNode,
+      disabled = false,
+    ) => (
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-pressed={active}
+        aria-label={label}
+        title={label}
+        className="p-2.5 rounded-full transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+        style={{
+          background: active ? 'var(--color-accent-subtle)' : 'transparent',
+          border: `1px solid ${active ? 'var(--color-accent)' : 'var(--color-border)'}`,
+          color: active ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
+        }}
+      >
+        {icon}
+      </button>
+    );
+
+    return (
+      <div className="flex items-center justify-center gap-3">
+        {iconButton(
+          deepResearch,
+          () => setDeepResearch(!deepResearch),
+          deepResearch ? 'Deep Research: on' : 'Deep Research: off',
+          <Search size={16} />,
+          streamState.isStreaming,
+        )}
+
+        <MicButton
+          state={effectiveSpeechState}
+          onClick={handleMicClick}
+          disabled={micDisabled}
+          reason={micReason}
+        />
+
+        {/* Silences Sage. While a reply is being spoken it also cuts that
+            reply short, so one control covers both "stop this" and "stop
+            doing this". */}
+        {iconButton(
+          !voiceRepliesEnabled,
+          () => {
+            if (audioPlaying) stopSpeaking();
+            useAppStore
+              .getState()
+              .updateSettings({ voiceRepliesEnabled: !voiceRepliesEnabled });
+          },
+          voiceRepliesEnabled ? 'Mute replies' : 'Replies muted',
+          voiceRepliesEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />,
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="px-4 pb-4 pt-2" style={{ maxWidth: 'var(--chat-max-width)', margin: '0 auto', width: '100%' }}>

@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { PanelRight } from 'lucide-react';
 import { InputArea } from '../components/Chat/InputArea';
 import { OrbVisual, useOrbState } from '../components/Chat/OrbVisual';
+import { VoiceTranscript } from '../components/Chat/VoiceTranscript';
 import { useAppStore } from '../lib/store';
 
-const ORB_SIZE = 420;
+const ORB_SIZE = 588;
 
 const STATUS: Record<ReturnType<typeof useOrbState>, string> = {
   idle: 'STANDING BY',
@@ -14,17 +16,18 @@ const STATUS: Record<ReturnType<typeof useOrbState>, string> = {
 /**
  * Voice-first surface (M30).
  *
- * The orb dominates the centre, the last exchange sits quietly beneath it, and
- * text entry is deliberately small and secondary. Everything underneath —
- * wake word, transcription, streaming speech — is the same pipeline the main
- * chat uses, so this page composes existing pieces rather than reimplementing
- * them: `InputArea` is reused whole, just given a narrow column.
+ * Spoken, not typed: the orb holds the centre, the controls below it are
+ * icons only, and the conversation is read from a transcript that floats over
+ * the right edge. Everything underneath — wake word, transcription, streaming
+ * speech — is the same pipeline the main chat uses, so this page composes
+ * existing pieces rather than reimplementing them.
  */
 export function VoicePage() {
   const orbState = useOrbState();
   const messages = useAppStore((s) => s.messages);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const startNewChat = useAppStore((s) => s.startNewChat);
+  const [showTranscript, setShowTranscript] = useState(true);
   const startedRef = useRef(false);
 
   useEffect(() => {
@@ -37,61 +40,60 @@ export function VoicePage() {
     startNewChat();
   }, [startNewChat]);
 
-  const exchange = useMemo(() => {
-    const assistant = [...messages]
-      .reverse()
-      .find((m) => m.role === 'assistant' && m.content.trim());
-    const asked = [...messages].reverse().find((m) => m.role === 'user');
-    return { asked: asked?.content ?? '', answered: assistant?.content ?? '' };
-  }, [messages]);
-
   return (
-    // The orb must sit on the true centre of the window, not the centre of
-    // "window minus sidebar". A phantom right-hand gutter the width of the
-    // sidebar rebalances it — the same trick ChatPage uses for its column.
-    // The gutter includes px-6's own 24px because `pr` overrides `px` on that
-    // side: without it the orb lands 12px right of centre.
-    // Collapsing the sidebar with its own toggle then makes this full-bleed,
-    // which is what "collapsible" is for; this page does not mutate that
-    // global state itself, since it would leak to every other page.
-    <div
-      className={`flex h-full w-full flex-col items-center justify-center overflow-hidden px-6 transition-[padding] duration-200 ease-in-out ${
-        sidebarOpen ? 'md:pr-[calc(260px+1.5rem)]' : ''
-      }`}
-    >
+    <div className="relative h-full w-full overflow-hidden">
+      {/* The orb holds the true window centre, not the centre of "window minus
+          sidebar" — hence the phantom gutter, which includes px-6's own 24px
+          because `pr` overrides `px` on that side. The transcript is absolutely
+          positioned and so contributes nothing here, which is what keeps the
+          orb still when it is shown or hidden. */}
       <div
-        className="text-[11px] tracking-[0.28em] mb-2 select-none"
-        style={{ color: 'var(--color-text-tertiary)' }}
+        className={`flex h-full w-full flex-col items-center justify-center px-6 transition-[padding] duration-200 ease-in-out ${
+          sidebarOpen ? 'md:pr-[calc(260px+1.5rem)]' : ''
+        }`}
       >
-        {STATUS[orbState]}
-      </div>
+        <div
+          className="text-[11px] tracking-[0.28em] mb-3 select-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
+          {STATUS[orbState]}
+        </div>
 
-      <OrbVisual state={orbState} size={ORB_SIZE} />
+        <OrbVisual state={orbState} size={ORB_SIZE} />
 
-      {/* The last exchange only — readable, never a transcript. */}
-      <div className="mt-6 w-full max-w-2xl text-center min-h-[4.5rem]">
-        {exchange.asked && (
-          <p
-            className="text-sm mb-1.5 truncate"
-            style={{ color: 'var(--color-text-tertiary)' }}
+        {/* Controls only — this surface is spoken, not typed. */}
+        <div className="mt-8 flex items-center gap-3">
+          <InputArea voiceOnly />
+          <button
+            type="button"
+            onClick={() => setShowTranscript((v) => !v)}
+            aria-pressed={showTranscript}
+            aria-label={showTranscript ? 'Hide transcript' : 'Show transcript'}
+            title={showTranscript ? 'Hide transcript' : 'Show transcript'}
+            className="p-2.5 rounded-full transition-colors cursor-pointer"
+            style={{
+              background: showTranscript
+                ? 'var(--color-accent-subtle)'
+                : 'transparent',
+              border: `1px solid ${
+                showTranscript ? 'var(--color-accent)' : 'var(--color-border)'
+              }`,
+              color: showTranscript
+                ? 'var(--color-accent)'
+                : 'var(--color-text-tertiary)',
+            }}
           >
-            {exchange.asked}
-          </p>
-        )}
-        {exchange.answered && (
-          <p
-            className="text-[15px] leading-relaxed line-clamp-4"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            {exchange.answered}
-          </p>
-        )}
+            <PanelRight size={16} />
+          </button>
+        </div>
       </div>
 
-      {/* Text entry stays deliberately small and secondary. */}
-      <div className="mt-6 w-full max-w-lg">
-        <InputArea />
-      </div>
+      {showTranscript && (
+        <VoiceTranscript
+          messages={messages}
+          onClose={() => setShowTranscript(false)}
+        />
+      )}
     </div>
   );
 }
