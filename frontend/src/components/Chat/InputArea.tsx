@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Square, Paperclip, Search } from 'lucide-react';
+import { Send, Square, Paperclip, Search, VolumeX } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore, generateId } from '../../lib/store';
 import { streamChat, streamResearch } from '../../lib/sse';
@@ -146,7 +146,7 @@ export function InputArea() {
   // useSpeech's `speechState`, so without this the orb would sit idle for a
   // whole spoken turn and the mic button would offer to start another.
   const [fluxTurnActive, setFluxTurnActive] = useState(false);
-  const { speak: speakStreaming } = useStreamingTts();
+  const { speak: speakStreaming, stop: stopSpeaking } = useStreamingTts();
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
 
@@ -157,6 +157,7 @@ export function InputArea() {
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const fluxEnabled = useAppStore((s) => s.settings.fluxEnabled);
+  const voiceRepliesEnabled = useAppStore((s) => s.settings.voiceRepliesEnabled);
   const fluxEagerEnabled = useAppStore((s) => s.settings.fluxEagerEnabled);
   // Flux replaces the local silence timer as the end-of-turn decision.
   // Declared here because handleMicClick, defined well above the Flux
@@ -703,6 +704,7 @@ export function InputArea() {
       // noise, false-trigger, and start a new recording before the reply
       // has even started speaking.
       if (
+        voiceRepliesEnabled &&
         shouldSynthesizeReplyAudio(
           wasVoice,
           content,
@@ -761,6 +763,7 @@ export function InputArea() {
     temperature,
     maxTokens,
       speakStreaming,
+      voiceRepliesEnabled,
   ]);
 
   // Hands-free stop: transcribes and sends immediately, unlike a manual
@@ -1172,6 +1175,20 @@ export function InputArea() {
           </button>
         ) : (
           <div className="flex items-center gap-1">
+            {audioPlaying && (
+              <button
+                onClick={stopSpeaking}
+                title="Stop speaking"
+                aria-label="Stop speaking"
+                className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer"
+                style={{
+                  background: 'var(--color-bg-tertiary)',
+                  color: 'var(--color-accent)',
+                }}
+              >
+                <VolumeX size={16} />
+              </button>
+            )}
             <MicButton
               state={effectiveSpeechState}
               onClick={handleMicClick}

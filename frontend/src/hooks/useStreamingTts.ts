@@ -48,6 +48,10 @@ export function useStreamingTts() {
     }
     ctxRef.current = null;
     scheduledUntilRef.current = 0;
+    // The orb and the top pulse both read this, and the wake-word listener
+    // stays suspended while it is true. Leaving it set after a manual stop
+    // would freeze the orb mid-speech and keep the mic disarmed.
+    useAppStore.getState().setAudioPlaying(false);
   }, []);
 
   useEffect(() => teardown, [teardown]);

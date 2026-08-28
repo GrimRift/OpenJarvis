@@ -132,6 +132,10 @@ interface Settings {
   wakeWordEnabled: boolean;
   wakeWordGreetingEnabled: boolean;
   continuousConversationEnabled: boolean;
+  // Speak replies to voice-originated turns. On by default -- it is the point
+  // of talking to Sage -- but a streamed reply has no player, so this and the
+  // stop control are the only ways to silence it.
+  voiceRepliesEnabled: boolean;
   // Deepgram Flux streaming transcription. Off by default: local
   // faster-whisper stays the default and the fallback.
   fluxEnabled: boolean;
@@ -155,6 +159,7 @@ function loadSettings(): Settings {
     wakeWordEnabled: false,
     wakeWordGreetingEnabled: true,
     continuousConversationEnabled: false,
+    voiceRepliesEnabled: true,
     fluxEnabled: false,
     fluxEagerEnabled: false,
   };
