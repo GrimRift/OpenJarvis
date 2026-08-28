@@ -12,6 +12,7 @@ import { rehypeCitations } from '../../lib/rehype-citations';
 import { XRayFooter } from './XRayFooter';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import { externalLinkAttributes, selectLinkPreview } from '../../lib/link-preview';
+import { protectCurrencyFromMath } from '../../lib/currency-math';
 import type { ChatMessage } from '../../types';
 
 function stripThinkTags(text: string): string {
@@ -105,6 +106,11 @@ export function MessageBubble({ message, isLive = false }: Props) {
   const isUser = message.role === 'user';
 
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
+  // Escaped only for rendering. Copy must still yield "$200", not "\$200".
+  const markdownContent = useMemo(
+    () => protectCurrencyFromMath(cleanContent),
+    [cleanContent],
+  );
   const linkPreview = useMemo(() => selectLinkPreview(message), [message]);
 
   // Build a ref→source lookup once per render. Memoized so the rehype plugin
@@ -183,7 +189,7 @@ export function MessageBubble({ message, isLive = false }: Props) {
               ),
             }}
           >
-            {cleanContent}
+            {markdownContent}
           </ReactMarkdown>
         </div>
       )}

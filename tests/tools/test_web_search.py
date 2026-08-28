@@ -362,4 +362,67 @@ class TestExecuteWithUrl:
         assert "Failed to fetch URL" in result.content
 
 
-__all__ = ["TestWebSearchTool"]
+class TestResultHygiene:
+    """Two defects seen in a live research transcript: literal "&#xA0;" in the
+    rendered answer, and the same source card shown twice."""
+
+    def _search(self, results):
+        fake_module, _ = _fake_tavily_module(search_return={"results": results})
+        tool = WebSearchTool(api_key="key")
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            return tool.execute(query="anything")
+
+    def test_html_entities_are_decoded_in_titles_and_snippets(self):
+        result = self._search(
+            [
+                {
+                    "title": "Tom&#xA0;&amp; Jerry",
+                    "url": "https://example.com/a",
+                    "content": "Costs&#xA0;rose&nbsp;sharply &amp; fell.",
+                }
+            ]
+        )
+
+        source = result.metadata["sources"][0]
+        assert source["title"] == "Tom & Jerry"
+        assert "&#xA0;" not in source["summary"]
+        assert "&amp;" not in source["summary"]
+        assert "&" in source["summary"]
+        # The model reads result.content, so it must be clean too.
+        assert "&#xA0;" not in result.content
+
+    def test_the_same_page_is_only_listed_once(self):
+        result = self._search(
+            [
+                {"title": "A", "url": "https://example.com/p", "content": "one"},
+                {"title": "A dup", "url": "https://example.com/p/", "content": "one"},
+                {"title": "A frag", "url": "https://example.com/p#x", "content": "one"},
+                {"title": "B", "url": "https://example.com/q", "content": "two"},
+            ]
+        )
+
+        urls = [s["url"] for s in result.metadata["sources"]]
+        assert urls == ["https://example.com/p", "https://example.com/q"]
+        assert result.content.count("Source: ") == 2
+
+    def test_distinct_pages_are_all_kept(self):
+        result = self._search(
+            [
+                {"title": "A", "url": "https://example.com/a", "content": "one"},
+                {"title": "B", "url": "https://example.com/b", "content": "two"},
+            ]
+        )
+        assert len(result.metadata["sources"]) == 2
+
+    def test_a_result_without_a_url_is_still_reported(self):
+        """Missing URLs must not all collapse into one deduplicated entry."""
+        result = self._search(
+            [
+                {"title": "A", "url": "", "content": "one"},
+                {"title": "B", "url": "", "content": "two"},
+            ]
+        )
+        assert len(result.metadata["sources"]) == 2
+
+
+__all__ = ["TestWebSearchTool", "TestResultHygiene"]

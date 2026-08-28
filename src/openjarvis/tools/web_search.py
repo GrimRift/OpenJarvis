@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html as _html
 import logging
 import os
 from typing import Any
@@ -12,6 +13,20 @@ from openjarvis.security.ssrf import check_ssrf
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_text(value: Any) -> str:
+    """Decode HTML entities and normalise whitespace in a provider string.
+
+    Tavily returns titles and snippets straight from the page, entities and
+    all, so "&#xA0;" and "&amp;" reached both the model and the transcript
+    verbatim.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    import re as _re
+
+    return _re.sub(r"\s+", " ", _html.unescape(value)).strip()
 
 
 @ToolRegistry.register("web_search")
@@ -109,7 +124,11 @@ class WebSearchTool(BaseTool):
         )
         # Strip HTML tags
         text = _re.sub(r"<[^>]+>", " ", html)
-        # Collapse whitespace
+        # Decode entities only after tags are gone, so an encoded "&lt;script&gt;"
+        # cannot become a real tag. Without this, "&#xA0;" reached the model and
+        # the transcript verbatim.
+        text = _html.unescape(text)
+        # Collapse whitespace (NBSP included, now that entities are decoded)
         text = _re.sub(r"\s+", " ", text).strip()
         if len(text) > max_chars:
             text = text[:max_chars] + "\n\n[Content truncated]"
@@ -175,10 +194,19 @@ class WebSearchTool(BaseTool):
             results = response.get("results", [])
             formatted_parts = []
             source_metadata = []
+            # Tavily can return the same page more than once (canonical plus a
+            # tracking or AMP variant), which surfaced as duplicate source cards
+            # and paid for the same snippet twice in the prompt.
+            seen_urls: set[str] = set()
             for r in results:
-                title = r.get("title", "Untitled")
+                title = _clean_text(r.get("title", "")) or "Untitled"
                 url = r.get("url", "")
-                content = r.get("content", "") or r.get("snippet", "")
+                if url:
+                    key = url.split("#", 1)[0].rstrip("/")
+                    if key in seen_urls:
+                        continue
+                    seen_urls.add(key)
+                content = _clean_text(r.get("content", "") or r.get("snippet", ""))
                 images = r.get("images") or []
                 first_image = images[0] if images else None
                 if isinstance(first_image, dict):
@@ -188,7 +216,9 @@ class WebSearchTool(BaseTool):
                         "title": title,
                         "url": url,
                         "summary": content[:500],
-                        "image_url": first_image if isinstance(first_image, str) else None,
+                        "image_url": (
+                            first_image if isinstance(first_image, str) else None
+                        ),
                     }
                 )
                 formatted_parts.append(
