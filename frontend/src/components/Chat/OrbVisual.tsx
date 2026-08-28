@@ -51,13 +51,13 @@ function makeParticles(n: number): Particle[] {
 // the orb honour these numbers literally: raised across two rounds of live
 // tuning to about 1.44x idle and 1.69x listening/speaking of the original.
 const SPEED_MAP: Record<OrbState, number> = {
-  idle: 0.00504,
+  idle: 0.0045,
   listening: 0.01248,
-  speaking: 0.02197,
+  speaking: 0.023,
 };
 const BRIGHT_MAP: Record<OrbState, number> = { idle: 0.85, listening: 1.05, speaking: 1.3 };
 
-export function OrbVisual({ state, size = 285 }: { state: OrbState; size?: number }) {
+export function OrbVisual({ state, size = 328 }: { state: OrbState; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
   const particlesRef = useRef<Particle[] | undefined>(undefined);
