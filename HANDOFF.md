@@ -308,7 +308,7 @@ Groundwork done, so picking this up is short:
 - Until then the token expires roughly weekly. `scripts/reauth-google.py` repairs it in a minute.
 
 
-## Sage persona, Web parity, and latency pass (2026-08-28, latest)
+## Sage persona, Web parity, and latency pass (2026-08-28)
 
 **Feature HEAD before this handoff update: `3b43494`** (`perf: reduce Sage response latency`). The immediately preceding verified commits are `2d0e97e` (compact voice player), `f9bedce` (seven-day inbox recency), `e7bad07` (global Sage persona), `9a2ef7f` (safe clickable Web previews), and `195f563` (Telegram/Web approval execution). Nothing is pushed; confirm before pushing.
 
@@ -329,6 +329,122 @@ Verification: **104 backend tests passed** across the changed server, speech, di
 3. **One Luna digest attempt returned empty content** after consuming exactly 1,024 completion tokens with `finish_reason=length`; the next attempt succeeded. Add a bounded fail-closed retry/headroom policy for an empty reasoning-model result, with a regression test, rather than treating an empty generation as a valid digest.
 4. The global Jarvis-like Sage persona is deployed everywhere, but the user has not yet made a final qualitative judgment on its personality. Do not rewrite it again without asking what specifically feels wrong.
 
+## Context payload, two rendering defects, and the empty digest (2026-08-28, latest)
+
+Picks up items 1-3 of the previous section's "concrete next work".
+
+### Tool schemas were the context, not the prompt
+
+Profiled before changing anything (`tiktoken`, live 23-tool config):
+
+| component | tokens |
+|---|---|
+| tool schemas (23 tools) | **3,791** |
+| entire system prompt | 1,540 |
+| — of which `agent_template` | 572 |
+| — `soul` (SOUL.md) | 433 |
+| — `user` | 257 |
+| — `memory` | 108 |
+| — `current_datetime` + reminder + tool_use_reminder | 170 |
+
+**Schemas are 71% of the per-turn baseline and the prompt is not the problem.**
+Worse, they are re-sent on every turn of a tool-calling loop, which is why a
+single inbox question reached 18,092 input tokens. By group: coding/git 1,270,
+core 744, scheduling 693, media 552, class 400, notify 132.
+
+`agents/tool_routing.py` sends only the schemas a request could plausibly need,
+filtered once per request in `OrchestratorAgent.run()` (never per turn, so the
+payload stays byte-identical across the loop and a provider's prompt cache
+keeps hitting).
+
+**Measured across 17 real request wordings: mean 2,214 tokens saved per turn,
+58% of the tool payload.** "who are you" drops 3,815 → 882.
+
+Three properties keep it from hiding a capability, which is the failure mode
+that matters — a hidden tool reads to the user as "Sage can't do that":
+
+1. **Core tools are always sent** (`retrieval`, `web_search`, `world_time`,
+   `calculator`, `notify_windows`). `retrieval` is core on purpose: "check my
+   inbox", "what did I say about X" and "when is my flight" all resolve
+   through it and share no vocabulary.
+2. **A tool in no group is always sent.** Adding a tool cannot silently hide
+   it; it must be assigned to a group deliberately. There is a test for this.
+3. **Matching uses the recent conversation, not just the newest message**, so
+   "open spotify" → "do it" keeps the media group.
+
+Patterns are deliberately over-inclusive: a false positive costs tokens, a
+false negative costs a capability.
+
+**Kill switch: `[agent] route_tools = false`** sends everything. Use it to rule
+routing out first if a "Sage says it can't do X" report ever appears.
+
+**Not done — the remaining floor.** Routing trims schemas; it does not touch
+the re-send-per-turn multiplier or conversation history. If more is needed,
+measure those two before adding cleverness here.
+
+### Currency rendered as math; entities and duplicates in web results
+
+`$200 ... $1` in one answer was paired by `remark-math` and KaTeX then ate
+every space between them, producing `200invoiceAIcreditswereactivated...1`.
+`frontend/src/lib/currency-math.ts` escapes a `$` only when it begins
+something shaped like money, leaving `$x^2$`, `$$...$$` and `$2x + 1$` as real
+math, and skipping code spans and fenced blocks where a backslash would be
+visible. The one real loss is inline math opening with a bare number followed
+by a non-word character (`$1 + 1$`); use `$$1 + 1$$`. Escaped text is used for
+rendering only — **the copy button still yields `$200`, not `\$200`**.
+
+`web_search.py` had two defects feeding both the transcript and the model:
+`_fetch_url_text` stripped tags but never decoded entities, so `&#xA0;`
+survived verbatim; and Tavily can return the same page twice (canonical plus
+an AMP or tracking variant), which showed as duplicate source cards and paid
+for the same snippet twice in the prompt. Entities are now decoded **after**
+tag-stripping (so an encoded `&lt;script&gt;` cannot become a real tag), and
+results are deduplicated by URL ignoring trailing slash and fragment. Results
+with no URL are never collapsed together.
+
+Also cleared the pre-existing `image_url` E501 so `web_search.py` lints clean.
+
+### An empty generation is not an empty news day
+
+One live Luna digest consumed exactly 1,024 completion tokens, finished with
+`finish_reason="length"`, returned no content, and the next attempt succeeded.
+`MorningDigestAgent` treated the empty string as a valid briefing.
+
+`_generate_narrative()` now retries **once** with real headroom
+(`max(max_tokens * 4, 4096)`) and, if the model returns nothing twice, fails
+closed: no artifact stored, no TTS, and a message that cannot be mistaken for
+"you have nothing waiting". Content that is entirely `<think>` tags counts as
+empty for the same reason.
+
+Two adjacent bugs fixed in the same pass:
+
+- **`BaseAgent._generate` could not accept a `max_tokens` override** — it
+  passed the stored default positionally alongside `**extra_kwargs`, so any
+  caller supplying one got "got multiple values for keyword argument". Stored
+  defaults are now a dict that extra kwargs update.
+- **An empty *revision* silently destroyed a good briefing.** The evaluator's
+  regenerate step assigned its result unconditionally, so a low score plus an
+  empty rewrite cost the whole digest. It now keeps the original.
+
+**Finding, not fixed: `openjarvis.agents.digest_evaluator` does not exist.**
+The import inside `run()` raises `ImportError` on every real run and is
+swallowed by a bare `except Exception: pass`, so the self-evaluate/regenerate
+step has never executed and every stored digest carries `quality_score = 0.0`.
+Left alone deliberately (writing an evaluator was not in scope), but the guard
+above is now correct for when it lands, and a test documents the live
+behaviour. Decide whether to build it or delete the dead branch.
+
+### Verification
+
+Ruff clean on every changed file. Frontend `tsc --noEmit` clean; **84 vitest**
+including 9 new currency cases.
+
+**Every new regression test was run against the old implementation first**: 7
+failed there (2 web-search hygiene, 5 empty-generation), and the 4 control
+tests passed on both, as they should. Routing is new code, so its wiring
+tests are the control pair instead — trimmed-payload and routing-off assert
+opposite payloads through the same path.
+
 ## Unfinished work and exact next action
 
 The current state and exact next candidates are in **"Sage persona, Web parity, and latency pass (2026-08-28, latest)" immediately above**. Nothing is mid-implementation; the old uncommitted orb/dashboard warning below was resolved long ago and is retained only as historical context. All current source and handoff work is committed locally, not pushed; confirm with the user before pushing.
@@ -337,4 +453,4 @@ Next, in order (as of the entry directly below this one — **items 1 and 2 abov
 1. Do NOT build Microsoft Calendar/OneDrive yet — they'd hit the identical NU admin-consent wall against the same mailbox, no point until Outlook clears. Teams is lower priority for the same reason. `ProactiveAgent` (`agents/proactive_agent.py` — the daily-digest-with-tiered-approval-and-chat-notification agent, distinct from `morning_digest.py`) is still real, tested, but never wired to a real startup path — a candidate for further M26 work if the user wants to keep going in that direction, but confirm with them before starting, per `AGENTS.md`'s "ask before assuming roadmap status" guidance.
 2. ~~A separate, undocumented body of work was flagged as sitting uncommitted in the tree back at `167ebb3`~~ Resolved: that work (orb visualization, dashboard leaderboard card, M26 tools) is committed — `5dbc371`, `feat: wake-word backend wiring, UI redesign (orb visual, dashboard), M26 tools`. Verified via `git log -- frontend/src/components/Chat/OrbVisual.tsx`. No longer a concern.
 
-**For anything past this point, use "Sage persona, Web parity, and latency pass (2026-08-28, latest)" above as the current state; this numbered list is historical.**
+**For anything past this point, use "Context payload, two rendering defects, and the empty digest (2026-08-28, latest)" above as the current state; this numbered list is historical.**

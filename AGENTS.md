@@ -87,6 +87,14 @@ Confirmed environmental or order-dependent, identical on a clean tree:
 full run, fails alone). Repo-wide `ruff check .` is also not clean; lint only
 the files you changed.
 
+**The failing set rotates between runs.** `pytest-randomly` shuffles order and
+several tests here leak state, so a wide run fails a different subset each
+time — `test_git_tool`, `test_template_loader_security`,
+`test_manager::TestCheckpoints` and `test_trace_recording` have all appeared,
+and all pass in isolation. Before blaming a change for one of these, re-run
+with `-p no:randomly` and compare against a stashed tree. A failure that moves
+when the seed moves is pollution, not your diff.
+
 ## Known traps in this codebase
 
 Each of these cost a real debugging session. Check them before assuming a
