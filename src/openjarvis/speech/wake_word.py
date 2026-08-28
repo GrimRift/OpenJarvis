@@ -8,6 +8,7 @@ provides (openWakeWord's own Colab notebook trains it; only the resulting
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -46,8 +47,15 @@ DETECTION_PATIENCE = 2
 WARMUP_FRAMES = 25
 
 
+# Guards the one-time openwakeword import/model download shared by every
+# detector instance.
+_LOAD_LOCK = threading.Lock()
+
+
 class WakeWordDetector:
-    def __init__(self, model_path: str = "", threshold: float = DEFAULT_THRESHOLD) -> None:
+    def __init__(
+        self, model_path: str = "", threshold: float = DEFAULT_THRESHOLD
+    ) -> None:
         self._model_path = model_path
         self._threshold = threshold
         self._model = None
@@ -72,6 +80,24 @@ class WakeWordDetector:
             return
         if not self.available:
             raise RuntimeError("Wake word model not configured or file missing")
+
+        # Serialised across every detector, because each WebSocket connection
+        # gets its own instance (clone()) and scores frames on its own thread
+        # via asyncio.to_thread. Two sockets opening together therefore raced
+        # this lazy import: one thread was still executing openwakeword's
+        # __init__ while the other reached openwakeword.FEATURE_MODELS and got
+        # "partially initialized module ... most likely due to a circular
+        # import". It recovered on reconnect, so it looked like noise, but the
+        # first wake word after a server restart could be lost.
+        with _LOAD_LOCK:
+            if self._model is not None:
+                return
+            self._load_locked()
+
+    def _load_locked(self) -> None:
+        # Imported before use so the package's __init__ has finished running;
+        # importing only the submodules can leave the parent half-built.
+        import openwakeword  # noqa: F401
         from openwakeword.model import Model
         from openwakeword.utils import download_models
 
