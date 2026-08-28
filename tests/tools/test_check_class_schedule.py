@@ -29,7 +29,6 @@ def _make_tool(tmp_path, schedule_path=None):
 
     return CheckClassScheduleTool(
         schedule_path=str(schedule_path) if schedule_path else None,
-        state_path=tmp_path / "state.json",
     )
 
 
@@ -88,30 +87,27 @@ def test_day_of_week_boundary(tmp_path):
     assert result.metadata["upcoming"] == []
 
 
-def test_dedup_same_occurrence_not_renotified(tmp_path):
+def test_reading_the_schedule_twice_still_reports_the_class(tmp_path):
+    """This tool is read-only. It used to record a "notified" marker just for
+    looking, so the 08:00 day-summary task silently consumed every reminder on
+    the schedule hours before any of them were due."""
     now = datetime(2026, 3, 10, 9, 50)
-    day_name = now.strftime("%A")
-    schedule = _write_schedule(tmp_path, day_name)
+    schedule = _write_schedule(tmp_path, now.strftime("%A"))
     tool = _make_tool(tmp_path, schedule)
 
     first = tool.execute(now=now, lookahead_minutes=15)
     second = tool.execute(now=now + timedelta(minutes=1), lookahead_minutes=15)
 
     assert len(first.metadata["upcoming"]) == 1
-    assert second.metadata["upcoming"] == []
-
-
-def test_dedup_resets_next_day(tmp_path):
-    now = datetime(2026, 3, 10, 9, 50)
-    day_name = now.strftime("%A")
-    schedule = _write_schedule(tmp_path, day_name)
-    tool = _make_tool(tmp_path, schedule)
-
-    tool.execute(now=now, lookahead_minutes=15)
-    next_week_same_day = now + timedelta(days=7)  # same weekday, new date
-    second = tool.execute(now=next_week_same_day, lookahead_minutes=15)
-
     assert len(second.metadata["upcoming"]) == 1
+
+
+def test_the_checker_owns_no_notification_state(tmp_path):
+    """Suppression belongs to whatever delivers a notification. Holding it here
+    is what let the day-summary read cancel the day's reminders."""
+    tool = _make_tool(tmp_path, _write_schedule(tmp_path, "Monday"))
+
+    assert not hasattr(tool, "_state_path")
 
 
 def test_missing_file_returns_failure(tmp_path):

@@ -7,11 +7,18 @@ notification itself — it only returns structured data; the caller (an agent
 prompt, wired via ``notify_windows``) decides what to do with it. Keeping the
 side effect isolated to one tool keeps this one a pure, easily-testable
 function of (schedule file, now) -> upcoming classes.
+
+That purity was previously untrue: this tool also wrote the "already
+notified" state, so *reading* the schedule consumed the day's reminders. The
+08:00 "what's coming up today" task summarised the day with a wide lookahead
+and silently burned every class on it, and asking "what's my schedule today"
+did the same — the 11:00 reminder never fired because the 08:00 summary had
+already marked it sent. Once-per-day suppression belongs to whatever actually
+delivers a notification, so it now lives in ``notify_class_schedule``.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from datetime import datetime
@@ -19,7 +26,6 @@ from datetime import time as dt_time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from openjarvis.core.paths import get_data_dir
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
@@ -30,10 +36,6 @@ _TIME_RANGE_SEP = re.compile(r"[\u2013\u2014-]")  # en dash, em dash, hyphen
 
 def _default_schedule_path() -> str:
     return os.environ.get("OPENJARVIS_CLASS_SCHEDULE_PATH", _DEFAULT_SCHEDULE_PATH)
-
-
-def _default_state_path() -> Path:
-    return get_data_dir() / "class_schedule_notify_state.json"
 
 
 def _parse_clock_time(raw: str) -> dt_time:
@@ -87,13 +89,8 @@ class CheckClassScheduleTool(BaseTool):
 
     tool_id = "check_class_schedule"
 
-    def __init__(
-        self,
-        schedule_path: Optional[str] = None,
-        state_path: Optional[Path] = None,
-    ) -> None:
+    def __init__(self, schedule_path: Optional[str] = None) -> None:
         self._schedule_path = Path(schedule_path or _default_schedule_path())
-        self._state_path = Path(state_path) if state_path else _default_state_path()
 
     @property
     def spec(self) -> ToolSpec:
@@ -109,8 +106,8 @@ class CheckClassScheduleTool(BaseTool):
                 "on this tool alone: pass a much larger lookahead_minutes "
                 "(e.g. 1440 for the rest of today) or read/search the "
                 "schedule note directly instead. Returns upcoming classes "
-                "in metadata.upcoming, deduplicated so the same class "
-                "occurrence is only ever reported once per day."
+                "in metadata.upcoming. Read-only: calling this never "
+                "suppresses a later reminder."
             ),
             parameters={
                 "type": "object",
@@ -157,7 +154,6 @@ class CheckClassScheduleTool(BaseTool):
             )
 
         upcoming = self._find_upcoming(rows, now, lookahead_minutes)
-        upcoming = self._drop_already_notified(upcoming, now)
 
         if not upcoming:
             return ToolResult(
@@ -212,43 +208,3 @@ class CheckClassScheduleTool(BaseTool):
                     }
                 )
         return found
-
-    @staticmethod
-    def _occurrence_key(item: Dict[str, Any], now: datetime) -> str:
-        return f"{item['subject_code']}|{now.strftime('%A')}|{item['section']}"
-
-    def _drop_already_notified(
-        self, upcoming: List[Dict[str, Any]], now: datetime
-    ) -> List[Dict[str, Any]]:
-        state = self._load_state()
-        today_str = now.date().isoformat()
-        if state.get("date") != today_str:
-            state = {"date": today_str, "notified": []}
-
-        notified = set(state.get("notified", []))
-        fresh: List[Dict[str, Any]] = []
-        for item in upcoming:
-            key = self._occurrence_key(item, now)
-            if key in notified:
-                continue
-            fresh.append(item)
-            notified.add(key)
-
-        if fresh:
-            state["notified"] = sorted(notified)
-            self._save_state(state)
-
-        return fresh
-
-    def _load_state(self) -> Dict[str, Any]:
-        try:
-            return json.loads(self._state_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
-
-    def _save_state(self, state: Dict[str, Any]) -> None:
-        try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(json.dumps(state), encoding="utf-8")
-        except OSError:
-            pass

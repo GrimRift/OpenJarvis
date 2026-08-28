@@ -11,18 +11,30 @@ multiple scheduled runs, fabricating a notification from classes later in
 the day framed as "starting soon." That's a small-model instruction-following
 gap no amount of prompt wording reliably closes — so for the automated
 schedule-check task specifically, the decision is removed from the model.
+
+Once-per-day suppression also lives here rather than in the checker, because
+it is a property of having *notified*, not of having *looked*. While the
+checker owned it, the daily "what's coming up today" summary consumed every
+reminder on the schedule hours before any of them were due.
 """
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
+from openjarvis.core.paths import get_data_dir
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.check_class_schedule import CheckClassScheduleTool
 from openjarvis.tools.notify_windows import deliver
+
+
+def _default_state_path() -> Path:
+    return get_data_dir() / "class_schedule_notify_state.json"
 
 
 @ToolRegistry.register("notify_class_schedule")
@@ -37,9 +49,8 @@ class NotifyClassScheduleTool(BaseTool):
         schedule_path: Optional[str] = None,
         state_path: Optional[Path] = None,
     ) -> None:
-        self._checker = CheckClassScheduleTool(
-            schedule_path=schedule_path, state_path=state_path
-        )
+        self._checker = CheckClassScheduleTool(schedule_path=schedule_path)
+        self._state_path = Path(state_path) if state_path else _default_state_path()
 
     @property
     def spec(self) -> ToolSpec:
@@ -73,7 +84,8 @@ class NotifyClassScheduleTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        check_result = self._checker.execute(**params)
+        now: datetime = params.get("now") or datetime.now()
+        check_result = self._checker.execute(**{**params, "now": now})
         if not check_result.success:
             return ToolResult(
                 tool_name="notify_class_schedule",
@@ -82,7 +94,10 @@ class NotifyClassScheduleTool(BaseTool):
             )
 
         upcoming = (check_result.metadata or {}).get("upcoming") or []
-        if not upcoming:
+        state = self._load_state(now)
+        already = set(state.get("notified", []))
+        pending = [c for c in upcoming if self._occurrence_key(c, now) not in already]
+        if not pending:
             return ToolResult(
                 tool_name="notify_class_schedule",
                 content="Nothing upcoming — no notification sent.",
@@ -90,8 +105,8 @@ class NotifyClassScheduleTool(BaseTool):
                 metadata={"notified": False, "upcoming": []},
             )
 
-        notified = []
-        for cls in upcoming:
+        notified: List[str] = []
+        for cls in pending:
             message = (
                 f"{cls['subject_description']} ({cls['subject_code']}) at "
                 f"{cls['start_time']} in {cls['room']} ({cls['mode']})"
@@ -99,17 +114,47 @@ class NotifyClassScheduleTool(BaseTool):
             try:
                 deliver("Class starting soon", message, duration="long")
             except Exception as exc:
+                # Record only what was delivered, so the classes that did not
+                # go out are retried on the next run instead of being
+                # suppressed for the rest of the day.
+                self._record(state, already, now)
                 return ToolResult(
                     tool_name="notify_class_schedule",
                     content=f"Failed to send notification: {exc}",
                     success=False,
-                    metadata={"notified": False, "upcoming": upcoming},
+                    metadata={"notified": bool(notified), "upcoming": pending},
                 )
+            already.add(self._occurrence_key(cls, now))
             notified.append(message)
 
+        self._record(state, already, now)
         return ToolResult(
             tool_name="notify_class_schedule",
             content=f"Notified about {len(notified)} class(es): " + "; ".join(notified),
             success=True,
-            metadata={"notified": True, "upcoming": upcoming},
+            metadata={"notified": True, "upcoming": pending},
         )
+
+    @staticmethod
+    def _occurrence_key(item: Dict[str, Any], now: datetime) -> str:
+        return f"{item['subject_code']}|{now.strftime('%A')}|{item['section']}"
+
+    def _load_state(self, now: datetime) -> Dict[str, Any]:
+        try:
+            state = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if state.get("date") != now.date().isoformat():
+            return {"date": now.date().isoformat(), "notified": []}
+        return state
+
+    def _record(self, state: Dict[str, Any], keys: set, now: datetime) -> None:
+        if set(state.get("notified", [])) == keys:
+            return
+        state["date"] = now.date().isoformat()
+        state["notified"] = sorted(keys)
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.write_text(json.dumps(state), encoding="utf-8")
+        except OSError:
+            pass
