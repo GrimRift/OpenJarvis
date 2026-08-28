@@ -292,3 +292,40 @@ class TestSpeculationIsServerSide:
         # No agent or tool path may be reachable from the speculative branch.
         for forbidden in ("ask", "run_agent", "ToolExecutor", "execute"):
             assert forbidden not in called
+
+
+class TestSpeculativeTemperature:
+    """Speculation answered at 0.3 while every other reply used the configured
+    temperature, so an open-ended request came back word-for-word identical
+    each time and read as a cached answer."""
+
+    def test_it_matches_the_configured_temperature(self):
+        cfg = JarvisConfig()
+        cfg.intelligence.temperature = 0.7
+        assert flux_routes._configured_temperature(cfg) == 0.7
+
+        cfg.intelligence.temperature = 0.2
+        assert flux_routes._configured_temperature(cfg) == 0.2
+
+    def test_a_missing_config_does_not_fall_back_to_the_old_0_3(self):
+        assert flux_routes._configured_temperature(None) == 0.7
+        assert flux_routes._configured_temperature(object()) == 0.7
+
+    def test_the_call_site_passes_it(self):
+        import ast
+        import inspect
+
+        tree = ast.parse(inspect.getsource(flux_routes))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and any(
+                kw.arg == "temperature"
+                for kw in node.keywords
+                if kw.arg is not None
+            )
+            and "generate_speculative"
+            in ast.dump(node)
+        ]
+        assert calls, "generate_speculative must be given an explicit temperature"

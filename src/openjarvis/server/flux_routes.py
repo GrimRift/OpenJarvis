@@ -155,6 +155,11 @@ async def flux_stream(websocket: WebSocket) -> None:
                 engine,
                 model=model,
                 transcript=transcript,
+                # Without this the speculative path answered at 0.3 while
+                # every other reply used the configured temperature, so an
+                # open-ended request ("tell me a joke") came back with the
+                # same wording every time and looked like a cached answer.
+                temperature=_configured_temperature(config),
             )
         except asyncio.CancelledError:
             raise
@@ -226,6 +231,13 @@ async def flux_stream(websocket: WebSocket) -> None:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         await session.close()
+
+
+def _configured_temperature(config: Any) -> float:
+    """The same temperature ordinary replies use."""
+    intelligence = getattr(config, "intelligence", None)
+    value = getattr(intelligence, "temperature", None)
+    return float(value) if isinstance(value, (int, float)) else 0.7
 
 
 def _unavailable_reason(speech_cfg: Any) -> str:
