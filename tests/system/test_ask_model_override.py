@@ -347,3 +347,65 @@ class TestPersonaReachesAsk:
         orch, captured = self._orchestrator_with_agent(accepts_builder=True)
         orch.ask("hi", agent="probe", system_prompt="OPERATOR PROMPT")
         assert captured.get("prompt_builder") is None
+
+
+class TestReportedModelIsTheOneThatRan:
+    """An agent may swap its own engine/model after construction. Reporting the
+    passed-in one instead made a proactive digest running on gpt-5.6-luna log
+    itself as qwen3.5:4b, which is exactly the fact the tiering decision rests
+    on."""
+
+    def _orchestrator(self, agent_model, agent_engine=None):
+        from openjarvis.agents._stubs import AgentResult
+        from openjarvis.core.config import JarvisConfig
+        from openjarvis.core.registry import AgentRegistry
+
+        class _Agent:
+            agent_id = "override_probe"
+            accepts_tools = False
+
+            def __init__(self, engine, model, **kw):
+                self._model = agent_model
+                self._engine = agent_engine if agent_engine is not None else engine
+
+            def run(self, input, context=None, **kw):
+                return AgentResult(content="ok", turns=1)
+
+        AgentRegistry.register("override_probe")(_Agent)
+
+        engine = _FakeEngine(["qwen3.5:4b"])
+        system = _system(engine)
+        real = JarvisConfig()
+        system.config.memory_files = real.memory_files
+        system.config.system_prompt = real.system_prompt
+        system.config.agent.default_system_prompt = ""
+        system.agent_name = "override_probe"
+        system.tools = []
+        system.capability_policy = None
+        system.session_store = None
+        system.trace_store = None
+        return QueryOrchestrator(system)
+
+    def test_the_agents_own_model_is_reported(self):
+        orch = self._orchestrator("gpt-5.6-luna")
+        assert orch.ask("hi", agent="override_probe")["model"] == "gpt-5.6-luna"
+
+    def test_an_agent_that_keeps_the_given_model_reports_it_unchanged(self):
+        orch = self._orchestrator("qwen3.5:4b")
+        assert orch.ask("hi", agent="override_probe")["model"] == "qwen3.5:4b"
+
+    def test_a_swapped_engine_is_reported_under_its_registry_key(self):
+        from openjarvis.core.registry import EngineRegistry
+
+        class _Cloudish(_FakeEngine):
+            def __init__(self):
+                super().__init__(["gpt-5.6-luna"])
+
+        EngineRegistry.register("cloudish")(_Cloudish)
+        orch = self._orchestrator("gpt-5.6-luna", agent_engine=_Cloudish())
+        assert orch.ask("hi", agent="override_probe")["engine"] == "cloudish"
+
+    def test_an_unregistered_engine_falls_back_to_the_system_key(self):
+        """Reporting must never crash a run that otherwise succeeded."""
+        orch = self._orchestrator("m", agent_engine=_FakeEngine([]))
+        assert orch.ask("hi", agent="override_probe")["engine"] == "ollama"

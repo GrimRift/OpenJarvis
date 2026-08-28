@@ -14,6 +14,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _engine_key_for(engine: object, fallback: str) -> str:
+    """Reverse-map an engine instance to the registry key it was built from."""
+    from openjarvis.core.registry import EngineRegistry
+
+    for key, cls in EngineRegistry.items():
+        if type(engine) is cls:
+            return key
+    return fallback
+
+
 def _is_cloud_model(model: str) -> bool:
     """Whether *model* belongs to a cloud provider, if that engine is present.
 
@@ -319,6 +329,16 @@ class QueryOrchestrator:
             except TypeError:
                 ag = agent_cls()
 
+        # An agent may swap in its own engine/model after construction --
+        # ProactiveAgent honours [proactive] model/engine that way -- so report
+        # what actually served the run. Reporting the passed-in model instead
+        # hides whether that override took effect at all.
+        ran_model = getattr(ag, "_model", None) or run_model
+        ran_engine_key = engine_key if engine_key is not None else s.engine_key
+        ran_engine = getattr(ag, "_engine", None)
+        if ran_engine is not None and ran_engine is not run_engine:
+            ran_engine_key = _engine_key_for(ran_engine, ran_engine_key)
+
         telemetry_events: List[Dict[str, Any]] = []
 
         def _on_inference_end(event: Any) -> None:
@@ -406,8 +426,8 @@ class QueryOrchestrator:
             "metadata": getattr(result, "metadata", {}),
             # The model that actually ran, not the system default, so telemetry
             # and the UI footer do not misreport an overridden run.
-            "model": run_model,
-            "engine": engine_key if engine_key is not None else s.engine_key,
+            "model": ran_model,
+            "engine": ran_engine_key,
             "_telemetry": _telemetry,
         }
 

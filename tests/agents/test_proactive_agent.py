@@ -302,6 +302,25 @@ class TestConfiguredModel:
         assert args[0] is original
 
 
+    def test_positional_construction_ends_up_on_the_configured_model(self):
+        """The unit tests above cover _apply_configured_model in isolation. This
+        one goes through the real __init__ the way orchestrator._run_agent calls
+        it -- positionally, with the system model -- because that is the only
+        path a scheduled digest actually takes."""
+        from openjarvis.agents.proactive_agent import ProactiveAgent
+
+        config = MagicMock()
+        config.proactive.model = "gpt-5.6-luna"
+        config.proactive.engine = ""
+
+        engine = MagicMock()
+        engine.list_models.return_value = ["qwen3.5:4b", "gpt-5.6-luna"]
+        with patch("openjarvis.core.config.load_config", return_value=config):
+            agent = ProactiveAgent(engine, "qwen3.5:4b")
+
+        assert agent._model == "gpt-5.6-luna"
+
+
 class TestConnectorFailuresAreReported:
     """A source that failed to fetch is not a source with nothing in it.
 
