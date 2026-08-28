@@ -1119,9 +1119,21 @@ export async function fetchPendingApprovals(): Promise<PendingApproval[]> {
   return data.actions || [];
 }
 
-export async function approveAction(actionId: string): Promise<void> {
+export interface ApprovalExecutionResult {
+  status: 'executed';
+  id: string;
+  execution: {
+    id: string;
+    success: boolean;
+    message: string;
+  };
+}
+
+export async function approveAction(actionId: string): Promise<ApprovalExecutionResult> {
   const res = await apiFetch(`/v1/approvals/${actionId}/approve`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Failed: ${res.status}`);
+  const body = await res.json().catch(() => ({ detail: res.statusText }));
+  if (!res.ok) throw new Error(body.detail || `Failed: ${res.status}`);
+  return body as ApprovalExecutionResult;
 }
 
 export async function denyAction(actionId: string): Promise<void> {

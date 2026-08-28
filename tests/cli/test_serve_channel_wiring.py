@@ -6,7 +6,7 @@ entrypoint now delegates all channel-wiring logic there.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from openjarvis.channels._stubs import ChannelMessage
 from openjarvis.core.config import JarvisConfig
@@ -502,3 +502,113 @@ class TestChannelModelOverride:
         _fire(channel, _make_channel_message(content="ping"))
 
         assert system.ask.call_count == 1
+
+
+class TestChannelApprovalReplies:
+    """Approval-shaped replies from the configured chat bypass the LLM."""
+
+    def test_configured_telegram_chat_processes_approval_directly(self, tmp_path):
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.config.proactive.notification_channel = "telegram:42"
+        system.ask = MagicMock(return_value={"content": "should not run"})
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+
+        with (
+            patch(
+                "openjarvis.tools.proactive_tools.looks_like_approval_response",
+                return_value=True,
+            ),
+            patch(
+                "openjarvis.tools.proactive_tools.parse_approval_response",
+                return_value=[
+                    {
+                        "id": "abcdef123456",
+                        "approved": True,
+                        "remembered": False,
+                    }
+                ],
+            ),
+            patch(
+                "openjarvis.tools.proactive_tools.execute_approved_actions",
+                return_value=[
+                    {
+                        "id": "abcdef123456",
+                        "success": True,
+                        "message": "Draft saved: harmless test",
+                    }
+                ],
+            ),
+        ):
+            _fire(channel, _make_channel_message(content="abcdef123456 yes"))
+
+        system.ask.assert_not_called()
+        channel.send.assert_called_once_with(
+            "42",
+            "Approved and executed [abcdef123456]: Draft saved: harmless test.",
+            conversation_id="1",
+        )
+
+    def test_ordinary_message_in_configured_chat_still_reaches_agent(self, tmp_path):
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.config.proactive.notification_channel = "telegram:42"
+        system.ask = MagicMock(return_value={"content": "pong"})
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+
+        with patch(
+            "openjarvis.tools.proactive_tools.looks_like_approval_response",
+            return_value=False,
+        ):
+            _fire(channel, _make_channel_message(content="hello"))
+
+        system.ask.assert_called_once()
+        channel.send.assert_called_once_with("42", "pong", conversation_id="1")
+
+    def test_approval_from_other_chat_is_not_authorized(self, tmp_path):
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.config.proactive.notification_channel = "telegram:42"
+        system.ask = MagicMock(return_value={"content": "normal reply"})
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+
+        with patch(
+            "openjarvis.tools.proactive_tools.parse_approval_response"
+        ) as parse:
+            _fire(
+                channel,
+                _make_channel_message(
+                    content="abcdef123456 yes",
+                    conversation_id="99",
+                ),
+            )
+
+        parse.assert_not_called()
+        system.ask.assert_called_once()
+
+    def test_stale_or_unknown_approval_does_not_reach_agent(self, tmp_path):
+        system = _make_system(agent_name="simple", tmp_path=tmp_path)
+        system.config.proactive.notification_channel = "telegram:42"
+        system.ask = MagicMock(return_value={"content": "should not run"})
+
+        channel = MagicMock()
+        system.wire_channel(channel)
+
+        with (
+            patch(
+                "openjarvis.tools.proactive_tools.looks_like_approval_response",
+                return_value=True,
+            ),
+            patch(
+                "openjarvis.tools.proactive_tools.parse_approval_response",
+                return_value=[],
+            ),
+        ):
+            _fire(channel, _make_channel_message(content="abcdef123456 yes"))
+
+        system.ask.assert_not_called()
+        sent = channel.send.call_args[0][1]
+        assert "no matching pending approval" in sent.lower()

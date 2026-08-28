@@ -7,6 +7,8 @@ import pytest
 from openjarvis.tools.approval_store import (
     STATUS_APPROVED,
     STATUS_DENIED,
+    STATUS_EXECUTED,
+    STATUS_FAILED,
     STATUS_PENDING,
     TIER_HIGH,
     TIER_LOW,
@@ -54,10 +56,10 @@ def client(approval_store):  # noqa: ARG001 — triggers store injection as a si
 def _queue(store: ApprovalStore, **kwargs) -> str:
     """Helper — queue an action and return its id."""
     defaults = dict(
-        action_type="file_write",
-        description="Write a report to ~/Desktop/report.txt",
-        payload={"path": "~/Desktop/report.txt", "size_kb": 12},
-        permission_key="file_write:path:~/Desktop",
+        action_type="sms_draft_reply",
+        description="Create a harmless reply draft",
+        payload={"draft": "Test draft"},
+        permission_key="sms_draft_reply:test",
         tier=TIER_MEDIUM,
     )
     defaults.update(kwargs)
@@ -196,15 +198,16 @@ class TestApproveAction:
     def test_approve_response_body(self, client, approval_store):
         action_id = _queue(approval_store)
         body = client.post(f"/v1/approvals/{action_id}/approve").json()
-        assert body["status"] == "approved"
+        assert body["status"] == "executed"
         assert body["id"] == action_id
+        assert body["execution"]["success"] is True
 
     def test_approve_updates_db_status(self, client, approval_store):
         action_id = _queue(approval_store)
         client.post(f"/v1/approvals/{action_id}/approve")
         action = approval_store.get_action(action_id)
         assert action is not None
-        assert action.status == STATUS_APPROVED
+        assert action.status == STATUS_EXECUTED
 
     def test_approve_removes_from_pending_list(self, client, approval_store):
         action_id = _queue(approval_store)
@@ -226,6 +229,23 @@ class TestApproveAction:
         body = resp.json()
         assert body["count"] == 1
         assert body["actions"][0]["id"] == id_b
+
+    def test_failed_execution_returns_error_and_remains_retryable(
+        self, client, approval_store
+    ):
+        action_id = _queue(
+            approval_store,
+            action_type="unsupported_test_action",
+        )
+
+        resp = client.post(f"/v1/approvals/{action_id}/approve")
+
+        assert resp.status_code == 502
+        assert approval_store.get_action(action_id).status == STATUS_FAILED
+        pending_ids = [
+            item["id"] for item in client.get("/v1/approvals/pending").json()["actions"]
+        ]
+        assert action_id in pending_ids
 
 
 @pytest.mark.skipif(not HAS_FASTAPI, reason="fastapi not installed")
@@ -275,13 +295,7 @@ class TestApprovalStoreIntegration:
 
     def test_full_approve_flow(self, client, approval_store):
         """Queue an action, verify it appears, approve it, verify it's gone."""
-        action_id = _queue(
-            approval_store,
-            action_type="email_delete",
-            description="Delete promotional email from newsletters@company.com",
-            payload={"message_id": "abc123", "subject": "Weekly promo"},
-            tier=TIER_HIGH,
-        )
+        action_id = _queue(approval_store, tier=TIER_HIGH)
 
         # Should appear in pending
         pending = client.get("/v1/approvals/pending").json()
@@ -295,8 +309,8 @@ class TestApprovalStoreIntegration:
         # Should be gone from pending
         assert client.get("/v1/approvals/pending").json()["count"] == 0
 
-        # Status in DB should be approved
-        assert approval_store.get_action(action_id).status == STATUS_APPROVED
+        # Status in DB should reflect completed execution
+        assert approval_store.get_action(action_id).status == STATUS_EXECUTED
 
     def test_full_deny_flow(self, client, approval_store):
         action_id = _queue(
@@ -328,7 +342,7 @@ class TestApprovalStoreIntegration:
         assert pending["count"] == 1
         assert pending["actions"][0]["id"] == id_c
 
-        assert approval_store.get_action(id_a).status == STATUS_APPROVED
+        assert approval_store.get_action(id_a).status == STATUS_EXECUTED
         assert approval_store.get_action(id_b).status == STATUS_DENIED
         assert approval_store.get_action(id_c).status == STATUS_PENDING
 

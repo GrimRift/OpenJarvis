@@ -34,6 +34,7 @@ STATUS_APPROVED = "approved"
 STATUS_DENIED = "denied"
 STATUS_EXPIRED = "expired"
 STATUS_EXECUTED = "executed"
+STATUS_FAILED = "failed"
 
 # Tiers govern default ask behavior
 TIER_TRIVIAL = "trivial"  # Execute immediately, no ask
@@ -246,9 +247,9 @@ class ApprovalStore:
         rows = self._conn.execute(
             "SELECT id, action_type, description, payload, permission_key, "
             "tier, status, created_at, expires_at, notification_sent, decision_at "
-            "FROM pending_actions WHERE status = ? AND expires_at > ? "
+            "FROM pending_actions WHERE status IN (?, ?) AND expires_at > ? "
             "ORDER BY created_at",
-            (STATUS_PENDING, now),
+            (STATUS_PENDING, STATUS_FAILED, now),
         ).fetchall()
         return [PendingAction.from_row(r) for r in rows]
 
@@ -288,8 +289,8 @@ class ApprovalStore:
         now = datetime.now(timezone.utc).isoformat()
         cur = self._conn.execute(
             "UPDATE pending_actions SET status = ? "
-            "WHERE status = ? AND expires_at <= ?",
-            (STATUS_EXPIRED, STATUS_PENDING, now),
+            "WHERE status IN (?, ?) AND expires_at <= ?",
+            (STATUS_EXPIRED, STATUS_PENDING, STATUS_FAILED, now),
         )
         self._conn.commit()
         return cur.rowcount
@@ -399,6 +400,7 @@ __all__ = [
     "STATUS_DENIED",
     "STATUS_EXPIRED",
     "STATUS_EXECUTED",
+    "STATUS_FAILED",
     "TIER_TRIVIAL",
     "TIER_LOW",
     "TIER_MEDIUM",

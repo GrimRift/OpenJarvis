@@ -36,6 +36,8 @@ from openjarvis.tools.approval_store import (
     STATUS_APPROVED,
     STATUS_DENIED,
     STATUS_EXECUTED,
+    STATUS_FAILED,
+    STATUS_PENDING,
     TIER_HIGH,
     TIER_LOW,
     TIER_MEDIUM,
@@ -378,7 +380,8 @@ class ExecutePendingActionsTool(BaseTool):
         results: List[Dict[str, Any]] = []
         for action in actions:
             success, message = self._run_action(action)
-            store.update_status(action.id, STATUS_EXECUTED)
+            status = STATUS_EXECUTED if success else STATUS_FAILED
+            store.update_status(action.id, status)
             results.append(
                 {
                     "id": action.id,
@@ -389,11 +392,12 @@ class ExecutePendingActionsTool(BaseTool):
                 }
             )
 
+        failures = sum(not item["success"] for item in results)
         return ToolResult(
             tool_name=self.spec.name,
             success=True,
             content=json.dumps(results, indent=2),
-            metadata={"executed": len(results)},
+            metadata={"executed": len(results) - failures, "failed": failures},
         )
 
     def _run_action(self, action: PendingAction) -> Tuple[bool, str]:
@@ -516,6 +520,34 @@ _APPROVAL_RE = re.compile(
 )
 
 
+def _normalise_approval_text(text: str) -> str:
+    return re.sub(r"[\[\]\{\}\(\)]", " ", text)
+
+
+def looks_like_approval_response(text: str) -> bool:
+    """Return whether *text* uses the explicit approval reply grammar."""
+    return bool(_APPROVAL_RE.search(_normalise_approval_text(text)))
+
+
+def execute_approved_actions(
+    action_ids: List[str],
+    store: Optional[ApprovalStore] = None,
+    executor_fn: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
+    """Execute specific approved actions and return their per-action results."""
+    result = ExecutePendingActionsTool(
+        store=store or get_store(),
+        executor_fn=executor_fn,
+    ).execute(action_ids=action_ids)
+    if not result.content:
+        return []
+    try:
+        parsed = json.loads(result.content)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def parse_approval_response(
     text: str,
     store: Optional[ApprovalStore] = None,
@@ -535,10 +567,14 @@ def parse_approval_response(
     # with `{abc123} yes`, `(abc123) yes`, etc.  Strip those surrounding
     # brackets/braces/parens before regex matching so the word-boundary
     # check sees a clean id.
-    text = re.sub(r"[\[\]\{\}\(\)]", " ", text)
+    text = _normalise_approval_text(text)
+    seen: set[str] = set()
 
     for m in _APPROVAL_RE.finditer(text):
         target = (m.group("target") or m.group("target2") or "").lower()
+        if target in seen:
+            continue
+        seen.add(target)
         raw_decision = (m.group("decision") or m.group("decision2") or "").lower()
         always = bool(m.group("always") or m.group("always2"))
 
@@ -559,7 +595,7 @@ def parse_approval_response(
                 )
         else:
             action = s.get_action(target)
-            if action is None:
+            if action is None or action.status not in (STATUS_PENDING, STATUS_FAILED):
                 continue
             new_status = STATUS_APPROVED if approved else STATUS_DENIED
             s.update_status(target, new_status)
@@ -580,6 +616,8 @@ __all__ = [
     "GetPendingActionsTool",
     "QueueActionTool",
     "RecordDecisionTool",
+    "execute_approved_actions",
     "get_store",
+    "looks_like_approval_response",
     "parse_approval_response",
 ]

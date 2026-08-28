@@ -11,6 +11,7 @@ from openjarvis.tools.approval_store import (
     ApprovalStore,
     PendingAction,
 )
+from openjarvis.tools.proactive_tools import execute_approved_actions
 
 try:
     from fastapi import APIRouter, HTTPException
@@ -61,8 +62,14 @@ async def approve_action(action_id: str) -> Dict[str, Any]:
     if action is None:
         raise HTTPException(status_code=404, detail="Action not found")
     store.update_status(action_id, STATUS_APPROVED)
-    logger.info("Action %s approved via UI", action_id)
-    return {"status": "approved", "id": action_id}
+    results = execute_approved_actions([action_id], store)
+    execution = results[0] if results else None
+    if not execution or not execution.get("success"):
+        message = (execution or {}).get("message", "Action was not executable")
+        logger.error("Action %s approved via UI but failed: %s", action_id, message)
+        raise HTTPException(status_code=502, detail=message)
+    logger.info("Action %s approved and executed via UI", action_id)
+    return {"status": "executed", "id": action_id, "execution": execution}
 
 
 @router.post("/v1/approvals/{action_id}/deny")

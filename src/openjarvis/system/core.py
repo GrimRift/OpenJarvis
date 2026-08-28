@@ -223,7 +223,76 @@ class JarvisSystem:
 
         _system = self  # capture for closure
 
+        def _approval_reply(cm) -> Optional[str]:
+            """Process explicit decisions only from the configured approval chat."""
+            spec = (_system.config.proactive.notification_channel or "").strip()
+            channel_type, separator, destination = spec.partition(":")
+            if (
+                not separator
+                or channel_type.casefold() != str(cm.channel).casefold()
+                or destination != str(cm.conversation_id)
+            ):
+                return None
+
+            from openjarvis.tools.proactive_tools import (
+                execute_approved_actions,
+                looks_like_approval_response,
+                parse_approval_response,
+            )
+
+            if not looks_like_approval_response(cm.content):
+                return None
+
+            decisions = parse_approval_response(cm.content)
+            if not decisions:
+                return (
+                    "No matching pending approval was found. "
+                    "It may have expired or already been decided."
+                )
+
+            approved_ids = [item["id"] for item in decisions if item["approved"]]
+            execution_results = execute_approved_actions(approved_ids)
+            executions = {item["id"]: item for item in execution_results}
+
+            labels = []
+            for decision in decisions:
+                action_id = decision["id"]
+                if decision["approved"]:
+                    execution = executions.get(action_id)
+                    if execution and execution.get("success"):
+                        label = (
+                            f"Approved and executed [{action_id}]: "
+                            f"{execution.get('message', 'done')}"
+                        )
+                    elif execution:
+                        label = (
+                            f"Approved [{action_id}], but execution failed: "
+                            f"{execution.get('message', 'unknown error')}"
+                        )
+                    else:
+                        label = f"Approved [{action_id}], but nothing was executed"
+                else:
+                    label = f"Denied [{action_id}]"
+                if decision.get("remembered"):
+                    label += " and remembered that choice"
+                labels.append(label)
+            if len(labels) == 1:
+                return labels[0] + "."
+            return f"Processed {len(labels)} decisions: " + "; ".join(labels) + "."
+
         def _on_channel_message(cm) -> None:
+            approval_reply = _approval_reply(cm)
+            if approval_reply is not None:
+                try:
+                    channel_bridge.send(
+                        cm.conversation_id,
+                        approval_reply,
+                        conversation_id=getattr(cm, "message_id", ""),
+                    )
+                except Exception:
+                    logger.exception("Channel approval acknowledgement error")
+                return
+
             session_key = f"{cm.channel}:{cm.conversation_id}"
             session = _system.session_store.get_or_create(
                 session_key,

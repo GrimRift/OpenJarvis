@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, CheckCircle, ChevronDown, ChevronUp, Clock, XCircle } from 'lucide-react';
+import { toast } from 'sonner';
 import { approveAction, denyAction, fetchPendingApprovals } from '../lib/api';
 import type { PendingApproval } from '../lib/api';
 
@@ -55,8 +56,12 @@ export function ApprovalBell() {
   const handleApprove = async (id: string) => {
     setProcessing(p => ({ ...p, [id]: true }));
     try {
-      await approveAction(id);
+      const result = await approveAction(id);
       setApprovals(prev => prev.filter(a => a.id !== id));
+      toast.success(result.execution.message || 'Action approved and executed.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Action execution failed.');
+      await load();
     } finally {
       setProcessing(p => ({ ...p, [id]: false }));
     }
