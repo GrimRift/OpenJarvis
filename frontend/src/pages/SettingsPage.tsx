@@ -241,6 +241,8 @@ export function SettingsPage() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   const [speechBackendAvailable, setSpeechBackendAvailable] = useState<boolean | null>(null);
   const [wakeWordAvailable, setWakeWordAvailable] = useState<boolean | null>(null);
+  const [fluxAvailable, setFluxAvailable] = useState<boolean | null>(null);
+  const [fluxReason, setFluxReason] = useState<string>('');
   const [saved, setSaved] = useState(false);
 
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(() => !isAutoUpdateDisabled());
@@ -316,15 +318,32 @@ export function SettingsPage() {
       .then((h) => {
         setSpeechBackendAvailable(h.available);
         setWakeWordAvailable(!!h.wake_word_available);
+        setFluxAvailable(!!h.flux_available);
+        setFluxReason(h.flux_reason || '');
       })
       .catch(() => {
         setSpeechBackendAvailable(false);
         setWakeWordAvailable(false);
+        setFluxAvailable(false);
+        setFluxReason('server unreachable');
       });
     getMemoryStats()
       .then(setMemoryStats)
       .catch(() => setMemoryStats(null));
   }, []);
+
+  // Which of the three voice modes is actually in effect. Flux enabled but
+  // unavailable reports the fallback rather than claiming the chosen mode.
+  const voiceModeLabel =
+    !settings.fluxEnabled
+      ? 'Local (faster-whisper)'
+      : fluxAvailable === false
+        ? 'Local — Flux unavailable, using fallback'
+        : fluxAvailable === null
+          ? 'Checking…'
+          : settings.fluxEagerEnabled
+            ? 'Flux Ultra (speculative)'
+            : 'Flux Standard';
 
   const showSaved = () => {
     setSaved(true);
@@ -799,6 +818,73 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
+                <SettingRow
+                  label="Deepgram Flux cloud speech-to-text"
+                  description={
+                    fluxAvailable === false
+                      ? `Unavailable — ${fluxReason || 'not configured on the server'}. Using local transcription.`
+                      : 'Stream speech to Deepgram and let the model decide when your turn ended, instead of waiting for a fixed pause. Local transcription stays the fallback.'
+                  }
+                >
+                  <button
+                    disabled={fluxAvailable === false}
+                    onClick={() => {
+                      const next = !settings.fluxEnabled;
+                      // Ultra depends on Flux, so turning Flux off must turn
+                      // speculation off with it.
+                      updateSettings({
+                        fluxEnabled: next,
+                        ...(next ? {} : { fluxEagerEnabled: false }),
+                      });
+                      showSaved();
+                    }}
+                    className="relative w-11 h-6 rounded-full transition-colors"
+                    style={{
+                      background: settings.fluxEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                      cursor: fluxAvailable === false ? 'not-allowed' : 'pointer',
+                      opacity: fluxAvailable === false ? 0.5 : 1,
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                      style={{
+                        transform: settings.fluxEnabled ? 'translateX(20px)' : 'translateX(0)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    />
+                  </button>
+                </SettingRow>
+                <SettingRow
+                  label="Ultra-low-latency voice"
+                  description="Start answering before Deepgram confirms you finished, and discard that work if you keep talking. Speculative answers are never spoken, shown, or allowed to run tools before confirmation. May start extra cloud LLM requests that are thrown away, increasing usage."
+                >
+                  <button
+                    disabled={!settings.fluxEnabled || fluxAvailable === false}
+                    onClick={() => {
+                      if (!settings.fluxEnabled) return;
+                      updateSettings({ fluxEagerEnabled: !settings.fluxEagerEnabled });
+                      showSaved();
+                    }}
+                    className="relative w-11 h-6 rounded-full transition-colors"
+                    style={{
+                      background: settings.fluxEagerEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                      cursor: !settings.fluxEnabled || fluxAvailable === false ? 'not-allowed' : 'pointer',
+                      opacity: !settings.fluxEnabled || fluxAvailable === false ? 0.5 : 1,
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                      style={{
+                        transform: settings.fluxEagerEnabled ? 'translateX(20px)' : 'translateX(0)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    />
+                  </button>
+                </SettingRow>
+                <div className="text-xs mt-1 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
+                  Transcription:{' '}
+                  <span style={{ color: 'var(--color-accent)' }}>{voiceModeLabel}</span>
+                </div>
               </>
             )}
             {!speechBackendAvailable && speechBackendAvailable !== null && (

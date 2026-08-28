@@ -1508,6 +1508,27 @@ class SpeechConfig:
     # vocabulary. Empty = no bias.
     initial_prompt: str = "Hey Sage."
 
+    # --- Deepgram Flux streaming STT (opt-in cloud mode) ------------------
+    # Server-side kill switch, not the user's choice. Whether Flux is *used*
+    # is the client toggle (off by default, so faster-whisper stays the
+    # default and the fallback); whether it *can* be used is the presence of
+    # DEEPGRAM_API_KEY. This allows it, so an admin can still forbid it
+    # outright without deleting the key.
+    flux_enabled: bool = True
+    # Server-side kill switch for speculation, matching flux_enabled. The
+    # user's opt-in is the client toggle, which defaults off because eager
+    # work can start extra cloud LLM calls that are discarded on TurnResumed.
+    flux_eager_enabled: bool = True
+    flux_model: str = "flux-general-en"
+    # Deepgram range 0.5-0.9. Higher = more certain before ending a turn.
+    flux_eot_threshold: float = 0.7
+    # Deepgram range 0.3-0.9, and must be <= flux_eot_threshold or the API
+    # rejects the connection. Deliberately conservative: a lower value
+    # speculates more often and discards more of it.
+    flux_eager_eot_threshold: float = 0.6
+    # Deepgram range 500-60000. Forces EndOfTurn after this much silence.
+    flux_eot_timeout_ms: int = 5000
+
 
 @dataclass(slots=True)
 class OptimizeConfig:

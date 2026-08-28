@@ -1118,10 +1118,37 @@ async def speech_health(request: Request):
         if callable(last_error):
             reason = last_error()
 
+    # Flux status, so Settings can disable the toggle and say why rather
+    # than letting it be switched on into a socket that will never connect.
+    # The key itself is never included — only whether one is present.
+    flux_available = False
+    flux_reason = ""
+    try:
+        from openjarvis.speech import flux as _flux  # noqa: PLC0415
+        from openjarvis.server.flux_routes import (  # noqa: PLC0415
+            _unavailable_reason,
+        )
+
+        cfg = getattr(request.app.state, "config", None)
+        speech_cfg = getattr(cfg, "speech", None) if cfg else None
+        # Capability, not choice: whether Flux *could* run. Gating this on the
+        # client's own toggle would make the Settings switch impossible to
+        # turn on, since it would report unavailable until already enabled.
+        flux_available = bool(
+            _flux.is_available() and getattr(speech_cfg, "flux_enabled", True)
+        )
+        if not flux_available:
+            flux_reason = _unavailable_reason(speech_cfg)
+    except Exception:
+        logger.debug("Flux availability check failed", exc_info=True)
+        flux_reason = "Flux support is not installed"
+
     return {
         "available": available,
         "backend": backend.backend_id,
         "wake_word_available": wake_word_available,
+        "flux_available": flux_available,
+        **({"flux_reason": flux_reason} if flux_reason else {}),
         **({"reason": reason} if reason else {}),
     }
 
@@ -1244,6 +1271,17 @@ def include_all_routes(app) -> None:
     app.include_router(speech_router)
     app.include_router(feedback_router)
     app.include_router(optimize_router)
+
+    # Deepgram Flux proxy. Imported here rather than at module scope so a
+    # build without the streaming deps still serves every other route.
+    try:
+        from openjarvis.server.flux_routes import (
+            router as flux_router,  # noqa: PLC0415
+        )
+
+        app.include_router(flux_router)
+    except ImportError:
+        logger.debug("Flux routes unavailable", exc_info=True)
 
     # Agent Manager routes (if available)
     try:

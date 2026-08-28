@@ -4,13 +4,19 @@ import { toast } from 'sonner';
 import { useAppStore, generateId } from '../../lib/store';
 import { streamChat, streamResearch } from '../../lib/sse';
 import type { ChatRequest } from '../../lib/sse';
-import { fetchSavings, getBase, synthesizeSpeech } from '../../lib/api';
+import {
+  fetchSavings,
+  getBase,
+  synthesizeSpeech,
+  transcribeAudio,
+} from '../../lib/api';
 import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
+import { useFluxSpeech } from '../../hooks/useFluxSpeech';
 import type {
   ChatMessage,
   MessageTelemetry,
@@ -19,6 +25,39 @@ import type {
   TokenUsage,
   ToolCallInfo,
 } from '../../types';
+
+/**
+ * Wrap raw PCM in a WAV container for the local transcription endpoint.
+ *
+ * Only used on the Flux fallback path: the buffered turn is raw 16-bit mono
+ * samples, and faster-whisper is handed a file, not a stream.
+ */
+function pcm16ToWav(samples: Int16Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const write = (offset: number, text: string) => {
+    for (let i = 0; i < text.length; i++) {
+      view.setUint8(offset + i, text.charCodeAt(i));
+    }
+  };
+  write(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  write(8, 'WAVE');
+  write(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  write(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    view.setInt16(44 + i * 2, samples[i], true);
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
+}
 
 // While Deep Research is toggled on, poll connected sources for sync
 // progress so we can surface "Searching over N items — sync in progress"
@@ -101,6 +140,12 @@ export function InputArea() {
   // Held from a wake-word trigger until listening has actually started, so
   // repeat detections of the same utterance can't stack up greetings.
   const wakeWordBusyRef = useRef(false);
+  // True between Flux beginTurn() and its EndOfTurn. Flux never sets
+  // useSpeech's `speechState`, so without this the orb would sit idle for a
+  // whole spoken turn and the mic button would offer to start another.
+  const [fluxTurnActive, setFluxTurnActive] = useState(false);
+  // Guards against two sends for one turn if Deepgram repeats a final event.
+  const lastFluxTurnRef = useRef<number | null>(null);
 
   const activeId = useAppStore((s) => s.activeId);
   const selectedModel = useAppStore((s) => s.selectedModel);
@@ -108,6 +153,12 @@ export function InputArea() {
   const messages = useAppStore((s) => s.messages);
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
+  const fluxEnabled = useAppStore((s) => s.settings.fluxEnabled);
+  const fluxEagerEnabled = useAppStore((s) => s.settings.fluxEagerEnabled);
+  // Flux replaces the local silence timer as the end-of-turn decision.
+  // Declared here because handleMicClick, defined well above the Flux
+  // hook, needs it too. With the toggle off nothing Flux-related runs.
+  const fluxActive = speechEnabled && fluxEnabled;
   const maxTokens = useAppStore((s) => s.settings.maxTokens);
   const temperature = useAppStore((s) => s.settings.temperature);
   const createConversation = useAppStore((s) => s.createConversation);
@@ -160,11 +211,30 @@ export function InputArea() {
 
   // Mirror into the store so the orb (rendered in ChatArea, outside this
   // component) can react to mic activity without lifting useSpeech() up.
+  // A Flux turn never touches useSpeech, so `speechState` stays 'idle' for
+  // the whole utterance. Everything that asks "is the mic live right now?"
+  // must consult this instead, or it will believe nothing is happening:
+  // the orb sat idle, the mic button showed no active state, and — worst —
+  // the wake word stayed armed and re-triggered on the user's own question
+  // mid-turn.
+  const effectiveSpeechState = fluxTurnActive ? 'recording' : speechState;
+
   useEffect(() => {
-    useAppStore.getState().setVoiceState(speechState);
-  }, [speechState]);
+    useAppStore.getState().setVoiceState(effectiveSpeechState);
+  }, [effectiveSpeechState]);
 
   const handleMicClick = useCallback(async () => {
+    // A Flux turn leaves speechState 'idle', so checking it directly sent
+    // every press down the "start" branch: the wake word was un-suspended
+    // and a competing local recording began, which is why pressing the
+    // button during a Flux turn could not pause anything.
+    if (fluxTurnActive) {
+      setWakeWordSuspended(true);
+      toast('Listening paused — tap the mic again to talk.', { duration: 4000 });
+      flux.endTurn();
+      setFluxTurnActive(false);
+      return;
+    }
     if (speechState === 'recording') {
       // Stopping by hand also stops listening. Without this the button only
       // ended the current recording, the wake word re-armed a second later,
@@ -183,9 +253,16 @@ export function InputArea() {
       }
     } else {
       setWakeWordSuspended(false);
+      if (fluxActive) {
+        setFluxTurnActive(true);
+        flux.beginTurn();
+        return;
+      }
       await startRecording();
     }
-  }, [speechState, startRecording, stopRecording]);
+    // flux is stable across renders; fluxActive/fluxTurnActive drive it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speechState, fluxActive, fluxTurnActive, startRecording, stopRecording]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -684,6 +761,128 @@ export function InputArea() {
     }
   }, [stopRecording, sendMessage]);
 
+  /**
+   * Post an already-generated answer without streaming a new one.
+   *
+   * The latency win of Ultra mode is skipping generation entirely, so this
+   * writes the pair straight into the conversation. Only ever called with
+   * text the server released against a confirmed turn: speculation is
+   * discarded there for anything tool-shaped, so this path never needs to
+   * run a tool, and deliberately cannot.
+   *
+   * Returns false when it declines, so the caller falls back to the normal
+   * streamed path rather than dropping the turn.
+   */
+  const releaseSpeculativeAnswer = useCallback(
+    async (transcript: string, answer: string): Promise<boolean> => {
+      if (streamState.isStreaming) return false;
+      if (!selectedModel) return false;
+
+      const convId = activeId ?? createConversation(selectedModel);
+      const wasVoice = voiceOriginatedRef.current;
+      voiceOriginatedRef.current = false;
+      lastReplyWasVoiceRef.current = wasVoice;
+
+      addMessage(convId, {
+        id: generateId(),
+        role: 'user',
+        content: transcript,
+        timestamp: Date.now(),
+      });
+      addMessage(convId, {
+        id: generateId(),
+        role: 'assistant',
+        content: answer,
+        timestamp: Date.now(),
+      });
+
+      // Same ordering as the streamed path: claim playback before the TTS
+      // round trip, or the wake word re-arms into the gap and false-triggers
+      // on ambient noise before the reply starts speaking.
+      if (wasVoice && answer) {
+        useAppStore.getState().setAudioPlaying(true);
+        synthesizeSpeech(answer)
+          .then((meta) => {
+            updateLastAssistant(convId, answer, undefined, undefined, undefined, {
+              url: meta.url,
+              autoPlay: true,
+            });
+          })
+          .catch(() => {
+            useAppStore.getState().setAudioPlaying(false);
+          });
+      }
+      return true;
+    },
+    [
+      activeId,
+      addMessage,
+      createConversation,
+      selectedModel,
+      streamState.isStreaming,
+      updateLastAssistant,
+    ],
+  );
+
+  const handleFluxEndOfTurn = useCallback(
+    async (transcript: string, turnIndex: number, speculativeAnswer?: string) => {
+      setFluxTurnActive(false);
+      // Deepgram can repeat a final event; one confirmed turn sends once.
+      if (lastFluxTurnRef.current === turnIndex) return;
+      lastFluxTurnRef.current = turnIndex;
+
+      const text = (transcript || '').trim();
+      if (!text) return;
+      voiceOriginatedRef.current = true;
+
+      // A released answer arrives only on a confirmed final, already checked
+      // against this turn's identity and transcript server-side. If posting
+      // it is declined for any reason, fall through and generate normally
+      // rather than losing the turn.
+      if (speculativeAnswer && speculativeAnswer.trim()) {
+        const posted = await releaseSpeculativeAnswer(text, speculativeAnswer.trim());
+        if (posted) return;
+      }
+      await sendMessage(text);
+    },
+    [releaseSpeculativeAnswer, sendMessage],
+  );
+
+  const handleFluxUnavailable = useCallback(
+    async (reason: string, audio: Int16Array | null) => {
+      setFluxTurnActive(false);
+      toast.error(`Cloud transcription unavailable — using local. ${reason}`, {
+        duration: 6000,
+      });
+      // Don't lose the utterance: whatever of the turn was captured is
+      // transcribed locally rather than dropped.
+      if (!audio || audio.length === 0) return;
+      try {
+        const wav = pcm16ToWav(audio, 16000);
+        const result = await transcribeAudio(wav, 'flux-fallback.wav');
+        const text = (result?.text || '').trim();
+        if (text) {
+          voiceOriginatedRef.current = true;
+          await sendMessage(text);
+        }
+      } catch {
+        toast.error('Local transcription of that turn failed.', { duration: 6000 });
+      }
+    },
+    [sendMessage],
+  );
+
+  const flux = useFluxSpeech({
+    enabled: fluxActive,
+    eager: fluxEagerEnabled,
+    onEndOfTurn: handleFluxEndOfTurn,
+    onTurnResumed: () => {
+      // The speaker carried on; the server has already discarded its
+      // speculative work. Nothing was shown here, so nothing to undo.
+    },
+    onUnavailable: handleFluxUnavailable,
+  });
+
   // Entry point for both the wake word and continuous-conversation re-arm.
   // Real silence detection (see useSpeech's VAD) stops the recording as soon
   // as the user finishes talking — the fixed 12s timer below is only a
@@ -692,8 +891,15 @@ export function InputArea() {
   // Previously the timer WAS the only mechanism, so every turn waited out
   // the same multi-second pause no matter how short the question was.
   const beginAutoRecording = useCallback(async () => {
-    if (micDisabled || speechState !== 'idle') return;
+    if (micDisabled || effectiveSpeechState !== 'idle') return;
     autoTriggeredRef.current = true;
+    if (fluxActive) {
+      // Flux decides when the turn ends, so there is no 12s fallback timer
+      // and no local recording to stop.
+      setFluxTurnActive(true);
+      flux.beginTurn();
+      return;
+    }
     await startRecording(finishAutoRecording);
     autoStopTimerRef.current = setTimeout(() => {
       finishAutoRecording();
@@ -719,7 +925,8 @@ export function InputArea() {
     // keep a second trigger out. A ref closes the gap immediately, before
     // any await — one observed "Hey Sage" started three overlapping
     // greetings without it.
-    if (micDisabled || speechState !== 'idle' || wakeWordBusyRef.current) return;
+    if (micDisabled || effectiveSpeechState !== 'idle' || wakeWordBusyRef.current)
+      return;
     wakeWordBusyRef.current = true;
     try {
       autoTriggeredRef.current = true;
@@ -729,6 +936,18 @@ export function InputArea() {
               toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
           })
         : undefined;
+      if (fluxActive) {
+        // Marked busy before awaiting the greeting, not after: this is what
+        // disarms the wake word, and leaving it armed through the greeting
+        // let a second detection of the same "Hey Sage" through.
+        setFluxTurnActive(true);
+        // Same sequential contract as the local path: the greeting finishes
+        // before any audio is transmitted, so Sage's own voice never enters
+        // the turn Deepgram is judging.
+        if (greeting) await greeting;
+        flux.beginTurn();
+        return;
+      }
       await startRecording(finishAutoRecording, { waitBeforeCapture: greeting });
       autoStopTimerRef.current = setTimeout(() => {
         finishAutoRecording();
@@ -777,6 +996,18 @@ export function InputArea() {
   // silently outlive the switch that is supposed to control it.
   const [wakeWordSuspended, setWakeWordSuspended] = useState(false);
 
+  // Never transmit while Sage is speaking. Echo cancellation is imperfect,
+  // and Sage's own reply reaching Deepgram would be transcribed as the
+  // user's next turn — the same failure the wake-word gating exists for.
+  useEffect(() => {
+    if (audioPlaying && fluxTurnActive) {
+      flux.endTurn();
+      setFluxTurnActive(false);
+    }
+    // flux.endTurn is stable; re-running on the flag alone is intended.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioPlaying, fluxTurnActive]);
+
   useEffect(() => {
     if (settleTimerRef.current) {
       clearTimeout(settleTimerRef.current);
@@ -811,7 +1042,7 @@ export function InputArea() {
     wakeWordEnabled &&
       !wakeWordSuspended &&
       !micDisabled &&
-      speechState === 'idle' &&
+      effectiveSpeechState === 'idle' &&
       !audioPlaying &&
       wakeWordSettled,
   );
@@ -922,7 +1153,7 @@ export function InputArea() {
         ) : (
           <div className="flex items-center gap-1">
             <MicButton
-              state={speechState}
+              state={effectiveSpeechState}
               onClick={handleMicClick}
               disabled={micDisabled}
               reason={micReason}

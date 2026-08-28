@@ -132,6 +132,13 @@ interface Settings {
   wakeWordEnabled: boolean;
   wakeWordGreetingEnabled: boolean;
   continuousConversationEnabled: boolean;
+  // Deepgram Flux streaming transcription. Off by default: local
+  // faster-whisper stays the default and the fallback.
+  fluxEnabled: boolean;
+  // Speculative EagerEndOfTurn work. Dependent on fluxEnabled, and separately
+  // opt-in because it can start extra cloud LLM generations that are
+  // discarded when the speaker resumes.
+  fluxEagerEnabled: boolean;
 }
 
 function loadSettings(): Settings {
@@ -148,6 +155,8 @@ function loadSettings(): Settings {
     wakeWordEnabled: false,
     wakeWordGreetingEnabled: true,
     continuousConversationEnabled: false,
+    fluxEnabled: false,
+    fluxEagerEnabled: false,
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -156,11 +165,16 @@ function loadSettings(): Settings {
     // An empty string is a legacy/unset value, not a deliberate choice to
     // clear the default model — fall back to defaults.defaultModel instead
     // of letting a stale '' persist through the merge below.
-    return {
+    const merged = {
       ...defaults,
       ...parsed,
       defaultModel: parsed.defaultModel || defaults.defaultModel,
     };
+    // Ultra depends on Flux. A stored combination with eager on and Flux off
+    // (settings edited by hand, or Flux switched off while eager stayed set)
+    // must not resurrect speculation.
+    if (!merged.fluxEnabled) merged.fluxEagerEnabled = false;
+    return merged;
   } catch {
     return defaults;
   }

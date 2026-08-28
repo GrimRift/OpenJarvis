@@ -332,6 +332,10 @@ export interface SpeechHealth {
   backend?: string;
   reason?: string;
   wake_word_available?: boolean;
+  /** Whether Deepgram Flux can actually be used: key present and enabled. */
+  flux_available?: boolean;
+  /** Why Flux is unavailable. Never contains the key itself. */
+  flux_reason?: string;
 }
 
 export async function transcribeAudio(audioBlob: Blob, filename = 'recording.webm'): Promise<TranscriptionResult> {
