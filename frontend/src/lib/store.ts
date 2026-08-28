@@ -222,6 +222,7 @@ interface AppState {
   models: ModelInfo[];
   modelsLoading: boolean;
   selectedModel: string;
+  cloudModelAvailable: boolean;
   serverInfo: ServerInfo | null;
   savings: SavingsData | null;
 
@@ -279,6 +280,7 @@ interface AppState {
   setModels: (models: ModelInfo[]) => void;
   setModelsLoading: (loading: boolean) => void;
   setSelectedModel: (model: string) => void;
+  setCloudModelAvailable: (available: boolean) => void;
   setServerInfo: (info: ServerInfo | null) => void;
   setSavings: (data: SavingsData | null) => void;
   incrementSavings: (usage: TokenUsage) => void;
@@ -352,6 +354,7 @@ export const useAppStore = create<AppState>((set, get) => {
     models: [],
     modelsLoading: true,
     selectedModel: '',
+    cloudModelAvailable: false,
     serverInfo: null,
     savings: null,
 
@@ -565,6 +568,7 @@ export const useAppStore = create<AppState>((set, get) => {
               preferCloudModel: state.settings.preferCloudModel,
               cloudModel: state.settings.cloudModel,
               localModel: state.settings.defaultModel,
+              cloudAvailable: state.cloudModelAvailable,
             },
           ) ||
           models.find((m) => !isEmbedOnlyModel(m.id))?.id ||
@@ -588,6 +592,26 @@ export const useAppStore = create<AppState>((set, get) => {
       }),
     setModelsLoading: (loading: boolean) => set({ modelsLoading: loading }),
     setSelectedModel: (model: string) => set({ selectedModel: model }),
+
+    // Cloud models are deliberately absent from /v1/models, so availability
+    // comes from the provider key instead. Arrives after the model list, so
+    // the selection is revisited once it does.
+    setCloudModelAvailable: (available: boolean) =>
+      set((state) => {
+        if (state.cloudModelAvailable === available) return {};
+        const next: Partial<AppState> = { cloudModelAvailable: available };
+        const target = preferredModelId(
+          state.models.filter((m) => !isEmbedOnlyModel(m.id)).map((m) => m.id),
+          {
+            preferCloudModel: state.settings.preferCloudModel,
+            cloudModel: state.settings.cloudModel,
+            localModel: state.settings.defaultModel,
+            cloudAvailable: available,
+          },
+        );
+        if (target && target !== state.selectedModel) next.selectedModel = target;
+        return next;
+      }),
     setServerInfo: (info: ServerInfo | null) => set({ serverInfo: info }),
     setSavings: (data: SavingsData | null) => set({ savings: data }),
     incrementSavings: (usage: TokenUsage) => {

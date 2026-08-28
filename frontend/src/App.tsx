@@ -12,7 +12,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
 import { useAppStore } from './lib/store';
-import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } from './lib/api';
+import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri, fetchToolCredentialStatus } from './lib/api';
 import { OptInModal } from './components/OptInModal';
 import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
@@ -31,6 +31,7 @@ export default function App() {
   const prevModelRef = useRef<string>('');
   const setModels = useAppStore((s) => s.setModels);
   const setModelsLoading = useAppStore((s) => s.setModelsLoading);
+  const setCloudModelAvailable = useAppStore((s) => s.setCloudModelAvailable);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const setServerInfo = useAppStore((s) => s.setServerInfo);
   const setSavings = useAppStore((s) => s.setSavings);
@@ -63,6 +64,14 @@ export default function App() {
     const interval = setInterval(importOverlay, 5000);
     return () => clearInterval(interval);
   }, [importOverlay]);
+
+  // Whether the cloud model is usable. /v1/models deliberately omits direct
+  // cloud models, so the provider key is the only signal available here.
+  useEffect(() => {
+    fetchToolCredentialStatus('cloud_openai')
+      .then((status) => setCloudModelAvailable(Boolean(status.OPENAI_API_KEY)))
+      .catch(() => setCloudModelAvailable(false));
+  }, [setCloudModelAvailable]);
 
   // Fetch models on mount
   useEffect(() => {

@@ -237,6 +237,7 @@ const themeOptions: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
 export function SettingsPage() {
   const settings = useAppStore((s) => s.settings);
   const models = useAppStore((s) => s.models);
+  const cloudModelAvailable = useAppStore((s) => s.cloudModelAvailable);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const conversations = useAppStore((s) => s.conversations);
@@ -577,6 +578,7 @@ export function SettingsPage() {
                       preferCloudModel: settings.preferCloudModel,
                       cloudModel: settings.cloudModel,
                       localModel: settings.defaultModel,
+                      cloudAvailable: cloudModelAvailable,
                     },
                     next,
                   );

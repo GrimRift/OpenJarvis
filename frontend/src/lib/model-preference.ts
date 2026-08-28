@@ -16,14 +16,22 @@ export interface ModelPreference {
   preferCloudModel: boolean;
   cloudModel: string;
   localModel: string;
+  /**
+   * Whether the cloud model can actually be used.
+   *
+   * Deliberately *not* inferred from the model list: /v1/models filters direct
+   * cloud models out on purpose ("Direct cloud models live in the Cloud Models
+   * tab"), so gpt-5.6-luna never appears there and a membership check silently
+   * fell back to local every time. The provider's API key is the real signal.
+   */
+  cloudAvailable: boolean;
 }
 
 /**
  * Pick a starting model from what the server actually offers.
  *
- * Falls through to local whenever the cloud model is absent — no API key, no
- * credit, or offline — so preferring cloud can never leave Sage with nothing
- * to answer on.
+ * Falls through to local whenever the cloud provider has no key configured,
+ * so preferring cloud can never leave Sage with nothing to answer on.
  */
 export function preferredModelId(
   chatModelIds: readonly string[],
@@ -31,7 +39,9 @@ export function preferredModelId(
 ): string {
   const has = (id: string) => Boolean(id) && chatModelIds.includes(id);
 
-  if (pref.preferCloudModel && has(pref.cloudModel)) return pref.cloudModel;
+  if (pref.preferCloudModel && pref.cloudAvailable && pref.cloudModel) {
+    return pref.cloudModel;
+  }
   if (has(pref.localModel)) return pref.localModel;
   return chatModelIds[0] ?? '';
 }
