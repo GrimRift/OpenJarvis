@@ -357,8 +357,25 @@ filtered once per request in `OrchestratorAgent.run()` (never per turn, so the
 payload stays byte-identical across the loop and a provider's prompt cache
 keeps hitting).
 
-**Measured across 17 real request wordings: mean 2,214 tokens saved per turn,
-58% of the tool payload.** "who are you" drops 3,815 → 882.
+**Measured live against the running server**, two requests differing only in
+group-triggering words: **5,452 vs 7,379 prompt tokens, a 1,927-token gap.** A
+real conversational turn fell from 7,365 to 5,452, so **~1,900 tokens saved per
+turn**; the `world_time` question fell from 13,848 to 10,022 across its
+multi-turn loop.
+
+**The first live measurement showed those two requests 14 tokens apart —
+routing was live and doing nothing.** `routes.py` injects retrieved memory into
+the request as a *system* message before dispatch, `_handle_agent` feeds that
+into `ctx.conversation`, and `routing_text` was reading every prior message.
+A blob from a 64k-chunk corpus matches essentially every group, so the full
+toolset was selected every time. Only user turns route now (`fa490e1`).
+
+**Worth internalising: all 38 unit tests passed throughout, including a wiring
+test that runs a real turn through `OrchestratorAgent.run()`.** They fed
+`routing_text` a bare string, which is not the shape the server produces — the
+right function tested against the wrong input. Only an A/B of two live requests
+differing in one variable exposed it. An offline measurement script had the
+same flaw and reported a confident, wrong 2,214-token saving.
 
 Three properties keep it from hiding a capability, which is the failure mode
 that matters — a hidden tool reads to the user as "Sage can't do that":
@@ -433,6 +450,36 @@ step has never executed and every stored digest carries `quality_score = 0.0`.
 Left alone deliberately (writing an evaluator was not in scope), but the guard
 above is now correct for when it lands, and a test documents the live
 behaviour. Decide whether to build it or delete the dead branch.
+
+### Found by the smoke test, not fixed: "no classes today" when there are three
+
+Asked *"What is my class schedule today?"* at 17:05 on a Friday with three
+classes on the note (11:00, 15:00, 17:00 — the last one in session), Sage
+answered **"You have no classes scheduled for today."**
+
+Not caused by routing: routing demonstrably includes `check_class_schedule`
+for that wording, and a control request padded so every group loads — an
+almost-unrouted toolset — reached the same wrong conclusion, then contradicted
+itself by listing the three classes it had just denied.
+
+The mechanism is in the tool. `_find_upcoming` keeps only
+`0 <= minutes_until <= lookahead`, so a class that has already *started* is
+never returned, and `datetime.combine(now.date(), start_time)` means it only
+ever considers today regardless of how large the lookahead is. Asked directly
+with `lookahead_minutes=1440` it answered "no classes starting in the next
+1,440 minutes" — technically true, and useless.
+
+So `check_class_schedule` is a *starting-soon* tool that cannot list today's
+schedule once the last class has begun, while its own description tells the
+model to use it for "today's full schedule" with a large lookahead. The
+description promises what the implementation cannot deliver, and the model
+converts "nothing upcoming" into "no classes today".
+
+Same family as the reminder bug fixed earlier the same day: a narrow window
+being read as a statement about the whole day. A fix wants a real day view
+(classes today with started/in-progress marked) rather than a wider lookahead,
+which cannot help. Left alone as out of scope; it is a live wrong answer, so
+it should be near the top of the next list.
 
 ### Verification
 
