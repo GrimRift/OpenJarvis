@@ -308,14 +308,33 @@ Groundwork done, so picking this up is short:
 - Until then the token expires roughly weekly. `scripts/reauth-google.py` repairs it in a minute.
 
 
+## Sage persona, Web parity, and latency pass (2026-08-28, latest)
+
+**Feature HEAD before this handoff update: `3b43494`** (`perf: reduce Sage response latency`). The immediately preceding verified commits are `2d0e97e` (compact voice player), `f9bedce` (seven-day inbox recency), `e7bad07` (global Sage persona), `9a2ef7f` (safe clickable Web previews), and `195f563` (Telegram/Web approval execution). Nothing is pushed; confirm before pushing.
+
+### What changed and what the user verified live
+
+- Streaming voice replies no longer hold back completed text while Cartesia TTS runs. The server releases text first; the Web UI then synthesizes and attaches audio asynchronously. Interactive Web morning digests use the same deferred-audio path. Scheduled/channel digests retain eager audio generation.
+- `digest_collect` now reads independent sources concurrently and merges them in the original deterministic source/section order. Gmail's digest-only path bounds itself to 15 messages and overlaps eight detail GETs; normal bulk Gmail synchronization remains sequential and unbounded by default.
+- Live profiling before the fix: a voice identity question displayed at 17.2s although Luna generation itself took 3.5s; the rest was synchronous TTS. Morning digest was 27.7s: connector collection 10.3s, Luna 8.8s, TTS 8.6s. Gmail alone took 6.9s for 15 serial detail requests.
+- Live profiling after the fix: voice text 4.35s; Gmail digest read 1.65s; connector collection 1.4s; successful morning-digest text 12.2s. The user then independently confirmed that text appears before speech and reported: identity 3.5s, Japan time 3.7s, Web search 11.0s, inbox 13.0s, morning digest 13.9s.
+- Sage was rebuilt/restarted; `/health` is `ok`, `/v1/channels/status` is `connected`, ports 8000 and 5173 are listening. `frontend/tsconfig.tsbuildinfo` is removed and ignored.
+
+Verification: **104 backend tests passed** across the changed server, speech, digest, and Gmail paths; frontend audio policy **2 tests passed**; production frontend build completed; Ruff passed on all touched files with the repo's pre-existing `routes.py:102` E501 excluded. Every new concurrency/non-blocking regression was run against the old implementation first and failed there.
+
+### Concrete next performance and rendering work
+
+1. **Tool/context payload is now the main latency floor.** The user's live turns still carried 18,092 input tokens for inbox, 17,535 for Web search, and 16,750 for `world_time`; even the tool-free identity response carried 8,660. Do not simply remove capabilities. Profile prompt sections versus tool schemas, then design a deterministic/lazy tool subset or stable prompt-cache-friendly routing that preserves all fail-closed boundaries and never hides a tool needed for an action.
+2. **Fix two visible rendering defects from the live transcript.** Currency text spanning `$200` and a later `$1` was interpreted as inline math and rendered as concatenated `200invoiceAIcreditswereactivated...1`; protect currency from `remark-math` without breaking real math. Web research also surfaced literal `&#xA0;` and duplicated source/snippet cards; normalize escaped entities and deduplicate the raw preview without weakening citations or safe-link handling.
+3. **One Luna digest attempt returned empty content** after consuming exactly 1,024 completion tokens with `finish_reason=length`; the next attempt succeeded. Add a bounded fail-closed retry/headroom policy for an empty reasoning-model result, with a regression test, rather than treating an empty generation as a valid digest.
+4. The global Jarvis-like Sage persona is deployed everywhere, but the user has not yet made a final qualitative judgment on its personality. Do not rewrite it again without asking what specifically feels wrong.
+
 ## Unfinished work and exact next action
 
-`jarvis connect --sync` is implemented, tested, and live-verified — not a stub anymore. Outlook/Microsoft Graph OAuth is implemented, tested, and live-verified up to a real external blocker (NU tenant admin-consent requirement) — waiting on NU's IT or a non-NU mailbox, nothing more to build here. Spotify is connected and working (401-on-refresh bug found and fixed this session, live-verified). M26's class-schedule reminder and the morning-digest chat bridge (with a new Obsidian notes section) are both fully implemented, tested, and live-verified. Wake word, the voice-conversation loop, general voice-reply TTS, and the date-hallucination mitigation are all implemented and tested — **the user was mid-live-test when this was written, about to restart their laptop and retest fresh** (clears any lingering process/browser-cache state; all fixes are already committed and built into `server/static/`, nothing further needed from that restart alone).
-
-Nothing is currently mid-implementation. All work through `167ebb3` is committed — not pushed to `origin` yet, confirm with the user first if that's wanted. **A separate, undocumented body of uncommitted work is sitting in the tree** (see "Current Git state" above — orb visualization, dashboard leaderboard card, config/serve/tools/pyproject changes) that this session deliberately left untouched; ask the user what it is before acting on it.
+The current state and exact next candidates are in **"Sage persona, Web parity, and latency pass (2026-08-28, latest)" immediately above**. Nothing is mid-implementation; the old uncommitted orb/dashboard warning below was resolved long ago and is retained only as historical context. All current source and handoff work is committed locally, not pushed; confirm with the user before pushing.
 
 Next, in order (as of the entry directly below this one — **items 1 and 2 above are stale, both since resolved**: wake word was re-tested, broke again for unrelated reasons, and went through the full retraining arc documented in "M28 completed, M31 in progress" below; the cloud-model date re-test was never explicitly revisited but is low-priority and not blocking anything):
 1. Do NOT build Microsoft Calendar/OneDrive yet — they'd hit the identical NU admin-consent wall against the same mailbox, no point until Outlook clears. Teams is lower priority for the same reason. `ProactiveAgent` (`agents/proactive_agent.py` — the daily-digest-with-tiered-approval-and-chat-notification agent, distinct from `morning_digest.py`) is still real, tested, but never wired to a real startup path — a candidate for further M26 work if the user wants to keep going in that direction, but confirm with them before starting, per `AGENTS.md`'s "ask before assuming roadmap status" guidance.
 2. ~~A separate, undocumented body of work was flagged as sitting uncommitted in the tree back at `167ebb3`~~ Resolved: that work (orb visualization, dashboard leaderboard card, M26 tools) is committed — `5dbc371`, `feat: wake-word backend wiring, UI redesign (orb visual, dashboard), M26 tools`. Verified via `git log -- frontend/src/components/Chat/OrbVisual.tsx`. No longer a concern.
 
-**For anything past this point, read "Two silent-failure bugs, both "it ran fine and reported nothing" (2026-08-28, later)" above — it is the current state, this list is not.**
+**For anything past this point, use "Sage persona, Web parity, and latency pass (2026-08-28, latest)" above as the current state; this numbered list is historical.**
