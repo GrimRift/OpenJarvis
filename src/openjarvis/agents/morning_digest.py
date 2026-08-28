@@ -39,6 +39,12 @@ def _load_persona(persona_name: str) -> str:
     return ""
 
 
+def _load_global_soul() -> str:
+    """Load the same live Sage persona used by web and channel agents."""
+    path = get_config_dir() / "SOUL.md"
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
 @AgentRegistry.register("morning_digest")
 class MorningDigestAgent(ToolUsingAgent):
     """Pre-compute a daily digest from configured data sources."""
@@ -63,6 +69,7 @@ class MorningDigestAgent(ToolUsingAgent):
     def _build_system_prompt(self) -> str:
         """Assemble the system prompt from persona + briefing structure."""
         persona_text = _load_persona(self._persona)
+        global_soul = _load_global_soul()
         now = datetime.now()
         honorific = getattr(self, "_honorific", "sir")
         sections = dict.fromkeys(
@@ -76,6 +83,7 @@ class MorningDigestAgent(ToolUsingAgent):
         )
 
         return (
+            f"{global_soul}\n\n"
             f"{persona_text}\n\n"
             f"Today is {now.strftime('%A, %B %d, %Y')}. "
             f"The time is {now.strftime('%I:%M %p')} in {self._timezone}.\n"

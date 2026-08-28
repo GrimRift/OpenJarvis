@@ -329,6 +329,19 @@ class TestPersonaReachesAsk:
         orch.ask("who are you", agent="probe")
         assert captured["prompt_builder"] is not None
 
+    def test_channel_builder_contains_the_configured_soul(self, tmp_path):
+        """Telegram and scheduled requests use this same orchestrator path."""
+        soul_path = tmp_path / "SOUL.md"
+        soul_path.write_text("CHANNEL_SAGE_PERSONA_SENTINEL", encoding="utf-8")
+
+        orch, captured = self._orchestrator_with_agent(accepts_builder=True)
+        orch._system.config.memory_files.soul_path = str(soul_path)
+        orch.ask("who are you", agent="probe")
+
+        assert "CHANNEL_SAGE_PERSONA_SENTINEL" in captured[
+            "prompt_builder"
+        ].build()
+
     def test_builder_is_reused_across_calls(self):
         """SystemPromptBuilder freezes a prefix per instance for cache stability."""
         orch, captured = self._orchestrator_with_agent(accepts_builder=True)

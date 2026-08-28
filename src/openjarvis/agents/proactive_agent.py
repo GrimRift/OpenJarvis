@@ -509,7 +509,7 @@ class ProactiveAgent(ToolUsingAgent):
         if not collect_result.success or not collect_result.content.strip():
             self._emit_turn_end(turns=1)
             return AgentResult(
-                content="No data collected from connectors — nothing to do.",
+                content="I couldn't collect source data, so I took no action.",
                 turns=1,
             )
 
@@ -530,8 +530,8 @@ class ProactiveAgent(ToolUsingAgent):
             self._emit_turn_end(turns=1)
             return AgentResult(
                 content=(
-                    "Could not read anything this run — every source failed, so "
-                    "this is not a report that your inbox is clear.\n\n"
+                    "I couldn't inspect your sources this run. Every source "
+                    "failed, so this is not an all-clear.\n\n"
                     + "\n".join(f"  {err}" for err in failed_sources)
                 ),
                 turns=1,
@@ -683,11 +683,11 @@ class ProactiveAgent(ToolUsingAgent):
         self._emit_turn_end(turns=1)
         # Say which sources were unreadable even when others worked, so a
         # short summary is not mistaken for a complete one.
-        summary = notification or "Nothing to report."
+        summary = notification or "Nothing requires your attention."
         if failed_sources:
-            summary += "\n\nCouldn't read " + ", ".join(
+            summary += "\n\nI couldn't read " + ", ".join(
                 err.split("'")[1] if "'" in err else err for err in failed_sources
-            ) + " this run, so this may be incomplete."
+            ) + " this run, so this update may be incomplete."
         return AgentResult(
             content=summary,
             turns=1,
@@ -708,7 +708,8 @@ class ProactiveAgent(ToolUsingAgent):
         if executed:
             successes = [r for r in executed if r.get("success")]
             failures = [r for r in executed if not r.get("success")]
-            lines.append(f"Done automatically ({len(successes)} actions):")
+            action_word = "action" if len(successes) == 1 else "actions"
+            lines.append(f"Handled automatically ({len(successes)} {action_word}):")
             for r in successes:
                 lines.append(f"  ✓ {r['description']}")
             for r in failures:
@@ -717,7 +718,8 @@ class ProactiveAgent(ToolUsingAgent):
         if pending:
             if lines:
                 lines.append("")
-            lines.append(f"Needs your approval ({len(pending)} actions):")
+            action_word = "action" if len(pending) == 1 else "actions"
+            lines.append(f"Your decision is needed ({len(pending)} {action_word}):")
             for action in pending:
                 tier_label = {
                     "low": "low-risk",
@@ -727,9 +729,9 @@ class ProactiveAgent(ToolUsingAgent):
                 lines.append(f"  [{action.id}] ({tier_label}) {action.description}")
             lines.append("")
             lines.append(
-                "Reply with: '{id} yes/no' to decide. "
-                "Add 'always' to remember (e.g. 'always yes {id}'). "
-                "'yes all' / 'no all' for bulk."
+                "Reply '{id} yes' or '{id} no'. "
+                "Use 'always yes/no {id}' to remember, or "
+                "'yes all' / 'no all' for everything."
             )
 
         if not lines:

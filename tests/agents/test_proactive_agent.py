@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -131,6 +132,32 @@ class TestNotificationChannel:
             channel = _build_notification_channel("twilio:15551234567")
 
         channel.connect.assert_called_once_with()
+
+
+class TestNotificationVoice:
+    def test_pending_actions_are_direct_and_decision_led(self):
+        from openjarvis.agents.proactive_agent import ProactiveAgent
+
+        agent = object.__new__(ProactiveAgent)
+        pending = [
+            SimpleNamespace(id="abc123", tier="medium", description="Send reply")
+        ]
+
+        notification = agent._build_notification([], pending)
+
+        assert notification.startswith("Your decision is needed (1 action):")
+        assert "Reply '{id} yes' or '{id} no'." in notification
+        assert "Needs your approval" not in notification
+
+    def test_completed_actions_use_composed_status_language(self):
+        from openjarvis.agents.proactive_agent import ProactiveAgent
+
+        agent = object.__new__(ProactiveAgent)
+        notification = agent._build_notification(
+            [{"success": True, "description": "Archived newsletter"}], []
+        )
+
+        assert notification.startswith("Handled automatically (1 action):")
 
 
 # -- Payload/description consistency -----------------------------------------
@@ -356,7 +383,7 @@ class TestConnectorFailuresAreReported:
 
         result = agent.run()
 
-        assert "not a report that your inbox is clear" in result.content
+        assert "not an all-clear" in result.content
         assert "gmail" in result.content
         assert result.metadata["collection_failed"] is True
 

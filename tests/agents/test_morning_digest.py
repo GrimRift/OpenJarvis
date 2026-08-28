@@ -92,6 +92,27 @@ def test_load_persona():
     assert result == ""
 
 
+def test_morning_digest_inherits_global_sage_persona(tmp_path):
+    from openjarvis.agents.morning_digest import MorningDigestAgent
+
+    (tmp_path / "SOUL.md").write_text(
+        "GLOBAL_SAGE_PERSONA_SENTINEL", encoding="utf-8"
+    )
+    agent = MorningDigestAgent(
+        MagicMock(), "test-model", tools=[], persona="jarvis", sections=["world"]
+    )
+
+    with patch(
+        "openjarvis.agents.morning_digest.get_config_dir", return_value=tmp_path
+    ):
+        prompt = agent._build_system_prompt()
+
+    assert "GLOBAL_SAGE_PERSONA_SENTINEL" in prompt
+    assert "You are Sage" in prompt
+    assert "spoken briefing" in prompt
+    assert "You are Jarvis" not in prompt
+
+
 def test_morning_digest_run_tts_failure_yields_no_audio_path(tmp_path):
     """A failed/unconfigured TTS backend must persist audio_path=None, not
     Path("") — the latter resolves to the CWD and always "exists"."""
