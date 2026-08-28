@@ -48,11 +48,12 @@ function makeParticles(n: number): Particle[] {
 }
 
 // Rotation rate per 60Hz frame. Tuned by eye after the frame-rate fix made
-// the orb honour these numbers literally: base rates +20%, speaking +30%.
+// the orb honour these numbers literally: raised across two rounds of live
+// tuning to about 1.44x idle and 1.69x listening/speaking of the original.
 const SPEED_MAP: Record<OrbState, number> = {
-  idle: 0.0042,
-  listening: 0.0096,
-  speaking: 0.0169,
+  idle: 0.00504,
+  listening: 0.01248,
+  speaking: 0.02197,
 };
 const BRIGHT_MAP: Record<OrbState, number> = { idle: 0.85, listening: 1.05, speaking: 1.3 };
 
