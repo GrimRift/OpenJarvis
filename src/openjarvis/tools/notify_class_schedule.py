@@ -85,7 +85,14 @@ class NotifyClassScheduleTool(BaseTool):
 
     def execute(self, **params: Any) -> ToolResult:
         now: datetime = params.get("now") or datetime.now()
-        check_result = self._checker.execute(**{**params, "now": now})
+        # Only the reminder window is forwarded, never the caller's whole
+        # param dict: a hallucinated full_day=true would turn this from "a
+        # class starts in 15 minutes" into a toast for every remaining class
+        # of the day, each one burning its once-per-day suppression.
+        checker_params: Dict[str, Any] = {"now": now, "full_day": False}
+        if params.get("lookahead_minutes") is not None:
+            checker_params["lookahead_minutes"] = params["lookahead_minutes"]
+        check_result = self._checker.execute(**checker_params)
         if not check_result.success:
             return ToolResult(
                 tool_name="notify_class_schedule",

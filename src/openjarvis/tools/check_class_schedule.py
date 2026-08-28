@@ -42,14 +42,35 @@ def _parse_clock_time(raw: str) -> dt_time:
     return datetime.strptime(raw.strip().upper(), "%I:%M%p").time()
 
 
-def _row_start_time(row: Dict[str, str]) -> Optional[dt_time]:
+def _row_time_range(row: Dict[str, str]) -> Optional[tuple[dt_time, Optional[dt_time]]]:
+    """Parse "11:00AM-01:00PM" into (start, end). End is None if unparseable."""
     parts = _TIME_RANGE_SEP.split(row.get("Time", ""), maxsplit=1)
     if len(parts) != 2:
         return None
     try:
-        return _parse_clock_time(parts[0])
+        start = _parse_clock_time(parts[0])
     except ValueError:
         return None
+    try:
+        end: Optional[dt_time] = _parse_clock_time(parts[1])
+    except ValueError:
+        end = None
+    return start, end
+
+
+def _row_start_time(row: Dict[str, str]) -> Optional[dt_time]:
+    parsed = _row_time_range(row)
+    return parsed[0] if parsed else None
+
+
+def _row_fields(row: Dict[str, str]) -> Dict[str, Any]:
+    return {
+        "subject_code": row.get("Subject Code", ""),
+        "subject_description": row.get("Subject Description", ""),
+        "section": row.get("Section", ""),
+        "room": row.get("Room", ""),
+        "mode": row.get("Mode", ""),
+    }
 
 
 def _parse_subjects_table(text: str) -> List[Dict[str, str]]:
@@ -97,29 +118,42 @@ class CheckClassScheduleTool(BaseTool):
         return ToolSpec(
             name="check_class_schedule",
             description=(
-                "Check for a class starting imminently, within the next N "
-                "minutes (default 15, meant for 'is a class about to start' "
-                "reminders). An empty result means nothing is starting in "
-                "that narrow window — it does NOT mean there are no classes "
-                "later today. For 'what's my schedule today/this week' or "
-                "any question not about the next few minutes, do not rely "
-                "on this tool alone: pass a much larger lookahead_minutes "
-                "(e.g. 1440 for the rest of today) or read/search the "
-                "schedule note directly instead. Returns upcoming classes "
-                "in metadata.upcoming. Read-only: calling this never "
-                "suppresses a later reminder."
+                "The user's class schedule. Two modes, and picking the wrong "
+                "one produces a false answer:\n"
+                "- full_day=true — EVERY class scheduled today, including "
+                "ones already in progress or finished, each marked with a "
+                "status. Use this for 'what is my schedule today', 'do I "
+                "have class today', 'what classes do I have', and any "
+                "question about the day as a whole.\n"
+                "- full_day=false (default) — only classes STARTING within "
+                "the next lookahead_minutes (default 15). This is for 'is a "
+                "class about to start' reminders only. An empty result here "
+                "means nothing starts in that narrow window; it does NOT "
+                "mean there are no classes today, and must never be reported "
+                "as such. A larger lookahead_minutes does not help — classes "
+                "that already started are excluded in this mode at any "
+                "lookahead.\n"
+                "Read-only: calling this never suppresses a later reminder."
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    "full_day": {
+                        "type": "boolean",
+                        "description": (
+                            "True for today's whole schedule, including "
+                            "classes already in progress or finished. Use "
+                            "this for any question about today rather than "
+                            "about the next few minutes."
+                        ),
+                        "default": False,
+                    },
                     "lookahead_minutes": {
                         "type": "integer",
                         "description": (
-                            "How many minutes ahead to look for an upcoming "
-                            "class. Use the default (15) only for 'is "
-                            "something starting right now' checks. Use a "
-                            "much larger value (e.g. 1440) when asked about "
-                            "today's full schedule or classes later in the day."
+                            "Reminder window in minutes, used only when "
+                            "full_day is false. Default 15. Raising it does "
+                            "not reveal classes that already started."
                         ),
                         "default": 15,
                     },
@@ -153,6 +187,9 @@ class CheckClassScheduleTool(BaseTool):
                 success=False,
             )
 
+        if params.get("full_day"):
+            return self._day_view(rows, now)
+
         upcoming = self._find_upcoming(rows, now, lookahead_minutes)
 
         if not upcoming:
@@ -160,10 +197,11 @@ class CheckClassScheduleTool(BaseTool):
                 tool_name="check_class_schedule",
                 content=(
                     f"No classes starting in the next {lookahead_minutes} "
-                    "minutes. This only covers that narrow window — there "
-                    "may still be classes later today or on other days; "
-                    "re-check with a larger lookahead_minutes or read the "
-                    "schedule note directly if asked about those."
+                    "minutes. This only covers that narrow window and says "
+                    "NOTHING about today's schedule — classes already in "
+                    "progress or finished are excluded, so do not report "
+                    "this as 'no classes today'. Call again with "
+                    "full_day=true for that question."
                 ),
                 success=True,
                 metadata={"upcoming": []},
@@ -181,30 +219,94 @@ class CheckClassScheduleTool(BaseTool):
             metadata={"upcoming": upcoming},
         )
 
+    def _day_view(self, rows: List[Dict[str, str]], now: datetime) -> ToolResult:
+        classes = self._find_today(rows, now)
+        day_name = now.strftime("%A")
+        if not classes:
+            return ToolResult(
+                tool_name="check_class_schedule",
+                content=f"No classes scheduled for today ({day_name}).",
+                success=True,
+                metadata={"classes": [], "upcoming": [], "day": day_name},
+            )
+
+        label = {
+            "upcoming": "later today",
+            "in_progress": "in progress now",
+            "ended": "already finished",
+        }
+        lines = [
+            f"- {c['subject_description']} ({c['subject_code']}) "
+            f"{c['start_time']}"
+            f"{'–' + c['end_time'] if c['end_time'] else ''} "
+            f"in {c['room']} ({c['mode']}) — {label[c['status']]}"
+            for c in sorted(classes, key=lambda c: c["start_time"])
+        ]
+        return ToolResult(
+            tool_name="check_class_schedule",
+            content=(
+                f"{len(classes)} class(es) scheduled today ({day_name}):\n"
+                + "\n".join(lines)
+            ),
+            success=True,
+            metadata={
+                "classes": classes,
+                "upcoming": [c for c in classes if c["status"] == "upcoming"],
+                "day": day_name,
+            },
+        )
+
     @staticmethod
     def _find_upcoming(
         rows: List[Dict[str, str]], now: datetime, lookahead_minutes: int
     ) -> List[Dict[str, Any]]:
+        found: List[Dict[str, Any]] = []
+        for item in CheckClassScheduleTool._find_today(rows, now):
+            if 0 <= item["minutes_until"] <= lookahead_minutes:
+                found.append({k: v for k, v in item.items() if k != "status"})
+        return found
+
+    @staticmethod
+    def _find_today(rows: List[Dict[str, str]], now: datetime) -> List[Dict[str, Any]]:
+        """Every class scheduled today, in start order, each with a status.
+
+        A class that has already begun is still on today's schedule. Filtering
+        it out is right for "is something starting soon" and wrong for "what do
+        I have today" -- answering the second with the first is how Sage came
+        to report "no classes scheduled for today" at 17:05 with three on the
+        note and one in session.
+        """
         today_name = now.strftime("%A")
         found: List[Dict[str, Any]] = []
         for row in rows:
             if row.get("Day", "").strip() != today_name:
                 continue
-            start_time = _row_start_time(row)
-            if start_time is None:
+            parsed = _row_time_range(row)
+            if parsed is None:
                 continue
+            start_time, end_time = parsed
             start_dt = datetime.combine(now.date(), start_time)
             minutes_until = (start_dt - now).total_seconds() / 60.0
-            if 0 <= minutes_until <= lookahead_minutes:
-                found.append(
-                    {
-                        "subject_code": row.get("Subject Code", ""),
-                        "subject_description": row.get("Subject Description", ""),
-                        "section": row.get("Section", ""),
-                        "room": row.get("Room", ""),
-                        "mode": row.get("Mode", ""),
-                        "start_time": start_time.strftime("%I:%M%p").lstrip("0"),
-                        "minutes_until": round(minutes_until, 1),
-                    }
-                )
+            end_dt = (
+                datetime.combine(now.date(), end_time) if end_time else None
+            )
+            if minutes_until >= 0:
+                status = "upcoming"
+            elif end_dt is None or now < end_dt:
+                status = "in_progress"
+            else:
+                status = "ended"
+            item = _row_fields(row)
+            item.update(
+                {
+                    "start_time": start_time.strftime("%I:%M%p").lstrip("0"),
+                    "end_time": (
+                        end_time.strftime("%I:%M%p").lstrip("0") if end_time else ""
+                    ),
+                    "minutes_until": round(minutes_until, 1),
+                    "status": status,
+                }
+            )
+            found.append(item)
+        found.sort(key=lambda c: c["minutes_until"])
         return found

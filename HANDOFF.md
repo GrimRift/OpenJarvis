@@ -451,7 +451,7 @@ Left alone deliberately (writing an evaluator was not in scope), but the guard
 above is now correct for when it lands, and a test documents the live
 behaviour. Decide whether to build it or delete the dead branch.
 
-### Found by the smoke test, not fixed: "no classes today" when there are three
+### "No classes today" when there were three — found by the smoke test, then fixed
 
 Asked *"What is my class schedule today?"* at 17:05 on a Friday with three
 classes on the note (11:00, 15:00, 17:00 — the last one in session), Sage
@@ -476,10 +476,25 @@ description promises what the implementation cannot deliver, and the model
 converts "nothing upcoming" into "no classes today".
 
 Same family as the reminder bug fixed earlier the same day: a narrow window
-being read as a statement about the whole day. A fix wants a real day view
-(classes today with started/in-progress marked) rather than a wider lookahead,
-which cannot help. Left alone as out of scope; it is a live wrong answer, so
-it should be near the top of the next list.
+read as a statement about the whole day.
+
+**Fixed with a real day view, not a wider lookahead** (which cannot help).
+`full_day=true` returns every class scheduled today, each marked `upcoming`,
+`in_progress` or `ended`. The default narrow mode is untouched, because the
+10-minute reminder loop depends on it. The description now names both modes
+and states plainly that an empty narrow result must never be reported as "no
+classes today", and that raising `lookahead_minutes` will not reveal a class
+that already started.
+
+`notify_class_schedule` now forwards **only** the reminder window to the
+checker instead of its caller's whole param dict: a hallucinated
+`full_day=true` would otherwise have turned "a class starts in 15 minutes"
+into a toast for every remaining class of the day, each burning its
+once-per-day suppression.
+
+Verified against the real note at 17:10 on the Friday in question: all three
+classes listed, the 5PM one marked in progress, while the narrow window stayed
+correctly silent and still fired at 16:50 for the 5PM class.
 
 ### Verification
 

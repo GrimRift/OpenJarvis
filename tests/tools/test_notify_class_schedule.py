@@ -10,7 +10,7 @@ announced, because the summary had already marked it sent.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 _ROWS = [
     ("CS101", "Intro to Testing", "SEC1", "10:00AM–11:00AM"),
@@ -152,3 +152,31 @@ def test_an_unreadable_schedule_fails_without_claiming_a_notification(tmp_path):
 
     assert result.success is False
     assert deliver.call_count == 0
+
+
+def test_full_day_is_never_forwarded_to_the_checker(tmp_path):
+    """check_class_schedule gained a full_day mode that returns classes already
+    in progress. If a caller could pass it through, a "starting soon" toast
+    would fire for every remaining class of the day, each one burning its
+    once-per-day suppression."""
+    now = datetime(2026, 3, 10, 9, 50)
+    tool = _make_tool(tmp_path, now.strftime("%A"))
+    spy = MagicMock(wraps=tool._checker.execute)
+    tool._checker.execute = spy
+
+    with patch("openjarvis.tools.notify_class_schedule.deliver"):
+        tool.execute(now=now, lookahead_minutes=15, full_day=True)
+
+    assert spy.call_args.kwargs["full_day"] is False
+
+
+def test_the_lookahead_is_still_forwarded(tmp_path):
+    now = datetime(2026, 3, 10, 9, 50)
+    tool = _make_tool(tmp_path, now.strftime("%A"))
+    spy = MagicMock(wraps=tool._checker.execute)
+    tool._checker.execute = spy
+
+    with patch("openjarvis.tools.notify_class_schedule.deliver"):
+        tool.execute(now=now, lookahead_minutes=45)
+
+    assert spy.call_args.kwargs["lookahead_minutes"] == 45
