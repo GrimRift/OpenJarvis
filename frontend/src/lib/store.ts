@@ -1,4 +1,8 @@
 import { create } from 'zustand';
+import {
+  DEFAULT_CLOUD_MODEL,
+  preferredModelId,
+} from './model-preference';
 import type {
   Conversation,
   ChatMessage,
@@ -125,6 +129,11 @@ interface Settings {
   apiKey: string;
   fontSize: 'small' | 'default' | 'large';
   defaultModel: string;
+  // Cloud is ~6x faster at Sage's real prompt sizes (11.7s vs 1.9s measured on
+  // the same question at ~6,200 input tokens), so it is the default. Falls
+  // back to the local model automatically whenever cloud is unavailable.
+  preferCloudModel: boolean;
+  cloudModel: string;
   defaultAgent: string;
   temperature: number;
   maxTokens: number;
@@ -152,6 +161,8 @@ function loadSettings(): Settings {
     apiKey: '',
     fontSize: 'default',
     defaultModel: 'qwen3.5:4b',
+    preferCloudModel: true,
+    cloudModel: DEFAULT_CLOUD_MODEL,
     defaultAgent: '',
     temperature: 0.7,
     maxTokens: 4096,
@@ -547,10 +558,14 @@ export const useAppStore = create<AppState>((set, get) => {
         // chat". Prefer a real chat model for selection / fallback.
         const chatModels = models.filter((m) => !isEmbedOnlyModel(m.id));
         const preferred =
-          (state.settings.defaultModel &&
-            chatModels.some((m) => m.id === state.settings.defaultModel) &&
-            state.settings.defaultModel) ||
-          chatModels[0]?.id ||
+          preferredModelId(
+            chatModels.map((m) => m.id),
+            {
+              preferCloudModel: state.settings.preferCloudModel,
+              cloudModel: state.settings.cloudModel,
+              localModel: state.settings.defaultModel,
+            },
+          ) ||
           models.find((m) => !isEmbedOnlyModel(m.id))?.id ||
           '';
 
