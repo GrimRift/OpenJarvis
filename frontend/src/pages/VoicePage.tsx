@@ -24,17 +24,18 @@ export function VoicePage() {
   const orbState = useOrbState();
   const messages = useAppStore((s) => s.messages);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
-  const createConversation = useAppStore((s) => s.createConversation);
-  const activeId = useAppStore((s) => s.activeId);
+  const startNewChat = useAppStore((s) => s.startNewChat);
   const startedRef = useRef(false);
 
   useEffect(() => {
-    // A fresh thread per visit, but only on the way in: turns taken while
-    // you stay on this page continue the same conversation.
+    // A fresh thread per visit, but only on the way in: turns taken while you
+    // stay on this page continue the same conversation. Clears rather than
+    // creates — creating eagerly put an empty "New chat" in the sidebar on
+    // every switch between Chat and Voice.
     if (startedRef.current) return;
     startedRef.current = true;
-    if (activeId) createConversation();
-  }, [activeId, createConversation]);
+    startNewChat();
+  }, [startNewChat]);
 
   const exchange = useMemo(() => {
     const assistant = [...messages]

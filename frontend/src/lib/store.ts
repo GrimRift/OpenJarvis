@@ -255,6 +255,7 @@ interface AppState {
   loadConversations: () => void;
   importOverlayConversation: () => Promise<void>;
   createConversation: (model?: string) => string;
+  startNewChat: () => void;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
   loadMessages: (conversationId: string | null) => void;
@@ -337,6 +338,19 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set, get) => {
   const initial = loadConversations();
+  // An empty conversation carries nothing and is only ever an artefact of
+  // creating one eagerly instead of on first message. Drop them at load so
+  // the sidebar cannot fill with "New chat" rows.
+  const emptyIds = Object.values(initial.conversations)
+    .filter((c) => c.messages.length === 0)
+    .map((c) => c.id);
+  if (emptyIds.length > 0) {
+    for (const id of emptyIds) delete initial.conversations[id];
+    if (initial.activeId && emptyIds.includes(initial.activeId)) {
+      initial.activeId = null;
+    }
+    saveConversations(initial);
+  }
   const convList = Object.values(initial.conversations).sort(
     (a, b) => b.updatedAt - a.updatedAt,
   );
@@ -419,6 +433,12 @@ export const useAppStore = create<AppState>((set, get) => {
         // Overlay command unavailable (non-Tauri or no overlay data)
       }
     },
+
+    // Clears the active thread without writing a row. The composer creates
+    // one lazily on the first message (`activeId ?? createConversation(...)`),
+    // so nothing is persisted until something is actually said — the same
+    // rule the sidebar's "+" already follows.
+    startNewChat: () => set({ activeId: null, messages: [] }),
 
     createConversation: (model?: string) => {
       const store = loadConversations();
