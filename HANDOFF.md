@@ -559,8 +559,7 @@ the loop guard is not worth the accuracy.
 
 ### What is left, in order
 
-1. **Read `cached_tokens` from a live turn.** It decides whether the 5x turn
-   multiplier is real. Everything else here is speculation until it is known.
+1. ~~Read `cached_tokens` from a live turn.~~ **Answered — see below.**
 2. **Consider lowering `max_context_tokens`.** 8,000 is a safe default that
    only bounds the worst case; a tighter budget trades recall for latency, and
    that is the user's call, not a default worth guessing at.
@@ -576,6 +575,97 @@ conversation. `1,504 passed` across `tests/agents tests/engine tests/server`;
 the 8 failures are all on the known list above (`test_default_max_turns`, two
 `test_claude_code`, `test_manager` checkpoint retention, four
 `TestGemmaCppLive` needing Kaggle weights).
+
+### Answered: the provider does cache, so turns are mostly free
+
+Measured directly against the cloud engine, same 2,416-token prompt twice:
+
+```
+call 1: prompt_tokens 2416, cached_tokens 0      <- cold
+call 2: prompt_tokens 2416, cached_tokens 2413   <- 99.9% served from cache
+```
+
+Turn 2 of a tool loop is turn 1's messages plus a tool call and its result, so
+turn 1's payload is a literal prefix of turn 2's and is served from cache. **The
+5x turn multiplier is nominal — it shows in `prompt_tokens` but not in real
+cost or latency.** Do not spend effort compressing turns. This is also why
+`tool_routing` filters once per request rather than per turn.
+
+### The trimming shipped an hour earlier would have broken exactly that
+
+`compress_context` ran *inside* the turn loop on a growing message list. Its
+sliding window keeps the newest messages, so as tool results accumulate the
+start of the kept context moves every turn — a different prefix each time,
+missing the cache on precisely the long conversations where trimming triggers.
+It would have made long chats slower, not faster.
+
+Fixed: the token budget is applied **once per request** via
+`OrchestratorAgent._trim_history_once()`, before either loop starts. Inside the
+loop `compress_context(..., apply_token_budget=False)` leaves only the original
+count-based overflow recovery, which is a genuine safety valve and rare enough
+that a cache miss there is the right trade. Both the function-calling and
+structured loops are covered.
+
+Two tests hold the line: one asserts the context start does not move across
+five loop turns, and a contrast test asserts that per-turn trimming really
+does move it — so this stays a demonstrated problem rather than a remembered
+one.
+
+**Live A/B of routing, in seconds rather than tokens** (same question, only the
+tool list differing, median of 3): all 23 tools **1.17s** vs routed 5 tools
+**0.95s** — about **0.22s per model call**, so roughly 0.4–0.7s on a request
+that uses a tool. Real but modest; the large win was the earlier deferred-audio
+work, 17.2s to 4.35s.
+
+## Scope: rolling conversation summary (not built)
+
+The window bounds cost by forgetting. A summary bounds it by compressing. Build
+this only once the window is observed actually losing something the user
+wanted — it may never be worth it.
+
+**Shape.** Split the conversation into an immutable summarized head and a
+verbatim tail:
+
+```
+[system] [tool schemas] [summary of exchanges 1..N] [exchanges N+1..now]
+         └───────── stable, cacheable ──────────┘   └── grows ──┘
+```
+
+- Summarize only the portion older than the last K exchanges (K ~ 6).
+- **Summarize once and persist**, keyed by conversation id and the index of the
+  last summarized message. Never per request, never per turn.
+- Fold incrementally as the tail grows past K again.
+
+**Where.** Not in `LoopGuard` — that is per-turn overflow recovery and must stay
+that way. This belongs where the conversation is assembled, before the agent
+loop: `routes.py`'s context injection or `_handle_agent`, next to the existing
+memory-context injection. Storage is one more column in `sessions.db`.
+
+**Which model.** Local `qwen3.5:4b`, off the critical path (after a turn
+completes, not before the next starts). Paying cloud latency to summarize text
+the user has already read defeats the purpose.
+
+**Invariants.**
+- The summary must be byte-identical across turns and across consecutive
+  requests. Regenerating it per request is *worse* than the window — see the
+  cache finding above.
+- Fail closed to the sliding window if summarization fails or has not run.
+- The newest exchange always survives verbatim.
+- Never summarize tool results. An agent acting on "the tool returned
+  something" is the failure mode this project keeps hitting.
+
+**Risks.** Silent fidelity loss is the real one: a summary that drops the detail
+that mattered reads as Sage misremembering and is invisible to tests. Keep K
+generous. Second, drift across repeated folds — cap the fold count and keep raw
+messages in `sessions.db` so any summary can be rebuilt from source.
+
+**Testing.** A pure `plan_history(messages, summary, budget) -> (summary_block,
+tail)`, testable without a model, in the shape of `tool_routing` and
+`orb-motion`. Then: stability across turns, fail-closed on summarizer error,
+newest-exchange survival, and a fold that does not lose a named fact.
+
+**Effort.** Roughly one session; the planning function and its tests are the
+bulk.
 
 ## Unfinished work and exact next action
 

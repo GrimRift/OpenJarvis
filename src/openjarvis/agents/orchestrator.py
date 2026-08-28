@@ -88,6 +88,18 @@ class OrchestratorAgent(ToolUsingAgent):
                 route_tools = True
         self._route_tools = route_tools
 
+    def _trim_history_once(self, messages: list) -> list:
+        """Apply the token budget once, before the turn loop starts.
+
+        Trimming inside the loop would move the start of the context on every
+        turn and invalidate the provider's prompt cache — measured at 99.9% of
+        a repeated prompt served from cache, which is worth far more than the
+        trimming. Inside the loop only count-based overflow recovery runs.
+        """
+        if not self._loop_guard:
+            return messages
+        return self._loop_guard.compress_context(messages)
+
     def run(
         self,
         input: str,
@@ -130,6 +142,7 @@ class OrchestratorAgent(ToolUsingAgent):
             sys_prompt = build_system_prompt(tools=self._tools)
 
         messages = self._build_messages(input, context, system_prompt=sys_prompt)
+        messages = self._trim_history_once(messages)
 
         all_tool_results: list[ToolResult] = []
         turns = 0
@@ -138,7 +151,13 @@ class OrchestratorAgent(ToolUsingAgent):
             turns += 1
 
             if self._loop_guard:
-                messages = self._loop_guard.compress_context(messages)
+                # Count-based overflow only. Re-trimming to the token budget
+                # here would move the start of the context every turn and
+                # invalidate the provider's prompt cache; the budget is
+                # applied once, before the loop.
+                messages = self._loop_guard.compress_context(
+                    messages, apply_token_budget=False
+                )
 
             result = self._generate(messages)
             content = result.get("content", "")
@@ -318,6 +337,7 @@ class OrchestratorAgent(ToolUsingAgent):
             context,
             system_prompt=self._system_prompt,
         )
+        messages = self._trim_history_once(messages)
 
         # Get OpenAI-format tool definitions. Routed once per request, never
         # per turn, so the serialized payload stays byte-identical across the
@@ -343,7 +363,13 @@ class OrchestratorAgent(ToolUsingAgent):
             turns += 1
 
             if self._loop_guard:
-                messages = self._loop_guard.compress_context(messages)
+                # Count-based overflow only. Re-trimming to the token budget
+                # here would move the start of the context every turn and
+                # invalidate the provider's prompt cache; the budget is
+                # applied once, before the loop.
+                messages = self._loop_guard.compress_context(
+                    messages, apply_token_budget=False
+                )
 
             # Build generate kwargs
             gen_kwargs: dict[str, Any] = {}

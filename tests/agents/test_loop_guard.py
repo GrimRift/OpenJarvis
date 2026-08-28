@@ -249,3 +249,76 @@ class TestTokenAwareCompression:
         out = guard.compress_context(messages)
 
         assert len(out) <= 10
+
+
+class TestPrefixStabilityForPromptCache:
+    """The provider serves a repeated prefix from cache — measured at 99.9% of
+    a 2,416-token prompt on the second identical call. Trimming inside the turn
+    loop moves the start of the context every turn, so the prefix changes and
+    every turn misses the cache, costing far more than the trimming saves."""
+
+    @staticmethod
+    def _msg(role, content):
+        from openjarvis.core.types import Message, Role
+
+        return Message(role=getattr(Role, role.upper()), content=content)
+
+    def _guard(self, **overrides):
+        from openjarvis.agents.loop_guard import LoopGuard, LoopGuardConfig
+
+        return LoopGuard(LoopGuardConfig(**overrides))
+
+    def _long_history(self, pairs=20, chars=2000):
+        msgs = [self._msg("system", "You are Sage.")]
+        for i in range(pairs):
+            msgs.append(self._msg("user", f"q{i} " + "x" * chars))
+            msgs.append(self._msg("assistant", f"a{i} " + "y" * chars))
+        return msgs
+
+    def test_the_token_budget_can_be_switched_off(self):
+        guard = self._guard(max_context_tokens=500)
+        messages = self._long_history()
+
+        assert guard.compress_context(messages, apply_token_budget=False) is messages
+        assert guard.compress_context(messages) is not messages
+
+    def test_a_growing_loop_does_not_move_the_context_start(self):
+        """What the in-loop call must guarantee: appending tool results across
+        turns must not shift which message the context begins with."""
+        guard = self._guard(max_context_tokens=500)
+        messages = guard.compress_context(self._long_history())
+        first = messages[0]
+        second = messages[1]
+
+        for turn in range(5):
+            messages = messages + [self._msg("tool", f"result {turn} " + "z" * 500)]
+            messages = guard.compress_context(messages, apply_token_budget=False)
+            assert messages[0] is first
+            assert messages[1] is second
+
+    def test_trimming_every_turn_really_would_move_it(self):
+        """The contrast case, so this stays a demonstrated problem rather than
+        a hypothetical one: the same loop with the budget applied per turn."""
+        guard = self._guard(max_context_tokens=500)
+        messages = guard.compress_context(self._long_history())
+        first = messages[0]
+        second = messages[1]
+
+        moved = False
+        for turn in range(5):
+            messages = messages + [self._msg("tool", f"result {turn} " + "z" * 4000)]
+            messages = guard.compress_context(messages)
+            if messages[0] is not first or messages[1] is not second:
+                moved = True
+                break
+
+        assert moved, "expected per-turn trimming to shift the context start"
+
+    def test_count_overflow_still_protects_a_runaway_loop(self):
+        """Switching the budget off must not disable overflow recovery."""
+        guard = self._guard(max_context_tokens=0, max_context_messages=10)
+        messages = self._long_history(pairs=40, chars=1)
+
+        out = guard.compress_context(messages, apply_token_budget=False)
+
+        assert len(out) <= 10
