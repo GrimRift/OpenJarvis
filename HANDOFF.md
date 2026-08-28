@@ -253,7 +253,60 @@ The first real proactive run (05:00) reported **"Nothing to report"** having fet
 
 **Deepgram credentials note:** the key lives in `OpenJarvis-Data/credentials.toml` under `[deepgram] DEEPGRAM_API_KEY`. It was first saved as `[Deepgram Flux]` / `Api_key_deepgram` — an **unquoted space makes the whole file invalid TOML**, which broke *every* credential including OpenAI and Tavily, and the key name never reached `DEEPGRAM_API_KEY`.
 
-Not done: live smoke tests for **Ultra** specifically, mid-turn interruption, and Flux-fails-mid-turn fallback. Standard mode is confirmed working by real speech. The `[proactive] model = "gpt-5.6-luna"` setting is configured but the 05:00 run reported `qwen3.5:4b` — that may be the wrapper reporting the system model rather than the agent's own, but it is **unverified**; check before trusting Ultra or proactive to be on the cloud model.
+Not done: live smoke tests for **Ultra** specifically, mid-turn interruption, and Flux-fails-mid-turn fallback. Standard mode is confirmed working by real speech. ~~The `[proactive] model` setting is unverified.~~ **Resolved — see the section below: the model was taking effect; the run log was misreporting it.**
+
+## Two silent-failure bugs, both "it ran fine and reported nothing" (2026-08-28, later)
+
+**HEAD `2866d34`**, two commits on `feature/sage-customization` (`b49660e`, `2866d34`). Working tree clean except `frontend/tsconfig.tsbuildinfo` (build artifact, never staged) and a new untracked `PRIVACY.md` (see "Google OAuth" below). **6 commits ahead of `origin`, not pushed** — confirm before pushing, as always.
+
+Both bugs share a shape worth naming: **a component reported success while silently doing the wrong thing, and the report itself was the misleading part.** Neither was reachable by the existing tests.
+
+### `[proactive] model` was working; the run log was lying
+
+The 05:00 digest logged `model: qwen3.5:4b, engine: multi` despite `[proactive] model = "gpt-5.6-luna"`. Checked by constructing the agent exactly the way `orchestrator._run_agent` does — **positionally**, `agent_cls(run_engine, run_model)` with the system model — which is the only path a scheduled run takes: `agent._model` came out `gpt-5.6-luna` on a `CloudEngine`. **The override was fine.**
+
+`_run_agent` built its result dict from `run_model` and `engine_key` — the values it *passed in*, not what the agent ended up on. Any agent that swaps its own engine/model during `__init__` (which is exactly how `ProactiveAgent` honours `[proactive]`) was misreported. Fixed in `b49660e`: capture `ag._model`/`ag._engine` after construction and reverse-map the engine to its registry key via `EngineRegistry`, falling back to the passed-in values when nothing was overridden. Same class of fix as `0bb493b`'s `run_engine_key`.
+
+**Why it mattered enough to chase:** that log line is the only evidence that the agent trusted with mailbox actions is on the model it was tiered against. A wrong model name there is indistinguishable from a real regression.
+
+The gap that made it ambiguous is closed too: the existing tests exercised `_apply_configured_model` **in isolation** and never the positional path the orchestrator actually uses. `TestConfiguredModel::test_positional_construction_ends_up_on_the_configured_model` now goes through the real `__init__`.
+
+### Reading the class schedule cancelled the day's reminders
+
+The user got no notification for an 11:00-13:00 class. The 10-minute `notify_class_schedule` loop had run all morning — including 10:41 and 10:51, squarely inside the 15-minute window — and reported **"Nothing upcoming"** every time.
+
+`CheckClassScheduleTool._drop_already_notified` wrote the "already notified" marker as a side effect of **merely checking**. At 08:00:06 the *other* scheduled task — *"Check my calendar for any events scheduled before 9:00 AM today"* — summarised the day with a wide lookahead, and that read marked all three of Friday's classes as notified, three hours before the class. Its own output even lists the 11:00 class back to the user: it saw it, described it, and consumed the reminder in the same call.
+
+**Not a one-off.** That task runs daily, so it burned every class every day. Asking *"what's my schedule today"* did the same — `check_class_schedule`'s own description tells the model to answer that with `lookahead_minutes=1440`.
+
+Fixed in `2866d34`. Suppression is a property of having **notified**, not of having **looked**, so it moved to `NotifyClassScheduleTool` and is recorded only after `deliver()` actually succeeds. That also fixed a second bug in the same code: **a failed toast still marked the class notified**, so a transient notification-backend failure silently cost the user the reminder for the rest of the day instead of retrying ten minutes later. Partial failures are handled — first toast lands, second throws, only the second is retried. `check_class_schedule` is now the pure function its docstring already claimed it was.
+
+The module docstring had asserted the opposite of the truth the whole time: *"Deliberately does not send any notification itself"* and *"a pure, easily-testable function of (schedule file, now) -> upcoming classes."* **A docstring is not evidence.**
+
+**Live state fixed by hand:** `class_schedule_notify_state.json` had all three Friday classes burned; cleared the two future ones so that day's 15:00 and 17:00 reminders still fired. (A dry-run during verification re-burned one of them through the real state file — caught and restored. **`notify_class_schedule` writes real state even with `deliver` patched**; pass a `state_path` pointing at a temp dir when exercising it against the live schedule.)
+
+### Verification
+
+`146 passed` (`tests/agents/ tests/system/ tests/scheduler/`) for the model fix; `740 passed, 4 skipped` (`tests/tools/`) for the schedule fix. Ruff clean on every changed file.
+
+**Every new regression test was checked against the old code and confirmed to fail there** — three for the schedule fix, four for the model fix. Worth keeping as a habit here: two of the tests as first written would have passed on the broken code (a standalone checker used a *different* state file than the notifier, so the coupling under test was never actually exercised). **A regression test that has not been run against the bug is not yet evidence.**
+
+Pre-existing failures confirmed identical on a stashed tree, left alone: `test_base_agent::test_default_max_turns`, `test_persona_scope::test_named_persona_resolves_to_personas_dir`, `test_channel_contract[whatsapp_baileys]`, two `test_claude_code::TestEnsureRunner` cases. Also **`tests/tools/test_check_class_schedule.py::test_check_class_schedule_registered` fails when that file is run alone and passes in a full run** — it calls `register_value` on a tool the import already registered, so it depends on another test importing the module first. Pre-existing, order-dependent, not worth chasing mid-task but worth a one-line fix someday.
+
+**Live-verified after restart** by asking the running server *"What is my full class schedule for today?"* — the exact query that used to burn the reminders — and confirming the state file was byte-identical before and after.
+
+### Google OAuth: still Testing, publish deferred by the user
+
+The 7-day refresh-token expiry is **not fixed**; the user chose to defer it. Publishing is blocked behind Google's Branding requirements (app name, support email, homepage URL, privacy policy URL) — `Publish app` is greyed out until all four are set.
+
+Groundwork done, so picking this up is short:
+
+- `PRIVACY.md` drafted and committed at the repo root (on `feature/sage-customization`, **not on `main`**, which is where the URL below needs it). Deliberately truthful about the cloud-model path (email/calendar excerpts leave the machine when a cloud model is configured), which is what a reviewer checks for. It contains the user's email address as the contact.
+- Homepage URL can be `https://github.com/GrimRift/OpenJarvis` — the fork is public and returns 200.
+- Privacy policy URL would be `https://github.com/GrimRift/OpenJarvis/blob/main/PRIVACY.md`, which **does not resolve yet** — `PRIVACY.md` must be committed and pushed to `main` first. That is a public-facing change to the user's repo; ask before pushing.
+- Publishing does **not** require Google verification and does stop the 7-day expiry. Because `gmail.modify` is a *restricted* scope, an unverified production app keeps an "unverified app" warning at consent (Advanced -> Go to Sage) and a 100-user cap — both fine for one user. Full verification needs a third-party CASA assessment: weeks and real money. **Publish unverified; do not pursue verification.**
+- Until then the token expires roughly weekly. `scripts/reauth-google.py` repairs it in a minute.
+
 
 ## Unfinished work and exact next action
 
@@ -265,4 +318,4 @@ Next, in order (as of the entry directly below this one — **items 1 and 2 abov
 1. Do NOT build Microsoft Calendar/OneDrive yet — they'd hit the identical NU admin-consent wall against the same mailbox, no point until Outlook clears. Teams is lower priority for the same reason. `ProactiveAgent` (`agents/proactive_agent.py` — the daily-digest-with-tiered-approval-and-chat-notification agent, distinct from `morning_digest.py`) is still real, tested, but never wired to a real startup path — a candidate for further M26 work if the user wants to keep going in that direction, but confirm with them before starting, per `AGENTS.md`'s "ask before assuming roadmap status" guidance.
 2. ~~A separate, undocumented body of work was flagged as sitting uncommitted in the tree back at `167ebb3`~~ Resolved: that work (orb visualization, dashboard leaderboard card, M26 tools) is committed — `5dbc371`, `feat: wake-word backend wiring, UI redesign (orb visual, dashboard), M26 tools`. Verified via `git log -- frontend/src/components/Chat/OrbVisual.tsx`. No longer a concern.
 
-**For anything past this point, read "Deepgram Flux STT, and three bugs found under it (2026-08-28)" above — it is the current state, this list is not.**
+**For anything past this point, read "Two silent-failure bugs, both "it ran fine and reported nothing" (2026-08-28, later)" above — it is the current state, this list is not.**

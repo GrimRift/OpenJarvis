@@ -52,6 +52,86 @@ checks, and fail-closed behavior. Use `git_tool.py` for Git-specific patterns.
 - Check external config before assuming roadmap work needs source changes.
 - Treat milestone/status details in older notes as stale until verified.
 
+## Verifying a fix
+
+A change is not done because the tests pass. It is done when the evidence
+distinguishes "fixed" from "never broken":
+
+- **Run every new regression test against the unfixed code and confirm it
+  fails.** `git stash`, run it, `git stash pop`. A test written from a correct
+  mental model often passes on the bug too, because it exercises a different
+  path than the one that broke. This has happened here.
+- **When a test needs the machine's real state, point it at `tmp_path`.**
+  Several tools in this repo write to `OpenJarvis-Data` even with their
+  side-effecting call patched. Exercising one against live data has corrupted
+  real state during verification.
+- **Check whether a failure pre-dates the change** before investigating it.
+  Stash and re-run. This repo has a standing set of environmental failures
+  (see below) and chasing them wastes a lot of time.
+- Prefer one live end-to-end check of the actual reported symptom over more
+  unit tests. Most real bugs here were found by using the app, not by testing.
+
+### Known pre-existing test failures — do not chase
+
+Confirmed environmental or order-dependent, identical on a clean tree:
+`test_base_agent::test_default_max_turns`,
+`test_persona_scope::test_named_persona_resolves_to_personas_dir`,
+`test_channel_contract[whatsapp_baileys]`,
+`test_claude_code::TestEnsureRunner` (2 cases),
+`test_scan::test_run_quick_returns_subset`,
+`test_credentials::test_file_permissions` (POSIX modes on Windows),
+`test_cli::test_importing_cli_does_not_import_numpy`,
+`TestGemmaCppLive` (needs Kaggle weights),
+`test_new_connectors_live.py` (needs real Oura/Strava/Spotify credentials),
+`test_check_class_schedule::test_check_class_schedule_registered` (passes in a
+full run, fails alone). Repo-wide `ruff check .` is also not clean; lint only
+the files you changed.
+
+## Known traps in this codebase
+
+Each of these cost a real debugging session. Check them before assuming a
+component works:
+
+- **`jarvis serve` does not call `SystemBuilder.build()`.** It hand-assembles a
+  `JarvisSystem` inline to dodge a ~30-40s double build, so **every dependency
+  the builder injects is silently absent** unless separately wired. This has
+  bitten three times: a systemless `TaskScheduler`, an untraced channel system,
+  and a `RetrievalTool` with no backend. **When adding anything to
+  `SystemBuilder`, check `serve.py` separately.**
+- **A backend restart never picks up frontend changes.** `jarvis serve` serves
+  a pre-built bundle from `server/static/`; run `cd frontend && npm run build`
+  first. The PWA service worker can hold an even staler cache — a hard refresh
+  or tab reopen may still be needed.
+- **`TaskScheduler` cron is evaluated in UTC.** This machine is UTC+8, so
+  `0 21 * * *` fires at 05:00 local. Convert before writing a schedule.
+- **`SimpleAgent` cannot call tools at all** (single-turn). A scheduled
+  "check X and notify me" task on `simple` produces text and does nothing.
+  Use `orchestrator`.
+- **Scheduled tasks get their tools from `config.toml`'s `[agent] tools`**, not
+  from the task's own `--tools` flag, which is stored but unread.
+- **The frontend has no jsdom and no testing-library** — vitest runs pure logic
+  only, so a hook cannot be rendered. Extract decision logic into a pure
+  function and test that; several real state-machine bugs were only testable
+  after doing this.
+- **Do not trust a small local model to call a tool reliably**, or to skip one
+  when it should. `qwen3.5:4b` has fabricated notifications and hallucinated
+  successful actions it never performed, and prompt wording did not fix it.
+  Route deterministically (`_DIGEST_INTENT_RE`, `_SPOTIFY_TRANSPORT_RE`) or put
+  the decision inside a single tool.
+- **A tool the model cannot name, it will not call.** "check my inbox"
+  produced no tool call at all while the tool existed and worked, because its
+  description said only "Search the knowledge base". Tool descriptions are
+  behaviour, not documentation.
+- **Side effects belong with the action, never with the query.** A read-only
+  checker that recorded "already notified" state silently cancelled a day of
+  reminders when an unrelated task merely read the schedule.
+- **A docstring is not evidence.** Two separate bugs here lived in modules
+  whose docstrings confidently described the opposite behaviour. Read the code.
+- **Config lives outside this repo** at `C:\AI\OpenJarvis-Data\config.toml`.
+  Check it before concluding a feature needs source changes. An unquoted space
+  in a TOML table header (`[Deepgram Flux]`) invalidates the whole file and
+  breaks every unrelated credential in it.
+
 ## Web parity
 
 For every feature and bug fix, classify Web impact first.
