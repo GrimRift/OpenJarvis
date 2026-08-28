@@ -14,6 +14,7 @@ import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import { shouldSynthesizeReplyAudio } from '../../lib/audio-policy';
+import { useStreamingTts } from '../../hooks/useStreamingTts';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
@@ -145,6 +146,7 @@ export function InputArea() {
   // useSpeech's `speechState`, so without this the orb would sit idle for a
   // whole spoken turn and the mic button would offer to start another.
   const [fluxTurnActive, setFluxTurnActive] = useState(false);
+  const { speak: speakStreaming } = useStreamingTts();
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
 
@@ -709,16 +711,24 @@ export function InputArea() {
         )
       ) {
         useAppStore.getState().setAudioPlaying(true);
-        synthesizeSpeech(accumulatedContent)
-          .then((meta) => {
-            updateLastAssistant(
-              convId,
-              accumulatedContent,
-              undefined,
-              undefined,
-              undefined,
-              { url: meta.url, autoPlay: true },
-            );
+        // Streamed first: the batch endpoint returns nothing until the whole
+        // clip exists (1.55s for a line, 6.92s for a paragraph, all silence),
+        // while the stream starts speaking at about 0.41s. Streamed replies
+        // are deliberately ephemeral — no file, so no replay control.
+        speakStreaming(accumulatedContent)
+          .then((spoke) => {
+            if (spoke) return;
+            // Nothing was heard, so falling back cannot repeat anything.
+            return synthesizeSpeech(accumulatedContent).then((meta) => {
+              updateLastAssistant(
+                convId,
+                accumulatedContent,
+                undefined,
+                undefined,
+                undefined,
+                { url: meta.url, autoPlay: true },
+              );
+            });
           })
           .catch(() => {
             // TTS failure for a voice reply shouldn't surface as a chat
@@ -750,6 +760,7 @@ export function InputArea() {
     deepResearch,
     temperature,
     maxTokens,
+      speakStreaming,
   ]);
 
   // Hands-free stop: transcribes and sends immediately, unlike a manual

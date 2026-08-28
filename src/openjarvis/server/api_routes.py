@@ -1283,6 +1283,16 @@ def include_all_routes(app) -> None:
     except ImportError:
         logger.debug("Flux routes unavailable", exc_info=True)
 
+    # Streaming TTS relay, mounted the same defensive way.
+    try:
+        from openjarvis.server.tts_stream_routes import (
+            router as tts_stream_router,  # noqa: PLC0415
+        )
+
+        app.include_router(tts_stream_router)
+    except ImportError:
+        logger.debug("TTS stream routes unavailable", exc_info=True)
+
     # Agent Manager routes (if available)
     try:
         if hasattr(app.state, "agent_manager") and app.state.agent_manager:
