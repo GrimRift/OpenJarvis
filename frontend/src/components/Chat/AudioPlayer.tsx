@@ -1,20 +1,13 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { Play, Pause, Volume2 } from 'lucide-react';
+import { Play, Pause } from 'lucide-react';
 import { useAppStore } from '../../lib/store';
 
 interface AudioPlayerProps {
   src: string;
   autoPlay?: boolean;
-  label?: string;
 }
 
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-export function AudioPlayer({ src, autoPlay = false, label = 'Morning Digest' }: AudioPlayerProps) {
+export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   // Seeded from autoPlay rather than always false: when a caller sets
   // audioPlaying=true optimistically ahead of this component mounting
@@ -86,19 +79,17 @@ export function AudioPlayer({ src, autoPlay = false, label = 'Morning Digest' }:
     };
   }, [playing]);
 
-  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
-
-  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+  const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const el = audioRef.current;
-    if (!el || !duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    el.currentTime = pct * duration;
+    if (!el) return;
+    const nextTime = Number(e.currentTarget.value);
+    el.currentTime = nextTime;
+    setCurrentTime(nextTime);
   };
 
   return (
     <div
-      className="flex items-center gap-3 px-4 py-3 rounded-xl mb-3"
+      className="flex w-full max-w-md items-center gap-3 rounded-xl px-3 py-2 mb-3"
       style={{
         background: 'var(--color-surface)',
         border: '1px solid var(--color-border)',
@@ -108,49 +99,28 @@ export function AudioPlayer({ src, autoPlay = false, label = 'Morning Digest' }:
 
       <button
         onClick={toggle}
-        className="flex items-center justify-center w-9 h-9 rounded-full transition-colors shrink-0"
+        aria-label={playing ? 'Pause voice reply' : 'Play voice reply'}
+        className="flex items-center justify-center w-8 h-8 rounded-full transition-colors shrink-0"
         style={{
           background: 'var(--color-accent)',
           color: 'var(--color-on-accent)',
           cursor: 'pointer',
         }}
       >
-        {playing ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
+        {playing ? <Pause size={14} /> : <Play size={14} className="ml-0.5" />}
       </button>
 
-      <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <Volume2 size={14} style={{ color: 'var(--color-text-tertiary)' }} />
-          <span
-            className="text-xs font-medium"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            {label}
-          </span>
-        </div>
-
-        <div
-          className="h-1.5 rounded-full cursor-pointer"
-          style={{ background: 'var(--color-bg-tertiary)' }}
-          onClick={seek}
-        >
-          <div
-            className="h-full rounded-full transition-all"
-            style={{
-              width: `${progress}%`,
-              background: 'var(--color-accent)',
-            }}
-          />
-        </div>
-
-        <div
-          className="flex justify-between text-xs"
-          style={{ color: 'var(--color-text-tertiary)' }}
-        >
-          <span>{formatTime(currentTime)}</span>
-          <span>{duration > 0 ? formatTime(duration) : '--:--'}</span>
-        </div>
-      </div>
+      <input
+        type="range"
+        min={0}
+        max={duration > 0 ? duration : 0}
+        step={0.1}
+        value={duration > 0 ? Math.min(currentTime, duration) : 0}
+        onChange={seek}
+        aria-label="Voice reply playback position"
+        className="h-1.5 min-w-0 flex-1 cursor-pointer"
+        style={{ accentColor: 'var(--color-accent)' }}
+      />
     </div>
   );
 }

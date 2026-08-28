@@ -67,6 +67,7 @@ site/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
 
 # Desktop
 desktop/node_modules/

@@ -160,12 +160,11 @@ export function MessageBubble({ message, isLive = false }: Props) {
           in the transcript is noise for someone who just wanted the app
           opened. Render ToolCallCard here to bring them back. */}
 
-      {/* Audio player — morning digest, or an auto-spoken voice reply */}
+      {/* Compact playback control for generated speech. */}
       {message.audio?.url && (
         <AudioPlayer
           src={message.audio.url}
           autoPlay={message.audio.autoPlay}
-          label={message.audio.autoPlay ? 'Voice Reply' : 'Morning Digest'}
         />
       )}
 
