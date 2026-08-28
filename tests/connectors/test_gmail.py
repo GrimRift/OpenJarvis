@@ -9,6 +9,7 @@ import base64
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Barrier
 from typing import List
 from unittest.mock import patch
 
@@ -165,6 +166,34 @@ def test_sync_yields_documents(
 
     # Verify the API was called correctly
     mock_list.assert_called_once()
+    assert mock_get.call_count == 2
+
+
+@patch("openjarvis.connectors.gmail._gmail_api_list_messages")
+@patch("openjarvis.connectors.gmail._gmail_api_get_message")
+def test_sync_can_bound_and_parallelize_message_fetches(
+    mock_get,
+    mock_list,
+    connector,
+) -> None:
+    """Latency-sensitive callers can overlap independent message GETs."""
+    Path(connector._credentials_path).write_text(
+        json.dumps({"token": "fake-access-token"}), encoding="utf-8"
+    )
+    mock_list.return_value = {
+        "messages": [{"id": "msg1"}, {"id": "msg2"}, {"id": "ignored"}]
+    }
+    rendezvous = Barrier(2, timeout=2)
+
+    def fetch(token, msg_id):
+        rendezvous.wait()
+        return _MSG1 if msg_id == "msg1" else _MSG2
+
+    mock_get.side_effect = fetch
+
+    docs = list(connector.sync(max_results=2, fetch_workers=2))
+
+    assert [doc.doc_id for doc in docs] == ["gmail:msg1", "gmail:msg2"]
     assert mock_get.call_count == 2
 
 

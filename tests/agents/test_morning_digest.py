@@ -164,6 +164,46 @@ def test_morning_digest_run_tts_failure_yields_no_audio_path(tmp_path):
     assert artifact.audio_path is None
 
 
+def test_morning_digest_can_defer_audio_for_interactive_delivery(tmp_path):
+    """Web chat may return text first and let its audio player synthesize later."""
+    from openjarvis.agents.digest_store import DigestStore
+    from openjarvis.agents.morning_digest import MorningDigestAgent
+
+    mock_engine = MagicMock()
+    mock_engine.generate.return_value = {
+        "content": "Good morning sir.",
+        "finish_reason": "stop",
+        "usage": {},
+    }
+    collect_result = ToolResult(
+        tool_name="digest_collect",
+        content="=== WORLD ===\n[hackernews] Something happened.\n",
+        success=True,
+    )
+    db_path = str(tmp_path / "digest.db")
+    agent = MorningDigestAgent(
+        mock_engine,
+        "test-model",
+        tools=[],
+        sections=["world"],
+        section_sources={"world": ["hackernews"]},
+        digest_store_path=db_path,
+        generate_audio=False,
+    )
+
+    with patch.object(agent._executor, "execute", return_value=collect_result) as run:
+        result = agent.run("Generate morning digest")
+
+    run.assert_called_once()
+    assert [item.tool_name for item in result.tool_results] == ["digest_collect"]
+    assert result.metadata["audio_path"] == ""
+    store = DigestStore(db_path=db_path)
+    artifact = store.get_latest()
+    store.close()
+    assert artifact is not None
+    assert artifact.audio_path is None
+
+
 def test_build_morning_digest_agent_returns_none_when_unregistered():
     from openjarvis.agents.morning_digest import build_morning_digest_agent
 
@@ -194,3 +234,19 @@ def test_build_morning_digest_agent_applies_digest_config():
     assert isinstance(agent, MorningDigestAgent)
     assert agent._sections == ["world", "music"]
     assert agent._honorific == "boss"
+
+
+def test_build_morning_digest_agent_can_disable_eager_audio():
+    from openjarvis.agents.morning_digest import (
+        MorningDigestAgent,
+        build_morning_digest_agent,
+    )
+    from openjarvis.core.config import JarvisConfig
+
+    AgentRegistry.register_value("morning_digest", MorningDigestAgent)
+    agent = build_morning_digest_agent(
+        MagicMock(), "test-model", JarvisConfig(), generate_audio=False
+    )
+
+    assert agent is not None
+    assert agent._generate_audio is False

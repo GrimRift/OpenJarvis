@@ -12,6 +12,7 @@ import calendar
 import email.utils
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -427,6 +428,8 @@ class GmailConnector(BaseConnector):
         since: Optional[datetime] = None,
         cursor: Optional[str] = None,
         query_extra: str = "",
+        max_results: Optional[int] = None,
+        fetch_workers: int = 1,
     ) -> Iterator[Document]:
         """Yield :class:`Document` objects for Gmail messages.
 
@@ -445,6 +448,12 @@ class GmailConnector(BaseConnector):
         query_extra:
             Additional Gmail search operators appended to the base query,
             e.g. ``"is:unread"`` to restrict to unread messages only.
+        max_results:
+            Optional hard cap for latency-sensitive reads such as the morning
+            digest. Bulk synchronization remains unbounded by default.
+        fetch_workers:
+            Number of concurrent message-detail requests. Defaults to one to
+            preserve existing bulk-sync behavior.
         """
         # Existence check only — the actual access token is reloaded on every
         # API call by _call_with_refresh so a mid-sync refresh is picked up
@@ -480,16 +489,32 @@ class GmailConnector(BaseConnector):
             )
             messages: List[Dict[str, Any]] = list_resp.get("messages", [])
 
-            for msg_stub in messages:
-                msg_id: str = msg_stub.get("id", "")
-                if not msg_id:
-                    continue
+            if max_results is not None:
+                remaining = max(0, max_results - synced)
+                messages = messages[:remaining]
 
-                msg = _call_with_refresh(
+            def fetch_message(msg_stub: Dict[str, Any]) -> Dict[str, Any]:
+                msg_id = msg_stub.get("id", "")
+                if not msg_id:
+                    return {}
+                return _call_with_refresh(
                     _gmail_api_get_message,
                     self._credentials_path,
                     msg_id,
                 )
+
+            if fetch_workers > 1 and len(messages) > 1:
+                with ThreadPoolExecutor(
+                    max_workers=min(fetch_workers, len(messages))
+                ) as pool:
+                    fetched_messages = list(pool.map(fetch_message, messages))
+            else:
+                fetched_messages = [fetch_message(stub) for stub in messages]
+
+            for msg_stub, msg in zip(messages, fetched_messages):
+                msg_id: str = msg_stub.get("id", "")
+                if not msg_id or not msg:
+                    continue
                 payload: Dict[str, Any] = msg.get("payload", {})
                 headers: List[Dict[str, str]] = payload.get("headers", [])
 
@@ -547,6 +572,10 @@ class GmailConnector(BaseConnector):
                 )
                 synced += 1
                 yield doc
+
+            if max_results is not None and synced >= max_results:
+                self._last_cursor = None
+                break
 
             next_page: Optional[str] = list_resp.get("nextPageToken")
             if not next_page:

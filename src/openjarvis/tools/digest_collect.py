@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
@@ -516,14 +517,17 @@ class DigestCollectTool(BaseTool):
         seen_ids: set = set(params.get("seen_ids", []))
         since = datetime.now() - timedelta(hours=hours_back)
 
-        # Collect raw documents per source
+        # Collect raw documents per source. Connectors are independent network
+        # and filesystem reads, so running them serially makes digest latency
+        # the sum of Gmail + Calendar + Spotify + every other source. Keep a
+        # small bounded pool and merge results in the caller's source order so
+        # output and metadata stay deterministic.
         collected_docs: Dict[str, List[Document]] = {}
         errors: List[str] = []
 
-        for source in sources:
+        def collect_source(source: str) -> tuple[str, List[Document] | None, str]:
             if not ConnectorRegistry.contains(source):
-                errors.append(f"Connector '{source}' not available")
-                continue
+                return source, None, f"Connector '{source}' not available"
 
             try:
                 connector_cls = ConnectorRegistry.get(source)
@@ -539,10 +543,11 @@ class DigestCollectTool(BaseTool):
                     connector = connector_cls()
 
                 if not connector.is_connected():
-                    errors.append(
-                        f"Connector '{source}' not connected (no credentials)"
+                    return (
+                        source,
+                        None,
+                        f"Connector '{source}' not connected (no credentials)",
                     )
-                    continue
 
                 # Cap per-source to avoid overwhelming the LLM context
                 max_per_source = 15
@@ -551,6 +556,11 @@ class DigestCollectTool(BaseTool):
                 sync_kwargs: Dict[str, Any] = {"since": since}
                 if unacted_only and source == "gmail":
                     sync_kwargs["query_extra"] = "is:unread"
+                if source == "gmail":
+                    # Gmail otherwise performs one full message GET at a time.
+                    # The digest needs at most 15, and their independent reads
+                    # can safely overlap without changing result order.
+                    sync_kwargs.update(max_results=15, fetch_workers=8)
 
                 for d in connector.sync(**sync_kwargs):
                     if d.doc_id not in seen_ids:
@@ -564,9 +574,18 @@ class DigestCollectTool(BaseTool):
                 if unacted_only and source == "gcalendar":
                     docs = _filter_pending_invites(docs)
 
-                collected_docs[source] = docs
+                return source, docs, ""
             except Exception as exc:
-                errors.append(f"Error fetching from '{source}': {exc}")
+                return source, None, f"Error fetching from '{source}': {exc}"
+
+        if sources:
+            with ThreadPoolExecutor(max_workers=min(8, len(sources))) as pool:
+                results = list(pool.map(collect_source, sources))
+            for source, docs, error in results:
+                if error:
+                    errors.append(error)
+                elif docs is not None:
+                    collected_docs[source] = docs
 
         # Group by section and build human-readable output
         summary_parts: List[str] = []

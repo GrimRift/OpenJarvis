@@ -835,6 +835,7 @@ class TestDigestIntentRouting:
             == "Sir, here is your briefing."
         )
         mock_build.assert_called_once()
+        assert mock_build.call_args.kwargs["generate_audio"] is False
         digest_agent.run.assert_called_once()
 
     def test_digest_phrase_routes_correctly_when_streaming(self, client_with_agent):
@@ -918,6 +919,32 @@ class TestDigestIntentRouting:
         )
 
         assert resp.status_code == 200
+        for line in resp.text.strip().split("\n"):
+            if not line.startswith("data:") or "[DONE]" in line:
+                continue
+            data = json.loads(line[5:].strip())
+            assert "audio" not in data
+
+    def test_streaming_voice_reply_does_not_block_on_tts(self, client_with_agent):
+        """Voice chat should release text before the slower TTS request.
+
+        The web client already synthesizes a voice reply asynchronously when
+        the finish event contains no built-in audio.  Doing the same work in
+        the synchronous agent handler delays the entire text response.
+        """
+        with patch("openjarvis.server.routes._synthesize_reply_audio") as synth:
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "who are you?"}],
+                    "stream": True,
+                    "voice": True,
+                },
+            )
+
+        assert resp.status_code == 200
+        synth.assert_not_called()
         for line in resp.text.strip().split("\n"):
             if not line.startswith("data:") or "[DONE]" in line:
                 continue

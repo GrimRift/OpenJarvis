@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from threading import Barrier
 from unittest.mock import MagicMock, patch
 
 from openjarvis.connectors._stubs import Document
@@ -88,3 +89,66 @@ def test_digest_collect_missing_connector():
 
     assert result.success is True  # Partial success
     assert "not available" in result.content
+
+
+def test_digest_collect_fetches_sources_concurrently():
+    """Independent connector waits must overlap instead of adding latency."""
+    from openjarvis.tools.digest_collect import DigestCollectTool
+
+    rendezvous = Barrier(2, timeout=2)
+
+    class GmailConnector:
+        auth_type = "oauth"
+
+        def is_connected(self):
+            return True
+
+        def sync(self, **kwargs):
+            rendezvous.wait()
+            return [
+                Document(
+                    doc_id="mail-1",
+                    source="gmail",
+                    doc_type="email",
+                    content="Hello",
+                    title="Inbox item",
+                    timestamp=datetime.now(),
+                )
+            ]
+
+    class CalendarConnector:
+        auth_type = "oauth"
+
+        def is_connected(self):
+            return True
+
+        def sync(self, **kwargs):
+            rendezvous.wait()
+            return [
+                Document(
+                    doc_id="event-1",
+                    source="gcalendar",
+                    doc_type="event",
+                    content="",
+                    title="Calendar item",
+                    timestamp=datetime.now(),
+                )
+            ]
+
+    connector_classes = {
+        "gmail": GmailConnector,
+        "gcalendar": CalendarConnector,
+    }
+    with patch.object(ConnectorRegistry, "contains", return_value=True):
+        with patch.object(
+            ConnectorRegistry,
+            "get",
+            side_effect=lambda source: connector_classes[source],
+        ):
+            result = DigestCollectTool().execute(
+                sources=["gmail", "gcalendar"], hours_back=24
+            )
+
+    assert result.success is True
+    assert result.metadata["sources_ok"] == ["gmail", "gcalendar"]
+    assert result.metadata["sources_failed"] == []

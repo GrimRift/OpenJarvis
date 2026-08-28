@@ -292,7 +292,14 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         from openjarvis.agents.morning_digest import build_morning_digest_agent
 
         digest_agent = build_morning_digest_agent(
-            engine, model, config, bus=getattr(request.app.state, "bus", None)
+            engine,
+            model,
+            config,
+            bus=getattr(request.app.state, "bus", None),
+            # The Web UI synthesizes digest audio after rendering the text.
+            # Scheduled/channel digests keep the factory default and still
+            # create their audio eagerly before delivery.
+            generate_audio=False,
         )
         if digest_agent is not None:
             agent = digest_agent
@@ -795,11 +802,20 @@ async def _handle_agent_stream(
         yield f"data: {first_chunk.model_dump_json()}\n\n"
 
         try:
+            # The browser can display the completed text immediately and
+            # already starts voice-reply TTS asynchronously when no audio is
+            # attached to the finish event.  Suppress the synchronous TTS in
+            # _handle_agent for streaming voice turns; otherwise a several-
+            # second media request delays the text the user could already be
+            # reading. Any agent-produced audio still comes through
+            # result.metadata and remains attached normally; interactive Web
+            # digests deliberately use the same deferred browser path.
+            agent_req = req.model_copy(update={"voice": False})
             response = await asyncio.to_thread(
                 _handle_agent,
                 agent,
                 model,
-                req,
+                agent_req,
                 complexity_info,
                 trace_store=trace_store,
                 bus=bus,

@@ -13,6 +13,7 @@ import {
 import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
+import { shouldSynthesizeReplyAudio } from '../../lib/audio-policy';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
@@ -687,11 +688,9 @@ export function InputArea() {
       });
       abortRef.current = null;
 
-      // Voice-initiated question with no built-in audio (e.g. deep
-      // research, which doesn't go through the backend path that attaches
-      // audio directly) — synthesize speech for the reply and patch it in
-      // once ready. Fire-and-forget: text already rendered above, this
-      // shouldn't delay stream cleanup or hold up the UI.
+      // Voice replies and interactive morning digests use browser-side TTS
+      // after the text is already visible. Fire-and-forget: this keeps the
+      // slower media request out of the chat response's critical path.
       //
       // setAudioPlaying(true) here, ahead of the actual player mounting,
       // matters: resetStream() above already dropped isStreaming, which
@@ -701,7 +700,14 @@ export function InputArea() {
       // round trip to the TTS backend) for the wake word to hear ambient
       // noise, false-trigger, and start a new recording before the reply
       // has even started speaking.
-      if (wasVoice && !audio && accumulatedContent) {
+      if (
+        shouldSynthesizeReplyAudio(
+          wasVoice,
+          content,
+          Boolean(audio),
+          accumulatedContent,
+        )
+      ) {
         useAppStore.getState().setAudioPlaying(true);
         synthesizeSpeech(accumulatedContent)
           .then((meta) => {

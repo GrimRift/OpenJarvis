@@ -62,6 +62,7 @@ class MorningDigestAgent(ToolUsingAgent):
         self._voice_id = kwargs.pop("voice_id", "")
         self._voice_speed = kwargs.pop("voice_speed", 1.0)
         self._tts_backend = kwargs.pop("tts_backend", "cartesia")
+        self._generate_audio = bool(kwargs.pop("generate_audio", True))
         self._digest_store_path = kwargs.pop("digest_store_path", "")
         self._honorific = kwargs.pop("honorific", "sir")
         super().__init__(*args, **kwargs)
@@ -205,24 +206,29 @@ class MorningDigestAgent(ToolUsingAgent):
         tts_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", tts_text)
         tts_text = tts_text.strip()
 
-        output_dir = str(get_config_dir() / "digests")
-        tts_call = ToolCall(
-            id="digest-tts-1",
-            name="text_to_speech",
-            arguments=json.dumps(
-                {
-                    "text": tts_text,
-                    "voice_id": self._voice_id,
-                    "backend": self._tts_backend,
-                    "speed": self._voice_speed,
-                    "output_dir": output_dir,
-                }
-            ),
-        )
-        tts_result = self._executor.execute(tts_call)
-        audio_path = (
-            tts_result.metadata.get("audio_path", "") if tts_result.success else ""
-        )
+        tts_result = None
+        audio_path = ""
+        if self._generate_audio:
+            output_dir = str(get_config_dir() / "digests")
+            tts_call = ToolCall(
+                id="digest-tts-1",
+                name="text_to_speech",
+                arguments=json.dumps(
+                    {
+                        "text": tts_text,
+                        "voice_id": self._voice_id,
+                        "backend": self._tts_backend,
+                        "speed": self._voice_speed,
+                        "output_dir": output_dir,
+                    }
+                ),
+            )
+            tts_result = self._executor.execute(tts_call)
+            audio_path = (
+                tts_result.metadata.get("audio_path", "")
+                if tts_result.success
+                else ""
+            )
 
         # Step 4: Store the artifact
         artifact = DigestArtifact(
@@ -244,7 +250,7 @@ class MorningDigestAgent(ToolUsingAgent):
         self._emit_turn_end(turns=1)
         return AgentResult(
             content=narrative,
-            tool_results=[collect_result, tts_result],
+            tool_results=[collect_result] + ([tts_result] if tts_result else []),
             turns=1,
             metadata={
                 "audio_path": audio_path,
@@ -254,7 +260,12 @@ class MorningDigestAgent(ToolUsingAgent):
 
 
 def build_morning_digest_agent(
-    engine: Any, model: str, config: Any, *, bus: Any = None
+    engine: Any,
+    model: str,
+    config: Any,
+    *,
+    bus: Any = None,
+    generate_audio: bool = True,
 ) -> Optional[MorningDigestAgent]:
     """Build a ready-to-run MorningDigestAgent from live config, or None.
 
@@ -267,7 +278,10 @@ def build_morning_digest_agent(
     if not AgentRegistry.contains("morning_digest"):
         return None
 
-    agent_kwargs: dict[str, Any] = {"bus": bus}
+    agent_kwargs: dict[str, Any] = {
+        "bus": bus,
+        "generate_audio": generate_audio,
+    }
     dc = getattr(config, "digest", None)
     if dc is not None:
         section_sources: dict[str, Any] = {}
@@ -289,8 +303,11 @@ def build_morning_digest_agent(
         )
 
     from openjarvis.tools.digest_collect import DigestCollectTool
-    from openjarvis.tools.text_to_speech import TextToSpeechTool
+    tools = [DigestCollectTool()]
+    if generate_audio:
+        from openjarvis.tools.text_to_speech import TextToSpeechTool
 
-    agent_kwargs["tools"] = [DigestCollectTool(), TextToSpeechTool()]
+        tools.append(TextToSpeechTool())
+    agent_kwargs["tools"] = tools
 
     return MorningDigestAgent(engine, model, **agent_kwargs)
