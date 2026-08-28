@@ -18,6 +18,10 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
   const [playing, setPlaying] = useState(autoPlay);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  // Synthesized clips live in an in-memory map on the server, so every token
+  // dies with a restart while the chat history keeps its URL. Reopening an
+  // old chat then renders a player that 404s and can never play.
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     if (!autoPlay) return;
@@ -58,16 +62,22 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
       setPlaying(false);
       setCurrentTime(0);
     };
+    const onError = () => {
+      setUnavailable(true);
+      setPlaying(false);
+    };
 
     el.addEventListener('timeupdate', onTime);
     el.addEventListener('loadedmetadata', onMeta);
     el.addEventListener('ended', onEnded);
+    el.addEventListener('error', onError);
     return () => {
       el.removeEventListener('timeupdate', onTime);
       el.removeEventListener('loadedmetadata', onMeta);
       el.removeEventListener('ended', onEnded);
+      el.removeEventListener('error', onError);
     };
-  }, []);
+  }, [src]);
 
   // Mirror into the store so the orb (rendered elsewhere) can show a
   // "speaking" state for the actual duration of the spoken audio, not
@@ -79,6 +89,10 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
     };
   }, [playing]);
 
+  useEffect(() => {
+    setUnavailable(false);
+  }, [src]);
+
   const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const el = audioRef.current;
     if (!el) return;
@@ -86,6 +100,9 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
     el.currentTime = nextTime;
     setCurrentTime(nextTime);
   };
+
+  // Nothing to offer: a dead clip's controls only mislead.
+  if (unavailable) return null;
 
   return (
     <div

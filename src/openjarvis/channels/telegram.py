@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import textwrap
@@ -172,7 +173,13 @@ class TelegramChannel(BaseChannel):
 
             app = ApplicationBuilder().token(self._token).build()
 
-            def _handle_msg(update, context):
+            # Must be async: python-telegram-bot awaits the callback, so a
+            # plain def returns None and every message ends in
+            # "object NoneType can't be used in 'await' expression". The
+            # message was still processed -- the body ran before the failed
+            # await -- which is why this looked like it worked while logging
+            # an error per message.
+            async def _handle_msg(update, context):
                 msg = update.message
                 if msg is None:
                     return
@@ -196,27 +203,34 @@ class TelegramChannel(BaseChannel):
                             cm.conversation_id,
                         )
                         return
-                for handler in self._handlers:
-                    try:
-                        handler(cm)
-                    except Exception:
-                        logger.exception("Telegram handler error")
-                if self._bus is not None:
-                    self._bus.publish(
-                        EventType.CHANNEL_MESSAGE_RECEIVED,
-                        {
-                            "channel": cm.channel,
-                            "sender": cm.sender,
-                            "content": cm.content,
-                            "message_id": cm.message_id,
-                        },
-                    )
+                # A handler runs a full agent turn, which blocks for
+                # seconds. Off the event loop so polling keeps up and a slow
+                # reply cannot stall the next message.
+                await asyncio.to_thread(self._dispatch, cm)
 
             app.add_handler(MessageHandler(filters.TEXT, _handle_msg))
             app.run_polling(stop_signals=None, drop_pending_updates=True)
         except Exception:
             logger.debug("Telegram poll loop error", exc_info=True)
             self._status = ChannelStatus.ERROR
+
+    def _dispatch(self, cm: ChannelMessage) -> None:
+        """Fan a received message out to handlers, then announce it."""
+        for handler in self._handlers:
+            try:
+                handler(cm)
+            except Exception:
+                logger.exception("Telegram handler error")
+        if self._bus is not None:
+            self._bus.publish(
+                EventType.CHANNEL_MESSAGE_RECEIVED,
+                {
+                    "channel": cm.channel,
+                    "sender": cm.sender,
+                    "content": cm.content,
+                    "message_id": cm.message_id,
+                },
+            )
 
     def _publish_sent(self, channel: str, content: str, conversation_id: str) -> None:
         """Publish a CHANNEL_MESSAGE_SENT event on the bus."""

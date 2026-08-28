@@ -268,3 +268,73 @@ class TestChannelAgentWiring:
 
         assert len(calls_a) == 1
         assert len(calls_b) == 1
+
+
+class TestPollLoopHandlerContract:
+    """python-telegram-bot awaits the callback. A plain def returns None, and
+    every message ended in "object NoneType can't be used in 'await'
+    expression" — logged once per message, after the body had already run."""
+
+    def test_the_message_handler_is_a_coroutine_function(self):
+        import ast
+        import inspect
+
+        from openjarvis.channels import telegram as mod
+
+        tree = ast.parse(inspect.getsource(mod))
+        handlers = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_handle_msg"
+        ]
+        assert handlers, "_handle_msg not found"
+        for node in handlers:
+            assert isinstance(node, ast.AsyncFunctionDef), (
+                "_handle_msg must be async — python-telegram-bot awaits it"
+            )
+
+    def test_dispatch_runs_every_handler_and_publishes(self):
+        from unittest.mock import MagicMock
+
+        from openjarvis.channels._stubs import ChannelMessage
+        from openjarvis.channels.telegram import TelegramChannel
+
+        ch = TelegramChannel(bot_token="t")
+        seen = []
+        ch._handlers = [seen.append]
+        ch._bus = MagicMock()
+        cm = ChannelMessage(
+            channel="telegram",
+            sender="1",
+            content="hi",
+            message_id="2",
+            conversation_id="3",
+        )
+
+        ch._dispatch(cm)
+
+        assert seen == [cm]
+        ch._bus.publish.assert_called_once()
+
+    def test_one_failing_handler_does_not_stop_the_others(self):
+        from unittest.mock import MagicMock
+
+        from openjarvis.channels._stubs import ChannelMessage
+        from openjarvis.channels.telegram import TelegramChannel
+
+        ch = TelegramChannel(bot_token="t")
+        seen = []
+        ch._handlers = [MagicMock(side_effect=RuntimeError("boom")), seen.append]
+        ch._bus = None
+        cm = ChannelMessage(
+            channel="telegram",
+            sender="1",
+            content="hi",
+            message_id="2",
+            conversation_id="3",
+        )
+
+        ch._dispatch(cm)
+
+        assert seen == [cm]
