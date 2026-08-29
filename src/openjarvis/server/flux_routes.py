@@ -124,8 +124,14 @@ async def flux_stream(websocket: WebSocket) -> None:
             text = message.get("text")
             if text == "stop":
                 # The client ends transmission between turns rather than
-                # streaming idle microphone audio.
-                return
+                # streaming idle microphone audio. Keep reading: returning
+                # here completed this task, which cancelled the event pump and
+                # closed the Deepgram session, so every turn tore the whole
+                # connection down and the next one paid for a fresh handshake
+                # — and surfaced to the user as "Flux connection closed".
+                # There is nothing to forward until the next turn sends audio,
+                # so simply waiting for it is the whole behaviour.
+                continue
 
     # Speculation is managed here rather than in the browser, so speculative
     # text never crosses the wire at all until a turn is confirmed. The

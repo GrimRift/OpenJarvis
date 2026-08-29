@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
+import time
 from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
@@ -329,3 +331,55 @@ class TestSpeculativeTemperature:
             in ast.dump(node)
         ]
         assert calls, "generate_speculative must be given an explicit temperature"
+
+
+class TestStopKeepsTheSessionAlive:
+    """'stop' ends a turn, not the connection.
+
+    The client sends it between turns rather than streaming idle microphone
+    audio. The relay used to ``return`` here, which completed the audio task,
+    cancelled the event pump and closed the Deepgram session — so the browser
+    saw the socket drop and reported "Cloud transcription unavailable — using
+    local. Flux connection closed", and the wake word did not re-arm.
+    """
+
+    class _FakeSession:
+        def __init__(self, **kwargs):
+            self.audio: list[bytes] = []
+            self.closed = False
+
+        async def connect(self):
+            return None
+
+        async def send_audio(self, data):
+            self.audio.append(data)
+
+        async def events(self):
+            await asyncio.Event().wait()
+            yield {}  # pragma: no cover - unreachable, keeps this a generator
+
+        async def close(self):
+            self.closed = True
+
+    def test_audio_after_a_stop_still_reaches_deepgram(self):
+        sessions: list = []
+
+        def _make(**kwargs):
+            session = self._FakeSession(**kwargs)
+            sessions.append(session)
+            return session
+
+        client = TestClient(_app(_enabled_config()))
+        with patch.object(flux_routes.flux, "is_available", return_value=True):
+            with patch.object(flux_routes.flux, "FluxSession", _make):
+                with client.websocket_connect("/v1/speech/flux") as ws:
+                    assert ws.receive_json()["type"] == "FluxReady"
+                    ws.send_bytes(b"turn-one")
+                    ws.send_text("stop")
+                    ws.send_bytes(b"turn-two")
+                    session = sessions[0]
+                    deadline = time.monotonic() + 5
+                    while len(session.audio) < 2 and time.monotonic() < deadline:
+                        time.sleep(0.02)
+
+        assert session.audio == [b"turn-one", b"turn-two"]

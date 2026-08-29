@@ -86,6 +86,16 @@ export type FluxAction =
  * may resend one, and sending the same turn twice would put two identical
  * questions into the conversation.
  */
+// Backoff for transport-level drops. Bounded on purpose: if Flux cannot be
+// reached after a few tries the page stays on local transcription, which is
+// the fail-closed outcome, rather than reconnecting in a loop forever.
+export const MAX_FLUX_RECONNECTS = 3;
+
+export function reconnectDelay(attemptsSoFar: number): number | null {
+  if (attemptsSoFar >= MAX_FLUX_RECONNECTS) return null;
+  return 500 * 2 ** attemptsSoFar;
+}
+
 export function interpretFluxMessage(
   raw: string,
   lastFinalTurn: number | null,
@@ -202,6 +212,13 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   // during that await. Every continuation re-checks this before touching a
   // ref, otherwise a stopped session resurrects an orphaned mic.
   const sessionIdRef = useRef(0);
+  // A dropped socket used to strand the page on local transcription until it
+  // was reloaded, because nothing reconnects outside the `enabled` effect.
+  // Bounded, and only for transport faults: a FluxUnavailable verdict is the
+  // server deciding Flux must not be used, and is never retried.
+  const reconnectsRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const connectRef = useRef<(() => void) | null>(null);
 
   const takeFallbackAudio = useCallback((): Int16Array | null => {
     const samples = fallbackRef.current;
@@ -214,6 +231,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
 
   const teardown = useCallback(() => {
     intentionalStopRef.current = true;
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     sendingRef.current = false;
     sessionIdRef.current += 1;
 
@@ -269,6 +290,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         case 'ready':
           setStatus('connected');
           setReason('');
+          // The socket reached the relay, so the next drop gets a fresh budget.
+          reconnectsRef.current = 0;
           break;
         case 'unavailable':
           fail(action.reason, 'unavailable');
@@ -337,14 +360,28 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') handleMessage(ev.data);
     };
+    // fail() tears the session down and hands the caller its buffered audio,
+    // so the turn in flight still gets transcribed locally. Reconnecting
+    // afterwards is what lets the *next* wake word reach Flux again.
+    const dropped = (why: string) => {
+      fail(why, 'error');
+      const delay = reconnectDelay(reconnectsRef.current);
+      if (delay === null) return;
+      reconnectsRef.current += 1;
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connectRef.current?.();
+      }, delay);
+    };
+
     ws.onerror = () => {
       if (session === sessionIdRef.current && !intentionalStopRef.current) {
-        fail('Flux connection error', 'error');
+        dropped('Flux connection error');
       }
     };
     ws.onclose = () => {
       if (session !== sessionIdRef.current || intentionalStopRef.current) return;
-      fail('Flux connection closed', 'error');
+      dropped('Flux connection closed');
     };
 
     const ctx = new AudioContext();
@@ -420,6 +457,12 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     setStatus('idle');
     setReason('');
   }, [teardown]);
+
+  useEffect(() => {
+    connectRef.current = () => {
+      void connect();
+    };
+  }, [connect]);
 
   useEffect(() => {
     if (enabled) {
