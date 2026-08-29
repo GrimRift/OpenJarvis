@@ -667,9 +667,154 @@ newest-exchange survival, and a fold that does not lose a named fact.
 **Effort.** Roughly one session; the planning function and its tests are the
 bulk.
 
+## Flux teardown, the proactive all-clear, and a TTS voice audit (2026-08-29 to 2026-08-30)
+
+Three commits, all pushed to `feature/sage-customization`: `978c2d13`,
+`c36d8fae`, `624f0e36`.
+
+### A wake word that hears nothing now releases the microphone
+
+Saying "Hey Sage" and then staying silent left the orb in LISTENING
+indefinitely — an hour, in the user's report. Deepgram's `eot_timeout_ms`
+bounds finalising a turn *in progress*; it does not bound waiting for one to
+begin, and Flux only ends turns it started. So nothing on either side was
+responsible for a turn that never happened.
+
+`FLUX_SILENCE_TIMEOUT_MS = 8000` in `InputArea.tsx`, armed at both Flux entry
+points (`beginAutoRecording`, `beginWakeWordRecording`), cancelled by a new
+`onTurnStarted` callback surfaced from `useFluxSpeech.ts`, and cleared at every
+existing turn-end site plus on unmount.
+
+### Ending a Flux turn was closing the whole Flux connection
+
+The fix above exposed a bug that had been there the entire time. The browser
+sends `'stop'` between turns rather than streaming idle microphone audio, and
+its own comment says this stops the proxy forwarding *"rather than closing the
+socket"*. The relay disagreed: `pump_audio` **returned** on `'stop'`, which
+completed that task, cancelled the event pump via `asyncio.wait(FIRST_COMPLETED)`
+and closed the Deepgram session. Every turn tore the connection down and the
+next one paid for a fresh handshake.
+
+It stayed invisible while a turn always ended immediately before a reply. The
+8s timeout calls `endTurn()` with no turn in progress, so the close arrived out
+of nowhere and surfaced as the toast **"Cloud transcription unavailable — using
+local. Flux connection closed"**, eight seconds after a wake word that heard
+nothing.
+
+The relay now keeps reading after `'stop'`. There is nothing to forward until
+the next turn sends audio, so waiting for it is the whole behaviour.
+
+Second half: a dropped socket only ever called `fail()`, and nothing reconnects
+outside the `enabled` effect — so **any** transport blip stranded the page on
+local transcription until reload. Added a bounded reconnect: three attempts at
+500/1000/2000ms (`reconnectDelay`, a pure exported function so it is testable
+without jsdom), budget reset once a `FluxReady` proves the socket good, and
+never retried for a `FluxUnavailable` verdict, which is the server deciding Flux
+must not be used.
+
+### An empty proactive classification was being read as an all-clear
+
+Audit of the 2026-08-29 morning runs (below) found the 05:00 proactive run had
+logged `llm raw (0 chars)`, parsed 0 proposals from a digest that *had*
+collected items, and reported "Nothing requires your attention."
+
+`proactive_agent.py` already refuses to draw that conclusion when its sources
+fail to fetch — *"Every source failed, so this is not an all-clear."* A model
+that says nothing is the same silence wearing a different hat, and that guard
+never covered it. Note this is a **different agent** from `morning_digest.py`,
+which got its own bounded retry earlier; the two are easy to confuse.
+
+`_classify()` retries once. `finish_reason` distinguishes the two kinds of
+empty: `"length"` ran out of budget so the retry buys headroom (the ceiling here
+is already 8192, set in `__init__` for JSON-array room — so this is *not* the
+digest's 4x bump); anything else came back blank, where the digest path observed
+the very next attempt succeeding unchanged.
+
+Still empty after the retry is **recorded, not announced** — the user's explicit
+choice: `metadata["classification_empty"]` plus a warning naming the collected
+item count, no 05:00 notification. Rare enough to matter: 1 of 160 logged calls.
+
+### Morning scheduled tasks: audited, all firing
+
+Read from `scheduler.db`. **Timestamps are stored UTC and the user is UTC+8, so
+the morning runs sit under the previous UTC date** — querying `started_at >=
+'<today>'` silently hides everything before 08:00 local.
+
+| Local | Task | Result |
+|---|---|---|
+| 05:00 | Proactive agent | OK (but see the empty classification above) |
+| 08:00 | Calendar / reminders | OK |
+| every 10 min | `notify_class_schedule`, 15-min lookahead | 57/57 OK |
+
+Two source problems, **neither fixed, both open**:
+- `google_tasks` returns `403 Forbidden` on `users/@me/lists` every run. Scope
+  or consent; adjacent to the still-pending Google OAuth publish.
+- `imessage` and `slack` report "not connected (no credentials)" every run.
+  iMessage cannot work on Windows, so it is permanent noise in the digest's
+  "I couldn't read ..." line. Decide: connect Slack, or drop both from the
+  source list. Ask the user first.
+
+### Temperature audit
+
+Verified against the live config, not the dataclass defaults:
+
+| Path | Value | |
+|---|---|---|
+| `intelligence.temperature` | 0.7 | not set in `config.toml`; code default |
+| Speculative / Flux Ultra | 0.7 | via `_configured_temperature(config)` — the earlier repeated-joke fix is holding |
+| `ProactiveAgent` | 0.2 | deliberate, `__init__`, for reliable JSON |
+| `DeepResearchAgent` | 0.3 | deliberate |
+
+No drift. `test_it_matches_the_configured_temperature` pins the speculative one.
+
+### Cartesia: which model, which voice, and how to change them
+
+Nothing for Cartesia exists in `config.toml`, so both run on code defaults.
+
+- **Model: `sonic-3`.** Hardcoded default in *two* places —
+  `CartesiaTTSBackend.__init__` (batch path) and `astream_pcm`'s signature
+  (streaming path, `cartesia_tts.py`). The streaming route never passes
+  `model=`, so it takes the signature default.
+- **Voice: `a0e99841-438c-4a64-b679-ae501e7d6091`.** Also in two places —
+  `_DEFAULT_VOICE` in `tts_stream_routes.py` and the `if not voice_id` fallback
+  in `cartesia_tts.py`.
+
+**The code comment calling this voice "British Butler" is wrong.** Queried live
+against `GET /voices/{id}`: it is **"Greg - Supporter"**, described as *"Neutral,
+deep male for conversational support"*, `en`. Do not trust the comment.
+
+**Config cannot change either today.** `_resolve_voice()` reads
+`getattr(speech, "voice_id", "")` — but `SpeechConfig` has no `voice_id` or
+`voice_speed` field, and the loader **silently drops** unknown keys (verified:
+adding `voice_id` under `[speech]` loads as absent). So that `getattr` can never
+return non-empty, and the obvious-looking config route is dead. The only working
+routes today are per-request (`/v1/speech/synthesize` and the tts-stream socket
+both accept `voice_id`) or editing the two constants.
+
+**Open, offered but not done:** add `voice_id: str = ""` and
+`voice_speed: float = 1.0` to `SpeechConfig` so the existing `getattr` calls
+start working, and collapse the duplicated model/voice defaults to one source.
+Two call sites for one value is exactly the shape the architectural-invariant
+tests are meant to catch.
+
+### Verification
+
+- `tests/server/test_flux_routes.py` — 27 passed. New
+  `TestStopKeepsTheSessionAlive` drives real audio either side of a `'stop'`;
+  confirmed failing against the un-fixed relay.
+- Frontend — 153 passed, `tsc` clean, bundle rebuilt.
+- `tests/agents/` — 648 passed. New `TestEmptyClassificationIsRetried`: 7 tests,
+  **5 of which fail against the un-retried code** (the other 2 cover the
+  metadata flag, which is independent of the retry — not evidence).
+- Ruff clean on every touched file.
+
+`AGENTS.md`'s pre-existing-failure list gained `test_manager::TestCheckpoints`:
+one case fails per run and *which* one moves (`test_checkpoint_retention_max_5`
+and `test_get_latest_checkpoint` both seen); each passes alone.
+
 ## Unfinished work and exact next action
 
-The current state and exact next candidates are in **"Sage persona, Web parity, and latency pass (2026-08-28, latest)" immediately above**. Nothing is mid-implementation; the old uncommitted orb/dashboard warning below was resolved long ago and is retained only as historical context. All current source and handoff work is committed locally, not pushed; confirm with the user before pushing.
+The current state and exact next candidates are in **"Flux teardown, the proactive all-clear, and a TTS voice audit (2026-08-29 to 2026-08-30)" immediately above**. Everything there is committed and pushed. Nothing is mid-implementation; the old uncommitted orb/dashboard warning below was resolved long ago and is retained only as historical context. All current source and handoff work is committed locally, not pushed; confirm with the user before pushing.
 
 Next, in order (as of the entry directly below this one — **items 1 and 2 above are stale, both since resolved**: wake word was re-tested, broke again for unrelated reasons, and went through the full retraining arc documented in "M28 completed, M31 in progress" below; the cloud-model date re-test was never explicitly revisited but is low-priority and not blocking anything):
 1. Do NOT build Microsoft Calendar/OneDrive yet — they'd hit the identical NU admin-consent wall against the same mailbox, no point until Outlook clears. Teams is lower priority for the same reason. `ProactiveAgent` (`agents/proactive_agent.py` — the daily-digest-with-tiered-approval-and-chat-notification agent, distinct from `morning_digest.py`) is still real, tested, but never wired to a real startup path — a candidate for further M26 work if the user wants to keep going in that direction, but confirm with them before starting, per `AGENTS.md`'s "ask before assuming roadmap status" guidance.
