@@ -34,6 +34,11 @@ import type {
  * Only used on the Flux fallback path: the buffered turn is raw 16-bit mono
  * samples, and faster-whisper is handed a file, not a stream.
  */
+// How long a Flux turn may hear nothing at all before the microphone is
+// released. Deliberately shorter than the local path's 12s fallback: a wake
+// word that fired on noise is the case this exists for.
+const FLUX_SILENCE_TIMEOUT_MS = 8000;
+
 function pcm16ToWav(samples: Int16Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
@@ -146,6 +151,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // text in the box for the user to review/edit, same as today.
   const autoTriggeredRef = useRef(false);
   const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Flux has no equivalent of the local 12s fallback: Deepgram only ends
+  // turns it has started, so a wake word that fires on noise produces no
+  // events at all and the microphone stays live indefinitely. This releases
+  // it when nothing is ever heard, and is cancelled the moment Deepgram
+  // reports real speech so a long question is never cut short.
+  const fluxSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Held from a wake-word trigger until listening has actually started, so
   // repeat detections of the same utterance can't stack up greetings.
   const wakeWordBusyRef = useRef(false);
@@ -243,6 +254,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       setWakeWordSuspended(true);
       toast('Listening paused — tap the mic again to talk.', { duration: 4000 });
       flux.endTurn();
+      clearFluxSilenceTimer();
       setFluxTurnActive(false);
       return;
     }
@@ -871,6 +883,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
 
   const handleFluxEndOfTurn = useCallback(
     async (transcript: string, turnIndex: number, speculativeAnswer?: string) => {
+      clearFluxSilenceTimer();
       setFluxTurnActive(false);
       // Deepgram can repeat a final event; one confirmed turn sends once.
       if (lastFluxTurnRef.current === turnIndex) return;
@@ -895,6 +908,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
 
   const handleFluxUnavailable = useCallback(
     async (reason: string, audio: Int16Array | null) => {
+      clearFluxSilenceTimer();
       setFluxTurnActive(false);
       toast.error(`Cloud transcription unavailable — using local. ${reason}`, {
         duration: 6000,
@@ -917,10 +931,37 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     [sendMessage],
   );
 
+  const clearFluxSilenceTimer = useCallback(() => {
+    if (fluxSilenceTimerRef.current) {
+      clearTimeout(fluxSilenceTimerRef.current);
+      fluxSilenceTimerRef.current = null;
+    }
+  }, []);
+
+  // A pending timer would otherwise fire after unmount and call endTurn on a
+  // torn-down socket.
+  useEffect(() => clearFluxSilenceTimer, [clearFluxSilenceTimer]);
+
+  const armFluxSilenceTimer = useCallback(() => {
+    clearFluxSilenceTimer();
+    fluxSilenceTimerRef.current = setTimeout(() => {
+      fluxSilenceTimerRef.current = null;
+      // Silent by design: nothing was said, so there is nothing to report.
+      flux.endTurn();
+      clearFluxSilenceTimer();
+      setFluxTurnActive(false);
+    }, FLUX_SILENCE_TIMEOUT_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clearFluxSilenceTimer]);
+
   const flux = useFluxSpeech({
     enabled: fluxActive,
     eager: fluxEagerEnabled,
     onEndOfTurn: handleFluxEndOfTurn,
+    onTurnStarted: () => {
+      // Real speech: from here Deepgram owns the ending.
+      clearFluxSilenceTimer();
+    },
     onTurnResumed: () => {
       // The speaker carried on; the server has already discarded its
       // speculative work. Nothing was shown here, so nothing to undo.
@@ -943,6 +984,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // and no local recording to stop.
       setFluxTurnActive(true);
       flux.beginTurn();
+      armFluxSilenceTimer();
       return;
     }
     await startRecording(finishAutoRecording);
@@ -991,6 +1033,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // the turn Deepgram is judging.
         if (greeting) await greeting;
         flux.beginTurn();
+        armFluxSilenceTimer();
         return;
       }
       await startRecording(finishAutoRecording, { waitBeforeCapture: greeting });
@@ -1047,6 +1090,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   useEffect(() => {
     if (audioPlaying && fluxTurnActive) {
       flux.endTurn();
+      clearFluxSilenceTimer();
       setFluxTurnActive(false);
     }
     // flux.endTurn is stable; re-running on the flag alone is intended.

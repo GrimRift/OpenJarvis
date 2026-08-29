@@ -41,6 +41,20 @@ describe('Flux message interpretation', () => {
         'turnStarted',
       );
     });
+
+    it('is the only signal that speech has actually begun', () => {
+      // Deepgram ends only turns it started, so a wake word that fires on
+      // noise produces no events at all. The caller arms a timeout on
+      // beginTurn and cancels it here; without a distinct StartOfTurn the
+      // microphone would stay live indefinitely, and cancelling on EndOfTurn
+      // instead would cut off any question longer than the timeout.
+      const speechSignals = ['StartOfTurn', 'Update', 'EagerEndOfTurn', 'EndOfTurn']
+        .map((event) => [event, interpretFluxMessage(turnInfo(event), null).kind]);
+
+      expect(
+        speechSignals.filter(([, kind]) => kind === 'turnStarted'),
+      ).toEqual([['StartOfTurn', 'turnStarted']]);
+    });
   });
 
   describe('duplicate and out-of-order events', () => {

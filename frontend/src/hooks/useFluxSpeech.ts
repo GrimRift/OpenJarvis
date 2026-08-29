@@ -39,6 +39,15 @@ export interface UseFluxSpeechOptions {
     speculativeAnswer?: string,
   ) => void;
   onEagerEndOfTurn?: (transcript: string, turnIndex: number) => void;
+  /**
+   * Deepgram has heard speech and opened a turn.
+   *
+   * The caller needs this to tell "nobody said anything" from "someone is
+   * still talking": Deepgram only ends turns it started, so a wake word that
+   * fires on noise produces no events at all and nothing else would ever
+   * release the microphone.
+   */
+  onTurnStarted?: (turnIndex: number) => void;
   onTurnResumed?: (turnIndex: number) => void;
   /**
    * Flux cannot be used, or failed mid-session. `audio` carries whatever of
@@ -263,6 +272,9 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           break;
         case 'unavailable':
           fail(action.reason, 'unavailable');
+          break;
+        case 'turnStarted':
+          cb.onTurnStarted?.(action.turnIndex);
           break;
         case 'speculate':
           cb.onEagerEndOfTurn?.(action.transcript, action.turnIndex);
