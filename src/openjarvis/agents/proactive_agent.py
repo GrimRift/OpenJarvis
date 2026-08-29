@@ -65,6 +65,10 @@ _PROACTIVE_CRON_PROMPT = (
     "notify pending approvals."
 )
 _PROACTIVE_TASK_KEY = "proactive-daily"
+# Retry ceiling when an empty classification was a budget problem. The
+# normal ceiling is already 8192 (see __init__), so this only matters for a
+# model that spent all of it thinking.
+_EMPTY_RETRY_MAX_TOKENS = 16384
 _PROACTIVE_TASK_KEY_FIELD = "openjarvis_task_key"
 
 _SYSTEM_PROMPT = """You are a proactive personal assistant agent. You have already collected
@@ -454,6 +458,37 @@ class ProactiveAgent(ToolUsingAgent):
 
         super().__init__(*args, **kwargs)
 
+    def _classify(self, messages: List[Message]) -> Dict[str, Any]:
+        """Ask for the proposals array, retrying once if the model says nothing.
+
+        A reasoning model can spend its entire completion budget thinking and
+        return no content at all. This agent already refuses to manufacture an
+        all-clear out of sources that failed to fetch; an empty classification
+        is that same silence wearing a different hat, and it reaches the user
+        as "Nothing requires your attention." The 05:00 run on 2026-08-29 hit
+        it live: 0 chars, 0 proposals, on a digest that had collected items.
+
+        Bounded to a single retry. ``finish_reason`` says which kind of empty
+        it was: "length" means the budget ran out, so the retry buys headroom;
+        anything else means the call simply came back blank, where the digest
+        path observed the very next attempt succeeding unchanged.
+        """
+        result = self._generate(messages)
+        if self._strip_think_tags(result.get("content", "")).strip():
+            return result
+
+        finish = result.get("finish_reason", "")
+        logger.warning(
+            "Proactive classification returned no content "
+            "(finish_reason=%r, max_tokens=%s); retrying once.",
+            finish,
+            self._max_tokens,
+        )
+        headroom = max(self._max_tokens * 2, _EMPTY_RETRY_MAX_TOKENS)
+        if finish == "length" and headroom > self._max_tokens:
+            return self._generate(messages, max_tokens=headroom)
+        return self._generate(messages)
+
     def _get_already_seen_ids(self, store: ApprovalStore) -> Set[str]:
         return store.get_seen_ids()
 
@@ -555,10 +590,18 @@ class ProactiveAgent(ToolUsingAgent):
                 ),
             ),
         ]
-        llm_result = self._generate(messages)
+        llm_result = self._classify(messages)
         raw_full = llm_result.get("content", "")
         raw_output = self._strip_think_tags(raw_full)
         proposed: List[Dict[str, Any]] = _extract_json_block(raw_output) or []
+        classification_empty = not raw_output.strip()
+        if classification_empty:
+            logger.warning(
+                "Proactive classification produced no content after a retry; "
+                "reporting no actions for %d collected item(s). This run's "
+                "quiet result is not evidence that the sources were quiet.",
+                items_collected,
+            )
 
         # Debug log — write the raw LLM output and what we parsed out so a
         # human can diagnose "Nothing to report" without re-running the
@@ -695,6 +738,7 @@ class ProactiveAgent(ToolUsingAgent):
                 "auto_executed": len(executed_results),
                 "pending_approval": len(pending_actions),
                 "sources_failed": failed_sources,
+                "classification_empty": classification_empty,
             },
         )
 

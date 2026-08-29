@@ -425,3 +425,102 @@ class TestConnectorFailuresAreReported:
 
         assert "incomplete" not in result.content
         assert result.metadata["sources_failed"] == []
+
+
+class TestEmptyClassificationIsRetried:
+    """An empty answer must not become "Nothing requires your attention."
+
+    Live on 2026-08-29 at 05:00 the classification step returned 0 chars, so
+    0 proposals were parsed and the run reported an all-clear over a digest
+    that had collected items. The agent already refuses to draw that
+    conclusion when its sources fail (see the collection_failed branch); a
+    model that says nothing is the same silence.
+    """
+
+    def _agent(self, tmp_path, responses):
+        from openjarvis.agents.proactive_agent import ProactiveAgent
+        from openjarvis.tools.approval_store import ApprovalStore
+
+        store = ApprovalStore(db_path=str(tmp_path / "approvals.db"))
+        agent = ProactiveAgent(
+            engine=MagicMock(),
+            model="test-model",
+            approval_store=store,
+        )
+        agent._executor = MagicMock()
+        agent._executor.execute.return_value = MagicMock(
+            success=True, content=_REAL_DIGEST
+        )
+        agent._generate = MagicMock(side_effect=list(responses))
+        return agent
+
+    def test_a_good_answer_is_not_retried(self, tmp_path):
+        agent = self._agent(tmp_path, [{"content": "```json\n[]\n```"}])
+        agent.run()
+        assert agent._generate.call_count == 1
+
+    def test_an_empty_answer_is_retried_once(self, tmp_path):
+        agent = self._agent(
+            tmp_path,
+            [{"content": "", "finish_reason": "stop"}, {"content": "```json\n[]\n```"}],
+        )
+        result = agent.run()
+        assert agent._generate.call_count == 2
+        assert result.metadata["classification_empty"] is False
+
+    def test_a_response_that_is_only_thinking_counts_as_empty(self, tmp_path):
+        agent = self._agent(
+            tmp_path,
+            [
+                {"content": "<think>weighing it up</think>", "finish_reason": "stop"},
+                {"content": "```json\n[]\n```"},
+            ],
+        )
+        agent.run()
+        assert agent._generate.call_count == 2
+
+    def test_running_out_of_budget_retries_with_more_headroom(self, tmp_path):
+        agent = self._agent(
+            tmp_path,
+            [
+                {"content": "", "finish_reason": "length"},
+                {"content": "```json\n[]\n```"},
+            ],
+        )
+        agent.run()
+        retry_kwargs = agent._generate.call_args_list[1].kwargs
+        assert retry_kwargs["max_tokens"] > agent._max_tokens
+
+    def test_a_blank_answer_does_not_buy_headroom_it_does_not_need(self, tmp_path):
+        agent = self._agent(
+            tmp_path,
+            [
+                {"content": "", "finish_reason": "stop"},
+                {"content": "```json\n[]\n```"},
+            ],
+        )
+        agent.run()
+        assert "max_tokens" not in agent._generate.call_args_list[1].kwargs
+
+    def test_the_retry_is_bounded_to_one(self, tmp_path):
+        agent = self._agent(
+            tmp_path,
+            [
+                {"content": "", "finish_reason": "stop"},
+                {"content": "", "finish_reason": "stop"},
+            ],
+        )
+        agent.run()
+        assert agent._generate.call_count == 2
+
+    def test_still_empty_is_recorded_rather_than_announced(self, tmp_path):
+        """The user chose to be told in the log, not at 05:00."""
+        agent = self._agent(
+            tmp_path,
+            [
+                {"content": "", "finish_reason": "stop"},
+                {"content": "", "finish_reason": "stop"},
+            ],
+        )
+        result = agent.run()
+        assert result.metadata["classification_empty"] is True

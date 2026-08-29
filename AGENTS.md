@@ -84,8 +84,11 @@ Confirmed environmental or order-dependent, identical on a clean tree:
 `TestGemmaCppLive` (needs Kaggle weights),
 `test_new_connectors_live.py` (needs real Oura/Strava/Spotify credentials),
 `test_check_class_schedule::test_check_class_schedule_registered` (passes in a
-full run, fails alone). Repo-wide `ruff check .` is also not clean; lint only
-the files you changed.
+full run, fails alone),
+`test_manager::TestCheckpoints` (one case fails per run and which one moves —
+`test_checkpoint_retention_max_5` and `test_get_latest_checkpoint` have both
+been seen; each passes when run alone). Repo-wide `ruff check .` is also not
+clean; lint only the files you changed.
 
 **The failing set rotates between runs.** `pytest-randomly` shuffles order and
 several tests here leak state, so a wide run fails a different subset each
