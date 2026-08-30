@@ -543,6 +543,7 @@ class SystemBuilder:
                 tool._channel = channel_backend
         elif name in (
             "schedule_task",
+            "update_scheduled_task",
             "list_scheduled_tasks",
             "pause_scheduled_task",
             "resume_scheduled_task",

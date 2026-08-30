@@ -108,6 +108,24 @@ class TestCreateAndList:
         assert len(active) == 1
         assert len(paused) == 1
 
+    def test_update_task_schedule_in_place(self, scheduler):
+        task = scheduler.create_task("sleep", "cron", "0 14 * * *")
+
+        updated = scheduler.update_task_schedule(task.id, "cron", "0 15 * * *")
+
+        assert updated.id == task.id
+        assert updated.schedule_value == "0 15 * * *"
+        assert updated.next_run is not None
+        stored = scheduler.list_tasks()[0]
+        assert stored.schedule_value == "0 15 * * *"
+
+    def test_update_refuses_cancelled_task(self, scheduler):
+        task = scheduler.create_task("sleep", "cron", "0 14 * * *")
+        scheduler.cancel_task(task.id)
+
+        with pytest.raises(ValueError, match="cancelled"):
+            scheduler.update_task_schedule(task.id, "cron", "0 15 * * *")
+
 
 # -- Pause / resume / cancel -------------------------------------------------
 

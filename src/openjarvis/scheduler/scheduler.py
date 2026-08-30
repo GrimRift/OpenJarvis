@@ -175,6 +175,29 @@ class TaskScheduler:
             rows = self._store.list_tasks(status=status)
         return [ScheduledTask.from_dict(r) for r in rows]
 
+    def update_task_schedule(
+        self,
+        task_id: str,
+        schedule_type: str,
+        schedule_value: str,
+    ) -> ScheduledTask:
+        """Change a task's schedule in place and recompute its next run."""
+        with self._lock:
+            d = self._store.get_task(task_id)
+            if d is None:
+                raise KeyError(f"Task not found: {task_id}")
+            if d.get("status") in ("cancelled", "completed"):
+                raise ValueError(
+                    f"Cannot update a {d['status']} task; choose an active "
+                    "or paused task."
+                )
+            d["schedule_type"] = schedule_type
+            d["schedule_value"] = schedule_value
+            task = ScheduledTask.from_dict(d)
+            task.next_run = self._compute_next_run(task)
+            self._store.update_task(task.to_dict())
+        return task
+
     def pause_task(self, task_id: str) -> None:
         """Pause an active task."""
         with self._lock:

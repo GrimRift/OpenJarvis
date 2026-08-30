@@ -188,6 +188,56 @@ def _local_cron_to_utc(expr: str) -> Tuple[str, str]:
     )
 
 
+_CLOCK_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+
+def _parse_local_clock(value: str) -> Tuple[int, int]:
+    """Parse a user-facing local clock time without doing timezone math."""
+    text = value.strip().lower().replace(".", "")
+    for word, number in _CLOCK_WORDS.items():
+        text = re.sub(rf"\b{word}\b", str(number), text)
+    match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text)
+    if not match:
+        raise ValueError(
+            "local_time must be a clock time such as '11:00 PM' or '23:00'."
+        )
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = match.group(3)
+    invalid_hour = not (1 <= hour <= 12) if meridiem else not (0 <= hour <= 23)
+    if minute > 59 or invalid_hour:
+        raise ValueError(f"Invalid local clock time: {value!r}.")
+    if meridiem:
+        hour %= 12
+        if meridiem == "pm":
+            hour += 12
+    return hour, minute
+
+
+def _cron_at_local_time(expr: str, local_time: str) -> Tuple[str, str]:
+    """Make *local_time* authoritative, then convert that cron once to UTC."""
+    fields = expr.split()
+    if len(fields) != 5:
+        raise ValueError("A cron schedule must contain exactly five fields.")
+    hour, minute = _parse_local_clock(local_time)
+    _old_minute, _old_hour, dom, month, dow = fields
+    local_expr = f"{minute} {hour} {dom} {month} {dow}"
+    return _local_cron_to_utc(local_expr)
+
+
 def _local_once_to_utc(value: str) -> Tuple[str, str]:
     """Normalise a one-off ISO datetime to an explicit UTC instant.
 
@@ -271,6 +321,7 @@ def set_scheduler(scheduler: Any) -> None:
     """
     for cls in (
         ScheduleTaskTool,
+        UpdateScheduledTaskTool,
         ListScheduledTasksTool,
         PauseScheduledTaskTool,
         ResumeScheduledTaskTool,
@@ -316,6 +367,15 @@ class ScheduleTaskTool(BaseTool):
                         "description": (
                             "Schedule value: cron expression, seconds for "
                             "interval, or ISO datetime for once."
+                        ),
+                    },
+                    "local_time": {
+                        "type": "string",
+                        "description": (
+                            "For cron schedules, copy the user's requested LOCAL "
+                            "clock time literally, such as 'eleven PM', '11:00 PM', "
+                            "or '23:00'. Do not convert it to UTC. This value is "
+                            "authoritative over the cron hour and minute."
                         ),
                     },
                     "agent": {
@@ -371,7 +431,24 @@ class ScheduleTaskTool(BaseTool):
             )
         note = ""
         if schedule_type == "cron":
-            schedule_value, note = _local_cron_to_utc(schedule_value)
+            local_time = params.get("local_time", "")
+            if not local_time:
+                return ToolResult(
+                    tool_name="schedule_task",
+                    content=(
+                        "Cron schedules require local_time copied directly from "
+                        "the user's request; do not convert it to UTC."
+                    ),
+                    success=False,
+                )
+            try:
+                schedule_value, note = _cron_at_local_time(
+                    schedule_value, local_time
+                )
+            except ValueError as exc:
+                return ToolResult(
+                    tool_name="schedule_task", content=str(exc), success=False
+                )
         elif schedule_type == "once":
             schedule_value, note = _local_once_to_utc(schedule_value)
 
@@ -472,6 +549,103 @@ class ScheduleTaskTool(BaseTool):
             )
 
 
+@ToolRegistry.register("update_scheduled_task")
+class UpdateScheduledTaskTool(BaseTool):
+    """Update the local clock time of an existing recurring task in place."""
+
+    tool_id = "update_scheduled_task"
+    _scheduler: Optional[Any] = None
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="update_scheduled_task",
+            description=(
+                "Change an existing fixed-time cron task without cancelling and "
+                "recreating it. local_time is the exact LOCAL clock time the user "
+                "said; copy it literally and never convert it to UTC."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "ID of the active or paused task to update.",
+                    },
+                    "local_time": {
+                        "type": "string",
+                        "description": (
+                            "Copy the user's local time literally, e.g. 'eleven PM', "
+                            "'11:00 PM', or '23:00'. Do not convert it."
+                        ),
+                    },
+                },
+                "required": ["task_id", "local_time"],
+            },
+            category="scheduler",
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        if self._scheduler is None:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content="Scheduler not available.",
+                success=False,
+            )
+        task_id = params.get("task_id", "")
+        local_time = params.get("local_time", "")
+        if not task_id or not local_time:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content="Missing required parameters: task_id, local_time.",
+                success=False,
+            )
+        try:
+            existing = next(
+                (task for task in self._scheduler.list_tasks() if task.id == task_id),
+                None,
+            )
+            if existing is None:
+                raise KeyError(task_id)
+            if existing.schedule_type != "cron":
+                raise ValueError(
+                    "Only fixed-time cron tasks can be updated with local_time."
+                )
+            schedule_value, note = _cron_at_local_time(
+                existing.schedule_value, local_time
+            )
+            task = self._scheduler.update_task_schedule(
+                task_id, "cron", schedule_value
+            )
+            return ToolResult(
+                tool_name=self.tool_id,
+                content=json.dumps(
+                    {
+                        "task_id": task.id,
+                        "status": task.status,
+                        "schedule_human": _describe_schedule(
+                            task.schedule_type, task.schedule_value
+                        ),
+                        "next_run_local": _to_local(task.next_run),
+                        "note": note,
+                    }
+                ),
+                success=True,
+            )
+        except KeyError:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content=f"Task not found: {task_id}",
+                success=False,
+            )
+        except Exception as exc:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content=f"Failed to update task: {exc}",
+                success=False,
+            )
+
+
 @ToolRegistry.register("list_scheduled_tasks")
 class ListScheduledTasksTool(BaseTool):
     """List all scheduled tasks."""
@@ -484,10 +658,9 @@ class ListScheduledTasksTool(BaseTool):
         return ToolSpec(
             name="list_scheduled_tasks",
             description=(
-                "List scheduled tasks, optionally filtered by status. Each "
-                "task includes 'schedule_human' and 'next_run_local' — quote "
-                "those when describing a task's timing, and do not convert "
-                "the raw cron, interval seconds, or UTC timestamps yourself."
+                "List current active scheduled tasks by default, optionally "
+                "filtered by another status or 'all'. Timing is already "
+                "rendered in local time and must be quoted as returned."
             ),
             parameters={
                 "type": "object",
@@ -496,8 +669,15 @@ class ListScheduledTasksTool(BaseTool):
                         "type": "string",
                         "description": (
                             "Filter by status: 'active', 'paused', "
-                            "'completed', 'cancelled'."
+                            "'completed', 'cancelled', or 'all'. Defaults to active."
                         ),
+                        "enum": [
+                            "active",
+                            "paused",
+                            "completed",
+                            "cancelled",
+                            "all",
+                        ],
                     },
                 },
             },
@@ -512,19 +692,30 @@ class ListScheduledTasksTool(BaseTool):
                 success=False,
             )
         try:
-            status = params.get("status")
+            requested_status = params.get("status", "active")
+            status = None if requested_status == "all" else requested_status
             tasks = self._scheduler.list_tasks(status=status)
             items = []
             for t in tasks:
-                d = t.to_dict()
-                # Stored fields are UTC/machine-facing; state the local
-                # equivalents outright so they are not re-derived downstream.
-                d["schedule_human"] = _describe_schedule(
-                    t.schedule_type, t.schedule_value
+                # Do not expose raw cron/UTC fields alongside their local
+                # equivalents. A live model ignored schedule_human, read
+                # "0 7 * * *" as 07:00 local, and contradicted the tool's
+                # verified local time. Give it one authoritative clock.
+                items.append(
+                    {
+                        "id": t.id,
+                        "prompt": t.prompt,
+                        "status": t.status,
+                        "schedule_type": t.schedule_type,
+                        "schedule_human": _describe_schedule(
+                            t.schedule_type, t.schedule_value
+                        ),
+                        "next_run_local": _to_local(t.next_run),
+                        "last_run_local": _to_local(t.last_run),
+                        "agent": t.agent,
+                        "tools": t.tools,
+                    }
                 )
-                d["next_run_local"] = _to_local(t.next_run)
-                d["last_run_local"] = _to_local(t.last_run)
-                items.append(d)
             return ToolResult(
                 tool_name="list_scheduled_tasks",
                 content=json.dumps(items, default=str),
@@ -724,4 +915,5 @@ __all__ = [
     "PauseScheduledTaskTool",
     "ResumeScheduledTaskTool",
     "ScheduleTaskTool",
+    "UpdateScheduledTaskTool",
 ]

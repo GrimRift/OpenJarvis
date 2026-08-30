@@ -17,6 +17,7 @@ from openjarvis.scheduler.tools import (
     PauseScheduledTaskTool,
     ResumeScheduledTaskTool,
     ScheduleTaskTool,
+    UpdateScheduledTaskTool,
 )
 
 # -- Spec correctness --------------------------------------------------------
@@ -33,6 +34,11 @@ class TestToolSpecs:
         tool = ListScheduledTasksTool()
         assert tool.spec.name == "list_scheduled_tasks"
 
+    def test_update_spec(self):
+        tool = UpdateScheduledTaskTool()
+        assert tool.spec.name == "update_scheduled_task"
+        assert "local_time" in tool.spec.parameters["required"]
+
     def test_pause_spec(self):
         tool = PauseScheduledTaskTool()
         assert tool.spec.name == "pause_scheduled_task"
@@ -48,6 +54,7 @@ class TestToolSpecs:
     def test_all_tools_have_scheduler_category(self):
         for cls in [
             ScheduleTaskTool,
+            UpdateScheduledTaskTool,
             ListScheduledTasksTool,
             PauseScheduledTaskTool,
             ResumeScheduledTaskTool,
@@ -74,6 +81,11 @@ class TestNoScheduler:
         tool._scheduler = None
         result = tool.execute()
         assert not result.success
+
+    def test_update_no_scheduler(self):
+        tool = UpdateScheduledTaskTool()
+        tool._scheduler = None
+        assert not tool.execute(task_id="abc", local_time="11 PM").success
 
     def test_pause_no_scheduler(self):
         tool = PauseScheduledTaskTool()
@@ -129,6 +141,40 @@ class TestWithScheduler:
         assert result.success
         assert "t1" in result.content
 
+    def test_update_scheduled_task_uses_literal_local_time(self):
+        """Luna's pre-converted cron hour must not be converted twice."""
+        mock_sched = MagicMock()
+        mock_sched.list_tasks.return_value = [
+            ScheduledTask(
+                id="sleep",
+                prompt="sleep",
+                schedule_type="cron",
+                schedule_value="0 14 * * *",
+                status="active",
+            )
+        ]
+        mock_sched.update_task_schedule.return_value = ScheduledTask(
+            id="sleep",
+            prompt="sleep",
+            schedule_type="cron",
+            schedule_value="0 15 * * *",
+            status="active",
+            next_run="2026-08-31T15:00:00+00:00",
+        )
+        tool = UpdateScheduledTaskTool()
+        tool._scheduler = mock_sched
+
+        with TestCronTimezone._at_plus_eight():
+            result = tool.execute(task_id="sleep", local_time="eleven PM")
+
+        assert result.success
+        mock_sched.update_task_schedule.assert_called_once_with(
+            "sleep", "cron", "0 15 * * *"
+        )
+        assert json.loads(result.content)["schedule_human"] == (
+            "daily at 23:00 local time"
+        )
+
     def test_schedule_task_missing_params(self):
         tool = ScheduleTaskTool()
         tool._scheduler = MagicMock()
@@ -159,7 +205,8 @@ class TestRegistration:
         code = (
             "import openjarvis.tools;"
             "from openjarvis.core.registry import ToolRegistry;"
-            "missing=[n for n in ('schedule_task','list_scheduled_tasks',"
+            "missing=[n for n in ('schedule_task','update_scheduled_task',"
+            "'list_scheduled_tasks',"
             "'pause_scheduled_task','resume_scheduled_task',"
             "'cancel_scheduled_task') if n not in ToolRegistry.keys()];"
             "raise SystemExit('unregistered: %s' % missing if missing else 0)"
@@ -214,6 +261,37 @@ class TestCronTimezone:
         with self._at_plus_eight():
             assert _local_cron_to_utc("0 8 * * *")[0] == "0 0 * * *"
             assert _local_cron_to_utc("30 14 * * *")[0] == "30 6 * * *"
+
+    def test_literal_local_time_overrides_a_preconverted_cron_hour(self):
+        from openjarvis.scheduler.tools import _cron_at_local_time
+
+        with self._at_plus_eight():
+            converted, _ = _cron_at_local_time("0 15 * * *", "11:00 PM")
+        assert converted == "0 15 * * *"
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("11:00 PM", (23, 0)),
+            ("23:00", (23, 0)),
+            ("eleven PM", (23, 0)),
+            ("12 AM", (0, 0)),
+            ("00:00", (0, 0)),
+        ],
+    )
+    def test_parses_user_facing_local_clock(self, value, expected):
+        from openjarvis.scheduler.tools import _parse_local_clock
+
+        assert _parse_local_clock(value) == expected
+
+    def test_cron_tool_requires_literal_local_time(self):
+        tool = ScheduleTaskTool()
+        tool._scheduler = MagicMock()
+        result = tool.execute(
+            prompt="sleep", schedule_type="cron", schedule_value="0 15 * * *"
+        )
+        assert not result.success
+        assert "local_time" in result.content
 
     def test_shifts_day_of_week_when_crossing_a_utc_day_boundary(self):
         from openjarvis.scheduler.tools import _local_cron_to_utc
@@ -400,6 +478,29 @@ class TestScheduleDescriptions:
             set_scheduler(None)
         assert payload[0]["schedule_human"] == "every 10 minutes"
         assert payload[0]["next_run_local"]
+
+    def test_list_defaults_to_active_and_hides_raw_utc_fields(self):
+        from openjarvis.scheduler.tools import set_scheduler
+
+        mock_sched = MagicMock()
+        mock_sched.list_tasks.return_value = [
+            ScheduledTask(
+                id="sleep",
+                prompt="sleep",
+                schedule_type="cron",
+                schedule_value="0 15 * * *",
+                next_run="2026-08-31T15:00:00+00:00",
+            )
+        ]
+        set_scheduler(mock_sched)
+        try:
+            payload = json.loads(ListScheduledTasksTool().execute().content)
+        finally:
+            set_scheduler(None)
+        mock_sched.list_tasks.assert_called_once_with(status="active")
+        assert payload[0]["schedule_human"]
+        assert "schedule_value" not in payload[0]
+        assert "next_run" not in payload[0]
 
 
 # -- Model name resolution ---------------------------------------------------
