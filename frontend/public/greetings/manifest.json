@@ -1,5 +1,15 @@
-[
-  "greetings/hello-sir.mp3",
-  "greetings/yes-sir.mp3",
-  "greetings/sir.mp3"
-]
+{
+  "default_voice_id": "78a05d7d-268b-4a18-aad7-7a96902a95ee",
+  "voices": {
+    "78a05d7d-268b-4a18-aad7-7a96902a95ee": [
+      "greetings/jarvis/hello-sir-sonic36-content.mp3",
+      "greetings/jarvis/yes-sir-sonic36-content.mp3",
+      "greetings/jarvis/sir-sonic36-content.mp3"
+    ],
+    "e23c9ecf-e002-4f7a-8e39-13d18d09923f": [
+      "greetings/frieren/hello-sir-sonic36-content.mp3",
+      "greetings/frieren/yes-sir-sonic36-content.mp3",
+      "greetings/frieren/sir-sonic36-content.mp3"
+    ]
+  }
+}

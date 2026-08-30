@@ -15,6 +15,11 @@ import httpx
 
 from openjarvis.core.registry import TTSRegistry
 from openjarvis.speech.tts import TTSBackend, TTSResult
+from openjarvis.speech.voice_profiles import (
+    CARTESIA_API_VERSION,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_VOICE,
+)
 
 _CARTESIA_API_BASE = "https://api.cartesia.ai"
 
@@ -23,9 +28,11 @@ def _cartesia_synthesize(
     api_key: str,
     text: str,
     voice_id: str,
-    model: str = "sonic-3",
+    model: str = DEFAULT_TTS_MODEL,
     output_format: str = "mp3",
     speed: float = 1.0,
+    volume: float = 1.0,
+    emotion: str = "",
     language: str = "en",
 ) -> bytes:
     """Call the Cartesia TTS API and return raw audio bytes."""
@@ -33,7 +40,7 @@ def _cartesia_synthesize(
         f"{_CARTESIA_API_BASE}/tts/bytes",
         headers={
             "X-API-Key": api_key,
-            "Cartesia-Version": "2024-06-10",
+            "Cartesia-Version": CARTESIA_API_VERSION,
         },
         json={
             "model_id": model,
@@ -45,7 +52,11 @@ def _cartesia_synthesize(
                 "encoding": "mp3" if output_format == "mp3" else "pcm_f32le",
             },
             "language": language,
-            **({"speed": speed} if speed != 1.0 else {}),
+            "generation_config": {
+                "speed": speed,
+                "volume": volume,
+                **({"emotion": emotion} if emotion else {}),
+            },
         },
         timeout=120.0,
     )
@@ -64,8 +75,9 @@ async def astream_pcm(
     text: str,
     voice_id: str,
     *,
-    model: str = "sonic-3",
+    model: str = DEFAULT_TTS_MODEL,
     speed: float = 1.0,
+    volume: float = 1.0,
     language: str = "en",
 ) -> AsyncIterator[bytes]:
     """Yield raw PCM chunks as Cartesia produces them.
@@ -88,20 +100,19 @@ async def astream_pcm(
             "encoding": STREAM_ENCODING,
         },
         "language": language,
-        **({"speed": speed} if speed != 1.0 else {}),
+        "generation_config": {"speed": speed, "volume": volume},
     }
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream(
             "POST",
             f"{_CARTESIA_API_BASE}/tts/sse",
-            headers={"X-API-Key": api_key, "Cartesia-Version": "2024-06-10"},
+            headers={"X-API-Key": api_key, "Cartesia-Version": CARTESIA_API_VERSION},
             json=body,
         ) as resp:
             if resp.status_code != 200:
                 await resp.aread()
                 raise RuntimeError(
-                    f"Cartesia stream failed ({resp.status_code}): "
-                    f"{resp.text[:200]}"
+                    f"Cartesia stream failed ({resp.status_code}): {resp.text[:200]}"
                 )
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data:"):
@@ -124,7 +135,7 @@ class CartesiaTTSBackend(TTSBackend):
     backend_id = "cartesia"
 
     def __init__(
-        self, *, api_key: str = "", model: str = "sonic-3", language: str = "en"
+        self, *, api_key: str = "", model: str = DEFAULT_TTS_MODEL, language: str = "en"
     ) -> None:
         self._api_key = api_key or os.environ.get("CARTESIA_API_KEY", "")
         self._model = model
@@ -136,15 +147,16 @@ class CartesiaTTSBackend(TTSBackend):
         *,
         voice_id: str = "",
         speed: float = 1.0,
+        volume: float = 1.0,
+        emotion: str = "",
         output_format: str = "mp3",
         language: str = "",
     ) -> TTSResult:
         if not self._api_key:
             raise RuntimeError("CARTESIA_API_KEY not set")
 
-        # Default to "British Butler" voice — warm, authoritative, Jarvis-like
         if not voice_id:
-            voice_id = "a0e99841-438c-4a64-b679-ae501e7d6091"
+            voice_id = DEFAULT_VOICE.voice_id
 
         audio = _cartesia_synthesize(
             self._api_key,
@@ -153,6 +165,8 @@ class CartesiaTTSBackend(TTSBackend):
             model=self._model,
             output_format=output_format,
             speed=speed,
+            volume=volume,
+            emotion=emotion,
             language=language or self._language,
         )
 
@@ -170,7 +184,7 @@ class CartesiaTTSBackend(TTSBackend):
             f"{_CARTESIA_API_BASE}/voices",
             headers={
                 "X-API-Key": self._api_key,
-                "Cartesia-Version": "2024-06-10",
+                "Cartesia-Version": CARTESIA_API_VERSION,
             },
             timeout=30.0,
         )

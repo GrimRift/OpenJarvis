@@ -31,6 +31,14 @@ describe('rmsFromTimeDomain', () => {
     expect(loud).toBeGreaterThan(quiet);
   });
 
+  it('uses most of the orb range for measured Sonic 3.6 speech', () => {
+    // A 0.14 sine has roughly 0.10 RMS, representative of active Jarvis
+    // syllables at the configured 1.9 volume. This used to map to only 0.32.
+    const level = rmsFromTimeDomain(tone(0.14));
+    expect(level).toBeGreaterThan(0.7);
+    expect(level).toBeLessThan(0.9);
+  });
+
   it('never exceeds one, even on a clipped signal', () => {
     // Otherwise the orb would scale without bound on a loud passage.
     const square = new Uint8Array(512);
@@ -52,6 +60,10 @@ describe('smoothLevel', () => {
     expect(rise).toBeGreaterThan(fall);
     expect(rise).toBeCloseTo(ATTACK, 6);
     expect(fall).toBeCloseTo(RELEASE, 6);
+  });
+
+  it('releases quickly enough to articulate gaps between syllables', () => {
+    expect(1 - smoothLevel(1, 0)).toBeGreaterThan(0.2);
   });
 
   it('scales with frame time', () => {

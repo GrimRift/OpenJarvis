@@ -54,6 +54,7 @@ class OpenAITTSBackend(TTSBackend):
         *,
         voice_id: str = "nova",
         speed: float = 1.0,
+        volume: float = 1.0,
         output_format: str = "mp3",
     ) -> TTSResult:
         if not self._api_key:

@@ -114,8 +114,16 @@ def test_synthesize_endpoint_returns_playable_url(client, tmp_path):
             success=True,
             metadata={"audio_path": str(audio_file)},
         ),
-    ):
-        synth_resp = client.post("/v1/speech/synthesize", json={"text": "Hello sir."})
+    ) as execute:
+        synth_resp = client.post(
+            "/v1/speech/synthesize",
+            json={
+                "text": "Hello sir.",
+                "voice_id": "frieren-id",
+                "speed": 0.9,
+                "volume": 1.9,
+            },
+        )
 
     assert synth_resp.status_code == 200
     url = synth_resp.json()["url"]
@@ -124,6 +132,9 @@ def test_synthesize_endpoint_returns_playable_url(client, tmp_path):
     audio_resp = client.get(url)
     assert audio_resp.status_code == 200
     assert audio_resp.content == b"fake-mp3-bytes"
+    assert execute.call_args.kwargs["voice_id"] == "frieren-id"
+    assert execute.call_args.kwargs["speed"] == 0.9
+    assert execute.call_args.kwargs["volume"] == 1.9
 
 
 def test_synthesize_endpoint_missing_text(client):

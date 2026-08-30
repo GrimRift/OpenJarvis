@@ -68,6 +68,7 @@ class MorningDigestAgent(ToolUsingAgent):
         self._timezone = kwargs.pop("timezone", "America/Los_Angeles")
         self._voice_id = kwargs.pop("voice_id", "")
         self._voice_speed = kwargs.pop("voice_speed", 1.0)
+        self._voice_volume = kwargs.pop("voice_volume", 1.0)
         self._tts_backend = kwargs.pop("tts_backend", "cartesia")
         self._generate_audio = bool(kwargs.pop("generate_audio", True))
         self._digest_store_path = kwargs.pop("digest_store_path", "")
@@ -276,15 +277,14 @@ class MorningDigestAgent(ToolUsingAgent):
                         "voice_id": self._voice_id,
                         "backend": self._tts_backend,
                         "speed": self._voice_speed,
+                        "volume": self._voice_volume,
                         "output_dir": output_dir,
                     }
                 ),
             )
             tts_result = self._executor.execute(tts_call)
             audio_path = (
-                tts_result.metadata.get("audio_path", "")
-                if tts_result.success
-                else ""
+                tts_result.metadata.get("audio_path", "") if tts_result.success else ""
             )
 
         # Step 4: Store the artifact
@@ -354,12 +354,14 @@ def build_morning_digest_agent(
                 "timezone": dc.timezone,
                 "voice_id": dc.voice_id,
                 "voice_speed": dc.voice_speed,
+                "voice_volume": dc.voice_volume,
                 "tts_backend": dc.tts_backend,
                 "honorific": dc.honorific,
             }
         )
 
     from openjarvis.tools.digest_collect import DigestCollectTool
+
     tools = [DigestCollectTool()]
     if generate_audio:
         from openjarvis.tools.text_to_speech import TextToSpeechTool

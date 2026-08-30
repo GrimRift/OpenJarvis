@@ -5,26 +5,48 @@
 // network call at exactly the moment latency is most obvious.
 
 const MANIFEST_URL = 'greetings/manifest.json';
-const FALLBACK_CLIPS = ['greetings/hello-sir.mp3'];
+const FALLBACK_CLIPS = ['greetings/jarvis/hello-sir-sonic36.mp3'];
 
-let clipsPromise: Promise<string[]> | null = null;
+interface GreetingManifest {
+  default_voice_id: string;
+  voices: Record<string, string[]>;
+}
+
+let manifestPromise: Promise<GreetingManifest | null> | null = null;
 let lastPlayed: string | null = null;
 
-function loadClips(): Promise<string[]> {
-  if (!clipsPromise) {
-    clipsPromise = fetch(MANIFEST_URL)
-      .then((res) => (res.ok ? res.json() : FALLBACK_CLIPS))
-      .then((list: unknown) =>
-        Array.isArray(list) && list.length > 0 ? (list as string[]) : FALLBACK_CLIPS,
-      )
-      .catch(() => FALLBACK_CLIPS);
+function loadManifest(): Promise<GreetingManifest | null> {
+  if (!manifestPromise) {
+    manifestPromise = fetch(MANIFEST_URL)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((value: unknown) => {
+        if (!value || typeof value !== 'object') return null;
+        const manifest = value as Partial<GreetingManifest>;
+        if (!manifest.voices || typeof manifest.default_voice_id !== 'string') return null;
+        return manifest as GreetingManifest;
+      })
+      .catch(() => null);
   }
-  return clipsPromise;
+  return manifestPromise;
+}
+
+export function clipsForVoice(
+  manifest: GreetingManifest | null,
+  voiceId: string,
+): string[] {
+  if (!manifest) return FALLBACK_CLIPS;
+  const selected = manifest.voices[voiceId];
+  if (Array.isArray(selected) && selected.length > 0) return selected;
+  const fallback = manifest.voices[manifest.default_voice_id];
+  return Array.isArray(fallback) && fallback.length > 0 ? fallback : FALLBACK_CLIPS;
 }
 
 /** Warm the manifest and decoder before the first trigger. */
 export function preloadGreetings(): void {
-  loadClips().then((clips) => {
+  loadManifest().then((manifest) => {
+    const clips = manifest
+      ? Array.from(new Set(Object.values(manifest.voices).flat()))
+      : FALLBACK_CLIPS;
     for (const clip of clips) {
       const audio = new Audio(clip);
       audio.preload = 'auto';
@@ -36,6 +58,7 @@ export function preloadGreetings(): void {
 }
 
 export interface GreetingOptions {
+  voiceId: string;
   /** Called when the clip could not be played at all.
    *
    * Playback failure has to stay non-fatal (listening must start either
@@ -48,10 +71,11 @@ export interface GreetingOptions {
 }
 
 /** Resolves when the clip has finished playing (or could not play at all). */
-export function playGreeting(options?: GreetingOptions): Promise<void> {
-  return loadClips().then(
-    (clips) =>
+export function playGreeting(options: GreetingOptions): Promise<void> {
+  return loadManifest().then(
+    (manifest) =>
       new Promise<void>((resolve) => {
+        const clips = clipsForVoice(manifest, options.voiceId);
         // Avoid repeating the previous clip so consecutive triggers don't
         // sound like a stuck recording.
         const choices = clips.length > 1 ? clips.filter((c) => c !== lastPlayed) : clips;
@@ -69,12 +93,12 @@ export function playGreeting(options?: GreetingOptions): Promise<void> {
         // Never leave the caller waiting on a clip that can't play (missing
         // file, autoplay policy, decode error) — listening must still start.
         audio.onerror = () => {
-          options?.onFailure?.(`could not load ${clip}`);
+          options.onFailure?.(`could not load ${clip}`);
           finish();
         };
         audio.play().catch((err: unknown) => {
           const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-          options?.onFailure?.(reason);
+          options.onFailure?.(reason);
           finish();
         });
       }),

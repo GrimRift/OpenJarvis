@@ -7,6 +7,7 @@ import {
   nextStartTime,
 } from '../lib/pcm-playback';
 import { analyseInto } from '../lib/speech-analyser';
+import type { VoiceProfile } from '../lib/voice-profiles';
 
 /**
  * Speak a reply by streaming PCM from the server and scheduling it into Web
@@ -70,7 +71,7 @@ export function useStreamingTts() {
   );
 
   const speak = useCallback(
-    (text: string): Promise<boolean> =>
+    (text: string, voice: VoiceProfile): Promise<boolean> =>
       new Promise<boolean>((resolve) => {
         if (!text.trim()) {
           resolve(false);
@@ -138,7 +139,12 @@ export function useStreamingTts() {
         // never heard.
         socket.onopen = () => {
           void ctx.resume().catch(() => {});
-          socket.send(JSON.stringify({ text }));
+          socket.send(JSON.stringify({
+            text,
+            voice_id: voice.id,
+            speed: voice.speed,
+            volume: voice.volume,
+          }));
         };
 
         // Clears the flag once whatever is already scheduled has finished.

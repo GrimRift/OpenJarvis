@@ -19,6 +19,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useAppStore, type ThemeMode } from '../lib/store';
+import { VOICE_PROFILES } from '../lib/voice-profiles';
 import { modelForToggle } from '../lib/model-preference';
 import {
   checkHealth,
@@ -770,6 +771,28 @@ export function SettingsPage() {
 
           {/* Speech */}
           <Section title="Speech">
+            <SettingRow label="Sage voice" description="Used for voice replies, morning-digest playback, and wake-word greetings">
+              <select
+                aria-label="Sage voice"
+                value={settings.ttsVoiceId}
+                onChange={(event) => {
+                  updateSettings({ ttsVoiceId: event.target.value });
+                  showSaved();
+                }}
+                className="px-3 py-2 rounded-lg text-sm cursor-pointer"
+                style={{
+                  background: 'var(--color-bg-tertiary)',
+                  color: 'var(--color-text-primary)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                {VOICE_PROFILES.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </SettingRow>
             <SettingRow label="Speech-to-Text" description="Enable microphone input for voice dictation">
               <button
                 onClick={() => { updateSettings({ speechEnabled: !settings.speechEnabled }); showSaved(); }}

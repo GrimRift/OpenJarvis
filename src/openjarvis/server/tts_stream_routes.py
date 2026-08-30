@@ -18,6 +18,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from openjarvis.speech.spoken_text import to_spoken_text
+from openjarvis.speech.voice_profiles import DEFAULT_VOICE
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,6 @@ router = APIRouter(tags=["speech"])
 
 CLOSE_UNAUTHORIZED = 1008
 CLOSE_UNAVAILABLE = 1011
-
-# Matches CartesiaTTSBackend's default "British Butler".
-_DEFAULT_VOICE = "a0e99841-438c-4a64-b679-ae501e7d6091"
 
 # A reply is a couple of hundred words at most. Anything beyond this is a bug
 # or an attempt to run up a bill, so it is refused rather than truncated —
@@ -39,7 +37,7 @@ def _resolve_voice(config: Any, requested: str) -> str:
     if requested:
         return requested
     speech = getattr(config, "speech", None)
-    return getattr(speech, "voice_id", "") or _DEFAULT_VOICE
+    return getattr(speech, "voice_id", "") or DEFAULT_VOICE.voice_id
 
 
 def _resolve_speed(config: Any, requested: Optional[float]) -> float:
@@ -48,6 +46,14 @@ def _resolve_speed(config: Any, requested: Optional[float]) -> float:
     speech = getattr(config, "speech", None)
     speed = getattr(speech, "voice_speed", 1.0)
     return float(speed) if isinstance(speed, (int, float)) and speed > 0 else 1.0
+
+
+def _resolve_volume(config: Any, requested: Optional[float]) -> float:
+    if isinstance(requested, (int, float)) and requested > 0:
+        return float(requested)
+    speech = getattr(config, "speech", None)
+    volume = getattr(speech, "voice_volume", 1.0)
+    return float(volume) if isinstance(volume, (int, float)) and volume > 0 else 1.0
 
 
 @router.websocket("/v1/speech/tts-stream")
@@ -85,9 +91,7 @@ async def tts_stream(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "error", "reason": "empty text"})
                 continue
             if len(text) > MAX_TEXT_CHARS:
-                await websocket.send_json(
-                    {"type": "error", "reason": "text too long"}
-                )
+                await websocket.send_json({"type": "error", "reason": "text too long"})
                 continue
 
             await _speak(websocket, config, api_key, text, request)
@@ -122,6 +126,7 @@ async def _speak(
             text,
             _resolve_voice(config, request.get("voice_id", "")),
             speed=_resolve_speed(config, request.get("speed")),
+            volume=_resolve_volume(config, request.get("volume")),
         )
         async for chunk in stream:
             if not started:

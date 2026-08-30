@@ -37,6 +37,7 @@ class TTSBackend(ABC):
         *,
         voice_id: str = "",
         speed: float = 1.0,
+        volume: float = 1.0,
         output_format: str = "mp3",
     ) -> TTSResult:
         """Synthesize text to audio."""

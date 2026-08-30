@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { DEFAULT_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
 import {
   DEFAULT_CLOUD_MODEL,
   preferredModelId,
@@ -145,6 +146,7 @@ interface Settings {
   // of talking to Sage -- but a streamed reply has no player, so this and the
   // stop control are the only ways to silence it.
   voiceRepliesEnabled: boolean;
+  ttsVoiceId: string;
   // Deepgram Flux streaming transcription. Off by default: local
   // faster-whisper stays the default and the fallback.
   fluxEnabled: boolean;
@@ -171,6 +173,7 @@ function loadSettings(): Settings {
     wakeWordGreetingEnabled: true,
     continuousConversationEnabled: false,
     voiceRepliesEnabled: true,
+    ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,
     fluxEagerEnabled: false,
   };
@@ -185,6 +188,9 @@ function loadSettings(): Settings {
       ...defaults,
       ...parsed,
       defaultModel: parsed.defaultModel || defaults.defaultModel,
+      ttsVoiceId: isKnownVoiceId(parsed.ttsVoiceId)
+        ? parsed.ttsVoiceId
+        : defaults.ttsVoiceId,
     };
     // Ultra depends on Flux. A stored combination with eager on and Flux off
     // (settings edited by hand, or Flux switched off while eager stayed set)

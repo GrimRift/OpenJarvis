@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from openjarvis.core.registry import TTSRegistry
 from openjarvis.speech.tts import TTSResult
@@ -57,6 +57,29 @@ def test_cartesia_synthesize():
     assert result.audio == b"fake-audio-mp3-bytes"
     assert result.format == "mp3"
     assert result.voice_id == "test-voice"
+
+
+def test_cartesia_uses_sonic_36_generation_config():
+    from openjarvis.speech.cartesia_tts import _cartesia_synthesize
+
+    response = MagicMock(content=b"audio")
+    with patch(
+        "openjarvis.speech.cartesia_tts.httpx.post", return_value=response
+    ) as post:
+        audio = _cartesia_synthesize(
+            "key", "Hello", "voice", speed=0.9, volume=1.9, emotion="content"
+        )
+
+    assert audio == b"audio"
+    request = post.call_args.kwargs
+    assert request["headers"]["Cartesia-Version"] == "2026-03-01"
+    assert request["json"]["model_id"] == "sonic-3.6"
+    assert request["json"]["generation_config"] == {
+        "speed": 0.9,
+        "volume": 1.9,
+        "emotion": "content",
+    }
+    assert "speed" not in request["json"]
 
 
 # ---------------------------------------------------------------------------

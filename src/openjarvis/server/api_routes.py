@@ -976,7 +976,11 @@ async def transcribe_speech(request: Request):
 
     # initial_prompt is faster-whisper-specific — openai/deepgram backends'
     # transcribe() don't accept it and would TypeError on an unknown kwarg.
-    extra_kwargs = {"initial_prompt": initial_prompt} if backend.backend_id == "faster-whisper" else {}
+    extra_kwargs = (
+        {"initial_prompt": initial_prompt}
+        if backend.backend_id == "faster-whisper"
+        else {}
+    )
 
     try:
         result = await asyncio.to_thread(
@@ -1079,6 +1083,8 @@ async def synthesize_speech(request: Request):
         text=text,
         voice_id=body.get("voice_id", ""),
         backend=body.get("backend", "cartesia"),
+        speed=body.get("speed", 1.0),
+        volume=body.get("volume", 1.0),
     )
     if not result.success:
         raise HTTPException(status_code=500, detail=result.content)
@@ -1129,10 +1135,10 @@ async def speech_health(request: Request):
     flux_available = False
     flux_reason = ""
     try:
-        from openjarvis.speech import flux as _flux  # noqa: PLC0415
         from openjarvis.server.flux_routes import (  # noqa: PLC0415
             _unavailable_reason,
         )
+        from openjarvis.speech import flux as _flux  # noqa: PLC0415
 
         cfg = getattr(request.app.state, "config", None)
         speech_cfg = getattr(cfg, "speech", None) if cfg else None

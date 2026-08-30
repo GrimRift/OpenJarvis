@@ -1499,7 +1499,7 @@ class OperatorsConfig:
 
 @dataclass(slots=True)
 class SpeechConfig:
-    """Speech-to-text settings."""
+    """Speech input and output settings."""
 
     backend: str = "auto"  # "auto", "faster-whisper", "openai", "deepgram"
     model: str = "base"  # Whisper model size: tiny, base, small, medium, large-v3
@@ -1513,6 +1513,9 @@ class SpeechConfig:
     # and readily mishears it as something phonetically closer to common
     # vocabulary. Empty = no bias.
     initial_prompt: str = "Hey Sage."
+    voice_id: str = "78a05d7d-268b-4a18-aad7-7a96902a95ee"
+    voice_speed: float = 1.0
+    voice_volume: float = 1.9
 
     # --- Deepgram Flux streaming STT (opt-in cloud mode) ------------------
     # Server-side kill switch, not the user's choice. Whether Flux is *used*
@@ -1645,8 +1648,9 @@ class DigestConfig:
         default_factory=lambda: ["github", "financial", "music", "fitness"]
     )
     honorific: str = "sir"
-    voice_id: str = ""
+    voice_id: str = "78a05d7d-268b-4a18-aad7-7a96902a95ee"
     voice_speed: float = 1.0
+    voice_volume: float = 1.9
     tts_backend: str = "cartesia"
     messages: DigestSectionConfig = field(
         default_factory=lambda: DigestSectionConfig(

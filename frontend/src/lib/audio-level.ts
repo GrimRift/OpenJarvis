@@ -36,14 +36,15 @@ export function rmsFromTimeDomain(data: Uint8Array): number {
     sum += centred * centred;
   }
   const rms = Math.sqrt(sum / data.length);
-  // Speech RMS sits well below 1.0; this maps a normal speaking level onto
-  // most of the range so the orb actually moves.
-  return Math.min(1, rms * 3.2);
+  // Real Sonic 3.6 PCM at Sage's 1.9 volume measures about 0.055-0.12 RMS
+  // across active syllables. The old 3.2 gain therefore drove only 18-39%
+  // of the orb's speaking range and made a reply look almost static.
+  return Math.min(1, rms * 8);
 }
 
-/** Attack and release per 60Hz frame — rises quickly, falls away gently. */
-export const ATTACK = 0.45;
-export const RELEASE = 0.12;
+/** Attack and release per 60Hz frame — articulate syllables without jitter. */
+export const ATTACK = 0.65;
+export const RELEASE = 0.22;
 
 /**
  * Move the displayed level toward the measured one.

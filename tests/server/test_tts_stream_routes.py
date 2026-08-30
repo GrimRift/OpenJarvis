@@ -45,9 +45,7 @@ class TestKeyContainment:
         ]
         assert sends, "expected the relay to send something"
         for call in sends:
-            names = {
-                sub.id for sub in ast.walk(call) if isinstance(sub, ast.Name)
-            }
+            names = {sub.id for sub in ast.walk(call) if isinstance(sub, ast.Name)}
             assert "api_key" not in names, ast.dump(call)[:200]
 
     def test_missing_key_reports_an_error_the_client_can_recover_from(self):
@@ -78,9 +76,7 @@ class TestRequestGuards:
     def test_empty_text_is_refused_without_calling_cartesia(self):
         with patch.dict("os.environ", {"CARTESIA_API_KEY": "k"}, clear=False):
             with patch.object(tts_stream_routes, "_speak") as speak:
-                with self._client().websocket_connect(
-                    "/v1/speech/tts-stream"
-                ) as ws:
+                with self._client().websocket_connect("/v1/speech/tts-stream") as ws:
                     ws.send_json({"text": "   "})
                     msg = ws.receive_json()
         assert msg["type"] == "error"
@@ -90,9 +86,7 @@ class TestRequestGuards:
         """A half-spoken answer is worse than a clear failure."""
         with patch.dict("os.environ", {"CARTESIA_API_KEY": "k"}, clear=False):
             with patch.object(tts_stream_routes, "_speak") as speak:
-                with self._client().websocket_connect(
-                    "/v1/speech/tts-stream"
-                ) as ws:
+                with self._client().websocket_connect("/v1/speech/tts-stream") as ws:
                     ws.send_json({"text": "a" * (tts_stream_routes.MAX_TEXT_CHARS + 1)})
                     msg = ws.receive_json()
         assert msg["type"] == "error"
@@ -129,6 +123,34 @@ class TestStreaming:
         assert first == b"\x00" * 8
         assert second == b"\x01" * 8
         assert done["type"] == "done"
+
+    def test_selected_voice_tuning_is_forwarded_to_cartesia(self):
+        captured = {}
+
+        def stream(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return _chunks(b"\x00" * 8)
+
+        with (
+            patch.dict("os.environ", {"CARTESIA_API_KEY": "k"}, clear=False),
+            patch("openjarvis.speech.cartesia_tts.astream_pcm", stream),
+        ):
+            with self._client().websocket_connect("/v1/speech/tts-stream") as ws:
+                ws.send_json(
+                    {
+                        "text": "hello",
+                        "voice_id": "frieren-id",
+                        "speed": 0.9,
+                        "volume": 1.9,
+                    }
+                )
+                ws.receive_json()
+                ws.receive_bytes()
+                ws.receive_json()
+
+        assert captured["args"][2] == "frieren-id"
+        assert captured["kwargs"] == {"speed": 0.9, "volume": 1.9}
 
     def test_a_failure_before_any_audio_is_flagged_recoverable(self):
         """started=False tells the browser it may fall back to the batch
@@ -183,3 +205,10 @@ class TestDefaults:
         assert tts_stream_routes._resolve_speed(cfg, 0) > 0
         assert tts_stream_routes._resolve_speed(cfg, None) > 0
         assert tts_stream_routes._resolve_speed(cfg, "fast") > 0
+
+    def test_volume_ignores_nonsense_values(self):
+        cfg = JarvisConfig()
+        assert tts_stream_routes._resolve_volume(cfg, 1.9) == 1.9
+        assert tts_stream_routes._resolve_volume(cfg, 0) > 0
+        assert tts_stream_routes._resolve_volume(cfg, None) > 0
+        assert tts_stream_routes._resolve_volume(cfg, "loud") > 0

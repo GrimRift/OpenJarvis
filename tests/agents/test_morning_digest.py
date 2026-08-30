@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock, patch
@@ -51,6 +52,7 @@ def test_morning_digest_run(tmp_path):
         persona="jarvis",
         sections=["world"],
         section_sources={"world": ["hackernews", "news_rss"]},
+        voice_volume=1.9,
         digest_store_path=str(tmp_path / "digest.db"),
     )
 
@@ -58,7 +60,7 @@ def test_morning_digest_run(tmp_path):
         agent._executor,
         "execute",
         side_effect=[mock_collect_result, mock_tts_result],
-    ):
+    ) as execute:
         result = agent.run("Generate morning digest")
 
     assert isinstance(result, AgentResult)
@@ -66,6 +68,8 @@ def test_morning_digest_run(tmp_path):
     assert result.turns == 1
     assert len(result.tool_results) == 2
     assert set(result.metadata["sources_used"]) == {"hackernews", "news_rss"}
+    tts_arguments = json.loads(execute.call_args_list[1].args[0].arguments)
+    assert tts_arguments["volume"] == 1.9
     prompt = "\n".join(
         message.text for message in mock_engine.generate.call_args.args[0]
     ).casefold()
@@ -80,9 +84,7 @@ def test_morning_digest_run(tmp_path):
 def test_resolve_sources_maps_notes_to_obsidian():
     from openjarvis.agents.morning_digest import MorningDigestAgent
 
-    agent = MorningDigestAgent(
-        MagicMock(), "test-model", tools=[], sections=["notes"]
-    )
+    agent = MorningDigestAgent(MagicMock(), "test-model", tools=[], sections=["notes"])
     assert agent._resolve_sources() == ["obsidian"]
 
 
@@ -97,9 +99,7 @@ def test_load_persona():
 def test_morning_digest_inherits_global_sage_persona(tmp_path):
     from openjarvis.agents.morning_digest import MorningDigestAgent
 
-    (tmp_path / "SOUL.md").write_text(
-        "GLOBAL_SAGE_PERSONA_SENTINEL", encoding="utf-8"
-    )
+    (tmp_path / "SOUL.md").write_text("GLOBAL_SAGE_PERSONA_SENTINEL", encoding="utf-8")
     agent = MorningDigestAgent(
         MagicMock(), "test-model", tools=[], persona="jarvis", sections=["world"]
     )
@@ -236,6 +236,9 @@ def test_build_morning_digest_agent_applies_digest_config():
     assert isinstance(agent, MorningDigestAgent)
     assert agent._sections == ["world", "music"]
     assert agent._honorific == "boss"
+    assert agent._voice_id == "78a05d7d-268b-4a18-aad7-7a96902a95ee"
+    assert agent._voice_speed == 1.0
+    assert agent._voice_volume == 1.9
 
 
 def test_build_morning_digest_agent_can_disable_eager_audio():
@@ -384,9 +387,7 @@ class TestEmptyGeneration:
         evaluator.evaluate.assert_called_once()
         assert result.content == "Good morning sir."
 
-    def test_the_evaluator_module_is_absent_and_the_digest_still_ships(
-        self, tmp_path
-    ):
+    def test_the_evaluator_module_is_absent_and_the_digest_still_ships(self, tmp_path):
         """Documents live behaviour: the evaluate/regenerate step never runs,
         so every stored digest carries quality_score 0.0. Delete this test if
         digest_evaluator is ever actually written."""

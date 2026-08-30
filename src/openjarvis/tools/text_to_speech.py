@@ -45,6 +45,9 @@ class TextToSpeechTool(BaseTool):
                         "type": "string",
                         "description": "Directory to save the audio file.",
                     },
+                    "speed": {"type": "number"},
+                    "volume": {"type": "number"},
+                    "emotion": {"type": "string"},
                 },
                 "required": ["text"],
             },
@@ -63,6 +66,8 @@ class TextToSpeechTool(BaseTool):
         backend_key = _ALIASES.get(backend_key, backend_key)
         output_dir = params.get("output_dir", "")
         speed = float(params.get("speed", 1.0))
+        volume = float(params.get("volume", 1.0))
+        emotion = str(params.get("emotion", ""))
 
         if not text:
             return ToolResult(
@@ -81,7 +86,14 @@ class TextToSpeechTool(BaseTool):
         backend_cls = TTSRegistry.get(backend_key)
         backend = backend_cls()
 
-        result = backend.synthesize(text, voice_id=voice_id, speed=speed)
+        synthesis_kwargs = {
+            "voice_id": voice_id,
+            "speed": speed,
+            "volume": volume,
+        }
+        if emotion:
+            synthesis_kwargs["emotion"] = emotion
+        result = backend.synthesize(text, **synthesis_kwargs)
 
         # Save to file
         if output_dir:

@@ -42,6 +42,7 @@ class KokoroTTSBackend(TTSBackend):
         *,
         voice_id: str = "af_heart",
         speed: float = 1.0,
+        volume: float = 1.0,
         output_format: str = "wav",
     ) -> TTSResult:
         self._ensure_pipeline()

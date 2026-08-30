@@ -36,6 +36,9 @@ def test_tts_tool_execute(tmp_path):
             text="Good morning sir.",
             voice_id="jarvis",
             backend="cartesia",
+            speed=0.9,
+            volume=1.9,
+            emotion="content",
             output_dir=str(tmp_path),
         )
 
@@ -43,6 +46,13 @@ def test_tts_tool_execute(tmp_path):
     assert "digest.mp3" in result.content
     assert (tmp_path / "digest.mp3").exists()
     assert (tmp_path / "digest.mp3").read_bytes() == b"fake-audio-data"
+    mock_backend_cls.return_value.synthesize.assert_called_once_with(
+        "Good morning sir.",
+        voice_id="jarvis",
+        speed=0.9,
+        volume=1.9,
+        emotion="content",
+    )
 
 
 def test_tts_tool_empty_text():

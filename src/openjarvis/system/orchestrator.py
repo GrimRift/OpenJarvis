@@ -307,6 +307,7 @@ class QueryOrchestrator:
                     "timezone": dc.timezone,
                     "voice_id": dc.voice_id,
                     "voice_speed": dc.voice_speed,
+                    "voice_volume": dc.voice_volume,
                     "tts_backend": dc.tts_backend,
                     "honorific": dc.honorific,
                 }

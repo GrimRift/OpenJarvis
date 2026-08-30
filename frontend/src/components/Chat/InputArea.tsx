@@ -14,6 +14,7 @@ import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import { shouldSynthesizeReplyAudio } from '../../lib/audio-policy';
+import { getVoiceProfile } from '../../lib/voice-profiles';
 import { useStreamingTts } from '../../hooks/useStreamingTts';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
@@ -176,6 +177,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const fluxEnabled = useAppStore((s) => s.settings.fluxEnabled);
   const voiceRepliesEnabled = useAppStore((s) => s.settings.voiceRepliesEnabled);
+  const ttsVoiceId = useAppStore((s) => s.settings.ttsVoiceId);
+  const ttsVoice = getVoiceProfile(ttsVoiceId);
   const fluxEagerEnabled = useAppStore((s) => s.settings.fluxEagerEnabled);
   // Flux replaces the local silence timer as the end-of-turn decision.
   // Declared here because handleMicClick, defined well above the Flux
@@ -736,11 +739,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // clip exists (1.55s for a line, 6.92s for a paragraph, all silence),
         // while the stream starts speaking at about 0.41s. Streamed replies
         // are deliberately ephemeral — no file, so no replay control.
-        speakStreaming(accumulatedContent)
+        speakStreaming(accumulatedContent, ttsVoice)
           .then((spoke) => {
             if (spoke) return;
             // Nothing was heard, so falling back cannot repeat anything.
-            return synthesizeSpeech(accumulatedContent).then((meta) => {
+            return synthesizeSpeech(accumulatedContent, {
+              voice_id: ttsVoice.id,
+              speed: ttsVoice.speed,
+              volume: ttsVoice.volume,
+            }).then((meta) => {
               updateLastAssistant(
                 convId,
                 accumulatedContent,
@@ -783,6 +790,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     maxTokens,
       speakStreaming,
       voiceRepliesEnabled,
+      ttsVoice,
   ]);
 
   // Hands-free stop: transcribes and sends immediately, unlike a manual
@@ -849,10 +857,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // Sage did not mute this.
       if (wasVoice && answer && voiceRepliesEnabled) {
         useAppStore.getState().setAudioPlaying(true);
-        speakStreaming(answer)
+        speakStreaming(answer, ttsVoice)
           .then((spoke) => {
             if (spoke) return;
-            return synthesizeSpeech(answer).then((meta) => {
+            return synthesizeSpeech(answer, {
+              voice_id: ttsVoice.id,
+              speed: ttsVoice.speed,
+              volume: ttsVoice.volume,
+            }).then((meta) => {
               updateLastAssistant(
                 convId,
                 answer,
@@ -878,6 +890,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       updateLastAssistant,
           speakStreaming,
       voiceRepliesEnabled,
+      ttsVoice,
     ],
   );
 
@@ -1019,6 +1032,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       autoTriggeredRef.current = true;
       const greeting = wakeWordGreetingEnabled
         ? playGreeting({
+            voiceId: ttsVoice.id,
             onFailure: (reason) =>
               toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
           })

@@ -374,11 +374,20 @@ export interface SynthesizeResult {
   url: string;
 }
 
-export async function synthesizeSpeech(text: string): Promise<SynthesizeResult> {
+export interface SynthesizeOptions {
+  voice_id: string;
+  speed: number;
+  volume: number;
+}
+
+export async function synthesizeSpeech(
+  text: string,
+  options: SynthesizeOptions,
+): Promise<SynthesizeResult> {
   const res = await apiFetch(`/v1/speech/synthesize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...options }),
   });
   if (!res.ok) {
     let detail = "";

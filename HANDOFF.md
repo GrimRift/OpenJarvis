@@ -767,35 +767,40 @@ Verified against the live config, not the dataclass defaults:
 
 No drift. `test_it_matches_the_configured_temperature` pins the speculative one.
 
-### Cartesia: which model, which voice, and how to change them
+### Cartesia Sonic 3.6 voices (implemented 2026-08-30)
 
-Nothing for Cartesia exists in `config.toml`, so both run on code defaults.
+All Sage TTS paths now use the centralized profiles in
+`speech/voice_profiles.py` and Cartesia `sonic-3.6` with the current
+`generation_config` request shape.
 
-- **Model: `sonic-3`.** Hardcoded default in *two* places —
-  `CartesiaTTSBackend.__init__` (batch path) and `astream_pcm`'s signature
-  (streaming path, `cartesia_tts.py`). The streaming route never passes
-  `model=`, so it takes the signature default.
-- **Voice: `a0e99841-438c-4a64-b679-ae501e7d6091`.** Also in two places —
-  `_DEFAULT_VOICE` in `tts_stream_routes.py` and the `if not voice_id` fallback
-  in `cartesia_tts.py`.
+- **Jarvis** is primary: `78a05d7d-268b-4a18-aad7-7a96902a95ee`, speed `1.0`,
+  volume `1.9`.
+- **Frieren** is alternate: `e23c9ecf-e002-4f7a-8e39-13d18d09923f`, speed
+  `0.9`, volume `1.9`.
+- Settings -> Speech -> Sage voice exposes both choices and persists the
+  selection locally. It controls streamed replies, batch fallback, deferred
+  morning-digest playback, and matching pre-rendered wake acknowledgements.
+- Scheduled/direct digest audio defaults to Jarvis through `DigestConfig`.
+  Digest content is generated fresh; there is no pre-recorded digest.
+- The previous wake clips and cached digest audio were removed. Twenty-nine
+  exact cached-digest audio pointers were cleared without removing digest text.
+- Both voices' three wake clips keep the original words (`Sir.`, `Yes, sir.`,
+  and `Hello, sir.`) but use Sonic's primary `content` emotion for warmer,
+  greeting-like delivery. Each voice can be regenerated independently.
+- The speaking orb's analyser was under-driving the designed animation range:
+  measured Jarvis audio at volume 1.9 reached only 18-39%. RMS gain is now 8.0
+  with faster 0.65 attack / 0.22 release, so size and brightness articulate
+  real syllables across most of the 0.95-1.40 speaking range.
 
-**The code comment calling this voice "British Butler" is wrong.** Queried live
-against `GET /voices/{id}`: it is **"Greg - Supporter"**, described as *"Neutral,
-deep male for conversational support"*, `en`. Do not trust the comment.
-
-**Config cannot change either today.** `_resolve_voice()` reads
-`getattr(speech, "voice_id", "")` — but `SpeechConfig` has no `voice_id` or
-`voice_speed` field, and the loader **silently drops** unknown keys (verified:
-adding `voice_id` under `[speech]` loads as absent). So that `getattr` can never
-return non-empty, and the obvious-looking config route is dead. The only working
-routes today are per-request (`/v1/speech/synthesize` and the tts-stream socket
-both accept `voice_id`) or editing the two constants.
-
-**Open, offered but not done:** add `voice_id: str = ""` and
-`voice_speed: float = 1.0` to `SpeechConfig` so the existing `getattr` calls
-start working, and collapse the duplicated model/voice defaults to one source.
-Two call sites for one value is exactly the shape the architectural-invariant
-tests are meant to catch.
+Live verification after rebuilding `frontend`: both choices
+persisted in the Web UI; six versioned wake clips returned HTTP 200; paid batch
+MP3 and streaming PCM synthesis completed for both profiles. Frontend: 158
+passed before the orb retune, then 160 passed after it. Focused
+Python/config/server suite: 118 passed. Ruff and `git diff --check` clean. The
+currently elevated `jarvis serve` process could not be restarted from Codex,
+but static assets are served from the rebuilt bundle and were live-reloaded.
+All source, tests, and generated wake assets for this slice are tracked on
+`feature/sage-customization`.
 
 ### Verification
 
@@ -812,12 +817,23 @@ tests are meant to catch.
 one case fails per run and *which* one moves (`test_checkpoint_retention_max_5`
 and `test_get_latest_checkpoint` both seen); each passes alone.
 
-## Unfinished work and exact next action
+## Current milestone and next agenda
 
-The current state and exact next candidates are in **"Flux teardown, the proactive all-clear, and a TTS voice audit (2026-08-29 to 2026-08-30)" immediately above**. Everything there is committed and pushed. Nothing is mid-implementation; the old uncommitted orb/dashboard warning below was resolved long ago and is retained only as historical context. All current source and handoff work is committed locally, not pushed; confirm with the user before pushing.
+M28 is shipped. The M31-adjacent wake-word and voice-customization slice is now
+functionally complete: the wake model, selectable Sonic 3.6 voices, matching
+acknowledgement clips, digest voice routing, and speaking-orb response are all
+implemented and verified.
 
-Next, in order (as of the entry directly below this one — **items 1 and 2 above are stale, both since resolved**: wake word was re-tested, broke again for unrelated reasons, and went through the full retraining arc documented in "M28 completed, M31 in progress" below; the cloud-model date re-test was never explicitly revisited but is low-priority and not blocking anything):
-1. Do NOT build Microsoft Calendar/OneDrive yet — they'd hit the identical NU admin-consent wall against the same mailbox, no point until Outlook clears. Teams is lower priority for the same reason. `ProactiveAgent` (`agents/proactive_agent.py` — the daily-digest-with-tiered-approval-and-chat-notification agent, distinct from `morning_digest.py`) is still real, tested, but never wired to a real startup path — a candidate for further M26 work if the user wants to keep going in that direction, but confirm with them before starting, per `AGENTS.md`'s "ask before assuming roadmap status" guidance.
-2. ~~A separate, undocumented body of work was flagged as sitting uncommitted in the tree back at `167ebb3`~~ Resolved: that work (orb visualization, dashboard leaderboard card, M26 tools) is committed — `5dbc371`, `feat: wake-word backend wiring, UI redesign (orb visual, dashboard), M26 tools`. Verified via `git log -- frontend/src/components/Chat/OrbVisual.tsx`. No longer a concern.
+Next candidates, in order:
 
-**For anything past this point, use "The rest of the latency floor: turns and history (2026-08-28, latest)" above as the current state; this numbered list is historical.**
+1. Observe normal conversations before changing history handling. If the
+   current 8,000-token sliding window loses context the user expected Sage to
+   retain, build the deferred rolling conversation summary; otherwise preserve
+   the current cache-friendly path.
+2. Close remaining integration hygiene: resolve Google Tasks/OAuth publishing,
+   and either connect Slack or remove the permanently unavailable iMessage and
+   unused Slack checks from the digest.
+3. Run the remaining live Ultra-voice interruption/fallback smoke coverage if
+   Ultra mode will be used regularly.
+4. Do not begin Microsoft Calendar, OneDrive, or Teams work until the existing
+   Microsoft admin-consent blocker is cleared.
