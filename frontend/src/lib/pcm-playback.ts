@@ -36,6 +36,37 @@ export function chunkDuration(samples: number, sampleRate: number): number {
   return samples / sampleRate;
 }
 
+/** Keep UI state alive while the browser and host device drain their buffers. */
+export function outputTailDelayMs(
+  baseLatencySeconds: number,
+  outputLatencySeconds: number,
+): number {
+  const latency = [baseLatencySeconds, outputLatencySeconds].reduce(
+    (total, value) =>
+      total + (Number.isFinite(value) && value > 0 ? value * 1000 : 0),
+    0,
+  );
+  return Math.ceil(latency) + 50;
+}
+
+/** Invalidates delayed callbacks as soon as a newer utterance takes over. */
+export class PlaybackGeneration {
+  private current = 0;
+
+  begin(): number {
+    this.current += 1;
+    return this.current;
+  }
+
+  cancel(): void {
+    this.current += 1;
+  }
+
+  isCurrent(generation: number): boolean {
+    return generation === this.current;
+  }
+}
+
 export type TtsStreamEvent =
   | { kind: 'start'; sampleRate: number }
   | { kind: 'done' }

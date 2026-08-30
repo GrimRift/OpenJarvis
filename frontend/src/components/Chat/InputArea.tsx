@@ -717,7 +717,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // after the text is already visible. Fire-and-forget: this keeps the
       // slower media request out of the chat response's critical path.
       //
-      // setAudioPlaying(true) here, ahead of the actual player mounting,
+      // Holding a request-level playback claim here, ahead of the actual
+      // player mounting,
       // matters: resetStream() above already dropped isStreaming, which
       // re-enables the wake-word listener. Without staking this claim
       // immediately, there's an unguarded window between stream end and
@@ -734,14 +735,20 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           accumulatedContent,
         )
       ) {
-        useAppStore.getState().setAudioPlaying(true);
+        const playbackOwner = `reply-request-${generateId()}`;
+        const releasePlayback = () =>
+          useAppStore.getState().setAudioPlayback(playbackOwner, false);
+        useAppStore.getState().setAudioPlayback(playbackOwner, true);
         // Streamed first: the batch endpoint returns nothing until the whole
         // clip exists (1.55s for a line, 6.92s for a paragraph, all silence),
         // while the stream starts speaking at about 0.41s. Streamed replies
         // are deliberately ephemeral — no file, so no replay control.
         speakStreaming(accumulatedContent, ttsVoice)
           .then((spoke) => {
-            if (spoke) return;
+            if (spoke) {
+              releasePlayback();
+              return;
+            }
             // Nothing was heard, so falling back cannot repeat anything.
             return synthesizeSpeech(accumulatedContent, {
               voice_id: ttsVoice.id,
@@ -756,12 +763,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 undefined,
                 { url: meta.url, autoPlay: true },
               );
+              // Let the mounted AudioPlayer acquire its own claim before the
+              // request-level bridge releases this one.
+              window.setTimeout(releasePlayback, 100);
             });
           })
           .catch(() => {
             // TTS failure for a voice reply shouldn't surface as a chat
             // error — the text answer already rendered fine.
-            useAppStore.getState().setAudioPlaying(false);
+            releasePlayback();
           });
       }
 
@@ -856,10 +866,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // when Flux Ultra is on. It also ignored voiceRepliesEnabled, so muting
       // Sage did not mute this.
       if (wasVoice && answer && voiceRepliesEnabled) {
-        useAppStore.getState().setAudioPlaying(true);
+        const playbackOwner = `reply-request-${generateId()}`;
+        const releasePlayback = () =>
+          useAppStore.getState().setAudioPlayback(playbackOwner, false);
+        useAppStore.getState().setAudioPlayback(playbackOwner, true);
         speakStreaming(answer, ttsVoice)
           .then((spoke) => {
-            if (spoke) return;
+            if (spoke) {
+              releasePlayback();
+              return;
+            }
             return synthesizeSpeech(answer, {
               voice_id: ttsVoice.id,
               speed: ttsVoice.speed,
@@ -873,10 +889,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 undefined,
                 { url: meta.url, autoPlay: true },
               );
+              window.setTimeout(releasePlayback, 100);
             });
           })
           .catch(() => {
-            useAppStore.getState().setAudioPlaying(false);
+            releasePlayback();
           });
       }
       return true;

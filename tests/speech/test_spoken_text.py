@@ -56,7 +56,7 @@ class TestOtherMarkdown:
 
     def test_links_are_read_as_their_text(self):
         assert to_spoken_text("See [the docs](https://example.com/a/b).") == (
-            "See the docs."
+            "See the docs.\n\nThe exact value is visible in chat."
         )
 
     def test_images_are_read_as_their_alt_text(self):
@@ -93,3 +93,68 @@ class TestEdges:
 
     def test_multiplication_is_not_treated_as_emphasis(self):
         assert to_spoken_text("2 * 3 * 4") == "2 * 3 * 4"
+
+
+class TestAwkwardPrivateValues:
+    def test_bare_url_is_referred_to_without_being_read(self):
+        url = "https://example.com/reset?token=abc123"
+        spoken = to_spoken_text(f"Open {url} to continue.")
+
+        assert url not in spoken
+        assert "a link" in spoken
+        assert spoken.endswith("The exact value is visible in chat.")
+
+    def test_file_paths_are_referred_to_without_being_read(self):
+        windows_path = r"C:\AI\OpenJarvis-Lab\src\openjarvis\server\api_routes.py"
+        posix_path = "/home/grim/sage/config.toml"
+        spoken = to_spoken_text(
+            f"The Windows file is `{windows_path}` and the Linux file is "
+            f"`{posix_path}`."
+        )
+
+        assert windows_path not in spoken
+        assert posix_path not in spoken
+        assert spoken.count("a file path") == 2
+        assert spoken.endswith("The exact values are visible in chat.")
+
+    def test_an_inline_file_path_with_spaces_is_fully_omitted(self):
+        path = r"C:\Program Files\Sage\user profile.json"
+        spoken = to_spoken_text(f"Open `{path}` now.")
+
+        assert path not in spoken
+        assert spoken == (
+            "Open a file path now.\n\nThe exact value is visible in chat."
+        )
+
+    def test_authentication_code_is_never_spoken(self):
+        code = "739204"
+        spoken = to_spoken_text(f"Your verification code is {code}.")
+
+        assert code not in spoken
+        assert "verification code is the authentication code" in spoken
+        assert spoken.endswith("The exact value is visible in chat.")
+
+    def test_long_identifiers_are_never_spoken(self):
+        uuid = "123e4567-e89b-12d3-a456-426614174000"
+        token = "sk_live_51N8LongIdentifier90876"
+        spoken = to_spoken_text(f"Use session {uuid} and token {token}.")
+
+        assert uuid not in spoken
+        assert token not in spoken
+        assert spoken.count("an identifier") == 2
+        assert spoken.endswith("The exact values are visible in chat.")
+
+    def test_a_long_numeric_id_is_never_spoken(self):
+        identifier = "73018492017462"
+        spoken = to_spoken_text(f"The account ID is {identifier}.")
+
+        assert identifier not in spoken
+        assert "an identifier" in spoken
+
+    def test_ordinary_numbers_and_short_ids_are_preserved(self):
+        text = "Version 2.4.1 is ready; order ID 12345 remains valid."
+        assert to_spoken_text(text) == text
+
+    def test_a_long_plain_word_is_not_mistaken_for_an_identifier(self):
+        text = "a" * 5001
+        assert to_spoken_text(text) == text

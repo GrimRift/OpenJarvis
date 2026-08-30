@@ -5,9 +5,13 @@ import {
   decodePcmF32,
   interpretTtsMessage,
   nextStartTime,
+  outputTailDelayMs,
+  PlaybackGeneration,
 } from '../lib/pcm-playback';
 import { analyseInto } from '../lib/speech-analyser';
 import type { VoiceProfile } from '../lib/voice-profiles';
+
+let nextPlaybackOwner = 0;
 
 /**
  * Speak a reply by streaming PCM from the server and scheduling it into Web
@@ -22,17 +26,28 @@ import type { VoiceProfile } from '../lib/voice-profiles';
  * failure after that point cannot be retried without repeating the opening.
  */
 export function useStreamingTts() {
+  const playbackOwnerRef = useRef('');
+  if (!playbackOwnerRef.current) {
+    playbackOwnerRef.current = `streaming-tts-${++nextPlaybackOwner}`;
+  }
   const socketRef = useRef<WebSocket | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const scheduledUntilRef = useRef(0);
   const sampleRateRef = useRef(24000);
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const completionTimerRef = useRef<number | null>(null);
+  const generationsRef = useRef(new PlaybackGeneration());
   // Every scheduled chunk feeds this, so the orb reacts to the real waveform
   // instead of a sine wave pretending to be speech.
   const gainRef = useRef<GainNode | null>(null);
   const stopAnalyserRef = useRef<(() => void) | null>(null);
 
   const teardown = useCallback(() => {
+    generationsRef.current.cancel();
+    if (completionTimerRef.current !== null) {
+      window.clearTimeout(completionTimerRef.current);
+      completionTimerRef.current = null;
+    }
     for (const src of sourcesRef.current) {
       try {
         src.stop();
@@ -54,7 +69,9 @@ export function useStreamingTts() {
     // The orb and the top pulse both read this, and the wake-word listener
     // stays suspended while it is true. Leaving it set after a manual stop
     // would freeze the orb mid-speech and keep the mic disarmed.
-    useAppStore.getState().setAudioPlaying(false);
+    useAppStore
+      .getState()
+      .setAudioPlayback(playbackOwnerRef.current, false);
   }, []);
 
   useEffect(
@@ -78,8 +95,17 @@ export function useStreamingTts() {
           return;
         }
 
+        // A new utterance owns the one streaming channel. Invalidate every
+        // callback and timer from the previous one before claiming playback.
+        teardown();
+        const generation = generationsRef.current.begin();
+        const owner = playbackOwnerRef.current;
+        useAppStore.getState().setAudioPlayback(owner, true);
+
         let settled = false;
         let started = false;
+        let streamComplete = false;
+        const activeSources = new Set<AudioBufferSourceNode>();
         const finish = (spoke: boolean) => {
           if (settled) return;
           settled = true;
@@ -104,6 +130,7 @@ export function useStreamingTts() {
             ctx = new Ctor({ sampleRate: 24000 });
           }
         } catch {
+          useAppStore.getState().setAudioPlayback(owner, false);
           finish(false);
           return;
         }
@@ -125,19 +152,26 @@ export function useStreamingTts() {
             `${proto}://${window.location.host}/v1/speech/tts-stream`,
           );
         } catch {
+          useAppStore.getState().setAudioPlayback(owner, false);
           finish(false);
           return;
         }
         socket.binaryType = 'arraybuffer';
         socketRef.current = socket;
 
-        const setPlaying = (playing: boolean) =>
-          useAppStore.getState().setAudioPlaying(playing);
+        const setPlaying = (playing: boolean) => {
+          if (!generationsRef.current.isCurrent(generation)) return;
+          useAppStore.getState().setAudioPlayback(owner, playing);
+        };
 
         // A fresh AudioContext starts suspended under the browser's autoplay
         // policy. Without this the buffers below are scheduled and simply
         // never heard.
         socket.onopen = () => {
+          if (!generationsRef.current.isCurrent(generation)) {
+            socket.close();
+            return;
+          }
           void ctx.resume().catch(() => {});
           socket.send(JSON.stringify({
             text,
@@ -147,21 +181,31 @@ export function useStreamingTts() {
           }));
         };
 
-        // Clears the flag once whatever is already scheduled has finished.
-        // Every exit path uses it: leaving audioPlaying set strands the orb in
-        // its speaking state and keeps the wake word suspended.
+        // The server's `done` means all buffers were delivered, not that the
+        // last buffer has reached the speakers. Wait for its real `onended`
+        // event, then include the host device's output latency. The generation
+        // guard prevents an older utterance from clearing a newer one's claim.
         const settlePlaying = () => {
-          const remaining = Math.max(
-            0,
-            scheduledUntilRef.current - ctx.currentTime,
-          );
-          window.setTimeout(
-            () => setPlaying(false),
-            Math.ceil(remaining * 1000) + 50,
-          );
+          if (
+            !streamComplete ||
+            activeSources.size > 0 ||
+            !generationsRef.current.isCurrent(generation)
+          ) {
+            return;
+          }
+          if (completionTimerRef.current !== null) {
+            window.clearTimeout(completionTimerRef.current);
+          }
+          const outputLatency =
+            (ctx as AudioContext & { outputLatency?: number }).outputLatency ?? 0;
+          completionTimerRef.current = window.setTimeout(() => {
+            completionTimerRef.current = null;
+            setPlaying(false);
+          }, outputTailDelayMs(ctx.baseLatency, outputLatency));
         };
 
         socket.onmessage = (event) => {
+          if (!generationsRef.current.isCurrent(generation)) return;
           if (typeof event.data === 'string') {
             const msg = interpretTtsMessage(event.data);
             if (msg.kind === 'start') {
@@ -172,6 +216,7 @@ export function useStreamingTts() {
                 // handling. Silence here used to look like a hung reply.
                 finish(false);
                 setPlaying(false);
+                socket.close();
                 return;
               }
               sampleRateRef.current = msg.sampleRate;
@@ -189,15 +234,18 @@ export function useStreamingTts() {
                 setPlaying(false);
               } else {
                 finish(true);
+                streamComplete = true;
                 settlePlaying();
               }
             } else if (msg.kind === 'done') {
+              streamComplete = true;
               settlePlaying();
               finish(true);
             }
             return;
           }
 
+          if (!started || !generationsRef.current.isCurrent(generation)) return;
           const samples = decodePcmF32(event.data as ArrayBuffer);
           if (samples.length === 0) return;
 
@@ -214,25 +262,34 @@ export function useStreamingTts() {
             startAt + chunkDuration(samples.length, rate);
 
           sourcesRef.current.push(source);
+          activeSources.add(source);
           source.onended = () => {
             sourcesRef.current = sourcesRef.current.filter((s) => s !== source);
+            activeSources.delete(source);
+            settlePlaying();
           };
         };
 
         socket.onerror = () => {
           finish(started);
-          if (started) settlePlaying();
+          if (started) {
+            streamComplete = true;
+            settlePlaying();
+          }
           else setPlaying(false);
         };
         socket.onclose = () => {
           // Also on the started path: a socket that drops mid-reply used to
           // leave the orb speaking forever.
-          if (started) settlePlaying();
+          if (started) {
+            streamComplete = true;
+            settlePlaying();
+          }
           else setPlaying(false);
           finish(started);
         };
       }),
-    [],
+    [teardown],
   );
 
   return { speak, stop: teardown };

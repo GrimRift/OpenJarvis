@@ -4,6 +4,8 @@ import {
   decodePcmF32,
   interpretTtsMessage,
   nextStartTime,
+  outputTailDelayMs,
+  PlaybackGeneration,
 } from './pcm-playback';
 
 function pcm(values: number[]): ArrayBuffer {
@@ -57,6 +59,25 @@ describe('chunkDuration', () => {
 
   it('is zero for a nonsense sample rate rather than Infinity', () => {
     expect(chunkDuration(1000, 0)).toBe(0);
+  });
+});
+
+describe('playback completion', () => {
+  it('keeps the speaking state through device output latency', () => {
+    expect(outputTailDelayMs(0.02, 0.18)).toBe(250);
+    expect(outputTailDelayMs(Number.NaN, Number.NaN)).toBe(50);
+  });
+
+  it('rejects completion callbacks from an older utterance', () => {
+    const generations = new PlaybackGeneration();
+    const first = generations.begin();
+    const second = generations.begin();
+
+    expect(generations.isCurrent(first)).toBe(false);
+    expect(generations.isCurrent(second)).toBe(true);
+
+    generations.cancel();
+    expect(generations.isCurrent(second)).toBe(false);
   });
 });
 

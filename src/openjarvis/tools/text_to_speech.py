@@ -8,6 +8,7 @@ from typing import Any
 
 from openjarvis.core.registry import ToolRegistry, TTSRegistry
 from openjarvis.core.types import ToolResult
+from openjarvis.speech.spoken_text import to_spoken_text
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 
@@ -93,7 +94,10 @@ class TextToSpeechTool(BaseTool):
         }
         if emotion:
             synthesis_kwargs["emotion"] = emotion
-        result = backend.synthesize(text, **synthesis_kwargs)
+        # This is a derived, audio-only rendering. The caller's full text and
+        # any stored chat/tool data remain untouched.
+        spoken_text = to_spoken_text(text)
+        result = backend.synthesize(spoken_text, **synthesis_kwargs)
 
         # Save to file
         if output_dir:

@@ -248,6 +248,9 @@ interface AppState {
   // so the orb's "speaking" state tracks real spoken audio, not just
   // token-streaming duration.
   audioPlaying: boolean;
+  // Each playback path owns a separate claim. A boolean alone allowed an old
+  // stream or player cleanup to mark newer audio idle while it was audible.
+  audioPlaybackOwners: Record<string, true>;
 
   // Opt-in sharing
   optInEnabled: boolean;
@@ -306,7 +309,7 @@ interface AppState {
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
   setVoiceState: (state: 'idle' | 'recording' | 'transcribing') => void;
-  setAudioPlaying: (playing: boolean) => void;
+  setAudioPlayback: (owner: string, playing: boolean) => void;
 
   // Data sources (cached between visits to avoid empty-state flicker)
   cachedConnectors: CachedConnector[] | null;
@@ -384,6 +387,7 @@ export const useAppStore = create<AppState>((set, get) => {
     sidebarOpen: true,
     voiceState: 'idle',
     audioPlaying: false,
+    audioPlaybackOwners: {},
 
     optInEnabled: localStorage.getItem(OPTIN_KEY) === 'true',
     optInDisplayName: localStorage.getItem(OPTIN_NAME_KEY) || '',
@@ -678,7 +682,19 @@ export const useAppStore = create<AppState>((set, get) => {
     toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
     setSidebarOpen: (open: boolean) => set({ sidebarOpen: open }),
     setVoiceState: (state) => set({ voiceState: state }),
-    setAudioPlaying: (playing) => set({ audioPlaying: playing }),
+    setAudioPlayback: (owner, playing) =>
+      set((state) => {
+        const alreadyOwned = Boolean(state.audioPlaybackOwners[owner]);
+        if (alreadyOwned === playing) return {};
+
+        const owners = { ...state.audioPlaybackOwners };
+        if (playing) owners[owner] = true;
+        else delete owners[owner];
+        return {
+          audioPlaybackOwners: owners,
+          audioPlaying: Object.keys(owners).length > 0,
+        };
+      }),
 
     // ── Agents ─────────────────────────────────────────────────────
 

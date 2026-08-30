@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useCallback, useId } from 'react';
 import { Play, Pause } from 'lucide-react';
 import { useAppStore } from '../../lib/store';
 import { analyseInto } from '../../lib/speech-analyser';
@@ -9,6 +9,7 @@ interface AudioPlayerProps {
 }
 
 export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
+  const playbackOwner = `audio-player-${useId()}`;
   const audioRef = useRef<HTMLAudioElement>(null);
   // Seeded from autoPlay rather than always false: when a caller sets
   // audioPlaying=true optimistically ahead of this component mounting
@@ -123,11 +124,11 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
   // "speaking" state for the actual duration of the spoken audio, not
   // just the response's text-streaming window.
   useEffect(() => {
-    useAppStore.getState().setAudioPlaying(playing);
+    useAppStore.getState().setAudioPlayback(playbackOwner, playing);
     return () => {
-      if (playing) useAppStore.getState().setAudioPlaying(false);
+      useAppStore.getState().setAudioPlayback(playbackOwner, false);
     };
-  }, [playing]);
+  }, [playbackOwner, playing]);
 
   useEffect(() => {
     setUnavailable(false);

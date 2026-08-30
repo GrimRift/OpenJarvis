@@ -11,7 +11,8 @@ from openjarvis.speech.tts import TTSResult
 def test_tts_tool_registered():
     from openjarvis.tools.text_to_speech import TextToSpeechTool
 
-    ToolRegistry.register_value("text_to_speech", TextToSpeechTool)
+    if not ToolRegistry.contains("text_to_speech"):
+        ToolRegistry.register_value("text_to_speech", TextToSpeechTool)
     assert ToolRegistry.contains("text_to_speech")
 
 
@@ -61,3 +62,42 @@ def test_tts_tool_empty_text():
     tool = TextToSpeechTool()
     result = tool.execute(text="")
     assert result.success is False
+
+
+def test_tts_tool_sanitizes_only_the_text_sent_to_the_backend(tmp_path):
+    from openjarvis.tools.text_to_speech import TextToSpeechTool
+
+    original = (
+        "Open https://example.com/private and use "
+        r"C:\AI\OpenJarvis-Lab\config.toml."
+    )
+    mock_result = TTSResult(
+        audio=b"audio",
+        format="mp3",
+        voice_id="jarvis",
+        duration_seconds=1.0,
+    )
+
+    with patch("openjarvis.tools.text_to_speech.TTSRegistry") as mock_registry:
+        mock_backend_cls = MagicMock()
+        mock_backend_cls.return_value.synthesize.return_value = mock_result
+        mock_registry.contains.return_value = True
+        mock_registry.get.return_value = mock_backend_cls
+
+        result = TextToSpeechTool().execute(
+            text=original,
+            backend="cartesia",
+            output_dir=str(tmp_path),
+        )
+
+    spoken_text = mock_backend_cls.return_value.synthesize.call_args.args[0]
+    assert result.success is True
+    assert original == (
+        "Open https://example.com/private and use "
+        r"C:\AI\OpenJarvis-Lab\config.toml."
+    )
+    assert "https://example.com/private" not in spoken_text
+    assert r"C:\AI\OpenJarvis-Lab\config.toml" not in spoken_text
+    assert "a link" in spoken_text
+    assert "a file path" in spoken_text
+    assert spoken_text.endswith("The exact values are visible in chat.")

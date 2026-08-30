@@ -70,3 +70,28 @@ describe('Speak Replies setting', () => {
     expect(useAppStore.getState().settings.speechEnabled).toBe(true);
   });
 });
+
+describe('audio playback ownership', () => {
+  it('stays active until every playback owner releases its claim', async () => {
+    const useAppStore = await loadStore();
+
+    useAppStore.getState().setAudioPlayback('streaming-tts', true);
+    useAppStore.getState().setAudioPlayback('batch-player', true);
+    useAppStore.getState().setAudioPlayback('streaming-tts', false);
+
+    expect(useAppStore.getState().audioPlaying).toBe(true);
+
+    useAppStore.getState().setAudioPlayback('batch-player', false);
+    expect(useAppStore.getState().audioPlaying).toBe(false);
+  });
+
+  it('treats repeated claims from one owner as idempotent', async () => {
+    const useAppStore = await loadStore();
+
+    useAppStore.getState().setAudioPlayback('streaming-tts', true);
+    useAppStore.getState().setAudioPlayback('streaming-tts', true);
+    useAppStore.getState().setAudioPlayback('streaming-tts', false);
+
+    expect(useAppStore.getState().audioPlaying).toBe(false);
+  });
+});
