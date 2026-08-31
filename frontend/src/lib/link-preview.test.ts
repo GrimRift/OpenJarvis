@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { externalLinkAttributes, selectLinkPreview } from './link-preview';
+import {
+  externalLinkAttributes,
+  selectLinkPreview,
+  selectSearchImages,
+} from './link-preview';
 import type { ChatMessage } from '../types';
 
 describe('externalLinkAttributes', () => {
@@ -37,6 +41,7 @@ describe('selectLinkPreview', () => {
               url: 'https://second.example/icl',
               summary: 'ICL information',
               image_url: 'https://images.example/eye.jpg',
+              published_date: '2026-08-31',
             },
           ],
         },
@@ -48,6 +53,7 @@ describe('selectLinkPreview', () => {
       url: 'https://second.example/icl',
       summary: 'ICL information',
       imageUrl: 'https://images.example/eye.jpg',
+      publishedDate: '2026-08-31',
     });
   });
 
@@ -67,5 +73,50 @@ describe('selectLinkPreview', () => {
     };
 
     expect(selectLinkPreview(message)).toBeUndefined();
+  });
+
+  it('rejects non-HTTPS source thumbnails', () => {
+    const message: ChatMessage = {
+      id: 'm1', role: 'assistant', timestamp: 1, content: 'Result',
+      toolCalls: [{
+        id: 't1', tool: 'web_search', arguments: '{}', status: 'success',
+        metadata: {
+          sources: [{
+            title: 'Result',
+            url: 'https://example.com/result',
+            image_url: 'http://images.example/result.jpg',
+          }],
+        },
+      }],
+    };
+
+    expect(selectLinkPreview(message)?.imageUrl).toBeUndefined();
+  });
+});
+
+describe('selectSearchImages', () => {
+  const message = (explicit: boolean): ChatMessage => ({
+    id: 'm1', role: 'assistant', timestamp: 1, content: 'Images',
+    toolCalls: [{
+      id: 't1', tool: 'web_search', arguments: '{}', status: 'success',
+      metadata: {
+        explicit_image_search: explicit,
+        images: [
+          { url: 'https://images.example/one.jpg', description: 'One' },
+          { url: 'http://images.example/two.jpg', description: 'Unsafe' },
+          { url: 'https://images.example/one.jpg', description: 'Duplicate' },
+        ],
+      },
+    }],
+  });
+
+  it('returns deduplicated HTTPS images for explicit image searches', () => {
+    expect(selectSearchImages(message(true))).toEqual([
+      { url: 'https://images.example/one.jpg', description: 'One' },
+    ]);
+  });
+
+  it('does not create a gallery for an ordinary web search', () => {
+    expect(selectSearchImages(message(false))).toEqual([]);
   });
 });

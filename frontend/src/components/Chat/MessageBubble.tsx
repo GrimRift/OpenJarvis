@@ -11,7 +11,11 @@ import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
 import { XRayFooter } from './XRayFooter';
 import { LinkPreviewCard } from './LinkPreviewCard';
-import { externalLinkAttributes, selectLinkPreview } from '../../lib/link-preview';
+import {
+  externalLinkAttributes,
+  selectLinkPreview,
+  selectSearchImages,
+} from '../../lib/link-preview';
 import { protectCurrencyFromMath } from '../../lib/currency-math';
 import type { ChatMessage } from '../../types';
 
@@ -112,6 +116,7 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
     [cleanContent],
   );
   const linkPreview = useMemo(() => selectLinkPreview(message), [message]);
+  const searchImages = useMemo(() => selectSearchImages(message), [message]);
 
   // Build a ref→source lookup once per render. Memoized so the rehype plugin
   // identity stays stable until the source list actually changes.
@@ -195,6 +200,32 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
       )}
 
       {linkPreview && <LinkPreviewCard preview={linkPreview} />}
+
+      {searchImages.length > 0 && (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {searchImages.map((image) => (
+            <a
+              key={image.url}
+              href={image.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block overflow-hidden rounded-xl border"
+              style={{ borderColor: 'var(--color-border)' }}
+              aria-label={image.description || 'Open search image'}
+            >
+              <img
+                src={image.url}
+                alt={image.description || ''}
+                loading="lazy"
+                decoding="async"
+                crossOrigin="anonymous"
+                referrerPolicy="no-referrer"
+                className="aspect-video h-full w-full object-cover"
+              />
+            </a>
+          ))}
+        </div>
+      )}
 
       {/* Footer: copy + x-ray */}
       <div className="flex items-center gap-2 mt-1.5">

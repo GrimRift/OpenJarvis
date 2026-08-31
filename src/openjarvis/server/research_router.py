@@ -457,7 +457,11 @@ async def _stream_research(
         agent = ResearchAgent(
             engine=engine,
             search=HybridSearch(store, embedder),
-            web_search=WebSearchTool() if os.environ.get("TAVILY_API_KEY") else None,
+            web_search=(
+                WebSearchTool(force_advanced=True)
+                if os.environ.get("TAVILY_API_KEY")
+                else None
+            ),
             model=model,
             clarify_handler=lambda question: _WEB_CLARIFY_RESPONSE,
             on_event=on_event,

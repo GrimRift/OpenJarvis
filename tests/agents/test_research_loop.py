@@ -112,7 +112,26 @@ def stub_web_search() -> MagicMock:
         tool_name="web_search",
         content="### Example\nSource: https://example.com\nSummary: stub result",
         success=True,
-        metadata={"num_results": 1, "engine": "tavily"},
+        metadata={
+            "num_results": 1,
+            "engine": "tavily",
+            "explicit_image_search": True,
+            "images": [
+                {
+                    "url": "https://images.example/example.jpg",
+                    "description": "Example image",
+                }
+            ],
+            "sources": [
+                {
+                    "title": "Example",
+                    "url": "https://example.com",
+                    "summary": "stub result",
+                    "published_date": "2026-08-31",
+                    "score": 0.9,
+                }
+            ],
+        },
     )
     return w
 
@@ -679,6 +698,36 @@ def test_web_search_offered_when_configured(
     assert offered_names == {"search", "clarify", "web_search"}
 
 
+def test_web_search_schema_keeps_provider_controls_internal() -> None:
+    properties = WEB_SEARCH_TOOL_SPEC["function"]["parameters"]["properties"]
+    assert set(properties) == {"query", "max_results"}
+    assert "search_depth" not in properties
+    assert "topic" not in properties
+    assert "time_range" not in properties
+    assert "include_domains" not in properties
+
+
+def test_web_search_prompt_describes_one_tool_owned_search(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(responses=[_text_response("done")])
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=1,
+    )
+    agent.run("current information")
+    prompt = engine.calls[0]["messages"][0].content
+
+    assert "web_search(query, max_results=5)" in prompt
+    assert "tool chooses provider controls" in prompt
+    assert "exactly one web_search call" in prompt
+    assert "include_domains" not in prompt
+    assert "search_depth='advanced'" not in prompt
+
+
 def test_web_search_dispatch_calls_tool_and_feeds_content_back(
     stub_search: MagicMock, stub_web_search: MagicMock
 ) -> None:
@@ -697,12 +746,47 @@ def test_web_search_dispatch_calls_tool_and_feeds_content_back(
     stub_web_search.execute.assert_called_once_with(
         query="current rust version", max_results=5
     )
+    second_turn_tools = {
+        tool["function"]["name"] for tool in engine.calls[1]["tools"]
+    }
+    assert "web_search" not in second_turn_tools
     assert result.tool_calls[0].tool_name == "web_search"
     assert result.tool_calls[0].num_results == 1
 
     tool_messages = [m for m in engine.calls[-1]["messages"] if m.role.value == "tool"]
     assert any("example.com" in m.content for m in tool_messages)
     assert "Rust is at 1.97" in result.answer
+
+
+def test_duplicate_web_search_call_never_reaches_provider(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(
+        responses=[
+            _web_search_call("w1", query="official iPhone announcement"),
+            _web_search_call("w2", query="try the same search again"),
+            _text_response("Final answer from the first search."),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=5,
+    )
+    result = agent.run("Find the official iPhone announcement")
+
+    stub_web_search.execute.assert_called_once_with(
+        query="official iPhone announcement", max_results=5
+    )
+    assert [call.tool_name for call in result.tool_calls] == ["web_search"]
+    duplicate_output = [
+        message.content
+        for message in engine.calls[-1]["messages"]
+        if message.role.value == "tool" and message.tool_call_id == "w2"
+    ]
+    assert "already completed" in duplicate_output[0]
 
 
 def test_web_search_events_emitted(
@@ -728,6 +812,15 @@ def test_web_search_events_emitted(
     types = [ev["type"] for ev in captured]
     assert "web_search_call" in types
     assert "web_search_result" in types
+    result_event = next(ev for ev in captured if ev["type"] == "web_search_result")
+    assert result_event["success"] is True
+    assert result_event["sources"] == stub_web_search.execute.return_value.metadata[
+        "sources"
+    ]
+    assert result_event["images"] == stub_web_search.execute.return_value.metadata[
+        "images"
+    ]
+    assert result_event["explicit_image_search"] is True
 
 
 def test_unknown_tool_error_lists_web_search_when_configured(

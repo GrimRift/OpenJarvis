@@ -100,6 +100,21 @@ export type ResearchEvent =
       top_titles?: string[];
       sources?: ResearchSource[];
     }
+  | {
+      type: 'web_search_call';
+      arguments: {
+        query: string;
+        max_results?: number;
+      };
+    }
+  | {
+      type: 'web_search_result';
+      num_results: number;
+      success?: boolean;
+      sources?: Array<Record<string, unknown>>;
+      images?: Array<Record<string, unknown>>;
+      explicit_image_search?: boolean;
+    }
   | { type: 'synthesis'; text: string }
   | {
       type: 'system_metrics';
@@ -107,7 +122,8 @@ export type ResearchEvent =
       energy_j: number;
       duration_s: number;
     }
-  | { type: 'done'; usage?: TokenUsage }
+  | { type: 'final_sources'; sources: ResearchSource[] }
+  | { type: 'done'; usage?: TokenUsage; sources?: ResearchSource[] }
   | { type: 'error'; message: string };
 
 export interface LiveEnergyMetrics {

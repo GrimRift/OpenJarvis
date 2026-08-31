@@ -1,4 +1,4 @@
-"""Tests for the web_search tool (Tavily only, no DuckDuckGo fallback)."""
+"""Tests for bounded Tavily-only web search routing."""
 
 from __future__ import annotations
 
@@ -6,423 +6,697 @@ import sys
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from openjarvis.core.registry import ToolRegistry
-from openjarvis.tools.web_search import WebSearchTool
+from openjarvis.tools.web_search import WebSearchTool, _build_plan
 
 
 def _fake_tavily_module(search_return=None, search_side_effect=None):
-    """Build a fake ``tavily`` module for injection into sys.modules."""
     fake_module = ModuleType("tavily")
     mock_client_cls = MagicMock()
-    mock_client_instance = MagicMock()
+    mock_client = MagicMock()
     if search_side_effect is not None:
-        mock_client_instance.search.side_effect = search_side_effect
+        mock_client.search.side_effect = search_side_effect
     else:
-        mock_client_instance.search.return_value = search_return or {}
-    mock_client_cls.return_value = mock_client_instance
+        mock_client.search.return_value = search_return or {}
+    mock_client_cls.return_value = mock_client
     fake_module.TavilyClient = mock_client_cls
     return fake_module, mock_client_cls
 
 
+def _result(
+    title: str,
+    url: str,
+    content: str,
+    **extra,
+) -> dict:
+    return {"title": title, "url": url, "content": content, **extra}
+
+
 class TestWebSearchTool:
-    def test_spec(self):
+    def test_spec_is_small_and_tool_owned(self):
         tool = WebSearchTool(api_key="key")
         assert tool.spec.name == "web_search"
         assert tool.spec.category == "search"
         assert tool.spec.metadata == {"requires_api_key": "TAVILY_API_KEY"}
-        assert "fallback" not in tool.spec.metadata
+        assert set(tool.spec.parameters["properties"]) == {"query", "max_results"}
+        assert tool.spec.parameters["required"] == ["query"]
+        assert "at most one corrective provider call" in tool.spec.description
+
+        research_tool = WebSearchTool(api_key="key", force_advanced=True)
+        assert research_tool.spec.parameters == tool.spec.parameters
 
     def test_no_query(self):
-        tool = WebSearchTool(api_key="key")
-        result = tool.execute(query="")
+        result = WebSearchTool(api_key="key").execute(query="")
         assert result.success is False
         assert "No query" in result.content
-
-    def test_spec_parameters_require_query(self):
-        tool = WebSearchTool(api_key="key")
-        assert "query" in tool.spec.parameters["properties"]
-        assert "query" in tool.spec.parameters["required"]
-
-    def test_no_query_param(self):
-        tool = WebSearchTool(api_key="key")
-        result = tool.execute()
-        assert result.success is False
-        assert "No query" in result.content
-
-    def test_url_query_fetches_directly(self):
-        tool = WebSearchTool(api_key="key")
-        mock_resp = MagicMock()
-        mock_resp.headers = {"content-type": "text/html"}
-        mock_resp.text = "<html><body><p>Hello world</p></body></html>"
-        mock_resp.raise_for_status.return_value = None
-        with (
-            patch("openjarvis.tools.web_search.check_ssrf", return_value=None),
-            patch("httpx.get", return_value=mock_resp),
-        ):
-            result = tool.execute(query="https://example.com/page")
-        assert result.success is True
-        assert "Hello world" in result.content
-        assert result.metadata["mode"] == "fetch"
-
-    def test_url_query_blocked_by_ssrf(self):
-        tool = WebSearchTool(api_key="key")
-        with patch(
-            "openjarvis.tools.web_search.check_ssrf",
-            return_value="blocked: private address",
-        ):
-            result = tool.execute(query="http://169.254.169.254/latest/meta-data")
-        assert result.success is False
-        assert "Failed to fetch URL" in result.content
+        assert result.metadata["bounded_search_complete"] is True
 
     def test_missing_api_key(self, monkeypatch):
         monkeypatch.delenv("TAVILY_API_KEY", raising=False)
         fake_module, _ = _fake_tavily_module()
         with patch.dict(sys.modules, {"tavily": fake_module}):
-            tool = WebSearchTool(api_key=None)
-            result = tool.execute(query="latest openjarvis release")
+            result = WebSearchTool(api_key=None).execute(query="OpenJarvis")
         assert result.success is False
         assert "TAVILY_API_KEY is not configured" in result.content
 
-    def test_tavily_success_no_fallback_attempted(self):
-        fake_module, mock_client_cls = _fake_tavily_module(
-            search_return={
-                "results": [
-                    {
-                        "title": "Example",
-                        "url": "https://example.com",
-                        "content": "Example summary",
-                        "images": ["https://example.com/preview.jpg"],
-                    }
-                ],
-                "usage": {"credits": 1},
-            }
-        )
-        with patch.dict(sys.modules, {"tavily": fake_module}):
-            tool = WebSearchTool(api_key="key")
-            result = tool.execute(query="latest openjarvis release")
-        assert result.success is True
-        assert result.metadata["engine"] == "tavily"
-        assert result.metadata["num_results"] == 1
-        assert result.metadata["credits"] == 1
-        assert result.metadata["sources"] == [
-            {
-                "title": "Example",
-                "url": "https://example.com",
-                "summary": "Example summary",
-                "image_url": "https://example.com/preview.jpg",
-            }
-        ]
-        assert "Example" in result.content
-        assert "example.com" in result.content
-        mock_client_cls.assert_called_once_with(api_key="key")
-        _, search_kwargs = mock_client_cls.return_value.search.call_args
-        assert search_kwargs["include_images"] is True
+    def test_tavily_not_installed(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "tavily", None)
+        result = WebSearchTool(api_key="key").execute(query="OpenJarvis")
+        assert result.success is False
+        assert "tavily-python not installed" in result.content
 
-    def test_tavily_error_returns_failure_not_duckduckgo(self):
-        fake_module, _ = _fake_tavily_module(
+    def test_tavily_error_fails_closed_without_fallback(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
             search_side_effect=RuntimeError("Tavily is down")
         )
         with patch.dict(sys.modules, {"tavily": fake_module}):
-            tool = WebSearchTool(api_key="key")
-            result = tool.execute(query="latest openjarvis release")
+            result = WebSearchTool(api_key="key").execute(query="OpenJarvis")
+
         assert result.success is False
         assert "Tavily search error" in result.content
         assert "duckduckgo" not in result.content.lower()
-        assert result.metadata.get("engine") != "duckduckgo"
-
-    def test_tavily_not_installed(self, monkeypatch):
-        # Force the import to fail regardless of whether tavily-python is
-        # actually installed in this environment — sys.modules[name] = None
-        # is the standard way to make `import tavily` raise ImportError.
-        monkeypatch.setitem(sys.modules, "tavily", None)
-        tool = WebSearchTool(api_key="key")
-        result = tool.execute(query="latest openjarvis release")
-        assert result.success is False
-        assert "tavily-python not installed" in result.content
-        assert "ddgs" not in result.content.lower()
-
-    def test_max_results_forwarded(self):
-        fake_module, mock_client_cls = _fake_tavily_module(
-            search_return={"results": []}
-        )
-        with patch.dict(sys.modules, {"tavily": fake_module}):
-            tool = WebSearchTool(api_key="key")
-            tool.execute(query="latest openjarvis release", max_results=3)
-        _, kwargs = mock_client_cls.return_value.search.call_args
-        assert kwargs["max_results"] == 3
+        assert mock_client_cls.return_value.search.call_count == 2
+        assert result.metadata["provider_calls"] == 2
 
     def test_to_openai_function(self):
-        tool = WebSearchTool(api_key="key")
-        function = tool.to_openai_function()
+        function = WebSearchTool(api_key="key").to_openai_function()
         assert function["type"] == "function"
         assert function["function"]["name"] == "web_search"
-        assert "query" in function["function"]["parameters"]["properties"]
-
-    def test_empty_results(self):
-        fake_module, _ = _fake_tavily_module(search_return={"results": []})
-        with patch.dict(sys.modules, {"tavily": fake_module}):
-            tool = WebSearchTool(api_key="key")
-            result = tool.execute(query="obscure query")
-        assert result.success is True
-        assert result.content == "No results found."
-
-    def test_tool_id(self):
-        tool = WebSearchTool(api_key="key")
-        assert tool.tool_id == "web_search"
+        assert set(function["function"]["parameters"]["properties"]) == {
+            "query",
+            "max_results",
+        }
 
     def test_registry_registration(self):
         ToolRegistry.register_value("web_search", WebSearchTool)
         assert ToolRegistry.contains("web_search")
 
-    def test_tavily_results_use_labeled_content_format(self):
+    def test_max_results_is_bounded_and_forwarded(self):
         fake_module, mock_client_cls = _fake_tavily_module(
             search_return={
                 "results": [
-                    {
-                        "title": "Result 1",
-                        "url": "https://example.com/1",
-                        "content": "Content about test.",
-                    }
+                    _result(
+                        "OpenJarvis overview",
+                        "https://example.com/openjarvis",
+                        "OpenJarvis overview.",
+                    )
                 ]
             }
         )
         with patch.dict(sys.modules, {"tavily": fake_module}):
-            tool = WebSearchTool(api_key="key")
-            result = tool.execute(query="test query")
-        assert result.success is True
-        assert "### Result 1" in result.content
-        assert "Source: https://example.com/1" in result.content
-        assert "Summary: Content about test." in result.content
-        _, kwargs = mock_client_cls.return_value.search.call_args
-        assert kwargs["search_depth"] == "advanced"
+            WebSearchTool(api_key="key").execute(
+                query="Give me 10 sources for the OpenJarvis overview",
+                max_results=99,
+            )
+        assert mock_client_cls.return_value.search.call_args.kwargs["max_results"] == 10
 
-    def test_tavily_uses_snippet_when_content_missing(self):
+
+class TestRouting:
+    def test_simple_named_game_uses_one_basic_search(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Crimson Desert - official game overview",
+                        "https://crimsondesert.pearlabyss.com/",
+                        "Crimson Desert is an open-world action game.",
+                    )
+                ]
+            }
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="Can you search for the game called Crimson Desert"
+            )
+
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 1
+        assert search.call_args.args[0].endswith("Crimson Desert")
+        assert search.call_args.kwargs["search_depth"] == "basic"
+        assert result.metadata["provider_calls"] == 1
+        assert result.metadata["initial_depth"] == "basic"
+        assert result.metadata["final_depth"] == "basic"
+        assert result.metadata["quality_passed"] is True
+
+    def test_expanded_game_overview_stays_basic_and_caps_results(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Crimson Desert overview",
+                        "https://games.example/crimson-desert",
+                        "Crimson Desert gameplay, platforms, and information.",
+                    )
+                ]
+            }
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(
+                query=(
+                    "Crimson Desert game latest information release date "
+                    "platforms gameplay official website 2026"
+                ),
+                max_results=5,
+            )
+
+        kwargs = mock_client_cls.return_value.search.call_args.kwargs
+        assert kwargs["search_depth"] == "basic"
+        assert kwargs["max_results"] == 3
+
+    def test_simple_fact_uses_basic(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Mount Apo",
+                        "https://example.com/mount-apo",
+                        "Mount Apo is the highest mountain in the Philippines.",
+                    )
+                ]
+            }
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(
+                query="What is the highest mountain in the Philippines?"
+            )
+        assert mock_client_cls.return_value.search.call_args.kwargs[
+            "search_depth"
+        ] == "basic"
+
+    def test_news_starts_advanced_without_retry(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": []}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="latest news around the Philippines this week"
+            )
+
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 1
+        assert search.call_args.kwargs["search_depth"] == "advanced"
+        assert search.call_args.kwargs["topic"] == "news"
+        assert search.call_args.kwargs["time_range"] == "week"
+        assert result.metadata["provider_calls"] == 1
+        assert result.metadata["quality_passed"] is False
+
+    def test_world_news_starts_advanced_without_special_query(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        f"International headline {index}",
+                        f"https://news{index}.example/story-{index}",
+                        "A major international development.",
+                    )
+                    for index in range(3)
+                ]
+            }
+        )
+        query = "latest trending news around the world"
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(query=query)
+
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 1
+        assert search.call_args.args[0] == query
+        assert search.call_args.kwargs["search_depth"] == "advanced"
+        assert result.metadata["quality_passed"] is True
+
+    def test_irrelevant_basic_rewrites_once_with_advanced(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_side_effect=[
+                {
+                    "results": [
+                        _result(
+                            "Unrelated tennis result",
+                            "https://sports.example/tennis",
+                            "A match result.",
+                        )
+                    ]
+                },
+                {
+                    "results": [
+                        _result(
+                            "Crimson Desert game overview",
+                            "https://games.example/crimson-desert",
+                            "Crimson Desert is an action adventure game.",
+                        )
+                    ]
+                },
+            ]
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="game called Crimson Desert"
+            )
+
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 2
+        assert [call.kwargs["search_depth"] for call in search.call_args_list] == [
+            "basic",
+            "advanced",
+        ]
+        assert '"Crimson Desert"' in search.call_args_list[1].args[0]
+        assert result.metadata["provider_calls"] == 2
+        assert result.metadata["escalated"] is True
+        assert result.metadata["bounded_search_complete"] is True
+        assert "tennis" not in result.content.lower()
+
+    def test_advanced_intent_never_gets_third_or_corrective_call(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": []}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="official iPhone announcement"
+            )
+        assert mock_client_cls.return_value.search.call_count == 1
+        assert result.metadata["provider_calls"] == 1
+        assert result.metadata["bounded_search_complete"] is True
+
+    def test_exact_current_figure_starts_advanced(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": []}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(
+                query="What is the exact current gasoline price in Manila?"
+            )
+        assert mock_client_cls.return_value.search.call_args.kwargs[
+            "search_depth"
+        ] == "advanced"
+
+    def test_verification_starts_advanced(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": []}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(
+                query="Verify whether this product claim is accurate"
+            )
+        assert mock_client_cls.return_value.search.call_args.kwargs[
+            "search_depth"
+        ] == "advanced"
+
+    def test_deep_research_forces_one_advanced_search(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": []}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            tool = WebSearchTool(api_key="key", force_advanced=True)
+            result = tool.execute(query="ordinary background information")
+
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 1
+        assert search.call_args.kwargs["search_depth"] == "advanced"
+        assert result.metadata["provider_calls"] == 1
+
+    def test_official_product_announcement_is_general_not_ai_specific(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Apple announces iPhone 18",
+                        "https://www.apple.com/newsroom/iphone-18/",
+                        "Apple announced the iPhone 18.",
+                    )
+                ]
+            }
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="official iPhone 18 announcement"
+            )
+
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 1
+        assert search.call_args.kwargs["search_depth"] == "advanced"
+        assert result.metadata["quality_passed"] is True
+        assert result.metadata["sources"][0]["official_source"] is True
+
+    def test_secondary_report_is_not_labeled_official(self):
         fake_module, _ = _fake_tavily_module(
             search_return={
                 "results": [
-                    {
-                        "title": "Snippet Only",
-                        "url": "https://example.com/s",
-                        "snippet": "Fallback snippet text.",
-                    }
+                    _result(
+                        "Apple announces iPhone 18",
+                        "https://www.reuters.com/technology/apple-iphone-18/",
+                        "Reuters reports that Apple announced the iPhone 18.",
+                    )
                 ]
             }
         )
         with patch.dict(sys.modules, {"tavily": fake_module}):
-            tool = WebSearchTool(api_key="key")
-            result = tool.execute(query="test query")
-        assert result.success is True
-        assert "Summary: Fallback snippet text." in result.content
+            result = WebSearchTool(api_key="key").execute(
+                query="official iPhone 18 announcement"
+            )
+        assert result.metadata["sources"][0]["official_source"] is False
+        assert result.metadata["quality_passed"] is False
+        assert "insufficient or off-topic" in result.content
 
-class TestUrlDetection:
-    def test_is_url_https(self):
-        assert WebSearchTool._is_url("https://example.com") is True
-
-    def test_is_url_http(self):
-        assert WebSearchTool._is_url("http://example.com") is True
-
-    def test_is_url_with_whitespace(self):
-        assert WebSearchTool._is_url("  https://example.com  ") is True
-
-    def test_is_url_plain_text(self):
-        assert WebSearchTool._is_url("what are punic wars") is False
-
-    def test_is_url_empty(self):
-        assert WebSearchTool._is_url("") is False
-
-    def test_extract_url_from_text(self):
-        url = WebSearchTool._extract_url(
-            "Summarize this: https://example.com/page please"
+    def test_news_homepage_is_not_accepted_as_a_direct_result(self):
+        fake_module, _ = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Philippines News",
+                        "https://example.com/news",
+                        "Latest Philippines news.",
+                    )
+                ]
+            }
         )
-        assert url == "https://example.com/page"
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="latest Philippines news"
+            )
+        assert result.metadata["sources"] == []
+        assert result.metadata["quality_passed"] is False
 
-    def test_extract_url_none_when_absent(self):
-        assert WebSearchTool._extract_url("no urls here") is None
-
-    def test_extract_url_strips_trailing_punctuation(self):
-        url = WebSearchTool._extract_url("See https://example.com/page.")
-        assert url == "https://example.com/page"
-
-    def test_extract_url_from_complex_text(self):
-        url = WebSearchTool._extract_url(
-            "Read https://arxiv.org/abs/2310.03714 and summarize"
+    def test_query_year_filters_conflicting_results(self):
+        fake_module, _ = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Device specification 2025",
+                        "https://example.com/device-2025",
+                        "Device specification from 2025.",
+                        published_date="2025-01-01",
+                    ),
+                    _result(
+                        "Device specification 2026",
+                        "https://example.com/device-2026",
+                        "Device specification from 2026.",
+                        published_date="2026-01-01",
+                    ),
+                ]
+            }
         )
-        assert url == "https://arxiv.org/abs/2310.03714"
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="device specification 2026"
+            )
+        assert [source["published_date"] for source in result.metadata["sources"]] == [
+            "2026-01-01"
+        ]
 
 
-class TestUrlNormalization:
-    def test_arxiv_pdf_to_abs(self):
-        url = WebSearchTool._normalize_url("https://arxiv.org/pdf/2310.03714")
-        assert url == "https://arxiv.org/abs/2310.03714"
-
-    def test_arxiv_pdf_with_extension(self):
-        url = WebSearchTool._normalize_url("https://arxiv.org/pdf/2310.03714.pdf")
-        assert url == "https://arxiv.org/abs/2310.03714"
-
-    def test_non_arxiv_unchanged(self):
-        url = WebSearchTool._normalize_url("https://example.com/page")
-        assert url == "https://example.com/page"
-
-    def test_arxiv_abs_unchanged(self):
-        url = WebSearchTool._normalize_url("https://arxiv.org/abs/2310.03714")
-        assert url == "https://arxiv.org/abs/2310.03714"
-
-
-class TestUrlFetching:
-    @staticmethod
-    def _allow_public_url(monkeypatch):
-        import openjarvis.tools.web_search as web_search
-
-        monkeypatch.setattr(web_search, "check_ssrf", lambda url: None)
-
-    @staticmethod
-    def _response(html: str, content_type: str = "text/html"):
-        response = MagicMock()
-        response.text = html
-        response.headers = {"content-type": content_type}
-        response.raise_for_status = MagicMock()
-        return response
-
-    def test_fetch_url_strips_scripts(self, monkeypatch):
-        import httpx
-
-        self._allow_public_url(monkeypatch)
-        response = self._response(
-            "<html><script>var x=1;</script><body>Content</body></html>"
+class TestImages:
+    def test_ordinary_search_keeps_only_source_bound_https_thumbnails(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "images": ["https://images.example/global.jpg"],
+                "results": [
+                    _result(
+                        "Crimson Desert overview",
+                        "https://games.example/crimson-desert",
+                        "Crimson Desert game overview.",
+                        images=["https://games.example/crimson.jpg"],
+                    ),
+                    _result(
+                        "Crimson Desert interview",
+                        "https://interviews.example/crimson-desert",
+                        "Crimson Desert developer interview.",
+                        images=["http://insecure.example/image.jpg"],
+                    ),
+                ],
+            }
         )
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=response))
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(query="Crimson Desert")
 
-        content = WebSearchTool._fetch_url("https://example.com")
-        assert "var x" not in content
-        assert "Content" in content
-
-    def test_fetch_url_truncates_long_content(self, monkeypatch):
-        import httpx
-
-        self._allow_public_url(monkeypatch)
-        response = self._response("<p>" + "x" * 10000 + "</p>")
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=response))
-
-        content = WebSearchTool._fetch_url("https://example.com", max_chars=100)
-        assert len(content) < 200
-        assert "[Content truncated]" in content
-
-    def test_fetch_url_pdf_content_type(self, monkeypatch):
-        import httpx
-
-        self._allow_public_url(monkeypatch)
-        response = self._response(
-            "%PDF-1.4 binary data", content_type="application/pdf"
+        kwargs = mock_client_cls.return_value.search.call_args.kwargs
+        assert kwargs["include_images"] is True
+        assert "include_image_descriptions" not in kwargs
+        assert result.metadata["images"] == []
+        assert result.metadata["sources"][0]["image_url"] == (
+            "https://games.example/crimson.jpg"
         )
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=response))
+        assert result.metadata["sources"][1]["image_url"] is None
 
-        content = WebSearchTool._fetch_url("https://example.com/file.pdf")
-        assert "PDF" in content
-        assert "cannot be read" in content
-
-
-class TestExecuteWithUrl:
-    @staticmethod
-    def _allow_public_url(monkeypatch):
-        import openjarvis.tools.web_search as web_search
-
-        monkeypatch.setattr(web_search, "check_ssrf", lambda url: None)
-
-    def test_execute_with_embedded_url(self, monkeypatch):
-        import httpx
-
-        self._allow_public_url(monkeypatch)
-        response = MagicMock()
-        response.text = "<html><body>Article text</body></html>"
-        response.headers = {"content-type": "text/html"}
-        response.raise_for_status = MagicMock()
-        monkeypatch.setattr(httpx, "get", MagicMock(return_value=response))
-
-        tool = WebSearchTool(api_key="key")
-        result = tool.execute(
-            query="Summarize https://example.com/article please"
+    def test_result_image_dict_can_supply_thumbnail(self):
+        fake_module, _ = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Crimson Desert overview",
+                        "https://games.example/crimson-desert",
+                        "Crimson Desert overview.",
+                        images=[
+                            {
+                                "url": "https://games.example/crimson.jpg",
+                                "description": "Screenshot",
+                            }
+                        ],
+                    )
+                ]
+            }
         )
-        assert result.success is True
-        assert "Article text" in result.content
-        assert result.metadata.get("mode") == "fetch"
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(query="Crimson Desert")
+        assert result.metadata["sources"][0]["image_url"].endswith("crimson.jpg")
 
-    def test_execute_url_fetch_failure(self, monkeypatch):
-        import httpx
-
-        self._allow_public_url(monkeypatch)
-        monkeypatch.setattr(
-            httpx,
-            "get",
-            MagicMock(side_effect=httpx.HTTPError("Connection failed")),
+    def test_missing_result_image_falls_back_to_none(self):
+        fake_module, _ = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        "Crimson Desert overview",
+                        "https://games.example/crimson-desert",
+                        "Crimson Desert overview.",
+                    )
+                ]
+            }
         )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(query="Crimson Desert")
+        assert result.metadata["sources"][0]["image_url"] is None
 
-        tool = WebSearchTool(api_key="key")
-        result = tool.execute(query="https://example.com/broken")
-        assert result.success is False
-        assert "Failed to fetch URL" in result.content
+    def test_explicit_image_request_preserves_full_tavily_images(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "images": [
+                    {
+                        "url": "https://images.example/crimson.jpg",
+                        "description": "Crimson Desert screenshot",
+                    },
+                    "http://insecure.example/crimson.jpg",
+                ],
+                "results": [
+                    _result(
+                        "Crimson Desert gallery",
+                        "https://games.example/crimson-desert/gallery",
+                        "Official screenshots from Crimson Desert.",
+                    )
+                ],
+            }
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="Show me images of Crimson Desert"
+            )
+
+        kwargs = mock_client_cls.return_value.search.call_args.kwargs
+        assert kwargs["search_depth"] == "advanced"
+        assert kwargs["include_images"] is True
+        assert kwargs["include_image_descriptions"] is True
+        assert result.metadata["explicit_image_search"] is True
+        assert result.metadata["images"] == [
+            {
+                "url": "https://images.example/crimson.jpg",
+                "description": "Crimson Desert screenshot",
+            }
+        ]
 
 
 class TestResultHygiene:
-    """Two defects seen in a live research transcript: literal "&#xA0;" in the
-    rendered answer, and the same source card shown twice."""
-
-    def _search(self, results):
+    @staticmethod
+    def _search(results: list[dict]):
         fake_module, _ = _fake_tavily_module(search_return={"results": results})
-        tool = WebSearchTool(api_key="key")
         with patch.dict(sys.modules, {"tavily": fake_module}):
-            return tool.execute(query="anything")
+            return WebSearchTool(api_key="key").execute(query="example")
 
-    def test_html_entities_are_decoded_in_titles_and_snippets(self):
+    def test_html_entities_are_decoded(self):
+        result = self._search(
+            [
+                _result(
+                    "Example&#xA0;&amp; Test",
+                    "https://example.com/a",
+                    "Example costs&#xA0;rose&nbsp;sharply &amp; fell.",
+                )
+            ]
+        )
+        source = result.metadata["sources"][0]
+        assert source["title"] == "Example & Test"
+        assert source["summary"] == "Example costs rose sharply & fell."
+        assert "&#" not in result.content
+
+    def test_same_page_is_only_listed_once(self):
+        result = self._search(
+            [
+                _result("Example A", "https://example.com/p", "Example one"),
+                _result("Example duplicate", "https://example.com/p/", "Example one"),
+                _result("Example fragment", "https://example.com/p#x", "Example one"),
+                _result("Example B", "https://example.com/q", "Example two"),
+            ]
+        )
+        assert [source["url"] for source in result.metadata["sources"]] == [
+            "https://example.com/p",
+            "https://example.com/q",
+        ]
+
+    def test_snippet_is_used_when_content_is_missing(self):
         result = self._search(
             [
                 {
-                    "title": "Tom&#xA0;&amp; Jerry",
-                    "url": "https://example.com/a",
-                    "content": "Costs&#xA0;rose&nbsp;sharply &amp; fell.",
+                    "title": "Example snippet",
+                    "url": "https://example.com/snippet",
+                    "snippet": "Example fallback snippet.",
                 }
             ]
         )
+        assert "Summary: Example fallback snippet." in result.content
 
+    def test_publication_date_and_score_are_preserved(self):
+        result = self._search(
+            [
+                _result(
+                    "Example announcement",
+                    "https://example.com/news/item",
+                    "Example release.",
+                    published_date="2026-08-31T04:00:00Z",
+                    score=0.98,
+                )
+            ]
+        )
         source = result.metadata["sources"][0]
-        assert source["title"] == "Tom & Jerry"
-        assert "&#xA0;" not in source["summary"]
-        assert "&amp;" not in source["summary"]
-        assert "&" in source["summary"]
-        # The model reads result.content, so it must be clean too.
-        assert "&#xA0;" not in result.content
+        assert source["published_date"] == "2026-08-31T04:00:00Z"
+        assert source["score"] == 0.98
+        assert "Published: 2026-08-31T04:00:00Z" in result.content
 
-    def test_the_same_page_is_only_listed_once(self):
+    def test_low_quality_score_and_missing_url_are_rejected(self):
         result = self._search(
             [
-                {"title": "A", "url": "https://example.com/p", "content": "one"},
-                {"title": "A dup", "url": "https://example.com/p/", "content": "one"},
-                {"title": "A frag", "url": "https://example.com/p#x", "content": "one"},
-                {"title": "B", "url": "https://example.com/q", "content": "two"},
+                _result(
+                    "Example low score",
+                    "https://example.com/low",
+                    "Example low-quality result.",
+                    score=0.05,
+                ),
+                _result("Example missing URL", "", "Example result."),
             ]
         )
-
-        urls = [s["url"] for s in result.metadata["sources"]]
-        assert urls == ["https://example.com/p", "https://example.com/q"]
-        assert result.content.count("Source: ") == 2
-
-    def test_distinct_pages_are_all_kept(self):
-        result = self._search(
-            [
-                {"title": "A", "url": "https://example.com/a", "content": "one"},
-                {"title": "B", "url": "https://example.com/b", "content": "two"},
-            ]
-        )
-        assert len(result.metadata["sources"]) == 2
-
-    def test_a_result_without_a_url_is_still_reported(self):
-        """Missing URLs must not all collapse into one deduplicated entry."""
-        result = self._search(
-            [
-                {"title": "A", "url": "", "content": "one"},
-                {"title": "B", "url": "", "content": "two"},
-            ]
-        )
-        assert len(result.metadata["sources"]) == 2
+        assert result.metadata["sources"] == []
 
 
-__all__ = ["TestWebSearchTool", "TestResultHygiene"]
+class TestUrlDetection:
+    def test_is_url(self):
+        assert WebSearchTool._is_url("https://example.com") is True
+        assert WebSearchTool._is_url("  http://example.com  ") is True
+        assert WebSearchTool._is_url("what are the Punic wars") is False
+
+    def test_extract_url(self):
+        assert WebSearchTool._extract_url(
+            "Summarize https://example.com/page."
+        ) == "https://example.com/page"
+        assert WebSearchTool._extract_url("no URLs") is None
+
+    def test_normalize_arxiv_pdf(self):
+        assert WebSearchTool._normalize_url(
+            "https://arxiv.org/pdf/2310.03714.pdf"
+        ) == "https://arxiv.org/abs/2310.03714"
+        assert WebSearchTool._normalize_url(
+            "https://example.com/page"
+        ) == "https://example.com/page"
+
+    def test_url_query_fetches_directly(self):
+        response = MagicMock()
+        response.headers = {"content-type": "text/html"}
+        response.text = "<html><script>bad()</script><body>Hello world</body></html>"
+        response.raise_for_status.return_value = None
+        with (
+            patch("openjarvis.tools.web_search.check_ssrf", return_value=None),
+            patch("httpx.get", return_value=response),
+        ):
+            result = WebSearchTool(api_key="key").execute(
+                query="https://example.com/page"
+            )
+        assert result.success is True
+        assert result.content == "Hello world"
+        assert result.metadata["mode"] == "fetch"
+        assert result.metadata["bounded_search_complete"] is True
+
+    def test_url_query_blocked_by_ssrf(self):
+        with patch(
+            "openjarvis.tools.web_search.check_ssrf",
+            return_value="blocked: private address",
+        ):
+            result = WebSearchTool(api_key="key").execute(
+                query="http://169.254.169.254/latest/meta-data"
+            )
+        assert result.success is False
+        assert "Failed to fetch URL" in result.content
+
+    def test_fetch_url_reports_pdf(self):
+        response = MagicMock()
+        response.headers = {"content-type": "application/pdf"}
+        response.raise_for_status.return_value = None
+        with (
+            patch("openjarvis.tools.web_search.check_ssrf", return_value=None),
+            patch("httpx.get", return_value=response),
+        ):
+            content = WebSearchTool._fetch_url("https://example.com/report.pdf")
+        assert "PDF file" in content
+
+    def test_fetch_url_truncates(self):
+        response = MagicMock()
+        response.headers = {"content-type": "text/html"}
+        response.text = "<p>" + ("x" * 200) + "</p>"
+        response.raise_for_status.return_value = None
+        with (
+            patch("openjarvis.tools.web_search.check_ssrf", return_value=None),
+            patch("httpx.get", return_value=response),
+        ):
+            content = WebSearchTool._fetch_url(
+                "https://example.com/long", max_chars=20
+            )
+        assert content == ("x" * 20) + "\n\n[Content truncated]"
+
+
+class TestImageIntentSurvivesModelRewording:
+    """The tool classifies the *model's* query, not the user's words.
+
+    Live, "Find images of Crimson Desert gameplay" reached the tool as
+    "Crimson Desert gameplay images" and came back with no gallery, because the
+    pattern required a verb before the noun. Noun-led and noun-trailing forms
+    are the model's natural rewording, so they count as image intent too.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Find images of Crimson Desert gameplay",
+            "Crimson Desert gameplay images",
+            "images of Crimson Desert",
+            "show pictures of Crimson Desert",
+            "image search Crimson Desert",
+            "Crimson Desert screenshots",
+        ],
+    )
+    def test_image_requests_are_recognised(self, query):
+        assert _build_plan(query, force_advanced=False).explicit_images is True
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "Crimson Desert gameplay",
+            "iPhone 17 camera image quality review",
+            "latest world news",
+        ],
+    )
+    def test_ordinary_queries_do_not_become_image_searches(self, query):
+        """A noun buried mid-query is not a request for pictures."""
+        assert _build_plan(query, force_advanced=False).explicit_images is False

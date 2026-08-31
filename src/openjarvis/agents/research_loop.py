@@ -130,7 +130,9 @@ SEARCH_TOOL_SPEC: Dict[str, Any] = {
 }
 
 
-WEB_SEARCH_TOOL_SPEC: Dict[str, Any] = WebSearchTool().to_openai_function()
+WEB_SEARCH_TOOL_SPEC: Dict[str, Any] = WebSearchTool(
+    force_advanced=True
+).to_openai_function()
 
 # Appended into SYSTEM_PROMPT only when a WebSearchTool was actually passed to
 # ResearchAgent — otherwise the model isn't told about a tool it can't call.
@@ -138,9 +140,13 @@ _WEB_TOOLS_SECTION = "\n    web_search(query, max_results=5)"
 _WEB_TOOLS_STRATEGY = (
     "\n  10. For current events, external/public information, or anything not"
     " likely to be in the personal corpus, use web_search instead of (or in"
-    " addition to) search. web_search results are not part of the personal"
-    " corpus — cite their URLs directly in your answer text, not as [N]"
-    " brackets."
+    " addition to) search. Put the exact entity, locale, date window, and requested"
+    " value in one complete query. You get exactly one web_search call; the tool"
+    " chooses provider controls and performs any single bounded retry internally."
+    " If the user corrects an entity name, use the corrected name. Distinguish"
+    " projections from confirmed outcomes and state exact dates when freshness"
+    " matters. web_search results are not part of the personal corpus"
+    " — cite their URLs directly in your answer text, not as [N] brackets."
 )
 _WEB_TOOLS_SYNTHESIS = (
     "\n  - For web_search results, cite the source URL directly in the"
@@ -448,8 +454,12 @@ class ToolInvocation:
     num_results: int = 0
     top_titles: List[str] = field(default_factory=list)
     raw_hits: List[SearchHit] = field(default_factory=list)
+    sources: List[Dict[str, Any]] = field(default_factory=list)
+    images: List[Dict[str, str]] = field(default_factory=list)
+    explicit_image_search: bool = False
     tool_name: str = "search"
     response: str = ""
+    success: bool = True
 
 
 def _default_clarify_handler(question: str) -> str:
@@ -616,12 +626,18 @@ class ResearchAgent:
     def _execute_web_search(self, args: Dict[str, Any]) -> ToolInvocation:
         query = str(args.get("query", "") or "")
         max_results = int(args.get("max_results", 5) or 5)
-        result = self._web_search.execute(query=query, max_results=max_results)
+        web_args: Dict[str, Any] = {"query": query, "max_results": max_results}
+        result = self._web_search.execute(**web_args)
+        metadata = result.metadata or {}
         return ToolInvocation(
             tool_name="web_search",
-            arguments={"query": query, "max_results": max_results},
-            num_results=int((result.metadata or {}).get("num_results", 0)),
+            arguments=web_args,
+            num_results=int(metadata.get("num_results", 0)),
+            sources=list(metadata.get("sources") or []),
+            images=list(metadata.get("images") or []),
+            explicit_image_search=bool(metadata.get("explicit_image_search")),
             response=result.content,
+            success=result.success,
         )
 
     def _execute_clarify(self, args: Dict[str, Any]) -> ToolInvocation:
@@ -688,6 +704,7 @@ class ResearchAgent:
         messages: List[Message] = [sys_msg, Message(role=Role.USER, content=query)]
 
         invocations: List[ToolInvocation] = []
+        web_search_complete = False
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         # Global ref counter: each search increments by the number of hits
@@ -705,8 +722,11 @@ class ResearchAgent:
             iterations += 1
             if len(invocations) < self._max_iterations:
                 tools_arg = [SEARCH_TOOL_SPEC, CLARIFY_TOOL_SPEC]
-                if self._web_search is not None:
-                    tools_arg.append(WEB_SEARCH_TOOL_SPEC)
+                if self._web_search is not None and not web_search_complete:
+                    web_spec = self._web_search.to_openai_function()
+                    tools_arg.append(
+                        web_spec if isinstance(web_spec, dict) else WEB_SEARCH_TOOL_SPEC
+                    )
             else:
                 tools_arg = None
             result = self._engine.generate(
@@ -848,16 +868,31 @@ class ResearchAgent:
                             }
                         )
                 elif name == "web_search" and self._web_search is not None:
-                    self._emit({"type": "web_search_call", "arguments": args})
-                    inv = self._execute_web_search(args)
-                    invocations.append(inv)
-                    self._emit(
-                        {
-                            "type": "web_search_result",
-                            "num_results": inv.num_results,
-                        }
-                    )
-                    tool_output = inv.response
+                    if web_search_complete:
+                        tool_output = json.dumps(
+                            {
+                                "error": (
+                                    "web_search already completed for this request; "
+                                    "synthesize from its results"
+                                )
+                            }
+                        )
+                    else:
+                        web_search_complete = True
+                        self._emit({"type": "web_search_call", "arguments": args})
+                        inv = self._execute_web_search(args)
+                        invocations.append(inv)
+                        self._emit(
+                            {
+                                "type": "web_search_result",
+                                "num_results": inv.num_results,
+                                "sources": inv.sources,
+                                "images": inv.images,
+                                "explicit_image_search": inv.explicit_image_search,
+                                "success": inv.success,
+                            }
+                        )
+                        tool_output = inv.response
                 else:
                     tool_output = json.dumps(
                         {

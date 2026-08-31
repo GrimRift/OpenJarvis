@@ -492,6 +492,40 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               [...researchTraces],
               flushSources(),
             );
+          } else if (ev.type === 'web_search_call') {
+            toolCalls.push({
+              id: generateId(),
+              tool: 'web_search',
+              arguments: serializeToolCallArguments(ev.arguments),
+              status: 'running',
+            });
+            setStreamState({
+              phase: `Searching the web: ${ev.arguments?.query ?? ''}`,
+              activeToolCalls: [...toolCalls],
+            });
+          } else if (ev.type === 'web_search_result') {
+            const pending = [...toolCalls]
+              .reverse()
+              .find((call) => call.tool === 'web_search' && call.status === 'running');
+            if (pending) {
+              pending.status = ev.success === false ? 'error' : 'success';
+              pending.metadata = {
+                num_results: ev.num_results,
+                sources: ev.sources ?? [],
+                images: ev.images ?? [],
+                explicit_image_search: ev.explicit_image_search ?? false,
+              };
+            }
+            updateLastAssistant(
+              convId,
+              accumulatedContent,
+              [...toolCalls],
+              undefined,
+              undefined,
+              undefined,
+              [...researchTraces],
+              flushSources(),
+            );
           } else if (ev.type === 'synthesis') {
             if (!ttftMs) ttftMs = Date.now() - startTime;
             accumulatedContent += ev.text;

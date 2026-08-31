@@ -5,6 +5,12 @@ export interface LinkPreview {
   url: string;
   summary?: string;
   imageUrl?: string;
+  publishedDate?: string;
+}
+
+export interface SearchImage {
+  url: string;
+  description?: string;
 }
 
 function remoteHttpUrl(value: unknown): string | undefined {
@@ -16,6 +22,11 @@ function remoteHttpUrl(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function remoteHttpsUrl(value: unknown): string | undefined {
+  const url = remoteHttpUrl(value);
+  return url?.startsWith('https:') ? url : undefined;
 }
 
 export function externalLinkAttributes(href: string | undefined): {
@@ -44,9 +55,37 @@ function previewsFromToolCall(toolCall: ToolCallInfo): LinkPreview[] {
     const summary = typeof record.summary === 'string' && record.summary.trim()
       ? record.summary.trim()
       : undefined;
-    const imageUrl = remoteHttpUrl(record.image_url);
-    return [{ title, url, summary, imageUrl }];
+    const imageUrl = remoteHttpsUrl(record.image_url);
+    const publishedDate = typeof record.published_date === 'string' && record.published_date.trim()
+      ? record.published_date.trim()
+      : undefined;
+    return [{ title, url, summary, imageUrl, publishedDate }];
   });
+}
+
+export function selectSearchImages(message: ChatMessage): SearchImage[] {
+  for (const toolCall of message.toolCalls ?? []) {
+    if (
+      toolCall.tool !== 'web_search'
+      || toolCall.status !== 'success'
+      || toolCall.metadata?.explicit_image_search !== true
+      || !Array.isArray(toolCall.metadata.images)
+    ) continue;
+
+    const seen = new Set<string>();
+    return toolCall.metadata.images.flatMap((image) => {
+      if (!image || typeof image !== 'object') return [];
+      const record = image as Record<string, unknown>;
+      const url = remoteHttpsUrl(record.url);
+      if (!url || seen.has(url)) return [];
+      seen.add(url);
+      const description = typeof record.description === 'string' && record.description.trim()
+        ? record.description.trim()
+        : undefined;
+      return [{ url, description }];
+    });
+  }
+  return [];
 }
 
 export function selectLinkPreview(message: ChatMessage): LinkPreview | undefined {

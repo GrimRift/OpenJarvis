@@ -30,7 +30,9 @@ export function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
       )}
       <div className="p-3">
         <div className="mb-1 flex items-center justify-between gap-3">
-          <span className="text-xs" style={{ color: 'var(--color-accent)' }}>{hostname}</span>
+          <span className="text-xs" style={{ color: 'var(--color-accent)' }}>
+            {hostname}{preview.publishedDate ? ` · ${preview.publishedDate}` : ''}
+          </span>
           <ExternalLink size={13} aria-hidden="true" style={{ color: 'var(--color-text-tertiary)' }} />
         </div>
         <div className="text-sm font-semibold">{preview.title}</div>

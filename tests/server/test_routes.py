@@ -632,6 +632,119 @@ class TestChatCompletions:
         assert stream_turn == 2
         assert not engine.generate.called
 
+    def test_terminal_search_removes_tools_before_final_synthesis(self):
+        """A bounded search result must not allow redundant model searches."""
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        stream_kwargs: list[dict] = []
+
+        class _BoundedSearchTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="web_search",
+                    description="Search the web",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(
+                    tool_name="web_search",
+                    content="Three relevant Philippine news stories.",
+                    success=True,
+                    metadata={
+                        "bounded_search_complete": True,
+                        "sources": [
+                            {
+                                "title": "Story",
+                                "url": "https://news.example/story",
+                                "image_url": "https://news.example/story.jpg",
+                            }
+                        ],
+                        "explicit_image_search": True,
+                        "images": [
+                            {
+                                "url": "https://images.example/story.jpg",
+                                "description": "Story image",
+                            }
+                        ],
+                    },
+                )
+
+        engine = _make_engine(content="ENGINE BYPASS")
+        stream_turn = 0
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            nonlocal stream_turn
+            stream_turn += 1
+            stream_kwargs.append(kwargs)
+            if stream_turn == 1:
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            yield StreamChunk(content="Here is the verified roundup.")
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_BoundedSearchTool()],
+            bus=EventBus(),
+            max_turns=3,
+            system_prompt="Use the configured tools.",
+        )
+        app = create_app(
+            engine,
+            "test-model",
+            agent=agent,
+            bus=EventBus(),
+            config=_test_config(),
+        )
+
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Philippines news"}],
+                "stream": True,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert stream_turn == 2
+        assert stream_kwargs[0]["tools"]
+        assert "tools" not in stream_kwargs[1]
+        events = [
+            json.loads(line[5:].strip())
+            for line in resp.text.splitlines()
+            if line.startswith("data:") and "[DONE]" not in line
+        ]
+        tool_end = next(
+            event
+            for event in events
+            if event.get("tool") == "web_search" and event.get("success") is True
+        )
+        assert tool_end["metadata"]["sources"][0]["image_url"].endswith(
+            "story.jpg"
+        )
+        assert tool_end["metadata"]["explicit_image_search"] is True
+        assert tool_end["metadata"]["images"][0]["description"] == "Story image"
+
     def test_orchestrator_streams_final_answer_as_model_deltas(self):
         """The default Sage agent must not collapse a streamed reply to one chunk."""
         from openjarvis.agents.orchestrator import OrchestratorAgent
@@ -1637,3 +1750,115 @@ class TestTraceRecording:
         assert trace.query == "stream please"
         # _make_engine streams "Hello", " ", "world".
         assert trace.result == "Hello world"
+
+
+class TestBoundedSearchRetiresOnlyTheSearchTool:
+    """A spent search must not disarm the rest of the toolbox.
+
+    Retiring the search tool after a bounded result was implemented by clearing
+    the whole per-request tool list, which also removed spotify_control,
+    notify_windows and the file tools. "Search for the song, then play it" lost
+    its second tool halfway through the turn, and this project has already been
+    bitten by the model claiming a Spotify action it never performed.
+    """
+
+    def test_a_non_search_tool_survives_a_bounded_search(self):
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        stream_kwargs: list[dict] = []
+
+        class _BoundedSearchTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="web_search",
+                    description="Search the web",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(
+                    tool_name="web_search",
+                    content="One relevant story.",
+                    success=True,
+                    metadata={"bounded_search_complete": True, "sources": []},
+                )
+
+        class _PlaybackTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="spotify_control",
+                    description="Control playback",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):  # pragma: no cover - not reached here
+                return ToolResult(
+                    tool_name="spotify_control", content="ok", success=True
+                )
+
+        engine = _make_engine(content="ENGINE BYPASS")
+        stream_turn = 0
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            nonlocal stream_turn
+            stream_turn += 1
+            stream_kwargs.append(kwargs)
+            if stream_turn == 1:
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "web_search", "arguments": "{}"},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            yield StreamChunk(content="Done.")
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_BoundedSearchTool(), _PlaybackTool()],
+            bus=EventBus(),
+            max_turns=3,
+            system_prompt="Use the configured tools.",
+        )
+        app = create_app(
+            engine,
+            "test-model",
+            agent=agent,
+            bus=EventBus(),
+            config=_test_config(),
+        )
+
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "find it then play it"}],
+                "stream": True,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert stream_turn == 2
+
+        def _names(kwargs):
+            return {
+                (tool.get("function") or {}).get("name")
+                for tool in kwargs.get("tools", [])
+            }
+
+        assert "web_search" in _names(stream_kwargs[0])
+        # The search is spent; playback is not.
+        assert "web_search" not in _names(stream_kwargs[1])
+        assert "spotify_control" in _names(stream_kwargs[1])

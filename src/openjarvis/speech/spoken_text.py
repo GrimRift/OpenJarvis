@@ -292,34 +292,40 @@ def to_spoken_text(markdown: str) -> str:
     if not markdown:
         return ""
 
-    hidden_value_count = 0
+    hidden_counts = {
+        "raw_link": 0,
+        "labeled_link": 0,
+        "path": 0,
+        "sensitive": 0,
+    }
 
-    def hide_value(replacement: str, trailing: str = "") -> str:
-        nonlocal hidden_value_count
-        hidden_value_count += 1
+    def hide_value(kind: str, replacement: str, trailing: str = "") -> str:
+        hidden_counts[kind] += 1
         return replacement + trailing
 
     def replace_link(match: re.Match[str]) -> str:
         label, target = match.groups()
         if re.match(r"(?i)^(?:https?://|www\.)", target.strip()):
-            hide_value("")
+            hide_value("labeled_link", "")
         return label
 
-    def replace_bare_value(match: re.Match[str], replacement: str) -> str:
+    def replace_bare_value(
+        match: re.Match[str], kind: str, replacement: str
+    ) -> str:
         _value, trailing = _split_trailing_punctuation(match.group(0))
-        return hide_value(replacement, trailing)
+        return hide_value(kind, replacement, trailing)
 
     def replace_inline_code(match: re.Match[str]) -> str:
         value = match.group(1)
         if _looks_like_file_path(value):
-            return hide_value("a file path")
+            return hide_value("path", "a file path")
         return value
 
     def replace_auth_code(match: re.Match[str]) -> str:
         return (
             match.group("label")
             + match.group("separator")
-            + hide_value("the authentication code")
+            + hide_value("sensitive", "the authentication code")
         )
 
     def replace_context_identifier(match: re.Match[str]) -> str:
@@ -330,14 +336,14 @@ def to_spoken_text(markdown: str) -> str:
         return (
             match.group("label")
             + match.group("separator")
-            + hide_value("an identifier")
+            + hide_value("sensitive", "an identifier")
         )
 
     def replace_long_identifier(match: re.Match[str]) -> str:
         value = match.group(0)
         if not _looks_like_identifier(value):
             return value
-        return hide_value("an identifier")
+        return hide_value("sensitive", "an identifier")
 
     text = _FENCED_CODE.sub(" ", markdown)
     text = _IMAGE.sub(r"\1", text)
@@ -346,18 +352,20 @@ def to_spoken_text(markdown: str) -> str:
 
     # Sanitize before emphasis processing because token-like identifiers often
     # contain underscores, which markdown otherwise consumes as formatting.
-    text = _BARE_URL.sub(lambda match: replace_bare_value(match, "a link"), text)
+    text = _BARE_URL.sub(
+        lambda match: replace_bare_value(match, "raw_link", "a link"), text
+    )
     text = _WINDOWS_PATH.sub(
-        lambda match: replace_bare_value(match, "a file path"), text
+        lambda match: replace_bare_value(match, "path", "a file path"), text
     )
     text = _POSIX_PATH.sub(
-        lambda match: replace_bare_value(match, "a file path"), text
+        lambda match: replace_bare_value(match, "path", "a file path"), text
     )
     text = _RELATIVE_FILE_PATH.sub(
-        lambda match: replace_bare_value(match, "a file path"), text
+        lambda match: replace_bare_value(match, "path", "a file path"), text
     )
     text = _AUTH_CODE.sub(replace_auth_code, text)
-    text = _UUID.sub(lambda match: hide_value("an identifier"), text)
+    text = _UUID.sub(lambda match: hide_value("sensitive", "an identifier"), text)
     text = _CONTEXT_IDENTIFIER.sub(replace_context_identifier, text)
     text = _LONG_IDENTIFIER.sub(replace_long_identifier, text)
 
@@ -383,9 +391,30 @@ def to_spoken_text(markdown: str) -> str:
 
     text = _BLANK_RUN.sub("\n\n", text)
     text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
-    if hidden_value_count:
-        noun = "value is" if hidden_value_count == 1 else "values are"
-        notice = f"The exact {noun} visible in chat."
+    notices: list[str] = []
+    link_count = hidden_counts["raw_link"] + hidden_counts["labeled_link"]
+    if hidden_counts["raw_link"] or hidden_counts["labeled_link"] >= 3:
+        notices.append(
+            "The link is in chat."
+            if link_count == 1
+            else "The source links are in chat."
+        )
+    path_count = hidden_counts["path"]
+    if path_count:
+        notices.append(
+            "The file path is in chat."
+            if path_count == 1
+            else "The file paths are in chat."
+        )
+    sensitive_count = hidden_counts["sensitive"]
+    if sensitive_count:
+        notices.append(
+            "The sensitive value is in chat."
+            if sensitive_count == 1
+            else "The sensitive values are in chat."
+        )
+    if notices:
+        notice = " ".join(notices)
         text = f"{text}\n\n{notice}" if text else notice
     return text
 

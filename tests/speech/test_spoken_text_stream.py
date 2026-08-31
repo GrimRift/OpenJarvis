@@ -28,22 +28,32 @@ def test_segments_are_delivered_in_order_and_final_tail_is_flushed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("parts", "secret"),
+    ("parts", "secret", "notice"),
     [
-        (("Open https://exa", "mple.com/reset now. "), "https://example.com/reset"),
+        (
+            ("Open https://exa", "mple.com/reset now. "),
+            "https://example.com/reset",
+            "The link is in chat.",
+        ),
         (
             (r"Use `C:\Program Fi", r"les\Sage\user.json` now. "),
             r"C:\Program Files\Sage\user.json",
+            "The file path is in chat.",
         ),
-        (("Your verification code is 73", "9204. "), "739204"),
+        (
+            ("Your verification code is 73", "9204. "),
+            "739204",
+            "The sensitive value is in chat.",
+        ),
         (
             ("Use session 123e4567-e89b-12d3-", "a456-426614174000. "),
             "123e4567-e89b-12d3-a456-426614174000",
+            "The sensitive value is in chat.",
         ),
     ],
 )
 def test_private_values_split_across_deltas_never_leak(
-    parts: tuple[str, str], secret: str
+    parts: tuple[str, str], secret: str, notice: str
 ) -> None:
     stream = SpokenTextStream()
 
@@ -52,16 +62,14 @@ def test_private_values_split_across_deltas_never_leak(
 
     joined = " ".join(spoken)
     assert secret not in joined
-    assert "visible in chat" in joined
+    assert notice in joined
 
 
 def test_unfinished_markdown_is_held_across_deltas() -> None:
     stream = SpokenTextStream()
 
     assert stream.push("See [the doc") == []
-    assert stream.push("s](https://example.com/a). Next") == [
-        "See the docs.\n\nThe exact value is visible in chat."
-    ]
+    assert stream.push("s](https://example.com/a). Next") == ["See the docs."]
     assert stream.finish() == ["Next"]
 
 

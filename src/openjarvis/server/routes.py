@@ -790,6 +790,10 @@ def _merge_agent_tool_call_fragments(
             entry["function"]["arguments"] += str(function["arguments"])
 
 
+# Tools that a bounded/terminal search result retires for the rest of the turn.
+_SEARCH_TOOL_NAMES = frozenset({"web_search"})
+
+
 async def _handle_streaming_orchestrator(
     agent,
     model: str,
@@ -848,6 +852,7 @@ async def _handle_streaming_orchestrator(
 
     async def generate():
         started_at = time.time()
+        active_tools = list(openai_tools)
         full_content = ""
         all_tool_results = []
         total_prompt_tokens = 0
@@ -876,8 +881,8 @@ async def _handle_streaming_orchestrator(
                 finish_reason = "stop"
                 turn_usage: dict[str, Any] = {}
                 stream_kwargs: dict[str, Any] = {}
-                if openai_tools:
-                    stream_kwargs["tools"] = openai_tools
+                if active_tools:
+                    stream_kwargs["tools"] = active_tools
 
                 async for stream_chunk in agent._engine.stream_full(
                     messages,
@@ -1005,7 +1010,15 @@ async def _handle_streaming_orchestrator(
                                     {
                                         "sources": tool_result.metadata.get(
                                             "sources", []
-                                        )
+                                        ),
+                                        "images": tool_result.metadata.get(
+                                            "images", []
+                                        ),
+                                        "explicit_image_search": (
+                                            tool_result.metadata.get(
+                                                "explicit_image_search", False
+                                            )
+                                        ),
                                     }
                                     if isinstance(tool_result.metadata, dict)
                                     else {}
@@ -1013,6 +1026,24 @@ async def _handle_streaming_orchestrator(
                             }
                         )
                         yield f"event: tool_call_end\ndata: {end_payload}\n\n"
+                    if any(
+                        isinstance(result.metadata, dict)
+                        and (
+                            result.metadata.get("terminal_search") is True
+                            or result.metadata.get("bounded_search_complete") is True
+                        )
+                        for result in results_by_index.values()
+                    ):
+                        # Only the search tool is spent. Clearing the whole list
+                        # also stripped spotify_control, notify_windows and the
+                        # file tools, so "search for X, then play it" lost its
+                        # second tool halfway through the turn.
+                        active_tools = [
+                            tool
+                            for tool in active_tools
+                            if (tool.get("function") or {}).get("name")
+                            not in _SEARCH_TOOL_NAMES
+                        ]
                     continue
 
                 full_content += turn_content
@@ -1281,7 +1312,13 @@ async def _handle_agent_stream(
                         {
                             "sources": getattr(tool_result, "metadata", {}).get(
                                 "sources", []
-                            )
+                            ),
+                            "images": getattr(tool_result, "metadata", {}).get(
+                                "images", []
+                            ),
+                            "explicit_image_search": getattr(
+                                tool_result, "metadata", {}
+                            ).get("explicit_image_search", False),
                         }
                         if isinstance(getattr(tool_result, "metadata", {}), dict)
                         else {}

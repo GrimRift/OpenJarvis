@@ -56,8 +56,17 @@ class TestOtherMarkdown:
 
     def test_links_are_read_as_their_text(self):
         assert to_spoken_text("See [the docs](https://example.com/a/b).") == (
-            "See the docs.\n\nThe exact value is visible in chat."
+            "See the docs."
         )
+
+    def test_many_labeled_links_get_one_source_notice(self):
+        text = " ".join(
+            f"[Source {index}](https://example.com/{index})."
+            for index in range(1, 4)
+        )
+        spoken = to_spoken_text(text)
+        assert spoken.count("The source links are in chat.") == 1
+        assert "exact value" not in spoken
 
     def test_images_are_read_as_their_alt_text(self):
         assert to_spoken_text("![a chart](chart.png)") == "a chart"
@@ -102,7 +111,7 @@ class TestAwkwardPrivateValues:
 
         assert url not in spoken
         assert "a link" in spoken
-        assert spoken.endswith("The exact value is visible in chat.")
+        assert spoken.endswith("The link is in chat.")
 
     def test_file_paths_are_referred_to_without_being_read(self):
         windows_path = r"C:\AI\OpenJarvis-Lab\src\openjarvis\server\api_routes.py"
@@ -115,16 +124,14 @@ class TestAwkwardPrivateValues:
         assert windows_path not in spoken
         assert posix_path not in spoken
         assert spoken.count("a file path") == 2
-        assert spoken.endswith("The exact values are visible in chat.")
+        assert spoken.endswith("The file paths are in chat.")
 
     def test_an_inline_file_path_with_spaces_is_fully_omitted(self):
         path = r"C:\Program Files\Sage\user profile.json"
         spoken = to_spoken_text(f"Open `{path}` now.")
 
         assert path not in spoken
-        assert spoken == (
-            "Open a file path now.\n\nThe exact value is visible in chat."
-        )
+        assert spoken == "Open a file path now.\n\nThe file path is in chat."
 
     def test_authentication_code_is_never_spoken(self):
         code = "739204"
@@ -132,7 +139,7 @@ class TestAwkwardPrivateValues:
 
         assert code not in spoken
         assert "verification code is the authentication code" in spoken
-        assert spoken.endswith("The exact value is visible in chat.")
+        assert spoken.endswith("The sensitive value is in chat.")
 
     def test_long_identifiers_are_never_spoken(self):
         uuid = "123e4567-e89b-12d3-a456-426614174000"
@@ -142,7 +149,7 @@ class TestAwkwardPrivateValues:
         assert uuid not in spoken
         assert token not in spoken
         assert spoken.count("an identifier") == 2
-        assert spoken.endswith("The exact values are visible in chat.")
+        assert spoken.endswith("The sensitive values are in chat.")
 
     def test_a_long_numeric_id_is_never_spoken(self):
         identifier = "73018492017462"
