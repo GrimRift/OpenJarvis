@@ -81,6 +81,22 @@ def _gcal_api_event_patch(
     return resp.json()
 
 
+def _gcal_api_event_insert(
+    token: str,
+    calendar_id: str,
+    body: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Create a calendar event."""
+    resp = httpx.post(
+        f"{_GCAL_API_BASE}/calendars/{calendar_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json=body,
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _gcal_api_calendars_list(token: str) -> Dict[str, Any]:
     """Call the Calendar ``calendarList.list`` endpoint.
 
@@ -436,6 +452,36 @@ class GCalendarConnector(BaseConnector):
         if not token:
             raise RuntimeError("Google Calendar token missing")
         return token
+
+    def create_event(
+        self,
+        *,
+        summary: str,
+        start: str,
+        end: str,
+        timezone: str,
+        description: str = "",
+        location: str = "",
+        calendar_id: str = "primary",
+    ) -> Dict[str, Any]:
+        """Create a timed event and return the created resource.
+
+        ``start``/``end`` are naive local ISO datetimes paired with an IANA
+        ``timezone``, which is how Google resolves the wall-clock time the user
+        actually meant. Sending a UTC instant instead would silently shift the
+        event whenever the assistant and the calendar disagree about the zone.
+        """
+        token = self._get_token()
+        body: Dict[str, Any] = {
+            "summary": summary,
+            "start": {"dateTime": start, "timeZone": timezone},
+            "end": {"dateTime": end, "timeZone": timezone},
+        }
+        if description:
+            body["description"] = description
+        if location:
+            body["location"] = location
+        return _gcal_api_event_insert(token, calendar_id, body)
 
     def accept_event(self, event_id: str, calendar_id: str = "primary") -> None:
         """Accept a calendar invite by setting responseStatus to 'accepted'."""

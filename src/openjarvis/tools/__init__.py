@@ -178,6 +178,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.create_calendar_event  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.open_app  # noqa: F401
 except ImportError:
     pass
