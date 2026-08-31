@@ -5,6 +5,27 @@ import { buildWsProtocols } from '../lib/useAgentEvents';
 // openWakeWord's native frame size: 80ms @ 16kHz, 16-bit mono PCM.
 const CHUNK_SAMPLES = 1280;
 const TARGET_SAMPLE_RATE = 16000;
+export const WAKE_WORD_STALE_MS = 12_000;
+
+export function shouldRestartWakeWord({
+  now,
+  lastResponseAt,
+  socketOpen,
+}: {
+  now: number;
+  lastResponseAt: number;
+  socketOpen: boolean;
+}): boolean {
+  return socketOpen && now - lastResponseAt > WAKE_WORD_STALE_MS;
+}
+
+export function wakeWordSessionOwnsSocket(
+  activeSessionId: number,
+  socketSessionId: number,
+  isCurrentSocket: boolean,
+): boolean {
+  return activeSessionId === socketSessionId && isCurrentSocket;
+}
 
 function buildWakeWordWsUrl(): string {
   const base = getBase();
@@ -27,11 +48,12 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
   const silentGainRef = useRef<GainNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingSamplesRef = useRef<number[]>([]);
-  // Distinguishes "we closed the socket on purpose" (toggle off, unmount)
-  // from an unexpected drop, so onclose knows whether to reconnect.
-  const intentionalStopRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The server answers every submitted 80 ms frame. If those replies stop,
+  // the capture pipeline is stale even when the browser still calls the
+  // socket OPEN (seen after a completed/silent Voice turn and a short idle).
+  const lastResponseAtRef = useRef(Date.now());
   // Bumped on every start()/stop() transition. start() is async (awaits
   // mic permission, then AudioContext setup) — if `enabled` flips back to
   // false while that's in flight, stop() runs and nulls every ref, but
@@ -52,7 +74,6 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
 
   const stop = useCallback(() => {
     sessionIdRef.current += 1;
-    intentionalStopRef.current = true;
     clearReconnectTimer();
     processorRef.current?.disconnect();
     processorRef.current = null;
@@ -64,8 +85,9 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
     audioCtxRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-    wsRef.current?.close();
+    const ws = wsRef.current;
     wsRef.current = null;
+    ws?.close();
     pendingSamplesRef.current = [];
     setListening(false);
   }, []);
@@ -73,17 +95,38 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
   // Creates (or re-creates) just the WebSocket leg of the pipeline. Kept
   // separate from `start` so an unexpected drop can reconnect without
   // re-requesting mic permission or tearing down the AudioContext.
-  const connectSocket = useCallback(() => {
+  const connectSocket = useCallback((sessionId: number) => {
+    if (sessionIdRef.current !== sessionId) return;
     const ws = new WebSocket(buildWakeWordWsUrl(), buildWsProtocols());
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (
+        !wakeWordSessionOwnsSocket(
+          sessionIdRef.current,
+          sessionId,
+          wsRef.current === ws,
+        )
+      ) {
+        return;
+      }
       reconnectAttemptsRef.current = 0;
+      lastResponseAtRef.current = Date.now();
       setError(null);
       setListening(true);
     };
     ws.onmessage = (event) => {
+      if (
+        !wakeWordSessionOwnsSocket(
+          sessionIdRef.current,
+          sessionId,
+          wsRef.current === ws,
+        )
+      ) {
+        return;
+      }
+      lastResponseAtRef.current = Date.now();
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'detected') {
@@ -95,8 +138,20 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
     };
     ws.onerror = () => {};
     ws.onclose = (event) => {
+      // stop() followed quickly by start() is the normal Voice re-arm path.
+      // The old close event can arrive after the new session is live; it must
+      // not mark that listener idle or schedule a competing reconnect.
+      if (
+        !wakeWordSessionOwnsSocket(
+          sessionIdRef.current,
+          sessionId,
+          wsRef.current === ws,
+        )
+      ) {
+        return;
+      }
+      wsRef.current = null;
       setListening(false);
-      if (intentionalStopRef.current) return;
 
       // 1008/1011 are the server intentionally refusing pre-accept (bad
       // auth, no detector configured) — retrying would just repeat the
@@ -117,7 +172,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       const delay = Math.min(1000 * 2 ** (reconnectAttemptsRef.current - 1), 15000);
       clearReconnectTimer();
       reconnectTimeoutRef.current = setTimeout(() => {
-        if (!intentionalStopRef.current) connectSocket();
+        if (sessionIdRef.current === sessionId) connectSocket(sessionId);
       }, delay);
     };
   }, []);
@@ -125,8 +180,8 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
   const start = useCallback(async () => {
     const mySession = ++sessionIdRef.current;
     setError(null);
-    intentionalStopRef.current = false;
     reconnectAttemptsRef.current = 0;
+    lastResponseAtRef.current = Date.now();
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setError('Microphone not supported in this browser');
@@ -164,7 +219,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       }
       streamRef.current = stream;
 
-      connectSocket();
+      connectSocket(mySession);
 
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
@@ -245,6 +300,33 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
     return stop;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const watchdog = window.setInterval(() => {
+      const ctx = audioCtxRef.current;
+      if (ctx?.state === 'suspended') {
+        // Give a successful resume one full liveness window before deciding
+        // that the entire capture graph must be rebuilt.
+        lastResponseAtRef.current = Date.now();
+        void ctx.resume().catch(() => undefined);
+        return;
+      }
+
+      const ws = wsRef.current;
+      if (
+        shouldRestartWakeWord({
+          now: Date.now(),
+          lastResponseAt: lastResponseAtRef.current,
+          socketOpen: ws?.readyState === WebSocket.OPEN,
+        })
+      ) {
+        stop();
+        void start();
+      }
+    }, 3000);
+    return () => window.clearInterval(watchdog);
+  }, [enabled, start, stop]);
 
   return { listening, error };
 }
