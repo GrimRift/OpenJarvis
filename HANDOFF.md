@@ -752,13 +752,24 @@ the morning runs sit under the previous UTC date** — querying `started_at >=
 | 08:00 | Calendar / reminders | OK |
 | every 10 min | `notify_class_schedule`, 15-min lookahead | 57/57 OK |
 
-Two source problems, **neither fixed, both open**:
-- `google_tasks` returns `403 Forbidden` on `users/@me/lists` every run. Scope
-  or consent; adjacent to the still-pending Google OAuth publish.
-- `imessage` and `slack` report "not connected (no credentials)" every run.
-  iMessage cannot work on Windows, so it is permanent noise in the digest's
-  "I couldn't read ..." line. Decide: connect Slack, or drop both from the
-  source list. Ask the user first.
+Two source problems, **both resolved 2026-09-01** by narrowing the hardcoded
+source list in `proactive_agent.py` to `["gmail", "gcalendar"]`:
+- `google_tasks` returned `403` on every run. Diagnosed precisely: not scope,
+  not consent, not the token — `accessNotConfigured`, i.e. the Tasks API was
+  never enabled for Google project `708083691179`. The user does not use
+  Google Tasks, so it was dropped rather than enabled; no Cloud Console step
+  is outstanding.
+- `imessage` and `slack` reported "not connected (no credentials)" every run.
+  iMessage cannot work on Windows and the user uses neither, so both were
+  dropped.
+
+All three failing daily meant every digest ended with "I couldn't read
+imessage, slack, google_tasks this run, so this update may be incomplete" —
+training the reader to ignore the one sentence that exists to say the summary
+is untrustworthy. That warning only carries information when it is rare.
+`TestCollectedSourcesAreReadable` pins it, with a second case asserting the
+list is not simply empty. Verified live: `digest_collect` over the real
+account now reports `sources_failed: (none)` and 26 collected items.
 
 ### Temperature audit
 

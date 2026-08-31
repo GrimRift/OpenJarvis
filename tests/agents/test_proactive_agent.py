@@ -524,3 +524,46 @@ class TestEmptyClassificationIsRetried:
         )
         result = agent.run()
         assert result.metadata["classification_empty"] is True
+
+
+class TestCollectedSourcesAreReadable:
+    """Every configured source must be one this machine can actually read.
+
+    iMessage cannot work on Windows, Slack was never connected, and the Tasks
+    API was never enabled for the Google project. All three were still in the
+    list, so every run ended with "I couldn't read imessage, slack,
+    google_tasks this run, so this update may be incomplete" — which teaches
+    the user to ignore the one sentence whose job is to say the summary is
+    incomplete. That warning only means something when it is rare.
+    """
+
+    UNREADABLE = {"imessage", "slack", "google_tasks"}
+
+    def _collected_sources(self, tmp_path) -> list[str]:
+        from openjarvis.agents.proactive_agent import ProactiveAgent
+        from openjarvis.tools.approval_store import ApprovalStore
+
+        store = ApprovalStore(db_path=str(tmp_path / "approvals.db"))
+        agent = ProactiveAgent(
+            engine=MagicMock(), model="test-model", approval_store=store
+        )
+        agent._executor = MagicMock()
+        agent._executor.execute.return_value = MagicMock(
+            success=True, content=_REAL_DIGEST
+        )
+        agent._generate = MagicMock(return_value={"content": "```json\n[]\n```"})
+        agent.run()
+
+        collect = agent._executor.execute.call_args_list[0].args[0]
+        return json.loads(collect.arguments)["sources"]
+
+    def test_no_permanently_unreadable_source_is_requested(self, tmp_path):
+        requested = set(self._collected_sources(tmp_path))
+        assert not (requested & self.UNREADABLE), (
+            f"{requested & self.UNREADABLE} cannot be read on this machine; "
+            "requesting them makes every digest report itself incomplete."
+        )
+
+    def test_it_still_collects_something(self, tmp_path):
+        """Emptying the list would satisfy the check above and collect nothing."""
+        assert "gmail" in self._collected_sources(tmp_path)

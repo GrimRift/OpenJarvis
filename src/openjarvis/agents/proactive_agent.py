@@ -526,7 +526,15 @@ class ProactiveAgent(ToolUsingAgent):
         store.expire_stale()
 
         # --- Step 1: Collect data — only items user hasn't acted on ---
-        sources = ["gmail", "imessage", "gcalendar", "slack", "google_tasks"]
+        # Only sources that can actually be read. The list previously also held
+        # imessage, slack and google_tasks: iMessage cannot work on Windows at
+        # all, Slack is not connected and the user does not use either, and the
+        # Tasks API was never enabled for the Google project. All three failed
+        # on every run, so each morning's digest ended with "I couldn't read
+        # imessage, slack, google_tasks this run, so this update may be
+        # incomplete" — training the user to ignore the one sentence that
+        # exists to say the summary is untrustworthy.
+        sources = ["gmail", "gcalendar"]
         seen_ids = self._get_already_seen_ids(store)
         collect_call = ToolCall(
             id="proactive-collect-1",
