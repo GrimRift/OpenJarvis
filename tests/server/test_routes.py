@@ -564,24 +564,32 @@ class TestChatCompletions:
                 )
 
         engine = _make_engine(content="ENGINE BYPASS")
-        engine.generate.side_effect = [
-            {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "name": "file_read",
-                        "arguments": '{"path": "README.md"}',
-                    }
-                ],
-                "usage": {},
-            },
-            {
-                "content": "README fixture contents",
-                "finish_reason": "stop",
-                "usage": {},
-            },
-        ]
+        from openjarvis.engine._stubs import StreamChunk
+
+        stream_turn = 0
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            nonlocal stream_turn
+            stream_turn += 1
+            if stream_turn == 1:
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {
+                                "name": "file_read",
+                                "arguments": '{"path": "README.md"}',
+                            },
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            yield StreamChunk(content="README fixture contents")
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
         agent = OrchestratorAgent(
             engine,
             "test-model",
@@ -621,7 +629,82 @@ class TestChatCompletions:
 
         assert content == "README fixture contents"
         assert executions == ["README.md"]
-        assert engine.generate.call_count == 2
+        assert stream_turn == 2
+        assert not engine.generate.called
+
+    def test_orchestrator_streams_final_answer_as_model_deltas(self):
+        """The default Sage agent must not collapse a streamed reply to one chunk."""
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        class _UnusedTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="unused",
+                    description="Unused fixture tool",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(tool_name="unused", content="unused", success=True)
+
+        engine = _make_engine(content="First sentence. Second sentence.")
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            yield StreamChunk(content="First sentence. ")
+            yield StreamChunk(content="Second sentence.")
+            yield StreamChunk(finish_reason="stop")
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_UnusedTool()],
+            bus=EventBus(),
+            max_turns=3,
+            temperature=0.7,
+            max_tokens=128,
+            system_prompt="Answer directly.",
+        )
+        client = TestClient(
+            create_app(
+                engine,
+                "test-model",
+                agent=agent,
+                bus=EventBus(),
+                config=_test_config(),
+            )
+        )
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Say two sentences"}],
+                "stream": True,
+            },
+        )
+
+        content_deltas = []
+        finish_usage = None
+        for line in resp.text.splitlines():
+            if not line.startswith("data: {"):
+                continue
+            payload = json.loads(line.removeprefix("data: "))
+            choices = payload.get("choices", [])
+            if choices and choices[0]["delta"].get("content"):
+                content_deltas.append(choices[0]["delta"]["content"])
+            if choices and choices[0].get("finish_reason") == "stop":
+                finish_usage = payload.get("usage")
+
+        assert content_deltas == ["First sentence. ", "Second sentence."]
+        assert finish_usage is not None
+        assert finish_usage["prompt_tokens"] > 0
+        assert finish_usage["completion_tokens"] > 0
+        assert not engine.generate.called
 
     def test_streaming_with_tools_emits_tool_calls_and_bypasses_agent(self):
         """Regression for the streaming analog of #414.

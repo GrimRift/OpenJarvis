@@ -158,14 +158,20 @@ class BaseAgent(ABC):
         context_messages = (
             list(context.conversation.messages) if context is not None else []
         )
-        # Check if the context already supplies a system message
-        _context_has_system = (
-            context
-            and context.conversation.messages
-            and any(m.role == Role.SYSTEM for m in context.conversation.messages)
+        # A caller-supplied system prompt is already authoritative. In
+        # particular, the web route builds the full persona-aware prompt and
+        # injects memory before constructing the agent context; rebuilding the
+        # prompt here would duplicate thousands of tokens and can force the
+        # history trimmer to discard the answer the user is following up on.
+        _context_has_system = any(m.role == Role.SYSTEM for m in context_messages)
+        _context_has_caller_system = any(
+            m.role == Role.SYSTEM and not m.metadata.get("memory_context")
+            for m in context_messages
         )
 
-        if self._prompt_builder is not None:
+        if _context_has_caller_system:
+            effective_system_prompt = None
+        elif self._prompt_builder is not None:
             effective_system_prompt = self._prompt_builder.build()
         elif system_prompt:
             effective_system_prompt = system_prompt

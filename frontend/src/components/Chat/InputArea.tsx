@@ -13,7 +13,8 @@ import {
 import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
-import { shouldSynthesizeReplyAudio } from '../../lib/audio-policy';
+import { isDigestPrompt, shouldSynthesizeReplyAudio } from '../../lib/audio-policy';
+import { shouldFlushStreamRender } from '../../lib/stream-render-policy';
 import { getVoiceProfile } from '../../lib/voice-profiles';
 import { useStreamingTts } from '../../hooks/useStreamingTts';
 import { MicButton } from './MicButton';
@@ -165,7 +166,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // useSpeech's `speechState`, so without this the orb would sit idle for a
   // whole spoken turn and the mic button would offer to start another.
   const [fluxTurnActive, setFluxTurnActive] = useState(false);
-  const { speak: speakStreaming, stop: stopSpeaking } = useStreamingTts();
+  const {
+    begin: beginStreamingSpeech,
+    speak: speakStreaming,
+    stop: stopSpeaking,
+  } = useStreamingTts();
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
 
@@ -405,6 +410,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       Array.from(researchSourcesByRef.values()).sort((a, b) => a.ref - b.ref);
     let lastFlush = 0;
     let ttftMs: number | undefined;
+    // Ordinary voice replies stream raw model deltas to the server while the
+    // exact same deltas continue into chat/history below. Digest prompts are
+    // excluded because that agent may return its own ready-made audio.
+    const incrementalSpeech =
+      voiceRepliesEnabled && wasVoice && !isDigestPrompt(content)
+        ? beginStreamingSpeech(ttsVoice)
+        : null;
 
     setStreamState({
       conversationId: convId,
@@ -483,9 +495,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           } else if (ev.type === 'synthesis') {
             if (!ttftMs) ttftMs = Date.now() - startTime;
             accumulatedContent += ev.text;
-            setStreamState({ content: accumulatedContent, phase: '' });
+            incrementalSpeech?.push(ev.text);
             const now = Date.now();
-            if (now - lastFlush >= 80) {
+            if (
+              shouldFlushStreamRender(now, lastFlush, accumulatedContent.length)
+            ) {
+              setStreamState({ content: accumulatedContent, phase: '' });
               updateLastAssistant(
                 convId,
                 accumulatedContent,
@@ -617,18 +632,21 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             if (data.usage) usage = data.usage;
             if (data.complexity) complexity = data.complexity;
             if (data.audio) audio = data.audio;
+            if (data.audio) incrementalSpeech?.cancel();
             if (delta?.content) {
               if (!ttftMs) ttftMs = Date.now() - startTime;
               accumulatedContent += delta.content;
-              setStreamState({ content: accumulatedContent, phase: '' });
+              incrementalSpeech?.push(delta.content);
 
               const now = Date.now();
-              if (now - lastFlush >= 80) {
-                updateLastAssistant(
-                  convId,
-                  accumulatedContent,
-                  toolCalls.length > 0 ? [...toolCalls] : undefined,
-                );
+              if (
+                shouldFlushStreamRender(
+                  now,
+                  lastFlush,
+                  accumulatedContent.length,
+                )
+              ) {
+                setStreamState({ content: accumulatedContent, phase: '' });
                 lastFlush = now;
               }
             }
@@ -713,20 +731,40 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       });
       abortRef.current = null;
 
+      const incrementalSpeechResult = incrementalSpeech?.finish();
+
       // Voice replies and interactive morning digests use browser-side TTS
       // after the text is already visible. Fire-and-forget: this keeps the
       // slower media request out of the chat response's critical path.
       //
-      // Holding a request-level playback claim here, ahead of the actual
-      // player mounting,
-      // matters: resetStream() above already dropped isStreaming, which
-      // re-enables the wake-word listener. Without staking this claim
-      // immediately, there's an unguarded window between stream end and
-      // the synthesized audio actually starting — long enough (a network
-      // round trip to the TTS backend) for the wake word to hear ambient
-      // noise, false-trigger, and start a new recording before the reply
-      // has even started speaking.
-      if (
+      // Incremental playback deliberately makes no optimistic audio claim:
+      // the Flux turn remains active while generation/TTS is pending, and the
+      // streaming hook marks audioPlaying only when Cartesia announces the
+      // first real PCM. This keeps the orb truthful without re-arming the mic.
+      if (incrementalSpeechResult) {
+        incrementalSpeechResult
+          .then((outcome) => {
+            if (outcome !== 'failed-before-audio') return;
+            // No streamed audio was heard, so batch fallback cannot replay
+            // any opening. A manual Stop resolves as cancelled and never
+            // reaches this branch.
+            return synthesizeSpeech(accumulatedContent, {
+              voice_id: ttsVoice.id,
+              speed: ttsVoice.speed,
+              volume: ttsVoice.volume,
+            }).then((meta) => {
+              updateLastAssistant(
+                convId,
+                accumulatedContent,
+                undefined,
+                undefined,
+                undefined,
+                { url: meta.url, autoPlay: true },
+              );
+            });
+          })
+          .catch(() => {});
+      } else if (
         voiceRepliesEnabled &&
         shouldSynthesizeReplyAudio(
           wasVoice,
@@ -798,9 +836,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     deepResearch,
     temperature,
     maxTokens,
-      speakStreaming,
-      voiceRepliesEnabled,
-      ttsVoice,
+    beginStreamingSpeech,
+    speakStreaming,
+    voiceRepliesEnabled,
+    ttsVoice,
   ]);
 
   // Hands-free stop: transcribes and sends immediately, unlike a manual
@@ -1322,51 +1361,53 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           style={{ color: 'var(--color-text)', maxHeight: '200px' }}
           disabled={streamState.isStreaming || modelLoading}
         />
-        {isCurrentChatStreaming ? (
-          <button
-            onClick={stopStreaming}
-            className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer"
-            style={{ background: 'var(--color-error)', color: 'var(--color-on-accent)' }}
-            title="Stop generating"
-          >
-            <Square size={16} />
-          </button>
-        ) : (
-          <div className="flex items-center gap-1">
-            {audioPlaying && (
-              <button
-                onClick={stopSpeaking}
-                title="Stop speaking"
-                aria-label="Stop speaking"
-                className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer"
-                style={{
-                  background: 'var(--color-bg-tertiary)',
-                  color: 'var(--color-accent)',
-                }}
-              >
-                <VolumeX size={16} />
-              </button>
-            )}
-            <MicButton
-              state={effectiveSpeechState}
-              onClick={handleMicClick}
-              disabled={micDisabled}
-              reason={micReason}
-            />
+        <div className="flex items-center gap-1">
+          {audioPlaying && (
             <button
-              onClick={() => sendMessage()}
-              disabled={streamState.isStreaming || !input.trim() || modelLoading || !selectedModel}
-              title={selectedModel ? 'Send message' : 'Pick a model first (⌘K)'}
-              className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer disabled:opacity-30 disabled:cursor-default"
+              onClick={stopSpeaking}
+              title="Stop speaking"
+              aria-label="Stop speaking"
+              className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer"
               style={{
-                background: input.trim() ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
-                color: input.trim() ? 'white' : 'var(--color-text-tertiary)',
+                background: 'var(--color-bg-tertiary)',
+                color: 'var(--color-accent)',
               }}
             >
-              <Send size={16} />
+              <VolumeX size={16} />
             </button>
-          </div>
-        )}
+          )}
+          {isCurrentChatStreaming ? (
+            <button
+              onClick={stopStreaming}
+              className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer"
+              style={{ background: 'var(--color-error)', color: 'var(--color-on-accent)' }}
+              title="Stop generating"
+            >
+              <Square size={16} />
+            </button>
+          ) : (
+            <>
+              <MicButton
+                state={effectiveSpeechState}
+                onClick={handleMicClick}
+                disabled={micDisabled}
+                reason={micReason}
+              />
+              <button
+                onClick={() => sendMessage()}
+                disabled={streamState.isStreaming || !input.trim() || modelLoading || !selectedModel}
+                title={selectedModel ? 'Send message' : 'Pick a model first (⌘K)'}
+                className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer disabled:opacity-30 disabled:cursor-default"
+                style={{
+                  background: input.trim() ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                  color: input.trim() ? 'white' : 'var(--color-text-tertiary)',
+                }}
+              >
+                <Send size={16} />
+              </button>
+            </>
+          )}
+        </div>
       </div>
       <div className="flex items-center justify-center mt-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
         <span>

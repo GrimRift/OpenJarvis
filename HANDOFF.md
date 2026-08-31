@@ -6,6 +6,7 @@ Build Sage into a broadly capable Windows assistant. Expand access progressively
 
 ## Verified completed work
 
+- **Sentence-buffered incremental TTS and long-history tool replay fixed (2026-08-31).** Voice-originated replies now keep streaming their exact model text into chat/history while a separate speech-only sanitizer emits completed sentences or safe clauses through one server-proxied Cartesia WebSocket context per assistant turn. Returned PCM stays ordered in the existing Web Audio queue; bounded frontend/server queues apply backpressure; Stop immediately clears scheduled/queued audio, cancels the Cartesia context, and rejects late frames without truncating chat. Pre-audio failures retain the safe batch fallback, while post-audio failures never replay from the beginning. Markdown, split URLs, paths, authentication codes, UUIDs, and long identifiers are held across model deltas until safely sanitized. Adaptive render batching restored token counters and prevents long streamed answers from making the chat UI laggy; the orb claims speaking only when audio is actually queued or playing, not while text alone is generating. A follow-up defect exposed by a 3,406-token tool-assisted answer was also fixed: the 8,000-token history window could retain a small `tool` result after dropping its large assistant `tool_calls` parent, producing OpenAI 400 on every later message. `LoopGuard` now repairs malformed history and treats each tool-call turn plus all results as an atomic unit, while `BaseAgent` no longer duplicates a persona-aware system prompt already assembled by the web route. The user accepted the voice behavior, and the same affected conversation shape was live-replayed after restart with HTTP 200, a complete SSE stream, assistant text, and no invalid-tool-history error.
 - **Speech-only sanitization and speaking-orb playback lifecycle fixed (2026-08-31).** Sage now creates a separate sanitized string only at the TTS boundary: complete URLs, file paths, authentication codes, UUIDs, and long identifiers remain intact in chat text, stored conversation history, and internal tool results, while spoken audio refers to the exact value as visible in chat. The direct `text_to_speech` tool path now follows the same rule as voice replies, streaming speech, and morning digests. The orb no longer stops early because audio state is now owned per playback source; streaming TTS waits for the server to finish, the final browser audio source to end, and the browser/device output-latency tail before releasing its claim. Playback generations prevent stale callbacks or timers from clearing a newer utterance. Focused Python tests passed (**70**), the full frontend suite passed (**164**), Ruff and `git diff --check` were clean, the frontend production build succeeded, and the refreshed live Sage UI served the current bundle with backend health `ok` and no browser errors. The user then confirmed the behavior looked good.
 - **Manual hidden Sage Start Menu launchers added and live-verified (2026-08-30).** Sage does not auto-start with Windows. The `Sage` shortcut manually runs `jarvis serve` on `127.0.0.1:8000` plus the Vite frontend on `127.0.0.1:5173`, waits for both health checks, and opens `http://localhost:5173` only when it actually started a missing component; clicking it while both are already healthy exits silently, avoiding duplicate browser tabs. A named mutex prevents overlapping launch attempts, which previously caused a false two-minute timeout after one competing Vite process had already claimed port 5173. The `Stop Sage` shortcut checks that each listener's command line belongs to `C:\AI\OpenJarvis-Lab` before stopping it and refuses an unrelated port owner. Version-controlled sources are `scripts/start-sage.ps1`, `scripts/start-sage-hidden.vbs`, `scripts/stop-sage.ps1`, and `scripts/stop-sage-hidden.vbs`; installed copies are under `C:\AI\OpenJarvis-Data\scripts\`, shortcuts are `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Sage.lnk` and `Stop Sage.lnk`, and logs are under `C:\AI\OpenJarvis-Data\logs\`. Start was live-verified with backend status `ok` and frontend HTTP 200; Stop was user-invoked and verified afterward with both endpoints unreachable, zero listeners on 8000/5173, zero Sage processes, and a clean Git worktree/index. No history, configuration, credentials, or stored data are deleted by either launcher.
 - M22–M25 were consolidated in `76da347`: hardened explicit-file `git_commit`; fail-closed directory scoping; sensitive-file blocking in Python and Rust; Tavily-only web search; restored 35-test web-search coverage; Web-enabled Deep Research across both separate agent implementations; and live-tested Obsidian ingestion at `C:\AI\Sage-Vault`.
@@ -46,14 +47,16 @@ Build Sage into a broadly capable Windows assistant. Expand access progressively
 
 - Repo: `C:\AI\OpenJarvis-Lab`
 - Branch: `feature/sage-customization`
-- Latest HEAD is the commit containing this handoff plus the speech-only sanitization and orb playback-lifecycle fix; use `git log -1 --oneline` for its exact hash.
-- Parent before this commit: `d25324a3` (`feat: add manual Sage start and stop launchers`).
-- `origin/feature/sage-customization` remains at `3f55362f`; after this commit the local branch is **ahead by 3**. Nothing from this slice has been pushed; do not push without explicit approval.
-- The working tree and index are expected to be clean after this commit. The 12 committed files are this handoff plus the 11 voice implementation/test files listed by the commit.
+- Latest HEAD is the commit containing this handoff, sentence-buffered incremental TTS, streamed-agent rendering/usage repairs, and atomic tool-history trimming; use `git log -1 --oneline` for its exact hash.
+- Parent before this commit: `b00b7cd3` (`fix: sanitize spoken replies and sync orb playback`).
+- `origin/feature/sage-customization` remains at `3f55362f`; after this commit the local branch is **ahead by 4**. Nothing from this slice has been pushed; do not push without explicit approval.
+- The working tree and index are expected to be clean after this commit. The 25 committed files are this handoff plus the 24 incremental-TTS, streaming-render, history-repair, and regression-test files listed by the commit.
 - `C:\AI\OpenJarvis-Data\config.toml`, `C:\AI\Sage-Vault\Class Schedule.md`, `C:\AI\OpenJarvis-Data\scheduler.db`, and the Windows Task Scheduler entry / VBScript wrapper are all outside this repo's Git tree — never part of any commit, tracked here in HANDOFF.md instead. The Colab notebook used to retrain the wake-word model, and the trained model files themselves (`C:\AI\Hey_Sage.onnx`, `C:\AI\Hey_Sage_verifier.pkl`, backup at `C:\AI\Hey_Sage.onnx.bak-20260822-141101`), are likewise outside this repo.
 
 ## Verification
 
+- Incremental TTS/stream-render slice (2026-08-31): focused backend suite **141 passed** and frontend suite **176 passed**; focused Ruff, frontend lint/build, and production bundle build passed. Regression coverage includes speech beginning before model completion, ordered sentence delivery/final-tail flush, secret-like material split across deltas, unchanged chat/history, Stop/context cancellation and late-frame rejection, pre-audio fallback versus post-audio no-replay, queue bounds, disconnect cleanup, truthful orb state, usage counters, and adaptive long-answer rendering.
+- Long-history tool replay repair (2026-08-31): both new regressions were confirmed failing on the unfixed code. Focused loop-guard/message-building suite **32 passed**; broader `test_loop_guard.py`, `test_base_agent.py`, `test_orchestrator.py`, and `test_routes.py` run had **138 passed** with only the documented pre-existing `TestToolUsingAgent::test_default_max_turns` assertion failing (`15` configured versus stale expected `10`). Ruff and `git diff --check` passed on the repair. Sage restarted cleanly, `/health` returned `ok`, and a live `gpt-5.6-luna` request carrying a long assistant answer plus historical tool call/result completed HTTP 200 with `[DONE]`, assistant text, and no invalid-tool-history error.
 - Speech-only sanitization/orb lifecycle slice (2026-08-31): focused Python speech/TTS/server/digest suite **70 passed**; full frontend suite **164 passed**; Ruff clean on the four touched Python implementation/test files; production frontend build succeeded; `git diff --check` clean. Sanitization benchmark was approximately **0.547 ms per 5,000-character transform** over 1,000 runs. Live Sage served the refreshed `/assets/index-DPUpgOoj.js` bundle, backend health returned `ok`, the browser reported no errors, and the user accepted the observed result. The deterministic tests cover playback ownership, stale-generation rejection, and base-plus-output-latency tail handling; an additional microphone permission prompt was deliberately not forced during final browser inspection.
 - Focused Gmail, checkpoint, config, OAuth, connector API, and Deep Research suite: **130 passed** (prior session).
 - `tests/cli/test_connect.py`: **12 passed** (9 prior + 3 new for `--sync`), Ruff clean on `connect_cmd.py` and the test file.
@@ -822,16 +825,19 @@ and `test_get_latest_checkpoint` both seen); each passes alone.
 M28 is shipped. The M31-adjacent wake-word and voice-customization slice is now
 functionally complete: the wake model, selectable Sonic 3.6 voices, matching
 acknowledgement clips, digest voice routing, speech-only sensitive-value
-sanitization, and speaking-orb response are all implemented and verified. The
-orb now follows the actual playback lifecycle through the final output-latency
-tail; there is no known open issue in this voice slice after user acceptance.
+sanitization, sentence-buffered incremental TTS, Stop semantics, adaptive
+stream rendering, and speaking-orb response are all implemented and verified.
+The orb now follows actual queued/audible playback through the final
+output-latency tail, and long tool-assisted conversations remain provider-valid
+after trimming. There is no known open issue in this voice slice after user
+acceptance.
 
 Next candidates, in order:
 
-1. Observe normal conversations before changing history handling. If the
-   current 8,000-token sliding window loses context the user expected Sage to
-   retain, build the deferred rolling conversation summary; otherwise preserve
-   the current cache-friendly path.
+1. Observe normal conversations after the atomic tool-history repair. The
+   reported summary failure was malformed trimming rather than proof that a
+   rolling summary is required; build the deferred rolling summary only if the
+   valid 8,000-token window later loses useful conversational detail.
 2. Close remaining integration hygiene: resolve Google Tasks/OAuth publishing,
    and either connect Slack or remove the permanently unavailable iMessage and
    unused Slack checks from the digest.

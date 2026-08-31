@@ -168,10 +168,14 @@ export function ChatArea() {
             {messages.map((msg, i) => {
               const isLastAssistant =
                 i === messages.length - 1 && msg.role === 'assistant';
+              const displayedMessage =
+                isLastAssistant && isCurrentChatStreaming && currentStreamContent
+                  ? { ...msg, content: currentStreamContent }
+                  : msg;
               return (
                 <MessageBubble
                   key={msg.id}
-                  message={msg}
+                  message={displayedMessage}
                   isLive={isLastAssistant && isCurrentChatStreaming}
                 />
               );

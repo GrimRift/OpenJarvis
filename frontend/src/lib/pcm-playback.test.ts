@@ -6,6 +6,7 @@ import {
   nextStartTime,
   outputTailDelayMs,
   PlaybackGeneration,
+  shouldShowSpeakingState,
 } from './pcm-playback';
 
 function pcm(values: number[]): ArrayBuffer {
@@ -82,6 +83,12 @@ describe('playback completion', () => {
 });
 
 describe('interpretTtsMessage', () => {
+  it('marks the incremental context ready before any audio exists', () => {
+    expect(
+      interpretTtsMessage(JSON.stringify({ type: 'ready', sample_rate: 24000 })),
+    ).toEqual({ kind: 'ready', sampleRate: 24000 });
+  });
+
   it('reads the start event and its sample rate', () => {
     expect(
       interpretTtsMessage(JSON.stringify({ type: 'start', sample_rate: 24000 })),
@@ -123,5 +130,19 @@ describe('interpretTtsMessage', () => {
     expect(interpretTtsMessage(JSON.stringify({ type: 'wat' })).kind).toBe(
       'ignored',
     );
+  });
+});
+
+describe('speaking state', () => {
+  it('stays idle while the TTS context is only ready', () => {
+    expect(
+      shouldShowSpeakingState({ kind: 'ready', sampleRate: 24000 }),
+    ).toBe(false);
+  });
+
+  it('starts only when the first audio frame is announced', () => {
+    expect(
+      shouldShowSpeakingState({ kind: 'start', sampleRate: 24000 }),
+    ).toBe(true);
   });
 });

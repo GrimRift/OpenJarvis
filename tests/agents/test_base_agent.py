@@ -237,7 +237,10 @@ class TestBuildMessages:
 
         messages = agent._build_messages("new", AgentContext(conversation=conv))
 
-        assert any(message.content == "You are helpful." for message in messages)
+        system_messages = [
+            message for message in messages if message.role == Role.SYSTEM
+        ]
+        assert [message.content for message in system_messages] == ["You are helpful."]
 
 
 class TestGenerate:

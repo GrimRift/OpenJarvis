@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from openjarvis.core.events import EventBus, EventType
@@ -193,6 +193,89 @@ class LoopGuard:
         return getattr(msg, "role", None) == "tool"
 
     @staticmethod
+    def _is_assistant(msg: object) -> bool:
+        """Check if a message has role == assistant."""
+        return getattr(msg, "role", None) == "assistant"
+
+    @classmethod
+    def _repair_tool_history(cls, messages: list) -> list:
+        """Drop or downgrade tool exchanges that providers would reject.
+
+        OpenAI requires every ``tool`` result to belong to the immediately
+        preceding assistant tool-call turn. History can arrive malformed from
+        an older client, and a sliding window must not create the same invalid
+        shape by keeping a small result after dropping its larger parent.
+        """
+        repaired: list = []
+        changed = False
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            tool_calls = (
+                list(getattr(message, "tool_calls", None) or [])
+                if cls._is_assistant(message)
+                else []
+            )
+            if tool_calls:
+                result_end = index + 1
+                results = []
+                while result_end < len(messages) and cls._is_tool(
+                    messages[result_end]
+                ):
+                    results.append(messages[result_end])
+                    result_end += 1
+
+                call_ids = [getattr(call, "id", "") for call in tool_calls]
+                declared_ids = set(call_ids)
+                matched = []
+                matched_ids = set()
+                for result in results:
+                    result_id = getattr(result, "tool_call_id", None)
+                    if result_id in declared_ids and result_id not in matched_ids:
+                        matched.append(result)
+                        matched_ids.add(result_id)
+
+                complete = (
+                    bool(declared_ids)
+                    and len(declared_ids) == len(call_ids)
+                    and matched_ids == declared_ids
+                )
+                if complete:
+                    repaired.append(message)
+                    repaired.extend(matched)
+                    changed = changed or len(matched) != len(results)
+                else:
+                    if getattr(message, "content", None):
+                        repaired.append(replace(message, tool_calls=None))
+                    changed = True
+                index = result_end
+                continue
+
+            if cls._is_tool(message):
+                changed = True
+            else:
+                repaired.append(message)
+            index += 1
+
+        return repaired if changed else messages
+
+    @classmethod
+    def _conversation_units(cls, messages: list) -> list[list]:
+        """Group an assistant tool-call turn with all of its tool results."""
+        units: list[list] = []
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            unit = [message]
+            index += 1
+            if cls._is_assistant(message) and getattr(message, "tool_calls", None):
+                while index < len(messages) and cls._is_tool(messages[index]):
+                    unit.append(messages[index])
+                    index += 1
+            units.append(unit)
+        return units
+
+    @staticmethod
     def _approx_tokens(messages: list) -> int:
         """Rough token count. Deliberately dependency-free — this decides how
         much to drop, not what to bill, so ~4 chars per token is enough."""
@@ -225,12 +308,15 @@ class LoopGuard:
         repeated prompt served from cache, so invalidating it every turn costs
         far more than the trimming saves. Trim once per request instead.
 
+        Before applying the two compression stages, malformed historical tool
+        messages are removed. Tool-call turns are then treated as atomic units
+        so no stage can separate a result from its assistant parent.
+
         Stages:
         1. Summarize old tool results (replace content with "[Tool result truncated]")
-        2. Sliding window — keep system + the most recent messages that fit
-        3. Drop tool call/result pairs from the middle
-        4. Truncate to system + last 2 exchanges
+        2. Sliding window — keep system + the most recent complete units that fit
         """
+        messages = self._repair_tool_history(messages)
         if not self._needs_compression(messages, apply_token_budget):
             return messages
 
@@ -259,45 +345,31 @@ class LoopGuard:
         if not self._needs_compression(compressed, apply_token_budget):
             return compressed
 
-        # Stage 2: Sliding window — keep system + the most recent that fit.
-        # Walks from the newest backwards so the turn the user is actually in
-        # always survives, even when a single message exceeds the budget.
+        # Stage 2: Sliding window — keep system + the most recent complete
+        # conversation units that fit. A tool-call assistant and its results
+        # are one unit; splitting them creates provider-invalid history.
         system_msgs = [m for m in compressed if self._is_system(m)]
         non_system = [m for m in compressed if not self._is_system(m)]
         max_msgs = max(0, self._config.max_context_messages - len(system_msgs))
         budget = self._config.max_context_tokens if apply_token_budget else 0
         if budget > 0:
             budget = max(0, budget - self._approx_tokens(system_msgs))
-        kept: list = []
+        units = self._conversation_units(non_system)
+        kept_units: list[list] = []
+        kept_messages = 0
         used = 0
-        for msg in reversed(non_system):
-            if len(kept) >= max_msgs:
+        for unit in reversed(units):
+            unit_messages = len(unit)
+            cost = self._approx_tokens(unit)
+            if kept_units and kept_messages + unit_messages > max_msgs:
                 break
-            cost = self._approx_tokens([msg])
-            if budget > 0 and kept and used + cost > budget:
+            if budget > 0 and kept_units and used + cost > budget:
                 break
-            kept.append(msg)
+            kept_units.append(unit)
+            kept_messages += unit_messages
             used += cost
-        compressed = system_msgs + list(reversed(kept))
-
-        if not self._needs_compression(compressed, apply_token_budget):
-            return compressed
-
-        # Stage 3: Drop tool call/result pairs from middle
-        keep_start = max(
-            len(system_msgs),
-            len(compressed) // 10,
-        )
-        keep_end = len(compressed) // 2
-        compressed = compressed[:keep_start] + compressed[-keep_end:]
-
-        if not self._needs_compression(compressed, apply_token_budget):
-            return compressed
-
-        # Stage 4: Extreme — system + last 2 exchanges
-        sys_final = [m for m in compressed if self._is_system(m)]
-        tail = [m for m in compressed if not self._is_system(m)]
-        return sys_final + tail[-4:]
+        kept = [message for unit in reversed(kept_units) for message in unit]
+        return system_msgs + kept
 
     def reset(self) -> None:
         """Reset all tracking state — always via Rust backend."""

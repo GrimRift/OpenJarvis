@@ -68,10 +68,16 @@ export class PlaybackGeneration {
 }
 
 export type TtsStreamEvent =
+  | { kind: 'ready'; sampleRate: number }
   | { kind: 'start'; sampleRate: number }
   | { kind: 'done' }
   | { kind: 'error'; reason: string; started: boolean }
   | { kind: 'ignored' };
+
+/** The orb may say "speaking" only after the relay announces real audio. */
+export function shouldShowSpeakingState(event: TtsStreamEvent): boolean {
+  return event.kind === 'start';
+}
 
 /**
  * Interpret one control message from the relay.
@@ -88,6 +94,10 @@ export function interpretTtsMessage(raw: string): TtsStreamEvent {
     return { kind: 'ignored' };
   }
   switch (msg.type) {
+    case 'ready': {
+      const rate = Number(msg.sample_rate);
+      return { kind: 'ready', sampleRate: rate > 0 ? rate : 24000 };
+    }
     case 'start': {
       const rate = Number(msg.sample_rate);
       return { kind: 'start', sampleRate: rate > 0 ? rate : 24000 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldSynthesizeReplyAudio } from './audio-policy';
+import { isDigestPrompt, shouldSynthesizeReplyAudio } from './audio-policy';
 
 describe('shouldSynthesizeReplyAudio', () => {
   it('defers voice replies and morning digests to the browser TTS path', () => {
@@ -11,5 +11,12 @@ describe('shouldSynthesizeReplyAudio', () => {
     expect(shouldSynthesizeReplyAudio(true, 'Hello', true, 'Hello, sir.')).toBe(false);
     expect(shouldSynthesizeReplyAudio(false, 'Hello', false, 'Hello, sir.')).toBe(false);
     expect(shouldSynthesizeReplyAudio(true, 'Hello', false, '')).toBe(false);
+  });
+});
+
+describe('isDigestPrompt', () => {
+  it('identifies prompts that may return their own built-in audio', () => {
+    expect(isDigestPrompt('Give me my morning digest')).toBe(true);
+    expect(isDigestPrompt('Who are you?')).toBe(false);
   });
 });

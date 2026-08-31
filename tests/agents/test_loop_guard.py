@@ -230,6 +230,69 @@ class TestTokenAwareCompression:
 
         assert out[0].content == "You are Sage."
 
+    def test_token_window_never_orphans_a_tool_result(self):
+        """A large answer must not be cut away from its tool result.
+
+        This reproduces the web-chat failure where a follow-up summary request
+        kept the small ``tool`` message but dropped the preceding assistant
+        message carrying ``tool_calls``. OpenAI rejects that history with 400.
+        """
+        from openjarvis.core.types import Message, Role, ToolCall
+
+        guard = self._guard(max_context_tokens=300)
+        messages = [
+            Message(role=Role.SYSTEM, content="s" * 400),
+            Message(role=Role.USER, content="Research the game requirements."),
+            Message(
+                role=Role.ASSISTANT,
+                content="Long researched answer. " + "a" * 1000,
+                tool_calls=[
+                    ToolCall(
+                        id="call_search",
+                        name="web_search",
+                        arguments='{"query":"game requirements"}',
+                    )
+                ],
+            ),
+            Message(
+                role=Role.TOOL,
+                content="Search result",
+                tool_call_id="call_search",
+                name="web_search",
+            ),
+            Message(role=Role.USER, content="Summarize all of that."),
+        ]
+
+        out = guard.compress_context(messages)
+
+        for index, message in enumerate(out):
+            if message.role != Role.TOOL:
+                continue
+            preceding = out[index - 1] if index else None
+            assert preceding is not None
+            assert preceding.role == Role.ASSISTANT
+            assert preceding.tool_calls
+            assert message.tool_call_id in {call.id for call in preceding.tool_calls}
+
+    def test_compression_discards_an_already_orphaned_tool_result(self):
+        from openjarvis.core.types import Message, Role
+
+        guard = self._guard(max_context_messages=3, max_context_tokens=0)
+        messages = [
+            Message(role=Role.SYSTEM, content="sys"),
+            Message(role=Role.USER, content="Earlier question"),
+            Message(
+                role=Role.TOOL,
+                content="orphan",
+                tool_call_id="missing-call",
+            ),
+            Message(role=Role.USER, content="Continue"),
+        ]
+
+        out = guard.compress_context(messages)
+
+        assert all(message.role != Role.TOOL for message in out)
+
     def test_a_short_conversation_is_untouched(self):
         guard = self._guard(max_context_tokens=8000)
         messages = self._history(2, chars=50)
@@ -299,6 +362,8 @@ class TestPrefixStabilityForPromptCache:
     def test_trimming_every_turn_really_would_move_it(self):
         """The contrast case, so this stays a demonstrated problem rather than
         a hypothetical one: the same loop with the budget applied per turn."""
+        from openjarvis.core.types import Message, Role, ToolCall
+
         guard = self._guard(max_context_tokens=500)
         messages = guard.compress_context(self._long_history())
         first = messages[0]
@@ -306,7 +371,19 @@ class TestPrefixStabilityForPromptCache:
 
         moved = False
         for turn in range(5):
-            messages = messages + [self._msg("tool", f"result {turn} " + "z" * 4000)]
+            call_id = f"call_{turn}"
+            messages = messages + [
+                Message(
+                    role=Role.ASSISTANT,
+                    content="",
+                    tool_calls=[ToolCall(id=call_id, name="lookup", arguments="{}")],
+                ),
+                Message(
+                    role=Role.TOOL,
+                    content=f"result {turn} " + "z" * 4000,
+                    tool_call_id=call_id,
+                ),
+            ]
             messages = guard.compress_context(messages)
             if messages[0] is not first or messages[1] is not second:
                 moved = True

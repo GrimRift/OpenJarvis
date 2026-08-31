@@ -69,6 +69,180 @@ _BLANK_RUN = re.compile(r"\n{3,}")
 _TRAILING_VALUE_PUNCTUATION = ".,;:!?)]}"
 
 
+class SpokenTextOverflow(ValueError):
+    """Raised when an unfinished speech segment exceeds its memory bound."""
+
+
+def _has_unfinished_emphasis(text: str) -> bool:
+    """Detect emphasis delimiters that still need a closing model delta."""
+    without_bullets = re.sub(r"^\s*[-*+•]\s+", "", text, flags=re.MULTILINE)
+    without_complete = _EMPHASIS.sub("", without_bullets)
+    return bool(
+        re.search(
+            r"(?<!\w)(?:\*{1,3}|_{1,3})(?=\S)"
+            r"|(?<=\S)(?:\*{1,3}|_{1,3})(?!\w)",
+            without_complete,
+        )
+    )
+
+
+def _completed_speech_boundaries(text: str) -> list[int]:
+    """Return stable sentence/clause ends outside URLs and Markdown spans.
+
+    A boundary is only stable once whitespace after its punctuation has
+    arrived. This is deliberately conservative: delaying one sentence is
+    harmless, while releasing half of a URL, path, code, identifier, or
+    Markdown target can make a value audible before the sanitizer sees it.
+    """
+    boundaries: list[int] = []
+    fence = ""
+    inline_code = False
+    link_label_depth = 0
+    link_target_depth = 0
+    unsafe_token = False
+    token_start = 0
+    segment_start = 0
+    index = 0
+
+    while index < len(text):
+        if not inline_code and not fence and text.startswith("```", index):
+            fence = "```"
+            index += 3
+            continue
+        if not inline_code and not fence and text.startswith("~~~", index):
+            fence = "~~~"
+            index += 3
+            continue
+        if fence:
+            if text.startswith(fence, index):
+                index += len(fence)
+                fence = ""
+            else:
+                index += 1
+            continue
+        char = text[index]
+        if char == "`":
+            inline_code = not inline_code
+            index += 1
+            continue
+        if inline_code:
+            index += 1
+            continue
+
+        if char == "[" and link_target_depth == 0:
+            link_label_depth += 1
+        elif char == "]" and link_label_depth:
+            link_label_depth -= 1
+            if index + 1 < len(text) and text[index + 1] == "(":
+                link_target_depth = 1
+                index += 2
+                continue
+        elif link_target_depth:
+            if char == "(":
+                link_target_depth += 1
+            elif char == ")":
+                link_target_depth -= 1
+                if link_target_depth == 0:
+                    # The URL/path inside the Markdown target is complete;
+                    # punctuation after the closing parenthesis belongs to
+                    # the prose and may safely end a sentence.
+                    unsafe_token = False
+                    token_start = index + 1
+
+        if char.isspace():
+            unsafe_token = False
+            token_start = index + 1
+        elif index == token_start:
+            unsafe_token = char in "/\\" or (
+                index + 2 < len(text)
+                and char.isalpha()
+                and text[index + 1] == ":"
+                and text[index + 2] in "/\\"
+            )
+        elif not unsafe_token:
+            token = text[token_start : index + 1].lower()
+            unsafe_token = "://" in token or token.startswith("www.")
+
+        next_is_space = index + 1 < len(text) and text[index + 1].isspace()
+        outside_markup = link_label_depth == 0 and link_target_depth == 0
+        if next_is_space and outside_markup and not unsafe_token:
+            if char in ".!?":
+                if not _has_unfinished_emphasis(text[segment_start : index + 1]):
+                    boundaries.append(index + 1)
+                    segment_start = index + 1
+            elif char in ";:" and index + 1 - segment_start >= 80:
+                if not _has_unfinished_emphasis(text[segment_start : index + 1]):
+                    boundaries.append(index + 1)
+                    segment_start = index + 1
+            elif char == "\n" and index + 1 - segment_start >= 40:
+                if not _has_unfinished_emphasis(text[segment_start : index + 1]):
+                    boundaries.append(index + 1)
+                    segment_start = index + 1
+        index += 1
+    return boundaries
+
+
+def _safe_final_text(text: str) -> str:
+    """Drop an unfinished Markdown tail rather than reading its syntax."""
+    for marker in ("```", "~~~"):
+        if text.count(marker) % 2:
+            text = text[: text.rfind(marker)]
+    if text.count("`") % 2:
+        text = text[: text.rfind("`")]
+    open_label = text.rfind("[")
+    close_label = text.rfind("]")
+    if open_label > close_label:
+        text = text[:open_label]
+    open_target = text.rfind("](")
+    close_target = text.rfind(")")
+    if open_target > close_target:
+        text = text[: text.rfind("[", 0, open_target + 1)]
+    return text
+
+
+class SpokenTextStream:
+    """Buffer raw model deltas and release only stable sanitized speech."""
+
+    def __init__(self, *, max_pending_chars: int = 4096) -> None:
+        if max_pending_chars <= 0:
+            raise ValueError("max_pending_chars must be positive")
+        self._pending = ""
+        self._max_pending_chars = max_pending_chars
+        self._finished = False
+
+    @property
+    def pending_chars(self) -> int:
+        return len(self._pending)
+
+    def push(self, delta: str) -> list[str]:
+        if self._finished or not delta:
+            return []
+        self._pending += delta
+        boundaries = _completed_speech_boundaries(self._pending)
+        segments: list[str] = []
+        consumed = 0
+        for boundary in boundaries:
+            raw = self._pending[consumed:boundary].strip()
+            consumed = boundary
+            spoken = to_spoken_text(raw)
+            if spoken:
+                segments.append(spoken)
+        if consumed:
+            self._pending = self._pending[consumed:].lstrip()
+        if len(self._pending) > self._max_pending_chars:
+            raise SpokenTextOverflow("unfinished speech segment too long")
+        return segments
+
+    def finish(self) -> list[str]:
+        if self._finished:
+            return []
+        self._finished = True
+        raw = _safe_final_text(self._pending).strip()
+        self._pending = ""
+        spoken = to_spoken_text(raw)
+        return [spoken] if spoken else []
+
+
 def _flatten_table_row(line: str) -> str:
     """Read a table row as its cells, so the bars are never spoken."""
     cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
@@ -216,4 +390,4 @@ def to_spoken_text(markdown: str) -> str:
     return text
 
 
-__all__ = ["to_spoken_text"]
+__all__ = ["SpokenTextOverflow", "SpokenTextStream", "to_spoken_text"]

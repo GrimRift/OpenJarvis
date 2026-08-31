@@ -99,7 +99,9 @@ def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message
         from openjarvis.prompt.builder import SystemPromptBuilder
 
         builder = SystemPromptBuilder(
-            agent_template=cfg.agent.system_prompt or cfg.agent.default_system_prompt or "",
+            agent_template=(
+                cfg.agent.system_prompt or cfg.agent.default_system_prompt or ""
+            ),
             memory_files_config=getattr(cfg, "memory_files", None),
             system_prompt_config=getattr(cfg, "system_prompt", None),
         )
@@ -765,6 +767,397 @@ def _handle_agent(
     return response
 
 
+def _merge_agent_tool_call_fragments(
+    accumulated: dict[int, dict[str, Any]],
+    fragments: list[dict[str, Any]],
+) -> None:
+    """Merge OpenAI-style streaming tool-call fragments by index."""
+    for fragment in fragments:
+        index = int(fragment.get("index", 0))
+        if index not in accumulated:
+            accumulated[index] = {
+                "id": fragment.get("id", "") or f"call_{index}",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            }
+        entry = accumulated[index]
+        if fragment.get("id"):
+            entry["id"] = fragment["id"]
+        function = fragment.get("function", {}) or {}
+        if function.get("name"):
+            entry["function"]["name"] += str(function["name"])
+        if function.get("arguments"):
+            entry["function"]["arguments"] += str(function["arguments"])
+
+
+async def _handle_streaming_orchestrator(
+    agent,
+    model: str,
+    req: ChatCompletionRequest,
+    complexity_info=None,
+    *,
+    trace_store=None,
+    bus=None,
+    memory_service=None,
+):
+    """Stream an OrchestratorAgent's real final-turn model deltas.
+
+    This is the async counterpart of ``OrchestratorAgent._run_function_calling``:
+    it keeps the same prompt builder, routed server-side tool set, loop guard,
+    and tool executor, while using ``engine.stream_full`` instead of waiting for
+    ``engine.generate``.  The browser therefore receives stable text while the
+    final answer is still being produced, which lets incremental TTS overlap
+    model generation without bypassing Sage's tools or persona.
+    """
+    import json as _json
+    import time
+
+    from openjarvis.agents._stubs import AgentContext
+    from openjarvis.core.types import ToolResult
+
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    input_text = req.messages[-1].content if req.messages else ""
+    query_text = input_text or ""
+
+    context = AgentContext()
+    if len(req.messages) > 1:
+        for message in _to_messages(req.messages[:-1]):
+            context.conversation.add(message)
+
+    messages = agent._build_messages(
+        input_text,
+        context,
+        system_prompt=agent._system_prompt,
+    )
+    if agent._loop_guard:
+        agent._loop_guard.reset()
+        messages = agent._trim_history_once(messages)
+
+    openai_tools = agent._executor.get_openai_tools() if agent._tools else []
+    if openai_tools and agent._route_tools:
+        from openjarvis.agents.tool_routing import route_tools, routing_text
+
+        openai_tools = route_tools(
+            openai_tools,
+            routing_text(input_text, context.conversation.messages),
+        )
+
+    telemetry_engine = _engine_key_for_model(agent._engine, model) or getattr(
+        agent._engine, "engine_id", ""
+    )
+
+    async def generate():
+        started_at = time.time()
+        full_content = ""
+        all_tool_results = []
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        turns = 0
+
+        agent._emit_turn_start(input_text)
+        first_chunk = ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+        )
+        yield f"data: {first_chunk.model_dump_json()}\n\n"
+
+        try:
+            while turns < agent._max_turns:
+                turns += 1
+                if agent._loop_guard:
+                    messages[:] = agent._loop_guard.compress_context(
+                        messages,
+                        apply_token_budget=False,
+                    )
+
+                turn_content = ""
+                tool_fragments: dict[int, dict[str, Any]] = {}
+                finish_reason = "stop"
+                turn_usage: dict[str, Any] = {}
+                stream_kwargs: dict[str, Any] = {}
+                if openai_tools:
+                    stream_kwargs["tools"] = openai_tools
+
+                async for stream_chunk in agent._engine.stream_full(
+                    messages,
+                    model=model or agent._model,
+                    temperature=agent._temperature,
+                    max_tokens=agent._max_tokens,
+                    **stream_kwargs,
+                ):
+                    if stream_chunk.content:
+                        turn_content += stream_chunk.content
+                        content_chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            model=model,
+                            choices=[
+                                StreamChoice(
+                                    delta=DeltaMessage(content=stream_chunk.content)
+                                )
+                            ],
+                        )
+                        yield f"data: {content_chunk.model_dump_json()}\n\n"
+                    if stream_chunk.tool_calls:
+                        _merge_agent_tool_call_fragments(
+                            tool_fragments,
+                            stream_chunk.tool_calls,
+                        )
+                    if stream_chunk.finish_reason:
+                        finish_reason = stream_chunk.finish_reason
+                    if stream_chunk.usage:
+                        turn_usage = stream_chunk.usage
+
+                total_prompt_tokens += int(turn_usage.get("prompt_tokens", 0) or 0)
+                total_completion_tokens += int(
+                    turn_usage.get("completion_tokens", 0) or 0
+                )
+
+                if tool_fragments:
+                    ordered = [
+                        tool_fragments[index] for index in sorted(tool_fragments)
+                    ]
+                    tool_calls = [
+                        ToolCall(
+                            id=item["id"],
+                            name=item["function"]["name"],
+                            arguments=item["function"]["arguments"] or "{}",
+                        )
+                        for item in ordered
+                    ]
+                    messages.append(
+                        Message(
+                            role=Role.ASSISTANT,
+                            content=turn_content,
+                            tool_calls=tool_calls,
+                        )
+                    )
+
+                    results_by_index: dict[int, ToolResult] = {}
+                    pending: list[tuple[int, ToolCall]] = []
+                    for index, tool_call in enumerate(tool_calls):
+                        start_payload = _json.dumps(
+                            {
+                                "id": tool_call.id,
+                                "tool": tool_call.name,
+                                "arguments": tool_call.arguments,
+                            }
+                        )
+                        yield f"event: tool_call_start\ndata: {start_payload}\n\n"
+                        if agent._loop_guard:
+                            verdict = agent._loop_guard.check_call(
+                                tool_call.name,
+                                tool_call.arguments,
+                            )
+                            if verdict.blocked:
+                                results_by_index[index] = ToolResult(
+                                    tool_name=tool_call.name,
+                                    content=f"Loop guard: {verdict.reason}",
+                                    success=False,
+                                )
+                                continue
+                        pending.append((index, tool_call))
+
+                    if agent._parallel_tools and len(pending) > 1:
+                        executed = await asyncio.gather(
+                            *[
+                                asyncio.to_thread(agent._executor.execute, tool_call)
+                                for _, tool_call in pending
+                            ]
+                        )
+                        for (index, _), tool_result in zip(
+                            pending, executed, strict=True
+                        ):
+                            results_by_index[index] = tool_result
+                    else:
+                        for index, tool_call in pending:
+                            results_by_index[index] = await asyncio.to_thread(
+                                agent._executor.execute,
+                                tool_call,
+                            )
+
+                    for index, tool_call in enumerate(tool_calls):
+                        tool_result = results_by_index[index]
+                        if agent._loop_guard and index in {
+                            pending_index for pending_index, _ in pending
+                        }:
+                            agent._loop_guard.record_result(
+                                tool_call.name,
+                                tool_call.arguments,
+                                tool_result.success,
+                            )
+                        all_tool_results.append(tool_result)
+                        messages.append(
+                            Message(
+                                role=Role.TOOL,
+                                content=tool_result.content,
+                                tool_call_id=tool_call.id,
+                                name=tool_call.name,
+                            )
+                        )
+                        end_payload = _json.dumps(
+                            {
+                                "id": tool_call.id,
+                                "tool": tool_call.name,
+                                "success": bool(tool_result.success),
+                                "result": str(tool_result.content)[:500],
+                                "metadata": (
+                                    {
+                                        "sources": tool_result.metadata.get(
+                                            "sources", []
+                                        )
+                                    }
+                                    if isinstance(tool_result.metadata, dict)
+                                    else {}
+                                ),
+                            }
+                        )
+                        yield f"event: tool_call_end\ndata: {end_payload}\n\n"
+                    continue
+
+                full_content += turn_content
+
+                # Preserve the sync agent's bounded continuation recovery.
+                for _ in range(2):
+                    if finish_reason != "length":
+                        break
+                    messages.append(Message(role=Role.ASSISTANT, content=full_content))
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content="Continue from where you left off.",
+                        )
+                    )
+                    finish_reason = "stop"
+                    continuation = ""
+                    async for stream_chunk in agent._engine.stream_full(
+                        messages,
+                        model=model or agent._model,
+                        temperature=agent._temperature,
+                        max_tokens=agent._max_tokens,
+                    ):
+                        if stream_chunk.content:
+                            continuation += stream_chunk.content
+                            content_chunk = ChatCompletionChunk(
+                                id=chunk_id,
+                                model=model,
+                                choices=[
+                                    StreamChoice(
+                                        delta=DeltaMessage(
+                                            content=stream_chunk.content
+                                        )
+                                    )
+                                ],
+                            )
+                            yield f"data: {content_chunk.model_dump_json()}\n\n"
+                        if stream_chunk.finish_reason:
+                            finish_reason = stream_chunk.finish_reason
+                        if stream_chunk.usage:
+                            total_prompt_tokens += int(
+                                stream_chunk.usage.get("prompt_tokens", 0) or 0
+                            )
+                            total_completion_tokens += int(
+                                stream_chunk.usage.get("completion_tokens", 0) or 0
+                            )
+                    full_content += continuation
+                break
+            else:
+                if not full_content:
+                    full_content = "Maximum turns reached without a final answer."
+                    content_chunk = ChatCompletionChunk(
+                        id=chunk_id,
+                        model=model,
+                        choices=[
+                            StreamChoice(delta=DeltaMessage(content=full_content))
+                        ],
+                    )
+                    yield f"data: {content_chunk.model_dump_json()}\n\n"
+
+        except Exception as exc:
+            logging.getLogger("openjarvis.server").error(
+                "Orchestrator stream error: %s",
+                exc,
+                exc_info=True,
+            )
+            error_chunk = ChatCompletionChunk(
+                id=chunk_id,
+                model=model,
+                choices=[
+                    StreamChoice(
+                        delta=DeltaMessage(
+                            content=f"Sorry, an error occurred: {exc}",
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+            )
+            yield f"data: {error_chunk.model_dump_json()}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        agent._emit_turn_end(turns=turns, content_length=len(full_content))
+        ended_at = time.time()
+        if trace_store is not None and full_content:
+            from openjarvis.traces.collector import record_response_trace
+
+            record_response_trace(
+                trace_store,
+                query=query_text,
+                result=full_content,
+                model=model,
+                engine=telemetry_engine,
+                agent=agent.agent_id,
+                started_at=started_at,
+                ended_at=ended_at,
+            )
+
+        if full_content:
+            _record_completed_exchange(
+                memory_service,
+                query_text,
+                full_content,
+                bus=bus,
+                source="server.chat.stream",
+            )
+
+        # Some streaming providers (including the currently configured OpenAI
+        # path) do not attach usage to their final delta. The old synchronous
+        # agent response always carried token counts, so falling through as
+        # zeros made the UI's input/output token figures disappear. Preserve
+        # exact provider usage when present and use the same conservative
+        # estimator as the rest of the server only when it is absent.
+        if total_prompt_tokens <= 0:
+            from openjarvis.engine._base import estimate_prompt_tokens
+
+            total_prompt_tokens = estimate_prompt_tokens(messages)
+        if total_completion_tokens <= 0 and full_content:
+            total_completion_tokens = max(1, len(full_content) // 4)
+
+        finish_chunk = ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
+        )
+        finish_data = _json.loads(finish_chunk.model_dump_json())
+        finish_data["usage"] = UsageInfo(
+            prompt_tokens=total_prompt_tokens,
+            completion_tokens=total_completion_tokens,
+            total_tokens=total_prompt_tokens + total_completion_tokens,
+        ).model_dump()
+        finish_data.setdefault("telemetry", {})
+        finish_data["telemetry"]["engine"] = telemetry_engine
+        if complexity_info is not None:
+            finish_data["complexity"] = complexity_info.model_dump()
+        yield f"data: {_json.dumps(finish_data)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 async def _handle_agent_stream(
     agent,
     model: str,
@@ -786,6 +1179,19 @@ async def _handle_agent_stream(
     Requests that explicitly supply OpenAI ``tools`` continue to use
     ``_handle_stream_tools`` so their raw tool-call deltas are preserved.
     """
+    from openjarvis.agents.orchestrator import OrchestratorAgent
+
+    if isinstance(agent, OrchestratorAgent) and agent._mode == "function_calling":
+        return await _handle_streaming_orchestrator(
+            agent,
+            model,
+            req,
+            complexity_info,
+            trace_store=trace_store,
+            bus=bus,
+            memory_service=memory_service,
+        )
+
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     query_text = ""
     for message in reversed(req.messages):

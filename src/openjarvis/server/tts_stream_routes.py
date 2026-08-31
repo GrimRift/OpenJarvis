@@ -11,13 +11,23 @@ browser talks only to this endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from openjarvis.speech.spoken_text import to_spoken_text
+from openjarvis.speech.cartesia_tts import (
+    STREAM_ENCODING,
+    STREAM_SAMPLE_RATE,
+    CartesiaTTSContext,
+)
+from openjarvis.speech.spoken_text import (
+    SpokenTextOverflow,
+    SpokenTextStream,
+    to_spoken_text,
+)
 from openjarvis.speech.voice_profiles import DEFAULT_VOICE
 
 logger = logging.getLogger(__name__)
@@ -31,6 +41,13 @@ CLOSE_UNAVAILABLE = 1011
 # or an attempt to run up a bill, so it is refused rather than truncated —
 # a half-spoken answer is worse than a clear failure.
 MAX_TEXT_CHARS = 5000
+MAX_TURN_CHARS = 20_000
+MAX_PENDING_RAW_CHARS = 4096
+MAX_PENDING_SEGMENTS = 8
+
+
+class _ClientCancelled(Exception):
+    pass
 
 
 def _resolve_voice(config: Any, requested: str) -> str:
@@ -82,19 +99,29 @@ async def tts_stream(websocket: WebSocket) -> None:
     config = getattr(websocket.app.state, "config", None)
 
     try:
+        request = await websocket.receive_json()
+        if request.get("type") == "begin":
+            await _stream_incremental_turn(websocket, config, api_key, request)
+            return
+
+        # Backward-compatible whole-transcript request for older clients and
+        # focused fallback tests. The current browser uses the incremental
+        # begin/text/finish protocol below.
         while True:
-            request = await websocket.receive_json()
             # Flattened before the length check so a markdown table is not
             # refused for characters that would never be spoken anyway.
             text = to_spoken_text(request.get("text") or "")
             if not text:
                 await websocket.send_json({"type": "error", "reason": "empty text"})
+                request = await websocket.receive_json()
                 continue
             if len(text) > MAX_TEXT_CHARS:
                 await websocket.send_json({"type": "error", "reason": "text too long"})
+                request = await websocket.receive_json()
                 continue
 
             await _speak(websocket, config, api_key, text, request)
+            request = await websocket.receive_json()
     except WebSocketDisconnect:
         return
     except Exception:  # noqa: BLE001
@@ -103,6 +130,150 @@ async def tts_stream(websocket: WebSocket) -> None:
             await websocket.close(code=CLOSE_UNAVAILABLE)
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _stream_incremental_turn(
+    websocket: WebSocket,
+    config: Any,
+    api_key: str,
+    begin: dict,
+) -> None:
+    """Buffer model deltas into safe speech on one Cartesia context."""
+    segment_queue: asyncio.Queue[tuple[str, bool] | None] = asyncio.Queue(
+        maxsize=MAX_PENDING_SEGMENTS
+    )
+    segmenter = SpokenTextStream(max_pending_chars=MAX_PENDING_RAW_CHARS)
+    total_chars = 0
+    started = False
+    finished = False
+    inputs_finished = False
+    tasks: list[asyncio.Task[Any]] = []
+
+    context = CartesiaTTSContext(
+        api_key,
+        _resolve_voice(config, begin.get("voice_id", "")),
+        speed=_resolve_speed(config, begin.get("speed")),
+        volume=_resolve_volume(config, begin.get("volume")),
+    )
+
+    async with context:
+        await websocket.send_json(
+            {
+                "type": "ready",
+                "sample_rate": STREAM_SAMPLE_RATE,
+                "encoding": STREAM_ENCODING,
+            }
+        )
+
+        async def receive_text() -> None:
+            nonlocal inputs_finished, total_chars
+            while True:
+                message = await websocket.receive_json()
+                kind = message.get("type")
+                if kind == "cancel":
+                    raise _ClientCancelled
+                if kind == "finish":
+                    if inputs_finished:
+                        continue
+                    inputs_finished = True
+                    for tail in segmenter.finish():
+                        await segment_queue.put((tail, True))
+                    await segment_queue.put(None)
+                    # Keep receiving until Cartesia's audio is fully drained.
+                    # Stop must still cancel this context after model text has
+                    # finished but while queued speech remains audible.
+                    continue
+                if kind != "text":
+                    continue
+                if inputs_finished:
+                    continue
+                delta = message.get("delta")
+                if not isinstance(delta, str) or not delta:
+                    continue
+                total_chars += len(delta)
+                if total_chars > MAX_TURN_CHARS:
+                    raise SpokenTextOverflow("speech turn too long")
+                for segment in segmenter.push(delta):
+                    # Cartesia concatenates continuations verbatim. Preserve a
+                    # word boundary after every completed sentence/clause.
+                    await segment_queue.put((segment + " ", False))
+
+        async def send_segments() -> None:
+            while True:
+                item = await segment_queue.get()
+                try:
+                    if item is None:
+                        await context.finish()
+                        return
+                    segment, _is_tail = item
+                    await context.send_text(segment)
+                finally:
+                    segment_queue.task_done()
+
+        async def relay_audio() -> None:
+            nonlocal started
+            async for chunk in context.receive_audio():
+                if not started:
+                    started = True
+                    await websocket.send_json(
+                        {
+                            "type": "start",
+                            "sample_rate": STREAM_SAMPLE_RATE,
+                            "encoding": STREAM_ENCODING,
+                        }
+                    )
+                await websocket.send_bytes(chunk)
+
+        input_task = asyncio.create_task(receive_text())
+        sender_task = asyncio.create_task(send_segments())
+        audio_task = asyncio.create_task(relay_audio())
+
+        async def await_output() -> None:
+            await asyncio.gather(sender_task, audio_task)
+
+        output_task = asyncio.create_task(await_output())
+        tasks = [input_task, sender_task, audio_task, output_task]
+        try:
+            done, _pending = await asyncio.wait(
+                {input_task, output_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if input_task in done:
+                # Normal input completion intentionally keeps listening for
+                # Stop, so this path is a cancellation, disconnect, or error.
+                await input_task
+                raise RuntimeError("incremental TTS input ended unexpectedly")
+            await output_task
+            finished = True
+            input_task.cancel()
+            await asyncio.gather(input_task, return_exceptions=True)
+            await websocket.send_json({"type": "done"})
+        except _ClientCancelled:
+            await context.cancel()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await websocket.send_json({"type": "cancelled"})
+        except WebSocketDisconnect:
+            await context.cancel()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await context.cancel()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.warning("Incremental TTS stream failed: %s", exc)
+            try:
+                await websocket.send_json(
+                    {"type": "error", "reason": str(exc), "started": started}
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            if not finished:
+                await context.cancel()
 
 
 async def _speak(
@@ -154,4 +325,9 @@ async def _speak(
     await websocket.send_json({"type": "done"})
 
 
-__all__ = ["router", "MAX_TEXT_CHARS"]
+__all__ = [
+    "MAX_PENDING_SEGMENTS",
+    "MAX_TEXT_CHARS",
+    "MAX_TURN_CHARS",
+    "router",
+]
