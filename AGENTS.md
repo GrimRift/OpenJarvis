@@ -103,6 +103,16 @@ when the seed moves is pollution, not your diff.
 Each of these cost a real debugging session. Check them before assuming a
 component works:
 
+- **The recurring shape is "the code was correct, it just was not the code
+  being run."** A second send path, a third TTS call site, a fourth tool list.
+  Behaviour tests keep passing because they exercise the path the author had in
+  mind. `tests/architecture/test_invariants.py` and
+  `frontend/src/architecture/invariants.test.ts` assert the wiring instead --
+  read them before adding a new reply, speech, or tool path, and add an
+  invariant when you create a fork someone could later miss. Write them against
+  the AST, never the source text: this file and `InputArea.tsx` both contain
+  comments naming the identifiers those tests forbid.
+
 - **`jarvis serve` does not call `SystemBuilder.build()`.** It hand-assembles a
   `JarvisSystem` inline to dodge a ~30-40s double build, so **every dependency
   the builder injects is silently absent** unless separately wired. This has
