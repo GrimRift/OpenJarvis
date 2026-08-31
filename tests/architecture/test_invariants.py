@@ -192,3 +192,46 @@ class TestOnlyTheNotifierWritesNotifyState:
             "Only the notifier may name it; a second writer re-creates the bug "
             "where checking the schedule consumed the reminder."
         )
+
+
+class TestGoogleCallsRefreshTheirToken:
+    """A Google access token lives an hour; every call must be able to refresh.
+
+    ``sync()`` always wrapped its reads in ``call_with_refresh``. The write
+    methods did not — they read the stored token directly — so accepting an
+    invite, declining one, or creating an event failed with a bare 401 for most
+    of any given day. Found live: a read through ``sync()`` worked, and
+    creating an event minutes later returned 401.
+
+    Calling a ``_gcal_api_*`` helper directly is the shape of that bug. The
+    helpers take a token as their first argument, so a direct call necessarily
+    supplies one from somewhere that cannot refresh it.
+    """
+
+    MODULE = "connectors/gcalendar.py"
+
+    def _direct_api_calls(self) -> list[str]:
+        offenders = []
+        for path, tree in _modules():
+            if _rel(path) != self.MODULE:
+                continue
+            for call in _calls(tree):
+                if (
+                    isinstance(call.func, ast.Name)
+                    and call.func.id.startswith("_gcal_api_")
+                ):
+                    offenders.append(f"{call.func.id}:{call.lineno}")
+        return offenders
+
+    def test_no_helper_is_called_outside_call_with_refresh(self):
+        assert not self._direct_api_calls(), (
+            f"called directly instead of via call_with_refresh: "
+            f"{self._direct_api_calls()}. These fail with 401 once the "
+            "hour-long access token expires."
+        )
+
+    def test_the_module_is_still_where_this_expects(self):
+        """A move would make the check above vacuously pass."""
+        assert any(_rel(path) == self.MODULE for path, _ in _modules()), (
+            f"{self.MODULE} not found — did it move?"
+        )

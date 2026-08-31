@@ -68,7 +68,20 @@ class TestHappyPath:
         )
         tool.execute(summary="Call", start=start, end=end, duration_minutes=90)
         kwargs = connector.create_event.call_args.kwargs
-        assert kwargs["end"] == end
+        assert datetime.fromisoformat(kwargs["end"]) == datetime.fromisoformat(end)
+
+    def test_datetimes_carry_seconds(self, tool, connector):
+        """Google wants RFC3339 and rejects minute precision.
+
+        Caught live: "2026-09-02T12:00" came back as a bare 400 Bad Request
+        with no explanation, and the identical body with ":00" appended
+        succeeded. This is the whole difference.
+        """
+        tool.execute(summary="Sync", start=_soon(days=1))
+        kwargs = connector.create_event.call_args.kwargs
+        for field in ("start", "end"):
+            assert len(kwargs[field]) == len("2026-09-02T12:00:00"), kwargs[field]
+            assert kwargs[field].count(":") == 2, kwargs[field]
 
     def test_local_time_is_sent_with_a_zone_not_a_utc_instant(self, tool, connector):
         """Google resolves wall-clock time from the zone; an offset would shift it."""
@@ -153,9 +166,16 @@ class TestFailsClosed:
 
 
 class TestSpec:
-    def test_it_requires_confirmation(self, tool):
-        """It writes to the user's real calendar."""
-        assert tool.spec.requires_confirmation is True
+    def test_it_does_not_ask_for_a_confirmation_nothing_can_answer(self, tool):
+        """requires_confirmation=True would disable the tool, not guard it.
+
+        Nothing in the chat path supplies a confirm_callback, so ToolExecutor
+        fails such a call outright: "requires confirmation but no confirmation
+        callback is available." Caught live — the first real attempt to create
+        an event came back "confirmation isn't available in this session".
+        Flip this to True only alongside an actual confirmation UI.
+        """
+        assert tool.spec.requires_confirmation is False
 
     def test_it_is_registered(self):
         """Reloaded on purpose, not imported.

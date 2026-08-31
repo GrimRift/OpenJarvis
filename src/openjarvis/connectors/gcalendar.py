@@ -444,14 +444,11 @@ class GCalendarConnector(BaseConnector):
         self._items_synced = synced
         self._last_sync = datetime.now()
 
-    def _get_token(self) -> str:
-        tokens = load_tokens(self._credentials_path)
-        if not tokens:
-            raise RuntimeError("Google Calendar not authenticated")
-        token = tokens.get("access_token", tokens.get("token", ""))
-        if not token:
-            raise RuntimeError("Google Calendar token missing")
-        return token
+    # _get_token() was removed rather than left unused. It read the stored
+    # access token with no refresh, and every write method that used it broke
+    # with 401 once the hour-long token expired — which is how creating an
+    # event failed live minutes after a read through sync() had worked.
+    # Keeping it around is an invitation to reintroduce exactly that.
 
     def create_event(
         self,
@@ -471,7 +468,6 @@ class GCalendarConnector(BaseConnector):
         actually meant. Sending a UTC instant instead would silently shift the
         event whenever the assistant and the calendar disagree about the zone.
         """
-        token = self._get_token()
         body: Dict[str, Any] = {
             "summary": summary,
             "start": {"dateTime": start, "timeZone": timezone},
@@ -481,13 +477,21 @@ class GCalendarConnector(BaseConnector):
             body["description"] = description
         if location:
             body["location"] = location
-        return _gcal_api_event_insert(token, calendar_id, body)
+        # call_with_refresh, not _get_token: the access token lives an hour, so
+        # a bare token read means every write fails with 401 for most of the
+        # day. sync() has always wrapped its reads this way; the write methods
+        # below never did, which is why accepting an invite hours after the
+        # last refresh has been silently broken.
+        return call_with_refresh(
+            _gcal_api_event_insert, self._credentials_path, calendar_id, body
+        )
 
     def accept_event(self, event_id: str, calendar_id: str = "primary") -> None:
         """Accept a calendar invite by setting responseStatus to 'accepted'."""
-        token = self._get_token()
-        user_email = _gcal_api_user_email(token)
-        event = _gcal_api_event_get(token, calendar_id, event_id)
+        user_email = call_with_refresh(_gcal_api_user_email, self._credentials_path)
+        event = call_with_refresh(
+            _gcal_api_event_get, self._credentials_path, calendar_id, event_id
+        )
         attendees = event.get("attendees", [])
         updated = []
         found = False
@@ -498,13 +502,20 @@ class GCalendarConnector(BaseConnector):
             updated.append(att)
         if not found and user_email:
             updated.append({"email": user_email, "responseStatus": "accepted"})
-        _gcal_api_event_patch(token, calendar_id, event_id, {"attendees": updated})
+        call_with_refresh(
+            _gcal_api_event_patch,
+            self._credentials_path,
+            calendar_id,
+            event_id,
+            {"attendees": updated},
+        )
 
     def decline_event(self, event_id: str, calendar_id: str = "primary") -> None:
         """Decline a calendar invite by setting responseStatus to 'declined'."""
-        token = self._get_token()
-        user_email = _gcal_api_user_email(token)
-        event = _gcal_api_event_get(token, calendar_id, event_id)
+        user_email = call_with_refresh(_gcal_api_user_email, self._credentials_path)
+        event = call_with_refresh(
+            _gcal_api_event_get, self._credentials_path, calendar_id, event_id
+        )
         attendees = event.get("attendees", [])
         updated = []
         found = False
@@ -515,7 +526,13 @@ class GCalendarConnector(BaseConnector):
             updated.append(att)
         if not found and user_email:
             updated.append({"email": user_email, "responseStatus": "declined"})
-        _gcal_api_event_patch(token, calendar_id, event_id, {"attendees": updated})
+        call_with_refresh(
+            _gcal_api_event_patch,
+            self._credentials_path,
+            calendar_id,
+            event_id,
+            {"attendees": updated},
+        )
 
     def sync_status(self) -> SyncStatus:
         """Return sync progress from the most recent :meth:`sync` call."""
