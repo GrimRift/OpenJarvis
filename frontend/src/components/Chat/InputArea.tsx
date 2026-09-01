@@ -1532,7 +1532,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           onPaste={handlePaste}
           placeholder={
             selectedModel
-              ? 'Message Sage — paste or drop an image to ask about it'
+              ? 'Message Sage — paste/drop image'
               : 'Pick a model first (⌘K)...'
           }
           rows={1}
