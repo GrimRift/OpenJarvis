@@ -213,6 +213,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.teams_read  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.spotify_control  # noqa: F401
 except ImportError:
     pass

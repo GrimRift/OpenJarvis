@@ -30,6 +30,49 @@ _SWP_NOZORDER = 0x0004
 _SWP_SHOWWINDOW = 0x0040
 
 
+#: A compact player: wide enough to watch, small enough to leave the desktop
+#: behind it usable. Proportions rather than pixels so it lands the same on
+#: either monitor. Measured off the window size the user pointed at — roughly
+#: 973x753 on a 1920x1080 screen. An earlier 0.55x0.88 was noticeably too
+#: tall.
+_COMPACT_WIDTH = 0.51
+_COMPACT_HEIGHT = 0.70
+_COMPACT_INSET = 0.03
+
+
+def place_compact(handle: int, monitor: Optional[int] = None) -> str:
+    """Put *handle* in front at a modest size, not maximized.
+
+    The default for a video the user asked to play: visible and focused,
+    because they did ask for it, but not taking the whole screen off whatever
+    else is open. Maximizing was the complaint in both directions — first it
+    moved their working window, then it covered the screen.
+    """
+    found = _monitors()
+    if not found:
+        raise RuntimeError("no monitors detected")
+    target = next((item for item in found if item.index == monitor), None)
+    if target is None:
+        target = next((item for item in found if item.is_primary), found[0])
+
+    width = int(target.width * _COMPACT_WIDTH)
+    height = int(target.height * _COMPACT_HEIGHT)
+    user32 = ctypes.windll.user32
+    user32.ShowWindow(handle, _SW_RESTORE)
+    user32.SetWindowPos(
+        handle,
+        None,
+        target.x + int(target.width * _COMPACT_INSET),
+        target.y + int(target.height * _COMPACT_INSET),
+        width,
+        height,
+        _SWP_NOZORDER | _SWP_SHOWWINDOW,
+    )
+    user32.SetForegroundWindow(handle)
+    role = "main" if target.is_primary else "second"
+    return f"monitor {target.index} ({role}) at {width}x{height}"
+
+
 def _monitors() -> List[Any]:
     from openjarvis.tools.desktop_monitors import list_monitors, number_from_primary
 
@@ -208,4 +251,9 @@ class ListMonitorsTool(BaseTool):
         )
 
 
-__all__ = ["find_window", "place_by_title", "place_window"]
+__all__ = [
+    "find_window",
+    "place_compact",
+    "place_by_title",
+    "place_window",
+]

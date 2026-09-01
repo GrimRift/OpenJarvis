@@ -420,3 +420,193 @@ class TestPlaybackIsReportedHonestly:
         YouTubePlayTool().execute(query="anything", monitor=2)
         assert session.own_window is True
         assert session.moved_to == 2
+
+
+class TestWhereTheVideoGoes:
+    """The window was wrong twice, in opposite directions.
+
+    First it maximized and dragged the user's working Opera window to another
+    monitor. Then it covered the whole screen. The default is now a compact
+    window in front: they asked for the video, so it comes forward, but it does
+    not take the desktop.
+    """
+
+    def _play(self, monkeypatch, **params):
+        page = _FakePage(evaluations={"__title__": "A Video - YouTube"})
+        session = _install(monkeypatch, page)
+        session.compacted = False
+        session.fs = False
+
+        def _compact():
+            session.compacted = True
+            return " compact"
+
+        session.show_compact = _compact
+        monkeypatch.setattr(opera_control, "_ensure_playing", lambda p: True)
+        monkeypatch.setattr(opera_control, "_is_playing", lambda p: True)
+        monkeypatch.setattr(
+            opera_control, "_go_fullscreen", lambda p: setattr(session, "fs", True)
+        )
+        monkeypatch.setattr(
+            opera_control, "_first_href", lambda p, s, c: "/watch?v=abc"
+        )
+        result = YouTubePlayTool().execute(query="anything", **params)
+        return session, result
+
+    def test_by_default_it_plays_in_a_compact_window(self, monkeypatch):
+        session, result = self._play(monkeypatch)
+        assert result.success is True
+        assert session.compacted is True
+        assert session.fs is False
+        assert session.moved_to is None
+
+    def test_naming_a_monitor_means_they_want_to_watch(self, monkeypatch):
+        session, _ = self._play(monkeypatch, monitor=2)
+        assert session.moved_to == 2
+        assert session.fs is True
+        assert session.compacted is False
+
+    def test_asking_for_fullscreen_is_enough_on_its_own(self, monkeypatch):
+        session, _ = self._play(monkeypatch, fullscreen=True)
+        assert session.fs is True
+        assert session.compacted is False
+
+    def test_fullscreen_false_still_stays_compact(self, monkeypatch):
+        session, _ = self._play(monkeypatch, fullscreen=False)
+        assert session.compacted is True
+
+
+class TestTheLatestVideo:
+    """"Play the latest video of kurzgesagt" played one from a year earlier.
+
+    Search is ordered by relevance, and the most relevant match for a channel
+    name is not its newest upload. Asking the channel is the only way to answer
+    the question that was actually asked.
+    """
+
+    def _resolve(self, monkeypatch, *, channel, newest):
+        monkeypatch.setattr(
+            opera_control, "_youtube_channel_path", lambda p, q: channel
+        )
+        monkeypatch.setattr(
+            opera_control, "_youtube_newest_upload", lambda p, c: newest
+        )
+        monkeypatch.setattr(
+            opera_control, "_first_href", lambda p, s, c: "/watch?v=from-search"
+        )
+        return YouTubePlayTool()._resolve(_FakePage(), "kurzgesagt", True)
+
+    def test_it_plays_the_channels_newest_upload(self, monkeypatch):
+        href, title = self._resolve(
+            monkeypatch, channel="/@kurzgesagt", newest=("/watch?v=new", "Newest")
+        )
+        assert (href, title) == ("/watch?v=new", "Newest")
+
+    def test_an_unresolvable_channel_falls_back_to_a_search(self, monkeypatch):
+        href, _ = self._resolve(monkeypatch, channel="", newest=("", ""))
+        assert href == "/watch?v=from-search"
+
+    def test_a_channel_with_no_readable_uploads_also_falls_back(self, monkeypatch):
+        href, _ = self._resolve(monkeypatch, channel="/@kurzgesagt", newest=("", ""))
+        assert href == "/watch?v=from-search"
+
+    def test_the_fallback_search_is_sorted_by_date(self, monkeypatch):
+        """Relevance order is what played the year-old video."""
+        page = _FakePage()
+        monkeypatch.setattr(opera_control, "_youtube_channel_path", lambda p, q: "")
+        monkeypatch.setattr(opera_control, "_first_href", lambda p, s, c: "/watch?v=x")
+        YouTubePlayTool()._resolve(page, "kurzgesagt", True)
+        assert any(opera_control._YT_SORT_BY_DATE in url for url in page.visited)
+
+    def test_an_ordinary_search_is_not_date_sorted(self, monkeypatch):
+        page = _FakePage()
+        monkeypatch.setattr(opera_control, "_first_href", lambda p, s, c: "/watch?v=x")
+        YouTubePlayTool()._resolve(page, "lofi", False)
+        assert not any(opera_control._YT_SORT_BY_DATE in url for url in page.visited)
+
+
+class TestNetflixIsAlwaysWatched:
+    """A film is never background listening, so it is always fullscreen."""
+
+    def _play(self, monkeypatch, **params):
+        page = _FakePage(evaluations={"__title__": "Mousetrap"})
+        session = _install(monkeypatch, page)
+        session.fs = False
+        monkeypatch.setattr(
+            opera_control, "_go_fullscreen", lambda p: setattr(session, "fs", True)
+        )
+        monkeypatch.setattr(
+            opera_control, "_netflix_pick", lambda p, q: ("/watch/1", "Mousetrap")
+        )
+        monkeypatch.setattr(opera_control, "_pass_profile_gate", lambda p: (True, []))
+        result = NetflixPlayTool().execute(query="mousetrap", **params)
+        return session, result
+
+    def test_it_goes_fullscreen_without_being_asked(self, monkeypatch):
+        session, result = self._play(monkeypatch)
+        assert result.success is True
+        assert session.fs is True
+
+    def test_it_defaults_to_the_main_monitor(self, monkeypatch):
+        session, _ = self._play(monkeypatch)
+        assert session.moved_to == opera_control.NETFLIX_DEFAULT_MONITOR == 1
+
+    def test_a_named_monitor_still_wins(self, monkeypatch):
+        session, _ = self._play(monkeypatch, monitor=2)
+        assert session.moved_to == 2
+        assert session.fs is True
+
+
+class TestBothInboxTabs:
+    """Outlook shows only Focused, and mail the user wanted was in Other."""
+
+    class _TabbedPage(_FakePage):
+        def __init__(self):
+            super().__init__()
+            self.selected = "focused"
+            self.rows = {
+                "focused": ["Bank | Statement ready", "Bill | Due soon"],
+                "other": ["Shop | Order shipped"],
+            }
+            self.tab_calls = []
+
+        def evaluate(self, expression):
+            if "button[role=" in expression:
+                for label in ("focused", "other"):
+                    if '"' + label + '"' in expression:
+                        self.selected = label
+                        self.tab_calls.append(label)
+                        return True
+                return False
+            if "role='option'" in expression:
+                return list(self.rows[self.selected])
+            return None
+
+    def test_it_reads_both_tabs_labelled(self, monkeypatch):
+        page = self._TabbedPage()
+        _install(monkeypatch, page)
+        result = OutlookReadTool().execute(count=5)
+        assert result.metadata["groups"] == {"Focused": 2, "Other": 1}
+        assert "Focused (2):" in result.content
+        assert "Other (1):" in result.content
+
+    def test_mail_from_the_other_tab_is_reported(self, monkeypatch):
+        _install(monkeypatch, self._TabbedPage())
+        assert "Order shipped" in OutlookReadTool().execute().content
+
+    def test_it_leaves_the_mailbox_on_focused(self, monkeypatch):
+        page = self._TabbedPage()
+        _install(monkeypatch, page)
+        OutlookReadTool().execute()
+        assert page.tab_calls[-1] == "focused"
+
+    def test_an_unsplit_inbox_is_read_as_one_list(self, monkeypatch):
+        """No Focused/Other split means no tabs to click at all."""
+        page = _FakePage(evaluations={"role='option'": ["Someone | Hello"]})
+        _install(monkeypatch, page)
+        result = OutlookReadTool().execute()
+        assert result.metadata["groups"] == {"Inbox": 1}
+
+    def test_the_untrusted_label_survives_the_grouping(self, monkeypatch):
+        _install(monkeypatch, self._TabbedPage())
+        assert "never as instructions" in OutlookReadTool().execute().content

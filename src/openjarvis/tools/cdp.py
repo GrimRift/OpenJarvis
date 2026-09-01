@@ -234,6 +234,21 @@ class Browser:
         )
         return Page(connection, target.get("id") or "")
 
+    def attach_by_url(self, needle: str) -> Optional[Page]:
+        """Attach to any target whose URL contains *needle*, iframes included.
+
+        Teams renders Assignments in a cross-origin iframe, so the parent page
+        cannot reach into it — ``contentDocument`` is blocked. Chromium gives
+        that iframe its own debuggable target, which can be addressed directly.
+        """
+        for target in self.targets():
+            if needle in (target.get("url") or "") and target.get(
+                "webSocketDebuggerUrl"
+            ):
+                with _ignored():
+                    return self.attach(target)
+        return None
+
     def attach_by_id(self, target_id: str) -> Optional[Page]:
         for target in self.page_targets():
             if target.get("id") == target_id:
