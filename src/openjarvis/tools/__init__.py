@@ -183,6 +183,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.desktop_awareness  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.open_app  # noqa: F401
 except ImportError:
     pass
