@@ -101,10 +101,34 @@ def _openrouter_model_id(model: str) -> str:
 
 
 def _to_openai_msgs(messages: Sequence[Message]) -> list[dict[str, Any]]:
+    """Serialize for OpenAI, carrying any attached images.
+
+    This is a *separate* serializer from ``engine._base.messages_to_dicts``:
+    cloud models take this direct route rather than going through an engine.
+    Adding vision to the engine one alone left this path silently dropping the
+    image, and the model answered "I can't see an image attached" — the same
+    one-of-several-call-sites shape the architecture invariants exist for.
+    """
+    from openjarvis.engine._base import _openai_image_url
+
     out = []
     for m in messages:
         role = m.role.value if hasattr(m.role, "value") else str(m.role)
-        out.append({"role": role, "content": m.content or ""})
+        images = getattr(m, "images", None)
+        if images:
+            parts: list[dict[str, Any]] = []
+            if m.content:
+                parts.append({"type": "text", "text": m.content})
+            parts.extend(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _openai_image_url(str(image))},
+                }
+                for image in images
+            )
+            out.append({"role": role, "content": parts})
+        else:
+            out.append({"role": role, "content": m.content or ""})
     return out
 
 
@@ -175,10 +199,16 @@ async def _stream_openai(
     payload: dict[str, Any] = {
         "model": model,
         "messages": _to_openai_msgs(messages),
-        "max_tokens": max_tokens,
         "stream": True,
     }
+    # Reasoning models reject `max_tokens` outright — "Unsupported parameter:
+    # 'max_tokens' is not supported with this model. Use
+    # 'max_completion_tokens' instead." This path had never been exercised with
+    # one: chat streams through the agent, and only an image turn (which skips
+    # the agent, since that path reduces the message to a bare string) reaches
+    # here. Same conditional the temperature below already needs.
     if _is_reasoning_model(model):
+        payload["max_completion_tokens"] = max_tokens
         # No UI control for this yet -- default to "high" whenever a
         # reasoning-capable model is selected at all, since choosing one of
         # these models over a plain chat model already signals wanting its
@@ -186,6 +216,7 @@ async def _stream_openai(
         # unspecified default is.
         payload["reasoning_effort"] = "high"
     else:
+        payload["max_tokens"] = max_tokens
         payload["temperature"] = temperature
 
     async with httpx.AsyncClient(timeout=180) as client:

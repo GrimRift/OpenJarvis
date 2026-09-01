@@ -18,6 +18,7 @@ import httpx
 from openjarvis.core.registry import EngineRegistry
 from openjarvis.core.types import Message
 from openjarvis.engine._base import (
+    IMAGE_FORMAT_OPENAI,
     EngineConnectionError,
     InferenceEngine,
     messages_to_dicts,
@@ -636,7 +637,9 @@ class CloudEngine(InferenceEngine):
         response_format = kwargs.pop("response_format", None)
         create_kwargs: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_completion_tokens": max_tokens,
             **kwargs,
         }
@@ -1018,7 +1021,9 @@ class CloudEngine(InferenceEngine):
         kwargs.pop("response_format", None)
         create_kwargs: Dict[str, Any] = {
             "model": actual_model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -1080,7 +1085,9 @@ class CloudEngine(InferenceEngine):
         kwargs.pop("response_format", None)
         create_kwargs: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -1130,7 +1137,9 @@ class CloudEngine(InferenceEngine):
         kwargs.pop("response_format", None)
         create_kwargs: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -1299,7 +1308,9 @@ class CloudEngine(InferenceEngine):
             raise EngineConnectionError("OpenAI client not available")
         create_kwargs: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_completion_tokens": max_tokens,
             "stream": True,
             **kwargs,
@@ -1550,7 +1561,9 @@ class CloudEngine(InferenceEngine):
         actual_model = model.removeprefix("openrouter/")
         create_kwargs: Dict[str, Any] = {
             "model": actual_model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
@@ -1583,7 +1596,9 @@ class CloudEngine(InferenceEngine):
         temperature = min(temperature, 1.0)
         create_kwargs: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
@@ -1607,7 +1622,9 @@ class CloudEngine(InferenceEngine):
             raise EngineConnectionError("DeepSeek client not available")
         create_kwargs: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
@@ -1651,7 +1668,9 @@ class CloudEngine(InferenceEngine):
             actual_model = model.removeprefix("openrouter/")
             create_kwargs: Dict[str, Any] = {
                 "model": actual_model,
-                "messages": messages_to_dicts(messages),
+                "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": True,
@@ -1665,7 +1684,9 @@ class CloudEngine(InferenceEngine):
             temperature = min(temperature, 1.0)
             create_kwargs = {
                 "model": model,
-                "messages": messages_to_dicts(messages),
+                "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": True,
@@ -1677,7 +1698,9 @@ class CloudEngine(InferenceEngine):
                 raise EngineConnectionError("DeepSeek client not available")
             create_kwargs = {
                 "model": model,
-                "messages": messages_to_dicts(messages),
+                "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": True,
@@ -1689,7 +1712,9 @@ class CloudEngine(InferenceEngine):
                 raise EngineConnectionError("OpenAI client not available")
             create_kwargs = {
                 "model": model,
-                "messages": messages_to_dicts(messages),
+                "messages": messages_to_dicts(
+                messages, image_format=IMAGE_FORMAT_OPENAI
+            ),
                 "max_completion_tokens": max_tokens,
                 "stream": True,
                 **kwargs,

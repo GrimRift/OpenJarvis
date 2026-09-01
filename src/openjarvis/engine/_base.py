@@ -69,8 +69,35 @@ def _message_estimated_chars(message: Message) -> int:
     return sum(len(part) for part in parts)
 
 
-def messages_to_dicts(messages: Sequence[Message]) -> List[Dict[str, Any]]:
-    """Convert ``Message`` objects to OpenAI-format dicts."""
+#: How a provider wants images attached to a message.
+#:
+#: Ollama takes a sibling ``images`` array of bare base64 strings. OpenAI takes
+#: ``content`` as a list of parts, with each image a ``data:`` URL. The two
+#: share nothing, and sending one to the other silently drops the image rather
+#: than erroring — the model just answers as if no picture arrived.
+IMAGE_FORMAT_OLLAMA = "ollama"
+IMAGE_FORMAT_OPENAI = "openai"
+
+
+def _openai_image_url(image: str) -> str:
+    """A base64 image as the data URL OpenAI expects.
+
+    Already-formed data URLs pass through, so a caller that did the work does
+    not get it done twice.
+    """
+    return image if image.startswith("data:") else f"data:image/png;base64,{image}"
+
+
+def messages_to_dicts(
+    messages: Sequence[Message],
+    *,
+    image_format: str = IMAGE_FORMAT_OLLAMA,
+) -> List[Dict[str, Any]]:
+    """Convert ``Message`` objects to OpenAI-format dicts.
+
+    ``image_format`` defaults to Ollama's shape because that is what this
+    function has always emitted; the OpenAI-compatible engines opt in.
+    """
     out: List[Dict[str, Any]] = []
     for m in messages:
         d: Dict[str, Any] = {"role": m.role.value, "content": m.content}
@@ -90,10 +117,23 @@ def messages_to_dicts(messages: Sequence[Message]) -> List[Dict[str, Any]]:
             ]
         if m.tool_call_id:
             d["tool_call_id"] = m.tool_call_id
-        # Vision: forward base64 images to the engine. Ollama's /api/chat
-        # accepts an "images" array on a message; text messages skip this.
-        if getattr(m, "images", None):
-            d["images"] = list(m.images)
+        # Vision: forward base64 images in whichever shape the provider reads.
+        images = getattr(m, "images", None)
+        if images:
+            if image_format == IMAGE_FORMAT_OPENAI:
+                parts: List[Dict[str, Any]] = []
+                if m.content:
+                    parts.append({"type": "text", "text": m.content})
+                parts.extend(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": _openai_image_url(str(image))},
+                    }
+                    for image in images
+                )
+                d["content"] = parts
+            else:
+                d["images"] = list(images)
         out.append(d)
     return out
 

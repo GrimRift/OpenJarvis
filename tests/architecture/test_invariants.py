@@ -269,3 +269,74 @@ class TestToolResultsAreLabelledInOnePlace:
         assert self._call_sites(), (
             f"no {self.TARGET} call site — tool results are no longer scanned."
         )
+
+
+class TestEveryOpenAISerializerHandlesImages:
+    """There is more than one place that builds an OpenAI message payload.
+
+    ``engine/_base.messages_to_dicts`` serves engine-backed models;
+    ``server/cloud_router._to_openai_msgs`` serves cloud models, which bypass
+    the engine entirely. Teaching only the first about vision left the second
+    dropping the image silently, and the model replied "I can't see an image
+    attached" — no error, nothing in a log.
+
+    A third serializer added later would fail the same way, so the rule is:
+    anything that emits OpenAI ``image_url`` parts must be reachable from this
+    list, and anything on this list must actually read ``images``.
+    """
+
+    SERIALIZERS = {
+        "engine/_base.py": "messages_to_dicts",
+        "server/cloud_router.py": "_to_openai_msgs",
+    }
+
+    def _function(self, module: str, name: str) -> ast.FunctionDef | None:
+        for path, tree in _modules():
+            if _rel(path) != module:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == name:
+                    return node
+        return None
+
+    def test_each_known_serializer_reads_images(self):
+        missing = []
+        for module, name in self.SERIALIZERS.items():
+            func = self._function(module, name)
+            if func is None:
+                missing.append(f"{module}::{name} (not found)")
+                continue
+            source = ast.dump(func)
+            if "'images'" not in source and '"images"' not in source:
+                missing.append(f"{module}::{name} (never reads images)")
+        assert not missing, (
+            f"these build OpenAI payloads without handling images: {missing}. "
+            "An image reaching one of them is dropped silently."
+        )
+
+    def test_no_unlisted_module_emits_image_parts(self):
+        """A new serializer must be added to SERIALIZERS, not written quietly.
+
+        Matched on the *shape* ``{"type": "image_url", ...}``, not on the bare
+        string: ``tools/web_search.py`` carries an ``image_url`` field of
+        Tavily's own, which is an unrelated thing wearing the same name. A
+        looser check flagged it and would have been deleted as noise.
+        """
+        emitters = set()
+        for path, tree in _modules():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Dict):
+                    continue
+                for key, value in zip(node.keys, node.values):
+                    if (
+                        isinstance(key, ast.Constant)
+                        and key.value == "type"
+                        and isinstance(value, ast.Constant)
+                        and value.value == "image_url"
+                    ):
+                        emitters.add(_rel(path))
+        unlisted = emitters - set(self.SERIALIZERS)
+        assert not unlisted, (
+            f"{unlisted} emit OpenAI image parts but are not listed here. Add "
+            "them, so the next vision change updates every payload builder."
+        )

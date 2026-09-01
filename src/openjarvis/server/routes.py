@@ -33,6 +33,21 @@ from openjarvis.server.models import (
 router = APIRouter()
 
 
+def _has_attached_image(request_body) -> bool:
+    """Whether the newest user turn carries an image.
+
+    An image turn is answered in one step by the vision model itself — no tool
+    loop, no hand-off. That is the scoped design, and it is also forced: the
+    agent path reduces the last message to `req.messages[-1].content`, a bare
+    string, so an image handed to it is silently dropped and the model answers
+    "I can't see an image attached".
+    """
+    for message in reversed(list(getattr(request_body, "messages", None) or [])):
+        if getattr(message, "role", "") == "user":
+            return bool(getattr(message, "images", None))
+    return False
+
+
 def _to_messages(chat_messages) -> list[Message]:
     """Convert Pydantic ChatMessage objects to core Message objects."""
     messages = []
@@ -55,6 +70,11 @@ def _to_messages(chat_messages) -> list[Message]:
                 tool_call_id=m.tool_call_id,
             )
         )
+        # Assigned after construction rather than passed in: Message has no
+        # `images` field, and every engine reads it with getattr. Ephemeral by
+        # design — images ride this request and are never indexed.
+        if getattr(m, "images", None):
+            messages[-1].images = list(m.images)
     return messages
 
 
@@ -250,6 +270,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                             ]
                             or None,
                             tool_call_id=getattr(msg, "tool_call_id", None),
+                            # Carried explicitly. This rebuild copies field by
+                            # field, so anything not named here is dropped —
+                            # which is how an attached image reached the model
+                            # as "I can't see an image attached".
+                            images=list(getattr(msg, "images", None) or []) or None,
                         )
                     )
                 request_body.messages = new_msgs
@@ -380,7 +405,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                 bus=getattr(request.app.state, "bus", None),
                 memory_service=getattr(request.app.state, "memory_service", None),
             )
-        if agent is not None and getattr(agent, "_tools", None):
+        if (
+            agent is not None
+            and getattr(agent, "_tools", None)
+            and not _has_attached_image(request_body)
+        ):
             return await _handle_agent_stream(
                 agent,
                 model,
@@ -421,7 +450,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     # ``engine.generate()``) both make blocking upstream calls; run them in a
     # worker thread so a slow/wedged non-streaming request can't stall the
     # event loop and every other concurrent request with it.
-    if agent is not None and not request_body.tools:
+    if (
+        agent is not None
+        and not request_body.tools
+        and not _has_attached_image(request_body)
+    ):
         response = await asyncio.to_thread(
             _handle_agent,
             agent,

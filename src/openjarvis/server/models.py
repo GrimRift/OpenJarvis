@@ -19,6 +19,10 @@ class ChatMessage(BaseModel):
     name: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
+    #: Base64 image data (bare, or a full ``data:`` URL) attached to this turn.
+    #: Ephemeral by design: images ride the request and are never indexed, so
+    #: nothing here reaches knowledge.db.
+    images: Optional[List[str]] = None
 
 
 class ChatCompletionRequest(BaseModel):

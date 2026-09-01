@@ -11,6 +11,7 @@ import httpx
 
 from openjarvis.core.types import Message
 from openjarvis.engine._base import (
+    IMAGE_FORMAT_OPENAI,
     EngineConnectionError,
     EngineContextLengthError,
     InferenceEngine,
@@ -86,7 +87,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(messages, image_format=IMAGE_FORMAT_OPENAI),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
@@ -178,7 +179,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
     ) -> AsyncIterator[str]:
         payload: Dict[str, Any] = {
             "model": model,
-            "messages": messages_to_dicts(messages),
+            "messages": messages_to_dicts(messages, image_format=IMAGE_FORMAT_OPENAI),
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
@@ -239,7 +240,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
         **kwargs: Any,
     ) -> AsyncIterator["StreamChunk"]:
         """Yield StreamChunks with content, tool_calls, and finish_reason."""
-        msg_dicts = messages_to_dicts(messages)
+        msg_dicts = messages_to_dicts(messages, image_format=IMAGE_FORMAT_OPENAI)
         payload: Dict[str, Any] = {
             "model": model,
             "messages": msg_dicts,
