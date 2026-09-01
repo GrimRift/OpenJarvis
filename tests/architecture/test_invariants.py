@@ -235,3 +235,37 @@ class TestGoogleCallsRefreshTheirToken:
         assert any(_rel(path) == self.MODULE for path, _ in _modules()), (
             f"{self.MODULE} not found — did it move?"
         )
+
+
+class TestToolResultsAreLabelledInOnePlace:
+    """Injection labelling must sit on the path every tool result takes.
+
+    ``ToolExecutor.execute`` is that path. Scanning per-tool instead would mean
+    the next tool added --- M32's screen reader, say --- silently skips it, and
+    on-screen text is the whole reason the labelling exists.
+    """
+
+    MODULE = "tools/_stubs.py"
+    TARGET = "_label_injection"
+
+    def _call_sites(self) -> list[str]:
+        sites = []
+        for path, tree in _modules():
+            for call in _calls(tree):
+                if _call_name(call) == self.TARGET:
+                    sites.append(f"{_rel(path)}:{call.lineno}")
+        return sites
+
+    def test_it_is_invoked_from_exactly_one_place(self):
+        sites = self._call_sites()
+        assert len(sites) == 1, (
+            f"{self.TARGET} is called from {sites}. A second call site means a "
+            "second execution path, and the one that forgets it is the bug."
+        )
+        assert sites[0].startswith(self.MODULE), sites
+
+    def test_the_invariant_has_something_to_guard(self):
+        """A rename or deletion would otherwise pass silently."""
+        assert self._call_sites(), (
+            f"no {self.TARGET} call site — tool results are no longer scanned."
+        )
