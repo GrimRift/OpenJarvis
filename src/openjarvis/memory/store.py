@@ -133,8 +133,14 @@ _DEDUPE_STOPWORDS = frozenset(
 )
 
 
+def _significant_words(text: str) -> list[str]:
+    """The identifying words of a fact, in the order they were written."""
+    cleaned = re.sub(r"[^a-z0-9 ]", " ", text.lower())
+    return [w for w in cleaned.split() if w not in _DEDUPE_STOPWORDS]
+
+
 def _dedupe_key(text: str) -> str:
-    """Collapse a fact to the words that identify it.
+    """Collapse a fact to the words that identify it, ignoring their order.
 
     Exact string matching let the same fact accumulate once per phrasing:
     one store held "User is currently in the AY 2026-2027, 1st Term.",
@@ -142,10 +148,53 @@ def _dedupe_key(text: str) -> str:
     variants of the sentence, each re-injected into every prompt. Comparing
     the set of significant words instead catches rewordings and reorderings,
     which is how the duplicates actually differed.
+
+    Order-blind on purpose, so this is only ever a *candidate* filter --- see
+    :func:`_is_duplicate`, which decides.
     """
-    cleaned = re.sub(r"[^a-z0-9 ]", " ", text.lower())
-    words = {w for w in cleaned.split() if w not in _DEDUPE_STOPWORDS}
-    return " ".join(sorted(words))
+    return " ".join(sorted(set(_significant_words(text))))
+
+
+# Words whose whole job is to order or compare the things either side of them.
+# Swap those things and the sentence means the opposite, while the set of words
+# stays identical.
+_ORDER_SENSITIVE_WORDS = frozenset(
+    """above after ahead before behind below beats exceeds follows instead
+    outranks over precedes rather replaces than under versus vs""".split()
+)
+
+# "from X to Y" reverses the same way, but `from` and `to` are stopwords and far
+# too common to treat as markers on their own — only the paired form counts.
+_FROM_TO_RE = re.compile(r"\bfrom\b.+?\bto\b")
+
+
+def _order_carries_meaning(text: str) -> bool:
+    lowered = text.lower()
+    if set(re.sub(r"[^a-z0-9 ]", " ", lowered).split()) & _ORDER_SENSITIVE_WORDS:
+        return True
+    return bool(_FROM_TO_RE.search(lowered))
+
+
+def _is_duplicate(new_text: str, existing_text: str) -> bool:
+    """Whether *new_text* says the same thing as an already-stored fact.
+
+    The word-set key alone was wrong in a way that lost data silently:
+    "User prefers dark mode over light mode" and "User prefers light mode over
+    dark mode" reduce to the same set, so the second — a correction — was
+    dropped as a duplicate with no error and no trace.
+
+    Order-blindness is exactly what makes the key catch rewordings, so it is
+    kept as the cheap first pass. When either sentence contains a word that
+    orders or compares its neighbours, the decision falls back to comparing the
+    significant words *in sequence*, which reversal changes and rewording of
+    the harmless kind does not reach. Fails toward keeping both: a redundant
+    fact is cheap, a discarded correction is not.
+    """
+    if _dedupe_key(new_text) != _dedupe_key(existing_text):
+        return False
+    if _order_carries_meaning(new_text) or _order_carries_meaning(existing_text):
+        return _significant_words(new_text) == _significant_words(existing_text)
+    return True
 
 
 @dataclass(slots=True)
@@ -339,9 +388,8 @@ class LocalFactStore(FactStore):
             # extractor rephrases freely, so an exact match misses the
             # near-duplicates this store actually accumulates. Upstream's
             # quarantine-the-older-copy behaviour below is preserved.
-            candidate = _dedupe_key(text)
             duplicate = next(
-                (fact for fact in self._facts if _dedupe_key(fact.text) == candidate),
+                (fact for fact in self._facts if _is_duplicate(text, fact.text)),
                 None,
             )
             if duplicate is not None:

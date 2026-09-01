@@ -23,12 +23,17 @@ from openjarvis.memory.store import (
 
 
 # These texts are deliberately unique as *word sets*, not just as strings.
-# This fork's _dedupe_key compares the set of significant words, so
-# "process-0-1" and "process-1-0" collapse to the same key and one write is
-# correctly discarded as a duplicate -- which would look like the lock losing
-# a write. These tests are about the lock, so the fact text must not be the
-# variable under study. (The underlying order-insensitivity is a real
-# limitation of _dedupe_key, not of the lock.)
+# _dedupe_key compares the set of significant words, so "process-0-1" and
+# "process-1-0" collapse to one key and a write is correctly discarded as a
+# duplicate -- which would read as the lock losing a write. These tests are
+# about the lock, so the fact text must not be the variable under study.
+#
+# _is_duplicate now protects word order wherever a sentence contains a word
+# that orders or compares its neighbours (see TestDedupeDoesNotDropCorrections).
+# Bare identifiers like "process-0-1" carry no such marker, and nothing in the
+# text distinguishes a reversal from a rewording, so they stay ambiguous by
+# design -- the guard is aimed at facts written in English, which is what the
+# extractor produces.
 def _add_facts_in_process(
     path: str,
     worker_id: int,
@@ -509,3 +514,54 @@ def test_load_configured_facts_skips_disabled_memory():
     config = SimpleNamespace(memory=SimpleNamespace(enabled=False))
 
     assert load_configured_facts(config) == []
+
+
+class TestDedupeDoesNotDropCorrections:
+    """A reversal is not a duplicate.
+
+    The word-set key discards order, so "User prefers dark mode over light
+    mode" and "User prefers light mode over dark mode" reduced to the same key
+    and the second — a correction — was dropped silently: no error, no trace,
+    the older belief simply won. Found when upstream's concurrency tests
+    started failing for what looked like a lock problem and was not.
+    """
+
+    def test_a_reworded_fact_still_dedupes(self, tmp_path):
+        """The behaviour the key exists for, and must keep."""
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        assert store.add("User is currently in the AY 2026-2027, 1st Term.") is True
+        assert store.add("User is currently in the 1st Term of AY 2026-2027.") is False
+        assert store.count() == 1
+
+    def test_a_reversal_is_kept(self, tmp_path):
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        assert store.add("User prefers dark mode over light mode") is True
+        assert store.add("User prefers light mode over dark mode") is True
+        assert store.count() == 2
+
+    def test_a_from_to_reversal_is_kept(self, tmp_path):
+        """`from` and `to` are stopwords; only the paired form marks order."""
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        assert store.add("Sage should migrate from local to cloud") is True
+        assert store.add("Sage should migrate from cloud to local") is True
+        assert store.count() == 2
+
+    def test_an_identical_fact_still_dedupes_despite_a_marker(self, tmp_path):
+        """Order-sensitivity must not disable deduping altogether."""
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        assert store.add("User prefers dark mode over light mode") is True
+        assert store.add("User prefers dark mode over light mode") is False
+        assert store.count() == 1
+
+    def test_a_marked_fact_still_dedupes_across_harmless_rewording(self, tmp_path):
+        """Only word *order* is protected — filler words still collapse."""
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        assert store.add("Mark ranks Sage above the alternatives") is True
+        assert store.add("Mark ranks Sage above alternatives") is False
+        assert store.count() == 1
+
+    def test_unrelated_facts_are_both_stored(self, tmp_path):
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        assert store.add("Mark lives in Manila") is True
+        assert store.add("Mark works in Manila") is True
+        assert store.count() == 2
