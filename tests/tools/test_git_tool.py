@@ -645,3 +645,44 @@ class TestCliFallbackWhenRustMissing:
             result = GitStatusTool().execute(repo_path=str(tmp_path))
         assert result.success is False
         assert "not a git repository" in result.content
+
+
+class TestNonRepositoryPathIsActionable:
+    r"""A path that is not a repository must name the ones that are.
+
+    Live: "Commit the current changes" answered "C:\AI is not a Git
+    repository, so I couldn't create the commit" and stopped there. `jarvis
+    serve` runs with its working directory at the allowed *root*, not inside a
+    checkout, so the "." default can never be a repo — and a bare refusal gives
+    the model nothing to retry with.
+    """
+
+    def test_it_lists_repositories_under_the_allowed_root(self, tmp_path):
+        (tmp_path / "not-a-repo").mkdir()
+        repo = tmp_path / "a-real-repo"
+        (repo / ".git").mkdir(parents=True)
+
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
+        result = tool.execute(
+            message="test", files="x.txt", repo_path=str(tmp_path)
+        )
+
+        assert result.success is False
+        assert "not a git repository" in result.content
+        assert str(repo) in result.content
+        assert "not-a-repo" not in result.content.replace(str(repo), "")
+
+    def test_an_allowed_root_that_is_itself_a_repo_is_offered(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
+        assert tool._known_repos() == [str(tmp_path)]
+
+    def test_a_missing_git_binary_is_not_reported_as_a_missing_repo(self, tmp_path):
+        """Without git, every path looks like "not a repository"."""
+        tool = GitCommitTool(allowed_dirs=[str(tmp_path)])
+        with patch("openjarvis.tools.git_tool.shutil.which", return_value=None):
+            result = tool.execute(
+                message="test", files="x.txt", repo_path=str(tmp_path)
+            )
+        assert result.success is False
+        assert "not found" in result.content

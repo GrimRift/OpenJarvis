@@ -262,6 +262,26 @@ class GitCommitTool(BaseTool):
             ]
         self._allowed_dirs = [Path(entry).resolve() for entry in allowed_dirs]
 
+    def _known_repos(self) -> list[str]:
+        """Git repositories at or one level under each allowed directory.
+
+        One level is deliberate: the allowed root is a workspace holding
+        checkouts, not a repository itself, and walking deeper would wander
+        into node_modules and vendored trees.
+        """
+        found: list[str] = []
+        for root in self._allowed_dirs:
+            try:
+                if (root / ".git").exists():
+                    found.append(str(root))
+                    continue
+                for child in sorted(root.iterdir()):
+                    if child.is_dir() and (child / ".git").exists():
+                        found.append(str(child))
+            except OSError:
+                continue
+        return found
+
     def _is_path_allowed(self, path: Path) -> bool:
         if not self._allowed_dirs:
             return False
@@ -328,6 +348,35 @@ class GitCommitTool(BaseTool):
                 tool_name="git_commit",
                 content=(
                     f"Access denied: {repo_path} is outside allowed git directories."
+                ),
+                success=False,
+            )
+
+        # `jarvis serve` runs with its working directory at the allowed *root*
+        # (C:\AI), not inside any repository, so the "." default resolves to
+        # something that is not a git repo and the commit failed with a bare
+        # "not a Git repository". Name the repositories instead of dead-ending:
+        # the model then retries with a real path in the same turn.
+        #
+        # After the binary check, not before: with git missing, every path
+        # looks like "not a repository" and the real cause would be hidden.
+        git_missing = _check_git()
+        if git_missing:
+            return ToolResult(
+                tool_name="git_commit", content=git_missing, success=False
+            )
+        if not (repo.resolve() / ".git").exists():
+            candidates = self._known_repos()
+            hint = (
+                " Use repo_path with one of: " + ", ".join(candidates)
+                if candidates
+                else ""
+            )
+            return ToolResult(
+                tool_name="git_commit",
+                content=(
+                    f"{repo.resolve()} is not a git repository, so nothing was "
+                    f"committed.{hint}"
                 ),
                 success=False,
             )

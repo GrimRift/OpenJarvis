@@ -38,15 +38,35 @@ from typing import Any, Optional
 #: A pending request expires rather than waiting forever for an answer.
 PENDING_TTL_SECONDS = 300.0
 
-# Deliberately narrow. This is a security decision made from natural language,
-# so it only accepts an unambiguous yes: no "sure, but change the time first",
-# and nothing that merely contains the word somewhere. A near-miss costs one
-# extra exchange; a false positive runs something the user did not sanction.
-_AFFIRMATIVE_RE = re.compile(
-    r"^\s*(?:yes|yeah|yep|yup|confirm|confirmed|approve|approved|do it|"
-    r"go ahead|proceed|please do|permission granted)\s*[.!]*\s*$",
-    re.IGNORECASE,
+# A whole-message vocabulary check rather than a phrase list.
+#
+# The first version matched a fixed set of phrases and was too strict in real
+# use: "yep sure thing" and "ok go ahead please" both read as plain agreement
+# and were rejected, costing an extra exchange every time. Listing more phrases
+# does not scale — people pad agreement with politeness in endless
+# combinations.
+#
+# So: every word must come from a vocabulary of agreement and politeness, and
+# at least one must be actual agreement. Any word carrying new content fails,
+# which is what keeps this safe. "yes, but make it 9pm instead" fails on
+# "but", "9pm" and "instead"; "yes, and delete the old one" fails on "delete"
+# and "old". A near-miss costs one exchange; a false positive runs something
+# the user did not sanction.
+_AGREEMENT_WORDS = frozenset(
+    """affirmative absolutely agreed alright approve approved aye certainly
+    confirm confirmed confirming correct definitely do fine go good granted
+    indeed ok okay okey proceed right roger sure yea yeah yep yes yup""".split()
 )
+
+# Padding that adds no meaning: allowed alongside agreement, never on its own.
+_FILLER_WORDS = frozenset(
+    """ahead all cheers course for great head is it its lets let me my now of
+    please set sir sounds thanks thank that the them these this thing things
+    to too us we with you your""".split()
+)
+
+_ALLOWED_WORDS = _AGREEMENT_WORDS | _FILLER_WORDS
+_WORD_RE = re.compile(r"[a-z']+")
 
 
 @dataclass(frozen=True)
@@ -106,7 +126,20 @@ def turn_key(messages: Any) -> str:
 
 
 def is_affirmative(text: str) -> bool:
-    return bool(_AFFIRMATIVE_RE.match(text or ""))
+    """Whether *text* is plain agreement and nothing else.
+
+    Digits fail on sight: a number is never padding, and "yes, 9pm" is a
+    correction wearing agreement's clothes.
+    """
+    lowered = (text or "").strip().lower()
+    if not lowered or any(character.isdigit() for character in lowered):
+        return False
+    words = _WORD_RE.findall(lowered)
+    if not words or len(words) > 8:
+        return False
+    if not all(word in _ALLOWED_WORDS for word in words):
+        return False
+    return any(word in _AGREEMENT_WORDS for word in words)
 
 
 def last_user_text(messages: Any) -> str:

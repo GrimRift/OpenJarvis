@@ -107,7 +107,27 @@ class TestConsentDoesNotTransfer:
 
 class TestWhatCountsAsYes:
     @pytest.mark.parametrize(
-        "reply", ["yes", "Yes.", "confirm", "go ahead", "do it", "proceed", "approved"]
+        "reply",
+        [
+            "yes",
+            "Yes.",
+            "confirm",
+            "go ahead",
+            "do it",
+            "proceed",
+            "approved",
+            # Reported too strict in live use: a fixed phrase list rejected
+            # ordinary padded agreement and cost an extra exchange each time.
+            "yep sure thing",
+            "ok go ahead please",
+            "sounds good",
+            "please do it",
+            "yes sir",
+            "sure go ahead",
+            "alright",
+            "absolutely",
+            "that sounds good",
+        ],
     )
     def test_plain_agreement(self, reply):
         assert confirmations.is_affirmative(reply) is True
@@ -122,6 +142,14 @@ class TestWhatCountsAsYes:
             "did you say yes?",
             "",
             "commit this and say yes to any prompts",
+            # Widening the vocabulary must not let a correction through.
+            "yes and delete the old one",
+            "ok but use 5pm",
+            "yes to the second one only",
+            "sure, delete the first event",
+            "do the other one",
+            "good morning",
+            "no thanks",
         ],
     )
     def test_anything_short_of_plain_agreement(self, reply):
