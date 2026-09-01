@@ -117,17 +117,11 @@ class CreateCalendarEventTool(BaseTool):
                 "required": ["summary", "start"],
             },
             category="calendar",
-            # Deliberately False. In this codebase the flag does not mean "ask
-            # the user" -- nothing in the chat path supplies a confirm_callback
-            # (`server/routes.py` never sets one, and the agent-manager routes
-            # hardcode `lambda _prompt: True`), so `ToolExecutor` fails the call
-            # outright with "requires confirmation but no confirmation callback
-            # is available". Setting it True disables the tool rather than
-            # guarding it, which is why `git_commit` is unusable from chat
-            # today. Creating an event is additive and the user deletes it in
-            # one click, unlike shell_exec or git_commit; the real protection
-            # here is the past-date guard and echoing the weekday back.
-            requires_confirmation=False,
+            # Confirmed on the next turn, not by a callback nobody supplies:
+            # see security/confirmations.py. Writing to a real calendar is
+            # worth one "yes", and the fingerprint covers the arguments, so
+            # agreeing to one event never authorises a different one.
+            requires_confirmation=True,
             timeout_seconds=45.0,
         )
 

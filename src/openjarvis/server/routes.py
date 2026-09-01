@@ -176,6 +176,16 @@ def _run_spotify_transport(action: str) -> str:
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
     """Handle chat completion requests (streaming and non-streaming)."""
+    # Bind this turn before anything touches the messages: a tool that needs
+    # confirmation is answered on the *next* turn, and the identity of this one
+    # is what proves a real user reply happened in between. Computed from the
+    # request as it arrived, ahead of memory injection, so the key does not
+    # move when recalled facts change between the ask and the answer.
+    # Each request runs in its own task, so this ContextVar is request-local.
+    from openjarvis.security import confirmations
+
+    confirmations.set_turn(request_body.messages)
+
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model

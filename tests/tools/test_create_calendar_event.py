@@ -166,16 +166,15 @@ class TestFailsClosed:
 
 
 class TestSpec:
-    def test_it_does_not_ask_for_a_confirmation_nothing_can_answer(self, tool):
-        """requires_confirmation=True would disable the tool, not guard it.
+    def test_it_asks_before_writing_to_a_real_calendar(self, tool):
+        """Two-turn confirmation, not the old fail-closed flag.
 
-        Nothing in the chat path supplies a confirm_callback, so ToolExecutor
-        fails such a call outright: "requires confirmation but no confirmation
-        callback is available." Caught live — the first real attempt to create
-        an event came back "confirmation isn't available in this session".
-        Flip this to True only alongside an actual confirmation UI.
+        This was False for one commit because requires_confirmation=True used
+        to mean "fail" — nothing in the chat path supplied a callback. Now
+        security/confirmations.py answers it on the next user turn, so the
+        guard is real rather than a disable switch.
         """
-        assert tool.spec.requires_confirmation is False
+        assert tool.spec.requires_confirmation is True
 
     def test_it_is_registered(self):
         """Reloaded on purpose, not imported.

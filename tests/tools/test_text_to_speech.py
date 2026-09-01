@@ -100,4 +100,10 @@ def test_tts_tool_sanitizes_only_the_text_sent_to_the_backend(tmp_path):
     assert r"C:\AI\OpenJarvis-Lab\config.toml" not in spoken_text
     assert "a link" in spoken_text
     assert "a file path" in spoken_text
-    assert spoken_text.endswith("The exact values are visible in chat.")
+    # The notice is now type-specific. The generic "The exact values are
+    # visible in chat." was deliberately dropped when spoken notices were
+    # narrowed; test_spoken_text.py and test_spoken_text_stream.py were updated
+    # then, and this third call site was missed — the same one-of-three shape
+    # the architecture invariants exist to catch.
+    assert "The link is in chat." in spoken_text
+    assert "The file path is in chat." in spoken_text

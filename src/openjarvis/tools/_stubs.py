@@ -225,22 +225,43 @@ class ToolExecutor:
 
         # Confirmation check for sensitive tools
         if tool.spec.requires_confirmation:
-            if not self._interactive or self._confirm_callback is None:
+            prompt = f"Allow execution of tool '{tool_call.name}' with args {params}?"
+            if self._interactive and self._confirm_callback is not None:
+                # An explicit callback is a person answering now. "No" from a
+                # TTY prompt is a refusal, not "ask me again next turn", and
+                # must not invite the model to retry.
+                if not self._confirm_callback(prompt):
+                    return ToolResult(
+                        tool_name=tool_call.name,
+                        content=f"Tool '{tool_call.name}' execution denied by user.",
+                        success=False,
+                    )
+                approved = True
+            else:
+                # No interactive callback is not "impossible", it is "ask on the
+                # next turn". Returning a hard failure here is what made
+                # requires_confirmation disable a tool rather than guard it, and
+                # left git_commit unusable from chat.
+                from openjarvis.security import confirmations
+
+                approved = confirmations.decide(tool_call.name, params)
+            if not approved:
                 return ToolResult(
                     tool_name=tool_call.name,
                     content=(
-                        f"Tool '{tool_call.name}' requires"
-                        " confirmation but no confirmation"
-                        " callback is available."
+                        f"Confirmation required before running "
+                        f"'{tool_call.name}'. Tell the user exactly what it "
+                        f"would do, with these arguments: {params}. Do not "
+                        f"claim it has happened. If they agree, call it again "
+                        f"with identical arguments — their reply is what "
+                        f"authorises it."
                     ),
                     success=False,
-                )
-            prompt = f"Allow execution of tool '{tool_call.name}' with args {params}?"
-            if not self._confirm_callback(prompt):
-                return ToolResult(
-                    tool_name=tool_call.name,
-                    content=f"Tool '{tool_call.name}' execution denied by user.",
-                    success=False,
+                    metadata={
+                        "requires_confirmation": True,
+                        "tool": tool_call.name,
+                        "arguments": params,
+                    },
                 )
 
         # Emit start event. ``agent`` carries the managed-agent UUID so the

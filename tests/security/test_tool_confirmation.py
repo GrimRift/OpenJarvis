@@ -53,12 +53,18 @@ class _DangerousTool(BaseTool):
 
 class TestToolConfirmation:
     def test_requires_confirmation_no_callback(self) -> None:
-        """Tool requiring confirmation but no callback → blocked."""
+        """Tool requiring confirmation but no callback → still blocked.
+
+        The wording changed when two-turn confirmation landed: with no callback
+        and no bound user turn this now asks rather than declaring confirmation
+        impossible. What must not change is that the tool does not run.
+        """
         executor = ToolExecutor([_DangerousTool()])
         call = ToolCall(id="1", name="dangerous", arguments="{}")
         result = executor.execute(call)
         assert result.success is False
-        assert "requires confirmation" in result.content
+        assert result.content != "executed!"
+        assert result.metadata.get("requires_confirmation") is True
 
     def test_requires_confirmation_not_interactive(self) -> None:
         """Tool requiring confirmation but interactive=False → blocked."""
@@ -70,7 +76,8 @@ class TestToolConfirmation:
         call = ToolCall(id="1", name="dangerous", arguments="{}")
         result = executor.execute(call)
         assert result.success is False
-        assert "requires confirmation" in result.content
+        assert result.content != "executed!"
+        assert result.metadata.get("requires_confirmation") is True
 
     def test_requires_confirmation_denied(self) -> None:
         """Tool requiring confirmation, callback returns False → denied."""
