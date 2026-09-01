@@ -28,7 +28,11 @@ from typing import Any, List, Optional, Tuple
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.security import confirmations
-from openjarvis.security.destructive_actions import describe_reason, looks_destructive
+from openjarvis.security.destructive_actions import (
+    describe_reason,
+    looks_destructive,
+    matched_terms,
+)
 from openjarvis.security.screen_redaction import is_sensitive_title
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
@@ -137,6 +141,19 @@ def to_sendkeys(combo: str) -> Optional[str]:
     return "".join(modifiers) + rendered
 
 
+#: What each chord means in the words a person would use, so "close obsidian"
+#: is recognised as the user asking for alt+f4 themselves.
+_COMBO_INTENT = {
+    "alt+f4": ("close", "quit", "exit", "shut"),
+    "ctrl+w": ("close", "quit", "exit"),
+    "ctrl+shift+w": ("close", "quit", "exit"),
+    "ctrl+q": ("close", "quit", "exit"),
+    "ctrl+shift+q": ("close", "quit", "exit"),
+    "delete": ("delete", "remove", "erase"),
+    "shift+delete": ("delete", "remove", "erase"),
+    "ctrl+d": ("delete", "remove", "bookmark"),
+}
+
 #: Chords that do what a destructive button would. Named separately because a
 #: key combo has no label for the word list to read.
 _DESTRUCTIVE_COMBOS = {
@@ -170,7 +187,12 @@ class _DesktopActionTool(BaseTool):
         return None
 
     def _needs_confirmation(
-        self, label: str, params: Any, *, force: bool = False
+        self,
+        label: str,
+        params: Any,
+        *,
+        force: bool = False,
+        intent_words: Any = None,
     ) -> Optional[ToolResult]:
         """Gate a destructive-looking action on a real user turn.
 
@@ -181,6 +203,13 @@ class _DesktopActionTool(BaseTool):
         # `force` exists for key chords: "ctrl+w" is not a word the list can
         # read, but it closes a window just the same.
         if not force and not looks_destructive(label):
+            return None
+        # The user asking in plain words is not something to confirm back at
+        # them. The guard is for actions Sage chooses on its own.
+        if confirmations.user_requested(
+            intent_words if intent_words is not None else matched_terms(label),
+            params,
+        ):
             return None
         if confirmations.decide(self.tool_id, params):
             return None
@@ -586,7 +615,12 @@ class PressKeysTool(_DesktopActionTool):
         # A chord has no label for the word list to read, so the destructive
         # ones are named directly.
         if combo.lower() in _DESTRUCTIVE_COMBOS:
-            blocked = self._needs_confirmation(combo, params, force=True)
+            blocked = self._needs_confirmation(
+                combo,
+                params,
+                force=True,
+                intent_words=_COMBO_INTENT.get(combo.lower(), ()),
+            )
             if blocked is not None:
                 return blocked
 
@@ -608,8 +642,90 @@ class PressKeysTool(_DesktopActionTool):
         )
 
 
+
+@ToolRegistry.register("close_window")
+class CloseWindowTool(_DesktopActionTool):
+    """Close a window by name.
+
+    Exists because "close obsidian" was unusable through `press_keys`: the
+    model would not invoke a raw Alt+F4 no matter how the description was
+    worded, and asked in prose turn after turn instead. A tool that says what
+    it does gets called; a keystroke that happens to close things does not.
+
+    The guard still applies — closing something the user did not ask to close
+    is confirmed — but "close obsidian" names both the verb and the target, so
+    it goes straight through.
+    """
+
+    tool_id = "close_window"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="close_window",
+            description=(
+                "Close a window by name, e.g. 'close Obsidian'. Call this "
+                "directly when the user asks to close something; it is the "
+                "normal way to close a window and does not need permission "
+                "first when they asked for it by name."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "window": {
+                        "type": "string",
+                        "description": "Window title, or enough of it to match.",
+                    },
+                },
+                "required": ["window"],
+            },
+            category="desktop",
+            timeout_seconds=30.0,
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        window_title = str(params.get("window", "") or "").strip()
+        if not window_title:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content="Name the window to close.",
+                success=False,
+            )
+
+        window, _control, problem = self._resolve(window_title, "")
+        if problem is not None:
+            return problem
+
+        actual = window.Name or window_title
+        blocked = self._needs_confirmation(
+            f"close {actual}",
+            params,
+            intent_words=("close", "quit", "exit", "shut"),
+        )
+        if blocked is not None:
+            return blocked
+
+        try:
+            window.SetFocus()
+            _uia().SendKeys("{Alt}{F4}", waitTime=0)
+        except Exception as exc:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content=f"Could not close {window_title!r}: {exc}",
+                success=False,
+            )
+
+        return ToolResult(
+            tool_name=self.tool_id,
+            content=f"Closed {actual!r}.",
+            success=True,
+            metadata={"window": actual},
+        )
+
+
 __all__ = [
     "ClickAtTool",
+    "CloseWindowTool",
     "ClickControlTool",
     "MAX_SEARCH_DEPTH",
     "PressKeysTool",

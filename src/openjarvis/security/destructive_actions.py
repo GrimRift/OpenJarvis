@@ -73,6 +73,24 @@ def looks_destructive(label: str) -> bool:
     return any(pattern.search(label) for pattern in _PATTERNS)
 
 
+def matched_terms(label: str) -> list[str]:
+    """The destructive words actually found in *label*.
+
+    Used to ask a narrower question than "is this destructive": did the *user*
+    use this same word themselves? Confirming an action the user asked for in
+    plain words makes them repeat themselves, and a guard that does that is a
+    guard they turn off.
+    """
+    if not label:
+        return []
+    found = []
+    for pattern in _PATTERNS:
+        hit = pattern.search(label)
+        if hit:
+            found.append(hit.group(0).lower())
+    return found
+
+
 def describe_reason(label: str) -> str:
     """Why this needs confirming, in words worth showing the user."""
     if not label:
@@ -82,4 +100,4 @@ def describe_reason(label: str) -> str:
     return f"it is named {label!r}" + (f" and contains {word!r}" if word else "")
 
 
-__all__ = ["describe_reason", "looks_destructive"]
+__all__ = ["describe_reason", "looks_destructive", "matched_terms"]

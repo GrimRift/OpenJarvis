@@ -379,3 +379,80 @@ class TestShortcutParsing:
         from openjarvis.tools.desktop_control import to_sendkeys
 
         assert to_sendkeys(combo) is None
+
+
+class TestWhatTheUserAskedForIsNotConfirmedBack:
+    """The guard is for actions Sage chooses, not ones the user asked for.
+
+    Live: "close obsidian" → "Shall I proceed?" → "yes" → refused. Confirming
+    a plain request makes the user say it twice, and that is the version they
+    switch off. The guard's real job is the Delete button Sage finds halfway
+    through a task, or an instruction it read off a web page.
+    """
+
+    def _asked(self, text: str):
+        confirmations.set_turn([{"role": "user", "content": text}])
+
+    def test_close_obsidian_just_closes_obsidian(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        self._asked("close obsidian")
+        window = _window("Obsidian", [])
+        with _patch_uia(window) as patched:
+            result = PressKeysTool().execute(window="Obsidian", keys="alt+f4")
+
+        assert result.success is True
+        patched.return_value.SendKeys.assert_called_once()
+
+    def test_a_vague_request_still_confirms(self):
+        """"Tidy up" is not permission to close things."""
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        self._asked("tidy up my desktop")
+        window = _window("Obsidian", [])
+        with _patch_uia(window) as patched:
+            result = PressKeysTool().execute(window="Obsidian", keys="alt+f4")
+
+        assert result.success is False
+        assert result.metadata["requires_confirmation"] is True
+        patched.return_value.SendKeys.assert_not_called()
+
+    def test_naming_the_word_without_the_target_is_not_enough(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        self._asked("close the browser")
+        window = _window("Obsidian", [])
+        with _patch_uia(window):
+            result = PressKeysTool().execute(window="Obsidian", keys="alt+f4")
+        assert result.success is False
+
+    def test_naming_the_target_without_the_word_is_not_enough(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        self._asked("what is open in obsidian?")
+        window = _window("Obsidian", [])
+        with _patch_uia(window):
+            result = PressKeysTool().execute(window="Obsidian", keys="alt+f4")
+        assert result.success is False
+
+    def test_it_applies_to_named_controls_too(self):
+        self._asked("delete the account in Settings")
+        button = _control("Delete Account")
+        window = _window("Settings", [button])
+        with _patch_uia(window):
+            result = ClickControlTool().execute(
+                window="Settings", control="Delete Account"
+            )
+        assert result.success is True
+
+    def test_an_instruction_sage_read_somewhere_is_not_the_user_asking(self):
+        """The whole point: text from a web page is not a user request."""
+        self._asked("summarise that page for me")
+        button = _control("Delete Account")
+        window = _window("Settings", [button])
+        with _patch_uia(window) as _:
+            result = ClickControlTool().execute(
+                window="Settings", control="Delete Account"
+            )
+        assert result.success is False
+        assert result.metadata["requires_confirmation"] is True

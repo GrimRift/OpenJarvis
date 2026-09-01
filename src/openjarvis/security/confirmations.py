@@ -79,6 +79,9 @@ class TurnContext:
     #: "shall I proceed?" *without calling the tool*, so nothing is pending
     #: when the user agrees — see `_assistant_described`.
     last_assistant: str = ""
+    #: What the user actually asked for, so an action they requested in plain
+    #: words is not confirmed back at them — see `user_requested`.
+    user_text: str = ""
 
 
 _current_turn: ContextVar[Optional[TurnContext]] = ContextVar(
@@ -163,6 +166,49 @@ def last_assistant_text(messages: Any) -> str:
 _MIN_DESCRIBED_LENGTH = 3
 
 
+def user_requested(intent_words: Any, arguments: Any) -> bool:
+    """Whether the user's own message this turn asked for this exact action.
+
+    The guard exists for actions Sage decides on by itself — pressing "Delete
+    all" while halfway through a task, or following an instruction it read off
+    a web page. It was never meant for "close obsidian", where confirming just
+    asks the user to say it twice.
+
+    Both halves are required: the user used the destructive word themselves
+    *and* named the thing being acted on. "Tidy up my desktop" does not
+    authorise a Delete button, because the user never said delete.
+    """
+    context = _current_turn.get()
+    if context is None or not intent_words or not isinstance(arguments, dict):
+        return False
+    said = (context.user_text or "").lower()
+    if not said:
+        return False
+    if not any(str(word).lower() in said for word in intent_words):
+        return False
+    targets = [
+        value.strip().lower()
+        for value in arguments.values()
+        if isinstance(value, str) and len(value.strip()) >= _MIN_DESCRIBED_LENGTH
+    ]
+    if not targets:
+        return False
+    # Match both ways. The model usually resolves the real window title before
+    # acting, so "close obsidian" arrives as
+    # "Class Schedule - Sage-Vault - Obsidian 1.13.7" — the user's words are
+    # inside the target rather than the other way round, and a one-directional
+    # check said the user had never mentioned it.
+    said_words = {
+        word for word in re.findall(r"[a-z0-9]+", said) if len(word) >= 4
+    } - _ALLOWED_WORDS
+    for target in targets:
+        if target in said:
+            return True
+        if any(word in target for word in said_words):
+            return True
+    return False
+
+
 def _assistant_described(text: str, arguments: Any) -> bool:
     """Whether the assistant's last message named this exact call.
 
@@ -207,6 +253,7 @@ def set_turn(messages: Any):
         turn_key=turn_key(messages),
         affirmative=is_affirmative(last_user_text(messages)),
         last_assistant=last_assistant_text(messages),
+        user_text=last_user_text(messages),
     )
     return _current_turn.set(context)
 
@@ -279,4 +326,5 @@ __all__ = [
     "reset_turn",
     "set_turn",
     "turn_key",
+    "user_requested",
 ]

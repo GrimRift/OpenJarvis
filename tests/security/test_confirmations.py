@@ -353,3 +353,53 @@ class TestTheModelAsksInProse:
         """"OK" appears in half of all sentences and proves nothing."""
         self._turn("Shall I proceed? It is ok to continue.", "yes")
         assert confirmations.decide("click_control", {"control": "ok"}) is False
+
+
+class TestActionsTheUserAskedForOutright:
+    """The guard is for what Sage chooses, not what the user requested.
+
+    Live: "close obsidian" produced "Shall I proceed?" then refused the yes.
+    Confirming a plain request makes the user say it twice.
+    """
+
+    INTENT = ("close", "quit", "exit", "shut")
+
+    def _said(self, text):
+        confirmations.set_turn(_msgs(("user", text)))
+
+    def test_a_plain_request_needs_no_confirmation(self):
+        self._said("close obsidian")
+        assert confirmations.user_requested(self.INTENT, {"window": "Obsidian"}) is True
+
+    def test_it_matches_a_resolved_window_title(self):
+        """The model resolves the real title first, so the user's word is
+        *inside* the target rather than the other way round — a one-directional
+        check reported the user had never mentioned it."""
+        self._said("close obsidian")
+        resolved = {"window": "Class Schedule - Sage-Vault - Obsidian 1.13.7"}
+        assert confirmations.user_requested(self.INTENT, resolved) is True
+
+    def test_a_different_app_is_not_covered(self):
+        self._said("close the browser")
+        assert (
+            confirmations.user_requested(self.INTENT, {"window": "Obsidian"}) is False
+        )
+
+    def test_no_destructive_word_means_no_exemption(self):
+        """"Tidy up my desktop" is not permission to close things."""
+        self._said("tidy up my desktop")
+        assert (
+            confirmations.user_requested(self.INTENT, {"window": "Obsidian"}) is False
+        )
+
+    def test_merely_naming_the_app_is_not_enough(self):
+        self._said("what is open in obsidian?")
+        assert (
+            confirmations.user_requested(self.INTENT, {"window": "Obsidian"}) is False
+        )
+
+    def test_no_bound_turn_means_no_exemption(self):
+        confirmations.clear()
+        assert (
+            confirmations.user_requested(self.INTENT, {"window": "Obsidian"}) is False
+        )
