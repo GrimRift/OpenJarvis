@@ -7,16 +7,35 @@ const CHUNK_SAMPLES = 1280;
 const TARGET_SAMPLE_RATE = 16000;
 export const WAKE_WORD_STALE_MS = 12_000;
 
+/**
+ * Whether the listener is dead and should be rebuilt.
+ *
+ * Staleness is judged purely on how long it has been since the server last
+ * answered a frame. It used to also require the socket to be *open*, which
+ * meant the one state the watchdog could never recover from was having no
+ * socket at all — and that is a reachable dead end, not a transient one:
+ * `onclose` schedules its retry only while the closing socket still belongs to
+ * the current session, every flip of `enabled` bumps that session, and
+ * `audioPlaying` flips twice around the digest's handover from streaming TTS
+ * to the batch AudioPlayer. A close landing across one of those flips is
+ * disowned, its reconnect is dropped, and nothing calls `connectSocket` again.
+ * Reported as "after the morning digest the wake word never came back".
+ *
+ * `start()` refreshes `lastResponseAt`, so a listener that has only just been
+ * built is never restarted out from under itself.
+ */
 export function shouldRestartWakeWord({
   now,
   lastResponseAt,
-  socketOpen,
+  fatal = false,
 }: {
   now: number;
   lastResponseAt: number;
-  socketOpen: boolean;
+  /** Mic denied, or the server refusing outright. Retrying only loops. */
+  fatal?: boolean;
 }): boolean {
-  return socketOpen && now - lastResponseAt > WAKE_WORD_STALE_MS;
+  if (fatal) return false;
+  return now - lastResponseAt > WAKE_WORD_STALE_MS;
 }
 
 export function wakeWordSessionOwnsSocket(
@@ -64,6 +83,10 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
   // after every await; a mismatch means it's stale and must tear down
   // whatever it just acquired instead of wiring it up.
   const sessionIdRef = useRef(0);
+  // A failure retrying cannot fix: mic permission denied, or the server
+  // refusing the socket before accept. The watchdog rebuilds anything else,
+  // so without this it would rebuild these on a 3s loop forever.
+  const fatalRef = useRef(false);
 
   const clearReconnectTimer = () => {
     if (reconnectTimeoutRef.current !== null) {
@@ -157,6 +180,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       // auth, no detector configured) — retrying would just repeat the
       // same refusal, so surface it immediately instead of looping.
       if (event.code === 1008 || event.code === 1011) {
+        fatalRef.current = true;
         setError(`Wake word connection dropped (code ${event.code})`);
         return;
       }
@@ -181,9 +205,11 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
     const mySession = ++sessionIdRef.current;
     setError(null);
     reconnectAttemptsRef.current = 0;
+    fatalRef.current = false;
     lastResponseAtRef.current = Date.now();
 
     if (!navigator.mediaDevices?.getUserMedia) {
+      fatalRef.current = true;
       setError('Microphone not supported in this browser');
       return;
     }
@@ -286,6 +312,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       processor.connect(silentGain);
       silentGain.connect(audioCtx.destination);
     } catch {
+      fatalRef.current = true;
       setError('Microphone access denied');
       stop();
     }
@@ -313,12 +340,11 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
         return;
       }
 
-      const ws = wsRef.current;
       if (
         shouldRestartWakeWord({
           now: Date.now(),
           lastResponseAt: lastResponseAtRef.current,
-          socketOpen: ws?.readyState === WebSocket.OPEN,
+          fatal: fatalRef.current,
         })
       ) {
         stop();
