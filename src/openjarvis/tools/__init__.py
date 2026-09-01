@@ -188,6 +188,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.capture_screen  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.open_app  # noqa: F401
 except ImportError:
     pass

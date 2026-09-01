@@ -1127,6 +1127,24 @@ class NotificationsConfig:
     desktop: bool = True
 
 
+@dataclass
+class VisionConfig:
+    """Which model looks at a picture — a screen capture or an attached image.
+
+    Declared as a real field rather than read with getattr: this loader drops
+    unknown keys silently, so a `[vision] model = ...` that nothing declares
+    would be accepted, ignored, and impossible to debug.
+    """
+
+    # Empty means the tool picks: the configured cloud model when a cloud key
+    # is present, otherwise the local vision model below.
+    model: str = ""
+    local_model: str = "qwen3-vl:8b"
+    # Long edge in pixels. A 1920x1080 capture is ~2.7MB of base64 and buys
+    # nothing over a downscale the model can still read.
+    max_edge: int = 1280
+
+
 @dataclass(slots=True)
 class ProactiveConfig:
     """Proactive agent — autonomous action scheduling and approval routing."""
@@ -1703,6 +1721,7 @@ class JarvisConfig:
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     mining: Optional["MiningConfig"] = None
 
