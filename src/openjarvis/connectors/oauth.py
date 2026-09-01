@@ -141,6 +141,12 @@ OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
             "user-read-playback-state",
             "user-top-read",
             "user-library-read",
+            # playlist-read-* let "play my <name> playlist" find a playlist by
+            # name. GET /me/playlists returns only public ones without them,
+            # so a private playlist looks like it does not exist. Read-only:
+            # neither scope can create, edit or delete a playlist.
+            "playlist-read-private",
+            "playlist-read-collaborative",
         ],
         setup_url="https://developer.spotify.com/dashboard",
         setup_hint=("Create an app, add redirect URI: http://127.0.0.1:8888/callback"),

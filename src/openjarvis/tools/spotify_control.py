@@ -32,6 +32,20 @@ from openjarvis.tools._stubs import BaseTool, ToolSpec
 _API_BASE = "https://api.spotify.com/v1"
 _DEFAULT_TOKEN_PATH = str(DEFAULT_CONFIG_DIR / "connectors" / "spotify.json")
 
+#: Kept beside the spec enum so the two cannot drift apart.
+_ACTIONS = frozenset(
+    {
+        "status",
+        "play",
+        "pause",
+        "next",
+        "previous",
+        "play_playlist",
+        "play_liked",
+        "list_playlists",
+    }
+)
+
 
 def _request(
     token: str,
@@ -78,6 +92,75 @@ def _find_track(token: str, query: str) -> Dict[str, Any]:
     )
     items = (data.get("tracks") or {}).get("items") or []
     return items[0] if items else {}
+
+
+def _list_playlists(token: str) -> List[Dict[str, Any]]:
+    """Every playlist on the account, paged out.
+
+    Paged rather than a single call: someone with 60 playlists would find the
+    last 10 permanently invisible, and "it cannot find my playlist" is
+    indistinguishable from the feature being broken.
+    """
+    playlists: List[Dict[str, Any]] = []
+    offset = 0
+    while offset < 500:
+        data = _request(
+            token, "GET", "me/playlists", params={"limit": 50, "offset": offset}
+        )
+        items = data.get("items") or []
+        playlists.extend(item for item in items if item)
+        if len(items) < 50:
+            break
+        offset += 50
+    return playlists
+
+
+def _find_playlist(token: str, query: str) -> Dict[str, Any]:
+    """Resolve a spoken playlist name to one of the user's playlists.
+
+    Exact match first: someone with "Gym" and "Gym 2024" who says "Gym" means
+    the one called Gym. Only then a substring, so a half-remembered name still
+    lands.
+    """
+    wanted = (query or "").strip().lower()
+    if not wanted:
+        return {}
+    playlists = _list_playlists(token)
+    for playlist in playlists:
+        if (playlist.get("name") or "").strip().lower() == wanted:
+            return playlist
+    for playlist in playlists:
+        if wanted in (playlist.get("name") or "").lower():
+            return playlist
+    return {}
+
+
+def _liked_track_uris(token: str, limit: int = 50) -> List[str]:
+    """URIs from Liked Songs.
+
+    Liked Songs is not a playlist and has no ``context_uri``, so it can only
+    be played by handing Spotify an explicit list of tracks.
+    """
+    data = _request(token, "GET", "me/tracks", params={"limit": min(limit, 50)})
+    items = data.get("items") or []
+    return [
+        (item.get("track") or {}).get("uri")
+        for item in items
+        if (item.get("track") or {}).get("uri")
+    ]
+
+
+def _set_shuffle(token: str, target: Dict[str, Any], state: bool) -> None:
+    """Best-effort shuffle. Never worth failing playback over."""
+    try:
+        _request(
+            token,
+            "PUT",
+            "me/player/shuffle",
+            params={**target, "state": str(state).lower()},
+        )
+    except httpx.HTTPStatusError:
+        pass
 
 
 def _most_recent_track(token: str) -> Dict[str, Any]:
@@ -280,7 +363,13 @@ class SpotifyControlTool(BaseTool):
                 "find out what is playing — that is what 'status' is for. If "
                 "the user only said hello, or asked about something other "
                 "than music, call nothing at all. 'play' opens the Spotify "
-                "app by itself when closed, so do NOT call open_app first."
+                "app by itself when closed, so do NOT call open_app first.\n"
+                "- 'play my <name> playlist' / 'put on my <name>' → "
+                "action='play_playlist' with query set to the playlist name.\n"
+                "- 'play my liked songs' / 'play my library' / 'play my "
+                "saved songs' → action='play_liked'.\n"
+                "- 'what playlists do I have?' → action='list_playlists'. "
+                "This one only reads and plays nothing."
             ),
             parameters={
                 "type": "object",
@@ -288,14 +377,33 @@ class SpotifyControlTool(BaseTool):
                     "action": {
                         "type": "string",
                         "description": "Playback action to perform.",
-                        "enum": ["status", "play", "pause", "next", "previous"],
+                        "enum": [
+                            "status",
+                            "play",
+                            "pause",
+                            "next",
+                            "previous",
+                            "play_playlist",
+                            "play_liked",
+                            "list_playlists",
+                        ],
                     },
                     "query": {
                         "type": "string",
                         "description": (
                             "Song to play, e.g. 'Bohemian Rhapsody' or "
                             "'Anti-Hero by Taylor Swift'. Only used with "
-                            "action='play'; omit to resume what was paused."
+                            "action='play'; omit to resume what was paused. "
+                            "With action='play_playlist' this is the "
+                            "playlist's name instead."
+                        ),
+                    },
+                    "shuffle": {
+                        "type": "boolean",
+                        "description": (
+                            "Shuffle for play_playlist and play_liked. "
+                            "Default true. Set false if the user asked for "
+                            "the playlist in order."
                         ),
                     },
                 },
@@ -327,7 +435,9 @@ class SpotifyControlTool(BaseTool):
             return {"context_uri": album_uri, "offset": {"uri": track["uri"]}}
         return {"uris": [track["uri"]]}
 
-    def _run_action(self, token: str, action: str, query: str) -> str:
+    def _run_action(
+        self, token: str, action: str, query: str, shuffle: bool = True
+    ) -> str:
         """Perform *action* and return the message to show the user."""
         # Answered before anything is launched or targeted, because it must
         # not change what the user is hearing. It exists to remove the
@@ -347,6 +457,19 @@ class SpotifyControlTool(BaseTool):
             state = "Playing" if playing else "Paused"
             return f"{state}: {name}{suffix}"
 
+        # Reads and plays nothing, so it is answered here for the same reason
+        # status is: it must not start music to answer a question about music.
+        if action == "list_playlists":
+            playlists = _list_playlists(token)
+            if not playlists:
+                return "No playlists on this account."
+            names = [
+                f"{item.get('name', 'Untitled')} "
+                f"({(item.get('tracks') or {}).get('total', 0)} tracks)"
+                for item in playlists
+            ]
+            return f"{len(names)} playlist(s): " + ", ".join(names)
+
         # Every action needs somewhere to play. Opening the app on demand is
         # what makes a bare "play a song" work without the user having
         # launched Spotify first, and it also puts the window on screen so
@@ -365,7 +488,7 @@ class SpotifyControlTool(BaseTool):
         # when another of the account's devices is the active one. The
         # transport actions deliberately do not, so "pause" stops whatever
         # is actually audible instead of a silent local client.
-        prefer_local = action == "play"
+        prefer_local = action in {"play", "play_playlist", "play_liked"}
 
         if is_app_running("spotify"):
             device_id = _pick_device_id(
@@ -386,6 +509,42 @@ class SpotifyControlTool(BaseTool):
         if action == "previous":
             _request(token, "POST", "me/player/previous", params=target)
             return "Went back to the previous track."
+
+        if action == "play_playlist":
+            if not query:
+                return "__NO_PLAYLIST_NAME__"
+            playlist = _find_playlist(token, query)
+            if not playlist:
+                return "__NO_PLAYLIST__"
+            _set_shuffle(token, target, shuffle)
+            _request(
+                token,
+                "PUT",
+                "me/player/play",
+                params=target,
+                json_body={"context_uri": playlist["uri"]},
+            )
+            total = (playlist.get("tracks") or {}).get("total", 0)
+            how = "shuffled" if shuffle else "in order"
+            return (
+                f"Playing your playlist {playlist['name']!r} "
+                f"({total} tracks), {how}."
+            )
+
+        if action == "play_liked":
+            uris = _liked_track_uris(token)
+            if not uris:
+                return "__NO_LIKED__"
+            _set_shuffle(token, target, shuffle)
+            _request(
+                token,
+                "PUT",
+                "me/player/play",
+                params=target,
+                json_body={"uris": uris},
+            )
+            how = "shuffled" if shuffle else "in order"
+            return f"Playing your Liked Songs ({len(uris)} tracks), {how}."
 
         # action == "play" with a named song
         if query:
@@ -438,12 +597,14 @@ class SpotifyControlTool(BaseTool):
         action = str(params.get("action", "")).strip().lower()
         query = str(params.get("query", "") or "").strip()
 
-        if action not in {"status", "play", "pause", "next", "previous"}:
+        shuffle = bool(params.get("shuffle", True))
+
+        if action not in _ACTIONS:
             return ToolResult(
                 tool_name="spotify_control",
                 content=(
                     f"Unknown action {action!r}. "
-                    "Use status, play, pause, next, or previous."
+                    f"Use one of: {', '.join(sorted(_ACTIONS))}."
                 ),
                 success=False,
             )
@@ -459,7 +620,7 @@ class SpotifyControlTool(BaseTool):
 
         try:
             message = call_with_refresh(
-                lambda token: self._run_action(token, action, query),
+                lambda token: self._run_action(token, action, query, shuffle),
                 self._token_path,
             )
         except SpotifyAuthError as exc:
@@ -531,6 +692,18 @@ class SpotifyControlTool(BaseTool):
                 "and play something once, then try again."
             ),
             "__NO_MATCH__": f"No track found matching {query!r}.",
+            "__NO_PLAYLIST_NAME__": (
+                "Which playlist? Name it, or ask me to list them."
+            ),
+            "__NO_PLAYLIST__": (
+                f"No playlist of yours matches {query!r}. If it is a "
+                "private playlist and this keeps happening, the Spotify "
+                "connection needs re-authorising: run "
+                "scripts/reauth-spotify.py."
+            ),
+            "__NO_LIKED__": (
+                "No Liked Songs on this account to play."
+            ),
             "__NO_HISTORY__": (
                 "Nothing to resume and no recent listening history to fall "
                 "back on. Name a song to play instead."

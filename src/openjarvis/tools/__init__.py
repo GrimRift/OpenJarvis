@@ -193,12 +193,22 @@ except ImportError:
     pass
 
 try:
-    import openjarvis.tools.desktop_control  # noqa: F401
+    import openjarvis.tools.open_app  # noqa: F401
 except ImportError:
     pass
 
 try:
-    import openjarvis.tools.open_app  # noqa: F401
+    import openjarvis.tools.window_placement  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.find_file  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.opera_control  # noqa: F401
 except ImportError:
     pass
 

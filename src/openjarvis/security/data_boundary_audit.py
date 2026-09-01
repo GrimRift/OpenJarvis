@@ -196,6 +196,13 @@ WEB_SEARCH_TOOLS = {"web_search", "search", "tavily_search"}
 BROWSER_TOOLS = {
     "browser",
     "browser_axtree",
+    # The Opera GX CDP tools. Egress surfaces in every sense that matters:
+    # they drive a real logged-in browser, so they reach the network *as the
+    # user*, and outlook_read returns third-party text written by strangers.
+    "netflix_play",
+    "outlook_read",
+    "web_open",
+    "youtube_play",
     "browser_click",
     "browser_extract",
     "browser_navigate",
@@ -225,6 +232,9 @@ CLOUD_API_SURFACES = CLOUD_MEDIA_TOOLS | WEB_SEARCH_TOOLS
 OUTBOUND_TOOL_SURFACES = EXTERNAL_TOOL_SURFACES
 LOCAL_ACCESS_TOOLS = {
     "apply_patch",
+    # Reads file *names* across every fixed drive — no contents, but the paths
+    # themselves describe what the user has, so it is a local-access surface.
+    "find_file",
     "channel_list",
     "channel_status",
     "code_interpreter",

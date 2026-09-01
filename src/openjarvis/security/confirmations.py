@@ -19,6 +19,18 @@ The fingerprint covers the tool name *and* its arguments, so answering "yes" to
 one request never authorises a different call that happens to arrive in the
 same turn.
 
+**Only user-authored text may authorise anything here.** An earlier version
+also approved a call when the assistant had described it in prose and the user
+then agreed, to spare the user a second "yes" when the model asked for
+permission without attempting the call. That check was vacuous: the model
+writes both the description and the arguments, so it satisfied its own test
+every time, and any affirmative reply — even one aimed at a different question
+in the same message — released whatever call the model had chosen. That turned
+the guarantee above into nothing precisely when it mattered, since the model
+may be repeating an instruction it read on screen or in a document. The two
+inputs consulted now, ``user_text`` and ``affirmative``, both come from the
+user's own message.
+
 Held in a ``ContextVar`` rather than on the executor: the executor is shared
 across concurrent requests, and per-request state on a shared agent is exactly
 the race that ``_get_agent_model_lock`` had to be introduced to fix.
@@ -75,10 +87,6 @@ class TurnContext:
 
     turn_key: str
     affirmative: bool
-    #: What the assistant said last. Needed because the model sometimes asks
-    #: "shall I proceed?" *without calling the tool*, so nothing is pending
-    #: when the user agrees — see `_assistant_described`.
-    last_assistant: str = ""
     #: What the user actually asked for, so an action they requested in plain
     #: words is not confirmed back at them — see `user_requested`.
     user_text: str = ""
@@ -149,18 +157,6 @@ def is_affirmative(text: str) -> bool:
     return any(word in _AGREEMENT_WORDS for word in words)
 
 
-def last_assistant_text(messages: Any) -> str:
-    for message in reversed(list(messages or [])):
-        role = getattr(message, "role", None)
-        content = getattr(message, "content", None)
-        if role is None and isinstance(message, dict):
-            role = message.get("role")
-            content = message.get("content")
-        if role == "assistant":
-            return content if isinstance(content, str) else ""
-    return ""
-
-
 #: Values shorter than this match too easily to prove anything — "OK" appears
 #: in half of all sentences.
 _MIN_DESCRIBED_LENGTH = 3
@@ -209,32 +205,6 @@ def user_requested(intent_words: Any, arguments: Any) -> bool:
     return False
 
 
-def _assistant_described(text: str, arguments: Any) -> bool:
-    """Whether the assistant's last message named this exact call.
-
-    The model often asks for permission in prose instead of attempting the
-    call, so the first *attempt* arrives on the turn the user already said yes
-    — with nothing pending to redeem. Rather than trusting a bare "yes", this
-    requires the assistant to have named every identifying value: a yes about
-    closing Notepad cannot authorise deleting a file, because "delete" and the
-    filename were never in the question the user answered.
-
-    Calls with no string arguments (a bare coordinate click) can never satisfy
-    this, which is deliberate — those are the ones with nothing to describe.
-    """
-    if not text or not isinstance(arguments, dict):
-        return False
-    values = [
-        value
-        for value in arguments.values()
-        if isinstance(value, str) and len(value.strip()) >= _MIN_DESCRIBED_LENGTH
-    ]
-    if not values:
-        return False
-    lowered = text.lower()
-    return all(value.strip().lower() in lowered for value in values)
-
-
 def last_user_text(messages: Any) -> str:
     for message in reversed(list(messages or [])):
         role = getattr(message, "role", None)
@@ -252,7 +222,6 @@ def set_turn(messages: Any):
     context = TurnContext(
         turn_key=turn_key(messages),
         affirmative=is_affirmative(last_user_text(messages)),
-        last_assistant=last_assistant_text(messages),
         user_text=last_user_text(messages),
     )
     return _current_turn.set(context)
@@ -297,13 +266,6 @@ def decide(tool_name: str, arguments: Any) -> bool:
         ):
             del _pending[key]
             return True
-        # Nothing pending, but the assistant asked in prose and the user
-        # agreed. Approved only when that question named this exact call.
-        if context.affirmative and _assistant_described(
-            context.last_assistant, arguments
-        ):
-            _pending.pop(key, None)
-            return True
         _pending[key] = (context.turn_key, now)
     return False
 
@@ -321,7 +283,6 @@ __all__ = [
     "decide",
     "fingerprint",
     "is_affirmative",
-    "last_assistant_text",
     "last_user_text",
     "reset_turn",
     "set_turn",

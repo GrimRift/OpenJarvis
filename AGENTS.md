@@ -80,6 +80,14 @@ Confirmed environmental or order-dependent, identical on a clean tree:
 `test_claude_code::TestEnsureRunner` (2 cases),
 `test_scan::test_run_quick_returns_subset`,
 `test_credentials::test_file_permissions` (POSIX modes on Windows),
+`test_subprocess_sandbox` (7 cases — `os.setsid` is POSIX-only and does not
+exist on Windows; fails identically on a clean tree),
+`test_file_permissions::TestSecureMkdir` / `TestSecureCreate` (5 cases — same
+cause: 700/600 modes do not exist on NTFS),
+`test_data_boundary_audit::test_local_engine_vendor_model_names_are_not_cloud`
+(3 parametrised cases) and
+`test_data_boundary_audit::test_builtin_registry_tools_are_classified_or_explicitly_exempt`
+(`check_class_schedule` and `notify_windows` have never been classified),
 `test_cli::test_importing_cli_does_not_import_numpy`,
 `TestGemmaCppLive` (needs Kaggle weights),
 `test_new_connectors_live.py` (needs real Oura/Strava/Spotify credentials),

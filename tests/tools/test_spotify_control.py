@@ -303,3 +303,113 @@ def test_library_fallback_survives_a_missing_scope():
         track = spotify_control._any_familiar_track("tok")
 
     assert track["uri"] == "spotify:track:xyz"
+
+
+class TestPlaylistsAndLibrary:
+    """Playing what the user actually owns, not just a search result.
+
+    The name lookup is the part that breaks quietly: a private playlist is
+    invisible without ``playlist-read-private``, and a single unpaged request
+    hides everything past the first fifty.
+    """
+
+    def _playlists(self, *names):
+        return [
+            {"name": name, "uri": f"spotify:playlist:{index}", "tracks": {"total": 3}}
+            for index, name in enumerate(names)
+        ]
+
+    def test_an_exact_name_beats_a_longer_one_containing_it(self):
+        """Someone with "Gym" and "Gym 2024" who says "Gym" means Gym."""
+        from openjarvis.tools import spotify_control
+
+        with patch.object(
+            spotify_control,
+            "_list_playlists",
+            return_value=self._playlists("Gym 2024", "Gym"),
+        ):
+            assert spotify_control._find_playlist("tok", "gym")["name"] == "Gym"
+
+    def test_a_partial_name_still_lands(self):
+        from openjarvis.tools import spotify_control
+
+        with patch.object(
+            spotify_control,
+            "_list_playlists",
+            return_value=self._playlists("Late Night Drive"),
+        ):
+            found = spotify_control._find_playlist("tok", "late night")
+            assert found["name"] == "Late Night Drive"
+
+    def test_no_match_is_empty_not_a_wrong_playlist(self):
+        from openjarvis.tools import spotify_control
+
+        with patch.object(
+            spotify_control, "_list_playlists", return_value=self._playlists("Gym")
+        ):
+            assert spotify_control._find_playlist("tok", "study") == {}
+
+    def test_playlists_are_paged(self):
+        """A 60-playlist account had its last 10 permanently invisible."""
+        from openjarvis.tools import spotify_control
+
+        pages = [
+            {"items": [{"name": f"P{i}"} for i in range(50)]},
+            {"items": [{"name": f"Q{i}"} for i in range(10)]},
+        ]
+
+        def fake_request(token, method, path, params=None, json_body=None):
+            return pages[params["offset"] // 50]
+
+        with patch.object(spotify_control, "_request", side_effect=fake_request):
+            assert len(spotify_control._list_playlists("tok")) == 60
+
+    def test_liked_songs_are_played_as_explicit_uris(self):
+        """Liked Songs is not a playlist and has no context_uri."""
+        from openjarvis.tools import spotify_control
+
+        def fake_request(token, method, path, params=None, json_body=None):
+            if path == "me/tracks":
+                return {"items": [{"track": {"uri": "spotify:track:a"}}]}
+            return {}
+
+        with patch.object(spotify_control, "_request", side_effect=fake_request):
+            assert spotify_control._liked_track_uris("tok") == ["spotify:track:a"]
+
+    def test_shuffle_failing_never_breaks_playback(self):
+        """Shuffle is a nicety; refusing it must not stop the music."""
+        import httpx
+
+        from openjarvis.tools import spotify_control
+
+        response = httpx.Response(403, request=httpx.Request("PUT", "http://x"))
+        with patch.object(
+            spotify_control,
+            "_request",
+            side_effect=httpx.HTTPStatusError("no", request=None, response=response),
+        ):
+            spotify_control._set_shuffle("tok", {"device_id": "d"}, True)
+
+    def test_list_playlists_never_starts_music(self):
+        """Same rule as status: answering a question must not change the room."""
+        from openjarvis.tools import spotify_control
+        from openjarvis.tools.spotify_control import SpotifyControlTool
+
+        calls = []
+
+        def fake_request(token, method, path, params=None, json_body=None):
+            calls.append(path)
+            return {"items": [{"name": "Gym", "tracks": {"total": 5}}]}
+
+        with patch.object(spotify_control, "_request", side_effect=fake_request):
+            message = SpotifyControlTool()._run_action("tok", "list_playlists", "")
+
+        assert "Gym" in message
+        assert not any("player/play" in path for path in calls)
+
+    def test_the_action_enum_and_the_validator_agree(self):
+        """Two lists of the same actions drift; this is why they are one."""
+        from openjarvis.tools.spotify_control import _ACTIONS, SpotifyControlTool
+
+        enum = SpotifyControlTool().spec.parameters["properties"]["action"]["enum"]
+        assert set(enum) == _ACTIONS
