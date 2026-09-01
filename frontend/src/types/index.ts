@@ -144,6 +144,9 @@ export interface ChatMessage {
   usage?: TokenUsage;
   telemetry?: MessageTelemetry;
   audio?: { url: string; autoPlay?: boolean };
+  /** Attached images as `data:` URLs. Session-only — stripped before
+   *  conversations are written to localStorage. */
+  images?: string[];
 }
 
 export interface Conversation {

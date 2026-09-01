@@ -1,7 +1,13 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Square, Paperclip, Search, VolumeX, Volume2 } from 'lucide-react';
+import { Send, Square, Paperclip, Search, VolumeX, Volume2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore, generateId } from '../../lib/store';
+import {
+  MAX_IMAGES,
+  imageFilesFrom,
+  planAttachments,
+  type AttachedImage,
+} from '../../lib/image-attach';
 import { streamChat, streamResearch } from '../../lib/sse';
 import type { ChatRequest } from '../../lib/sse';
 import {
@@ -135,6 +141,18 @@ function useResearchCorpusSync(enabled: boolean): {
  */
 export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const [input, setInput] = useState('');
+  // Ephemeral: images ride one request, show as a thumbnail while the tab is
+  // open, and are stripped before conversations reach localStorage.
+  const [attachments, setAttachments] = useState<AttachedImage[]>([]);
+  const [dragActive, setDragActive] = useState(false);
+  // Read inside a stable callback, so attaching a second image sees the first
+  // instead of a closure captured when the component mounted.
+  const visionUseLocal = useAppStore((st) => st.settings.visionUseLocal);
+  const visionLocalModel = useAppStore((st) => st.settings.visionLocalModel);
+  const attachmentsRef = useRef<AttachedImage[]>([]);
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -311,6 +329,69 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     resetStream();
   }, [resetStream]);
 
+  const attachFiles = useCallback(
+    async (files: File[]) => {
+      if (!files.length) return;
+      const { accepted, rejected } = planAttachments(
+        attachmentsRef.current,
+        files.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+      );
+      if (rejected) toast.error(rejected);
+      if (!accepted.length) return;
+
+      const read = await Promise.all(
+        accepted.map(
+          (index) =>
+            new Promise<AttachedImage | null>((resolve) => {
+              const file = files[index];
+              const reader = new FileReader();
+              reader.onload = () =>
+                resolve({
+                  id: generateId(),
+                  dataUrl: String(reader.result || ''),
+                  name: file.name,
+                  bytes: file.size,
+                });
+              // A failed read is one image, not the message: drop it and carry
+              // on rather than rejecting the whole attach.
+              reader.onerror = () => resolve(null);
+              reader.readAsDataURL(file);
+            }),
+        ),
+      );
+      const usable = read.filter((image): image is AttachedImage => image !== null);
+      if (usable.length < accepted.length) toast.error('Some images could not be read');
+      if (usable.length) setAttachments((prev) => [...prev, ...usable].slice(0, MAX_IMAGES));
+    },
+    [],
+  );
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = imageFilesFrom(Array.from(event.clipboardData?.items || []));
+      if (!files.length) return;
+      // Only claim the paste when it actually carried an image, so pasting
+      // text into the composer still behaves normally.
+      event.preventDefault();
+      void attachFiles(files);
+    },
+    [attachFiles],
+  );
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      setDragActive(false);
+      const files = Array.from(event.dataTransfer?.files || []);
+      void attachFiles(files);
+    },
+    [attachFiles],
+  );
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((image) => image.id !== id));
+  }, []);
+
   const sendMessage = useCallback(async (overrideContent?: string) => {
     const content = (overrideContent ?? input).trim();
     if (!content || streamState.isStreaming) return;
@@ -329,11 +410,22 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       convId = createConversation(selectedModel);
     }
 
+    // Taken before the state clears, so a slow request cannot lose them.
+    const outgoingImages = attachments.map((a) => a.dataUrl);
+    setAttachments([]);
+    // An image turn can go to a local vision model instead, so the picture
+    // never leaves the machine. Otherwise it rides the model already selected.
+    const turnModel =
+      outgoingImages.length && visionUseLocal && visionLocalModel
+        ? visionLocalModel
+        : selectedModel;
+
     const userMsg: ChatMessage = {
       id: generateId(),
       role: 'user',
       content,
       timestamp: Date.now(),
+      images: outgoingImages.length ? outgoingImages : undefined,
     };
     addMessage(convId, userMsg);
 
@@ -376,7 +468,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           });
         }
       } else {
-        apiMessages.push({ role: m.role, content: m.content });
+        apiMessages.push({
+          role: m.role,
+          content: m.content,
+          // Only this turn's images. Replaying earlier ones would re-send
+          // megabytes and re-bill them on every later message.
+          images:
+            m.id === userMsg.id && outgoingImages.length
+              ? outgoingImages
+              : undefined,
+        });
       }
     }
 
@@ -600,7 +701,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       } else {
       for await (const sseEvent of streamChat(
         {
-          model: selectedModel,
+          model: turnModel,
           messages: apiMessages,
           stream: true,
           temperature,
@@ -1373,11 +1474,50 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           </div>
         )}
       </div>
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2 px-1 pb-2">
+          {attachments.map((image) => (
+            <div key={image.id} className="relative group">
+              <img
+                src={image.dataUrl}
+                alt={image.name}
+                title={image.name}
+                className="h-16 w-16 object-cover rounded-lg"
+                style={{ border: '1px solid var(--color-input-border)' }}
+              />
+              <button
+                onClick={() => removeAttachment(image.id)}
+                title={`Remove ${image.name}`}
+                aria-label={`Remove ${image.name}`}
+                className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full cursor-pointer"
+                style={{
+                  background: 'var(--color-bg-tertiary)',
+                  color: 'var(--color-text)',
+                  border: '1px solid var(--color-input-border)',
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div
         className="flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow"
+        onDragOver={(e) => {
+          // Only claim a drag that is actually carrying files, so selecting
+          // text and dragging it does not light up the whole composer.
+          if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+          e.preventDefault();
+          setDragActive(true);
+        }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={handleDrop}
         style={{
           background: 'var(--color-input-bg)',
-          border: '1px solid var(--color-input-border)',
+          border: dragActive
+            ? '1px dashed var(--color-accent)'
+            : '1px solid var(--color-input-border)',
           boxShadow: 'var(--shadow-sm)',
         }}
       >
@@ -1389,7 +1529,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             voiceOriginatedRef.current = false;
           }}
           onKeyDown={handleKeyDown}
-          placeholder={selectedModel ? 'Message Sage...' : 'Pick a model first (⌘K)...'}
+          onPaste={handlePaste}
+          placeholder={
+            selectedModel
+              ? 'Message Sage — paste or drop an image to ask about it'
+              : 'Pick a model first (⌘K)...'
+          }
           rows={1}
           className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed"
           style={{ color: 'var(--color-text)', maxHeight: '200px' }}

@@ -863,6 +863,23 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
+                <SettingRow label="Local Vision Model" description={`Answer image questions with ${settings.visionLocalModel} on this machine instead of the cloud model. Slower and a weaker reasoner, but the picture never leaves your computer`}>
+                  <button
+                    onClick={() => { updateSettings({ visionUseLocal: !settings.visionUseLocal }); showSaved(); }}
+                    className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
+                    style={{
+                      background: settings.visionUseLocal ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                      style={{
+                        transform: settings.visionUseLocal ? 'translateX(20px)' : 'translateX(0)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    />
+                  </button>
+                </SettingRow>
                 <SettingRow label="Speak Replies" description="Read answers aloud when you asked by voice. Streamed speech has no player, so this and the stop button beside the composer are the only ways to silence a reply">
                   <button
                     onClick={() => { updateSettings({ voiceRepliesEnabled: !settings.voiceRepliesEnabled }); showSaved(); }}

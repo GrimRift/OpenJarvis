@@ -36,6 +36,27 @@ export interface AgentEvent {
   data: Record<string, unknown>;
 }
 
+import { withoutImages } from './image-attach';
+
+/**
+ * Attached images, held for the life of the tab and keyed by message id.
+ *
+ * Deliberately outside the conversation store. `addMessage` re-reads
+ * conversations from localStorage on every call, so anything living on the
+ * message itself is either persisted or gone by the next render — there is no
+ * in-memory middle ground there. A few MB of screenshots do not belong in the
+ * storage quota, so they live here instead and vanish when the tab closes.
+ */
+const sessionImages = new Map<string, string[]>();
+
+export function rememberImages(messageId: string, images: string[]): void {
+  if (images.length) sessionImages.set(messageId, images);
+}
+
+export function imagesFor(messageId: string): string[] | undefined {
+  return sessionImages.get(messageId);
+}
+
 // ── localStorage persistence ──────────────────────────────────────────
 
 const CONVERSATIONS_KEY = 'openjarvis-conversations';
@@ -116,7 +137,19 @@ function loadConversations(): ConversationStore {
 }
 
 function saveConversations(store: ConversationStore): void {
-  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(store));
+  // Images are session-only. A screenshot is 1-3MB of base64 and a handful
+  // would quietly exhaust the localStorage quota, taking the whole
+  // conversation history with them.
+  const stripped: ConversationStore = {
+    ...store,
+    conversations: Object.fromEntries(
+      Object.entries(store.conversations).map(([id, conversation]) => [
+        id,
+        withoutImages(conversation),
+      ]),
+    ),
+  };
+  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(stripped));
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -135,6 +168,11 @@ interface Settings {
   // back to the local model automatically whenever cloud is unavailable.
   preferCloudModel: boolean;
   cloudModel: string;
+  // Which model answers a turn with an image attached. Cloud by default: it
+  // is the stronger reasoner and needs no local download. Switching to local
+  // keeps the picture on this machine, which is the reason to want it.
+  visionUseLocal: boolean;
+  visionLocalModel: string;
   defaultAgent: string;
   temperature: number;
   maxTokens: number;
@@ -172,6 +210,8 @@ function loadSettings(): Settings {
     wakeWordEnabled: false,
     wakeWordGreetingEnabled: true,
     continuousConversationEnabled: false,
+    visionUseLocal: false,
+    visionLocalModel: 'qwen3-vl:8b',
     voiceRepliesEnabled: true,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,
@@ -522,7 +562,13 @@ export const useAppStore = create<AppState>((set, get) => {
       const store = loadConversations();
       const conv = store.conversations[conversationId];
       if (!conv) return;
-      conv.messages.push(message);
+      // Held aside rather than on the message: this store round-trips through
+      // localStorage, so an image left here would be persisted or lost.
+      if (message.images?.length) {
+        rememberImages(message.id, message.images);
+      }
+      const { images: _ephemeral, ...persisted } = message;
+      conv.messages.push(persisted);
       conv.updatedAt = Date.now();
       if (message.role === 'user' && conv.title === 'New chat') {
         conv.title =

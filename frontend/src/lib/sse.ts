@@ -17,6 +17,9 @@ export interface ChatRequest {
       type: 'function';
       function: { name: string; arguments: string };
     }>;
+    /** Attached images as `data:` URLs; the server forwards them to the
+     *  provider in whichever shape it wants. */
+    images?: string[];
   }>;
   stream: true;
   temperature?: number;

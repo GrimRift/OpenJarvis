@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import 'katex/dist/katex.min.css';
 import { Copy, Check } from 'lucide-react';
+import { imagesFor } from '../../lib/store';
 import { AudioPlayer } from './AudioPlayer';
 import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
@@ -108,6 +109,8 @@ function CopyMessageButton({ content }: { content: string }) {
 
 function MessageBubbleComponent({ message, isLive = false }: Props) {
   const isUser = message.role === 'user';
+  // Session-only, keyed by message id — see the registry in store.ts.
+  const sessionImages = imagesFor(message.id);
 
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
   // Escaped only for rendering. Copy must still yield "$200", not "\$200".
@@ -147,6 +150,19 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
             wordBreak: 'break-word',
           }}
         >
+          {sessionImages && sessionImages.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {sessionImages.map((src, index) => (
+                <img
+                  key={index}
+                  src={src}
+                  alt="Attached"
+                  className="max-h-40 rounded-lg"
+                  style={{ border: '1px solid var(--color-input-border)' }}
+                />
+              ))}
+            </div>
+          )}
           {message.content}
         </div>
       </div>
