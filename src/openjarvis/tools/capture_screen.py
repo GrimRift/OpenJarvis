@@ -28,7 +28,22 @@ from openjarvis.security.screen_redaction import is_sensitive_title
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.desktop_monitors import list_monitors
 
-DEFAULT_QUESTION = "Describe what is on this screen."
+DEFAULT_QUESTION = "What is on this screen?"
+
+#: Appended to whatever is asked. Without it the model writes an inventory of
+#: every visible element: measured at 1523 completion tokens and ~8s for one
+#: screenshot, against ~100 tokens and ~2.5s once the answer is bounded. The
+#: caller almost always wants an answer, not a transcript of the screen.
+_BREVITY = (
+    " Answer in at most four short bullets, or one sentence if that is enough."
+    " Only describe what is actually visible."
+)
+
+#: Describing a picture is not a reasoning problem. The engine defaults to
+#: "high" for any tool-free call, which is the wrong default here and buys
+#: nothing measurable: high 3.4s/138 tokens versus minimal 2.4s/100 on the same
+#: capture.
+VISION_REASONING_EFFORT = "minimal"
 
 #: A reasoning model spends tokens thinking before it writes anything, and a
 #: dense screenshot is a lot to think about. Measured on a 1280px capture of a
@@ -157,7 +172,7 @@ class CaptureScreenTool(BaseTool):
     def _ask(self, model: str, data_url: str, question: str) -> Optional[str]:
         from openjarvis.core.types import Message, Role
 
-        message = Message(role=Role.USER, content=question)
+        message = Message(role=Role.USER, content=question + _BREVITY)
         message.images = [data_url]
 
         engine = self._engine
@@ -180,7 +195,10 @@ class CaptureScreenTool(BaseTool):
 
             engine = CloudEngine()
         result = engine.generate(
-            [message], model=model, max_tokens=VISION_MAX_TOKENS
+            [message],
+            model=model,
+            max_tokens=VISION_MAX_TOKENS,
+            reasoning_effort=VISION_REASONING_EFFORT,
         )
         answer = str((result or {}).get("content") or "").strip()
         if answer:
@@ -190,7 +208,10 @@ class CaptureScreenTool(BaseTool):
         if str((result or {}).get("finish_reason") or "") != "length":
             return None
         retry = engine.generate(
-            [message], model=model, max_tokens=VISION_RETRY_MAX_TOKENS
+            [message],
+            model=model,
+            max_tokens=VISION_RETRY_MAX_TOKENS,
+            reasoning_effort=VISION_REASONING_EFFORT,
         )
         return str((retry or {}).get("content") or "").strip() or None
 

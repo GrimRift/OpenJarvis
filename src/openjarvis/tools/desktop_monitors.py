@@ -69,7 +69,9 @@ class Monitor:
         return self.x <= x < self.x + self.width and self.y <= y < self.y + self.height
 
     def describe(self, largest: bool) -> str:
-        role = "primary" if self.is_primary else "secondary"
+        # "main" and "second" are the words the user actually says; "primary"
+        # is Windows' term and does not survive being spoken aloud.
+        role = "main" if self.is_primary else "second"
         extra = ", largest" if largest and not self.is_primary else ""
         label = f" — {self.name}" if self.name else ""
         return (
@@ -129,8 +131,24 @@ def list_monitors() -> List[Monitor]:
         return True
 
     user32.EnumDisplayMonitors(None, None, callback_type(_collect), 0)
-    # Primary first so "the main monitor" is simply the first one listed.
-    return sorted(found, key=lambda m: (not m.is_primary, m.index))
+    return number_from_primary(found)
+
+
+def number_from_primary(found: List[Monitor]) -> List[Monitor]:
+    """Renumber so the main screen is Monitor 1.
+
+    Windows enumerates by device order (DISPLAY1, DISPLAY2), which has nothing
+    to do with how a person counts their screens. On this user's machine the
+    laptop panel is DISPLAY1 while the external they call "main" is the
+    primary — so device numbering made "look at my second monitor" capture the
+    main one and describe it confidently. A wrong answer that looks like a
+    working feature is worse than an error.
+    """
+    ordered = sorted(found, key=lambda m: (not m.is_primary, m.index))
+    return [
+        Monitor(**{**monitor.__dict__, "index": position})
+        for position, monitor in enumerate(ordered, start=1)
+    ]
 
 
 def monitor_for(monitors: List[Monitor], x: int, y: int) -> Monitor | None:
@@ -154,4 +172,5 @@ __all__ = [
     "describe_monitors",
     "list_monitors",
     "monitor_for",
+    "number_from_primary",
 ]

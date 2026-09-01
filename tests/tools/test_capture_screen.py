@@ -98,14 +98,32 @@ class TestItAnswersAboutTheScreen:
         with monitors, windows, patch.object(tool, "_grab", return_value=_image()):
             tool.execute(monitor=1, question="Which character is shown?")
         sent = engine.generate.call_args.args[0][0]
-        assert sent.content == "Which character is shown?"
+        assert sent.content.startswith("Which character is shown?")
         assert sent.images and sent.images[0].startswith("data:image/png;base64,")
+
+    def test_the_answer_is_asked_to_be_brief(self, tool, engine):
+        """Unbounded, the model inventories the screen: 1523 completion tokens
+        and ~8s, against ~100 and ~2.5s once bounded."""
+        monitors, windows = _patched()
+        with monitors, windows, patch.object(tool, "_grab", return_value=_image()):
+            tool.execute(monitor=1, question="What is shown?")
+        assert "bullets" in engine.generate.call_args.args[0][0].content
+
+    def test_it_does_not_pay_for_reasoning_it_does_not_need(self, tool, engine):
+        """The engine defaults tool-free calls to "high"; describing a picture
+        is not a reasoning problem."""
+        monitors, windows = _patched()
+        with monitors, windows, patch.object(tool, "_grab", return_value=_image()):
+            tool.execute(monitor=1)
+        assert engine.generate.call_args.kwargs["reasoning_effort"] == "minimal"
 
     def test_a_missing_question_still_works(self, tool, engine):
         monitors, windows = _patched()
         with monitors, windows, patch.object(tool, "_grab", return_value=_image()):
             tool.execute(monitor=1)
-        assert engine.generate.call_args.args[0][0].content == DEFAULT_QUESTION
+        assert engine.generate.call_args.args[0][0].content.startswith(
+            DEFAULT_QUESTION
+        )
 
     def test_it_names_which_monitor_it_looked_at(self, tool):
         monitors, windows = _patched()

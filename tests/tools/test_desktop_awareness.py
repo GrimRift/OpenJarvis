@@ -66,10 +66,11 @@ class TestMonitorGeometry:
     def test_a_point_on_no_screen_returns_nothing(self):
         assert monitor_for(MONITORS, 99999, 99999) is None
 
-    def test_the_primary_is_described_as_primary(self):
+    def test_the_main_and_second_screens_are_named_that_way(self):
+        """"main"/"second" are the words the user says; "primary" is Windows'."""
         text = describe_monitors(MONITORS)
-        assert "Monitor 2 (primary" in text
-        assert "Monitor 1 (secondary" in text
+        assert "(main" in text
+        assert "(second" in text
 
     def test_the_largest_is_called_out_when_it_is_not_primary(self):
         """The user picks a main screen by size; Windows picks by setting."""
@@ -145,3 +146,48 @@ class TestItIsReadOnly:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         }
         assert forbidden not in called
+
+
+class TestMonitorNumbering:
+    """The main screen must be Monitor 1, whatever Windows calls it.
+
+    Windows enumerates by device order. On this user's machine the laptop is
+    DISPLAY1 and the external they call "main" is the primary, so device
+    numbering made "look at my second monitor" capture the main one — and
+    describe it confidently. A wrong answer that looks like a working feature
+    is worse than an error.
+    """
+
+    def test_the_primary_becomes_monitor_one(self):
+        from openjarvis.tools.desktop_monitors import number_from_primary
+
+        # Device order: laptop first, external (primary) second.
+        renumbered = number_from_primary([LAPTOP, EXTERNAL])
+        assert renumbered[0].is_primary is True
+        assert renumbered[0].index == 1
+        assert renumbered[0].device == EXTERNAL.device
+
+    def test_the_other_screen_becomes_monitor_two(self):
+        from openjarvis.tools.desktop_monitors import number_from_primary
+
+        renumbered = number_from_primary([LAPTOP, EXTERNAL])
+        assert renumbered[1].index == 2
+        assert renumbered[1].device == LAPTOP.device
+
+    def test_indices_are_contiguous_from_one(self):
+        from openjarvis.tools.desktop_monitors import number_from_primary
+
+        renumbered = number_from_primary([LAPTOP, EXTERNAL])
+        assert [m.index for m in renumbered] == [1, 2]
+
+    def test_a_single_screen_is_monitor_one(self):
+        from openjarvis.tools.desktop_monitors import number_from_primary
+
+        assert number_from_primary([EXTERNAL])[0].index == 1
+
+    def test_the_main_screen_is_described_as_main(self):
+        from openjarvis.tools.desktop_monitors import number_from_primary
+
+        text = describe_monitors(number_from_primary([LAPTOP, EXTERNAL]))
+        assert "Monitor 1 (main" in text
+        assert "Monitor 2 (second" in text
