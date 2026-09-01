@@ -299,3 +299,57 @@ class TestFingerprintIsCanonical:
             _msgs(("user", "add it"), ("assistant", "Confirm?"), ("user", "yes"))
         )
         assert confirmations.decide("t", {"start": "y", "summary": "x"}) is True
+
+
+class TestTheModelAsksInProse:
+    """The model often asks permission instead of attempting the call.
+
+    Live: "Shall I proceed?" was said *without calling the tool*, so nothing
+    was pending. The user answered "Yes. Proceed." and the first attempt
+    arrived on that same turn — registering a fresh request and refusing, which
+    read as the confirmation being ignored. Same root cause as the calendar
+    double-ask seen earlier.
+    """
+
+    ARGS = {"window": "Claude", "control": "Close"}
+
+    def _turn(self, assistant: str, reply: str):
+        confirmations.set_turn(
+            _msgs(
+                ("user", "close that tab"),
+                ("assistant", assistant),
+                ("user", reply),
+            )
+        )
+
+    def test_a_yes_to_a_question_that_named_the_call_is_honoured(self):
+        self._turn("Closing the Claude window will close it. Shall I proceed?", "yes")
+        assert confirmations.decide("click_control", self.ARGS) is True
+
+    def test_a_question_that_did_not_name_the_call_is_not_enough(self):
+        """Consent stays tied to what was actually described."""
+        self._turn("Something needs confirming. Shall I proceed?", "yes")
+        assert confirmations.decide("click_control", self.ARGS) is False
+
+    def test_a_question_naming_only_part_of_it_is_not_enough(self):
+        self._turn("Shall I act on the Claude window?", "yes")
+        assert confirmations.decide("click_control", self.ARGS) is False
+
+    def test_a_yes_about_one_thing_does_not_authorise_another(self):
+        self._turn("Closing the Claude window. Shall I proceed?", "yes")
+        other = {"window": "Notepad", "control": "Delete"}
+        assert confirmations.decide("click_control", other) is False
+
+    def test_without_a_yes_the_description_means_nothing(self):
+        self._turn("Closing the Claude window with Close. Shall I proceed?", "no")
+        assert confirmations.decide("click_control", self.ARGS) is False
+
+    def test_a_call_with_no_describable_arguments_is_never_approved_this_way(self):
+        """A bare coordinate click has nothing the question could have named."""
+        self._turn("Shall I click at 100, 200?", "yes")
+        assert confirmations.decide("click_at", {"x": 100, "y": 200}) is False
+
+    def test_very_short_values_do_not_count_as_described(self):
+        """"OK" appears in half of all sentences and proves nothing."""
+        self._turn("Shall I proceed? It is ok to continue.", "yes")
+        assert confirmations.decide("click_control", {"control": "ok"}) is False

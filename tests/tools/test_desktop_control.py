@@ -277,3 +277,105 @@ class TestAwarenessStaysReadOnly:
         }
         for forbidden in ("Invoke", "Toggle", "SetValue", "Click", "SendKeys"):
             assert forbidden not in called
+
+
+class TestKeyboardShortcuts:
+    """Electron apps expose almost no accessibility tree.
+
+    Live: asked to open a new tab in Obsidian, `click_control` found no "New
+    Tab" control and correctly refused rather than guessing. The shortcut works
+    perfectly well — there was simply no way to send one.
+    """
+
+    def test_a_shortcut_is_sent_to_the_window(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        window = _window("Obsidian", [])
+        with _patch_uia(window) as patched:
+            result = PressKeysTool().execute(window="Obsidian", keys="ctrl+t")
+
+        assert result.success is True
+        assert result.metadata["sendkeys"] == "{Ctrl}t"
+        patched.return_value.SendKeys.assert_called_once()
+
+    def test_the_window_is_focused_first(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        window = _window("Obsidian", [])
+        with _patch_uia(window):
+            PressKeysTool().execute(window="Obsidian", keys="ctrl+t")
+        window.SetFocus.assert_called_once()
+
+    def test_an_unreadable_chord_is_refused_not_guessed(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        window = _window("Obsidian", [])
+        with _patch_uia(window) as patched:
+            result = PressKeysTool().execute(window="Obsidian", keys="nonsense+x")
+
+        assert result.success is False
+        patched.return_value.SendKeys.assert_not_called()
+
+    def test_a_closing_chord_is_confirmed(self):
+        """A chord has no label, so the word list cannot read it."""
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        window = _window("Obsidian", [])
+        with _patch_uia(window) as patched:
+            result = PressKeysTool().execute(window="Obsidian", keys="ctrl+w")
+
+        assert result.success is False
+        assert result.metadata["requires_confirmation"] is True
+        patched.return_value.SendKeys.assert_not_called()
+
+    def test_alt_f4_is_confirmed(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        window = _window("Obsidian", [])
+        with _patch_uia(window):
+            result = PressKeysTool().execute(window="Obsidian", keys="alt+f4")
+        assert result.success is False
+
+    def test_an_ordinary_chord_goes_straight_through(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        window = _window("Obsidian", [])
+        with _patch_uia(window):
+            result = PressKeysTool().execute(window="Obsidian", keys="ctrl+s")
+        assert result.success is True
+
+    def test_it_will_not_send_keys_to_a_sensitive_window(self):
+        from openjarvis.tools.desktop_control import PressKeysTool
+
+        window = _window("1Password", [])
+        with _patch_uia(window) as patched:
+            result = PressKeysTool().execute(window="1Password", keys="ctrl+c")
+
+        assert result.success is False
+        assert result.metadata["redacted"] is True
+        patched.return_value.SendKeys.assert_not_called()
+
+
+class TestShortcutParsing:
+    @pytest.mark.parametrize(
+        "combo,expected",
+        [
+            ("ctrl+t", "{Ctrl}t"),
+            ("ctrl+shift+p", "{Ctrl}{Shift}p"),
+            ("alt+f4", "{Alt}{F4}"),
+            ("enter", "{Enter}"),
+            ("esc", "{Esc}"),
+            ("a", "a"),
+        ],
+    )
+    def test_readable_chords(self, combo, expected):
+        from openjarvis.tools.desktop_control import to_sendkeys
+
+        assert to_sendkeys(combo) == expected
+
+    @pytest.mark.parametrize("combo", ["ctrl+", "nonsense+x", "", "ctrl+shift+"])
+    def test_unreadable_chords_return_nothing(self, combo):
+        """Half-understanding a chord means pressing something nobody named."""
+        from openjarvis.tools.desktop_control import to_sendkeys
+
+        assert to_sendkeys(combo) is None

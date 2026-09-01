@@ -89,6 +89,68 @@ def _patterns(control: Any) -> List[str]:
     return available
 
 
+
+#: Friendly names -> uiautomation's SendKeys syntax. Written so a model can say
+#: "ctrl+t" and a person can read the result back.
+_MODIFIERS = {
+    "ctrl": "{Ctrl}",
+    "control": "{Ctrl}",
+    "alt": "{Alt}",
+    "shift": "{Shift}",
+    "win": "{Win}",
+    "cmd": "{Win}",
+}
+
+#: Keys with no single-character form.
+_NAMED_KEYS = {
+    "enter", "return", "tab", "esc", "escape", "space", "backspace", "delete",
+    "del", "home", "end", "pageup", "pagedown", "up", "down", "left", "right",
+    "insert", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10",
+    "f11", "f12",
+}
+
+_KEY_ALIASES = {
+    "esc": "Esc", "escape": "Esc", "return": "Enter", "del": "Delete",
+    "pageup": "PageUp", "pagedown": "PageDown", "ins": "Insert",
+}
+
+
+def to_sendkeys(combo: str) -> Optional[str]:
+    """Turn "ctrl+shift+p" into "{Ctrl}{Shift}p", or None if unreadable.
+
+    Refusing an unparseable combo matters more than accepting a clever one:
+    a half-understood chord presses something nobody named.
+    """
+    parts = [p.strip().lower() for p in (combo or "").split("+") if p.strip()]
+    if not parts:
+        return None
+    modifiers = [_MODIFIERS[p] for p in parts[:-1] if p in _MODIFIERS]
+    if len(modifiers) != len(parts) - 1:
+        return None
+    key = parts[-1]
+    if key in _NAMED_KEYS:
+        rendered = "{" + _KEY_ALIASES.get(key, key.capitalize()) + "}"
+    elif len(key) == 1 and key.isalnum():
+        rendered = key
+    else:
+        return None
+    return "".join(modifiers) + rendered
+
+
+#: Chords that do what a destructive button would. Named separately because a
+#: key combo has no label for the word list to read.
+_DESTRUCTIVE_COMBOS = {
+    "alt+f4",
+    "ctrl+w",
+    "ctrl+shift+w",
+    "ctrl+q",
+    "ctrl+shift+q",
+    "delete",
+    "shift+delete",
+    "ctrl+d",
+}
+
+
 class _DesktopActionTool(BaseTool):
     """Shared guards. Every action tool answers the same two questions first."""
 
@@ -107,14 +169,18 @@ class _DesktopActionTool(BaseTool):
             )
         return None
 
-    def _needs_confirmation(self, label: str, params: Any) -> Optional[ToolResult]:
+    def _needs_confirmation(
+        self, label: str, params: Any, *, force: bool = False
+    ) -> Optional[ToolResult]:
         """Gate a destructive-looking action on a real user turn.
 
         Checked per call rather than through ``ToolSpec.requires_confirmation``,
         which is static: pressing "Bold" and pressing "Delete Account" are the
         same tool and must not be treated the same way.
         """
-        if not looks_destructive(label):
+        # `force` exists for key chords: "ctrl+w" is not a word the list can
+        # read, but it closes a window just the same.
+        if not force and not looks_destructive(label):
             return None
         if confirmations.decide(self.tool_id, params):
             return None
@@ -187,7 +253,10 @@ class ClickControlTool(_DesktopActionTool):
             description=(
                 "Press a button, menu item or checkbox by name in a named "
                 "window. Resolves the exact control first, so it never presses "
-                "something it could not find. Prefer this over click_at."
+                "something it could not find. Prefer this over click_at. Attempt the "
+                "call rather than asking in prose first: the tool itself stops and "
+                "asks when an action looks destructive, and asking without calling "
+                "leaves the user's yes with nothing to authorise."
             ),
             parameters={
                 "type": "object",
@@ -275,7 +344,10 @@ class TypeTextTool(_DesktopActionTool):
             description=(
                 "Type text into a window. Names a field where possible, which "
                 "sets its value directly; without one the text is typed into "
-                "whatever currently has focus in that window."
+                "whatever currently has focus in that window. Attempt the call rather "
+                "than asking in prose first: the tool itself stops and asks when an "
+                "action looks destructive, and asking without calling leaves the "
+                "user's yes with nothing to authorise."
             ),
             parameters={
                 "type": "object",
@@ -441,4 +513,106 @@ class ClickAtTool(_DesktopActionTool):
         )
 
 
-__all__ = ["ClickAtTool", "ClickControlTool", "MAX_SEARCH_DEPTH", "TypeTextTool"]
+
+
+@ToolRegistry.register("press_keys")
+class PressKeysTool(_DesktopActionTool):
+    """Send a keyboard shortcut to a window.
+
+    Electron apps — Obsidian, Discord, VS Code — expose almost no accessibility
+    tree, so `click_control` has nothing to press and correctly refuses. Their
+    shortcuts work perfectly well, and this is how most of what is actually on
+    the user's screen gets driven.
+    """
+
+    tool_id = "press_keys"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="press_keys",
+            description=(
+                "Send a keyboard shortcut to a named window, e.g. 'ctrl+t' for "
+                "a new tab or 'ctrl+s' to save. Use this for apps with no "
+                "readable controls — Obsidian, Discord, VS Code and other "
+                "Electron apps expose almost no accessibility tree. Attempt the call "
+                "rather than asking in prose first: the tool itself stops and asks "
+                "when an action looks destructive, and asking without calling leaves "
+                "the user's yes with nothing to authorise."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "window": {"type": "string", "description": "Window title."},
+                    "keys": {
+                        "type": "string",
+                        "description": (
+                            "Shortcut as 'ctrl+t', 'ctrl+shift+p', 'alt+f4', "
+                            "'enter'. One chord per call."
+                        ),
+                    },
+                },
+                "required": ["window", "keys"],
+            },
+            category="desktop",
+            timeout_seconds=30.0,
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        window_title = str(params.get("window", "") or "").strip()
+        combo = str(params.get("keys", "") or "").strip()
+        if not window_title or not combo:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content="Name the window and the shortcut.",
+                success=False,
+            )
+
+        rendered = to_sendkeys(combo)
+        if rendered is None:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content=(
+                    f"Could not read {combo!r} as a shortcut. Use the form "
+                    "'ctrl+t', 'ctrl+shift+p' or 'enter'."
+                ),
+                success=False,
+            )
+
+        window, _control, problem = self._resolve(window_title, "")
+        if problem is not None:
+            return problem
+
+        # A chord has no label for the word list to read, so the destructive
+        # ones are named directly.
+        if combo.lower() in _DESTRUCTIVE_COMBOS:
+            blocked = self._needs_confirmation(combo, params, force=True)
+            if blocked is not None:
+                return blocked
+
+        try:
+            window.SetFocus()
+            _uia().SendKeys(rendered, waitTime=0)
+        except Exception as exc:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content=f"Could not send {combo!r} to {window_title!r}: {exc}",
+                success=False,
+            )
+
+        return ToolResult(
+            tool_name=self.tool_id,
+            content=f"Sent {combo} to {window_title!r}.",
+            success=True,
+            metadata={"keys": combo, "sendkeys": rendered},
+        )
+
+
+__all__ = [
+    "ClickAtTool",
+    "ClickControlTool",
+    "MAX_SEARCH_DEPTH",
+    "PressKeysTool",
+    "TypeTextTool",
+    "to_sendkeys",
+]
