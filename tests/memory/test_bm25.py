@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 rank_bm25 = pytest.importorskip("rank_bm25")
@@ -34,7 +36,11 @@ def test_store_returns_id():
     backend = _make_backend()
     doc_id = backend.store("hello world")
     assert isinstance(doc_id, str)
-    assert len(doc_id) == 32  # hex UUID
+    # A hyphenated UUID, which is what every Rust-backed store returns --
+    # BM25, SQLite and ColBERT alike. The old assertion wanted 32 characters
+    # (`uuid4().hex`), a format none of them has produced since the backends
+    # moved to Rust, so it failed on a correct id.
+    uuid.UUID(doc_id)
 
 
 # -- retrieve ---------------------------------------------------------------

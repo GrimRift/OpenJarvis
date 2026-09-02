@@ -132,6 +132,18 @@ impl PyBM25Memory {
             .count()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
+
+    fn delete(&self, doc_id: &str) -> PyResult<bool> {
+        self.inner
+            .delete(doc_id)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    fn clear(&self) -> PyResult<()> {
+        self.inner
+            .clear()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
 }
 
 #[pyclass(name = "FAISSMemory")]
@@ -331,6 +343,18 @@ impl PyHybridMemory {
     fn count(&self) -> PyResult<usize> {
         self.inner
             .count()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    fn delete(&self, doc_id: &str) -> PyResult<bool> {
+        self.inner
+            .delete(doc_id)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    fn clear(&self) -> PyResult<()> {
+        self.inner
+            .clear()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 }
