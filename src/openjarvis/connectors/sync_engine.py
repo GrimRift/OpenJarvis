@@ -188,5 +188,24 @@ class SyncEngine:
         )
         self._conn.commit()
 
+    def close(self) -> None:
+        """Close the state database connection.
+
+        The connection is held for the engine's lifetime, and until now there
+        was no way to give it back. On Windows an open handle also blocks the
+        file from being deleted, so a caller working in a temporary directory
+        could not clean up after itself.
+        """
+        try:
+            self._conn.close()
+        except Exception:  # noqa: BLE001 — closing must never be the failure
+            pass
+
+    def __enter__(self) -> "SyncEngine":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
 
 __all__ = ["SyncEngine"]

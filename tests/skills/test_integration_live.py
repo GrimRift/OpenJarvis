@@ -14,7 +14,25 @@ from openjarvis.skills.tool_adapter import SkillTool
 from openjarvis.system import SystemBuilder
 
 
+def _skills_dir():
+    """The directory the product actually scans, not a hardcoded home path."""
+    from pathlib import Path
+
+    from openjarvis.core.config import load_config
+
+    return Path(load_config().skills.skills_dir).expanduser()
+
+
+def _skills_installed() -> bool:
+    directory = _skills_dir()
+    return directory.is_dir() and any(directory.iterdir())
+
+
 @pytest.mark.live
+@pytest.mark.skipif(
+    not _skills_installed(),
+    reason="no skills installed; these assert on specific bundled skills",
+)
 class TestSkillSystemIntegration:
     """Integration tests verifying skills flow end-to-end with a real engine."""
 
@@ -42,9 +60,10 @@ class TestSkillSystemIntegration:
         """The skill catalog XML should be generated correctly."""
         bus = EventBus()
         mgr = SkillManager(bus=bus)
-        from pathlib import Path
-
-        mgr.discover(paths=[Path("~/.openjarvis/skills/").expanduser()])
+        # The configured directory, not "~/.openjarvis": this install keeps
+        # its data elsewhere, so the hardcoded path scanned nothing and the
+        # catalogue came back empty regardless of what was installed.
+        mgr.discover(paths=[_skills_dir()])
 
         catalog = mgr.get_catalog_xml()
         assert "<available_skills>" in catalog
@@ -57,9 +76,7 @@ class TestSkillSystemIntegration:
         """Invoking a skill tool returns meaningful content."""
         bus = EventBus(record_history=True)
         mgr = SkillManager(bus=bus)
-        from pathlib import Path
-
-        mgr.discover(paths=[Path("~/.openjarvis/skills/").expanduser()])
+        mgr.discover(paths=[_skills_dir()])
 
         # Test instruction-only skill
         tools = mgr.get_skill_tools()

@@ -40,13 +40,14 @@ def _make_backend(key, tmp_path):
             "openjarvis.tools.storage.faiss_backend",
             exc_type=ImportError,
         )
-        return mod.FAISSMemory(db_path=str(tmp_path / "faiss"))
+        # In-memory index built from an embedder; it has never taken a path.
+        return mod.FAISSMemory()
     elif key == "colbert":
         mod = pytest.importorskip(
             "openjarvis.tools.storage.colbert_backend",
             exc_type=ImportError,
         )
-        return mod.ColBERTMemory(db_path=str(tmp_path / "colbert"))
+        return mod.ColBERTMemory()
     elif key == "hybrid":
         mod = pytest.importorskip(
             "openjarvis.tools.storage.hybrid",
@@ -171,16 +172,12 @@ class TestStorageSuiteOptional:
         assert "Python" in results[0].content
 
     def test_delete_document(self, backend_key, tmp_path):
-        if backend_key == "hybrid":
-            pytest.skip("HybridMemory sub-backend BM25 lacks delete()")
         backend = _make_backend(backend_key, tmp_path)
         doc_id = backend.store("content to delete")
         assert backend.delete(doc_id) is True
         assert backend.delete(doc_id) is False
 
     def test_clear_all(self, backend_key, tmp_path):
-        if backend_key == "hybrid":
-            pytest.skip("HybridMemory sub-backend BM25 lacks clear()")
         backend = _make_backend(backend_key, tmp_path)
         backend.store("first document")
         backend.store("second document")
