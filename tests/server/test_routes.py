@@ -89,10 +89,12 @@ class _SpyMemoryService:
     """Minimal stand-in capturing memory submissions."""
 
     def __init__(self) -> None:
-        self.submissions: list[tuple[str, str]] = []
+        self.submissions: list[tuple[str, str, str]] = []
 
-    def submit(self, user_text: str, assistant_text: str = "") -> bool:
-        self.submissions.append((user_text, assistant_text))
+    def submit(
+        self, user_text: str, assistant_text: str = "", answered_by: str = ""
+    ) -> bool:
+        self.submissions.append((user_text, assistant_text, answered_by))
         return True
 
     def stop(self, timeout: float = 2.0) -> None:
@@ -119,7 +121,7 @@ class TestMemoryServiceWiring:
             },
         )
         assert resp.status_code == 200
-        assert spy.submissions == [("I like jazz", "remembered reply")]
+        assert spy.submissions == [("I like jazz", "remembered reply", "test-model")]
 
     def test_agent_completion_feeds_memory(self):
         engine = _make_engine()
@@ -142,7 +144,7 @@ class TestMemoryServiceWiring:
             },
         )
         assert resp.status_code == 200
-        assert spy.submissions == [("remember this", "agent reply")]
+        assert spy.submissions == [("remember this", "agent reply", "test-model")]
 
     def test_non_streaming_completion_publishes_completed_exchange(self):
         bus = EventBus(record_history=True)
@@ -188,7 +190,7 @@ class TestMemoryServiceWiring:
 
         assert resp.status_code == 200
         assert "data:" in resp.text
-        assert spy.submissions == [("stream remember", "Hello world")]
+        assert spy.submissions == [("stream remember", "Hello world", "test-model")]
 
     def test_streaming_completion_publishes_completed_exchange(self):
         bus = EventBus(record_history=True)

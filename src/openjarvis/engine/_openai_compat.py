@@ -91,7 +91,9 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
-            **kwargs,
+            # `keep_alive` is Ollama's own; an OpenAI-shaped endpoint answers
+            # an unknown field with a 400, and this body is splatted wholesale.
+            **{k: v for k, v in kwargs.items() if k != "keep_alive"},
         }
         # Default to tool_choice=auto when tools are provided
         if "tools" in payload and "tool_choice" not in payload:

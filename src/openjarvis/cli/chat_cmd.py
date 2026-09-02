@@ -341,6 +341,7 @@ def chat(
                 user_input,
                 content,
                 source="cli.chat",
+                model=model,
             )
         except KeyboardInterrupt:
             console.print("\n[dim]Generation interrupted.[/dim]")

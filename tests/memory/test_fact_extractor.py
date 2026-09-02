@@ -103,3 +103,37 @@ def test_filters_non_fact_tokens():
     engine = FakeEngine('["none", "N/A", "Real fact"]')
     extractor = FactExtractor(engine, "m")
     assert extractor.extract("x", "y") == ["Real fact"]
+
+
+class TestExtractionFollowsTheAnsweringModel:
+    """The configured extraction_model is the local choice, not an absolute one.
+
+    A cloud-answered turn has already reached the provider, so extracting it
+    there costs no new exposure — and it keeps a multi-GB local model off a
+    GPU the user may be decoding video on.
+    """
+
+    def test_cloud_answered_turn_extracts_in_the_cloud(self):
+        engine = FakeEngine('["User likes jazz"]')
+        extractor = FactExtractor(engine, "qwen3.5:4b")
+
+        extractor.extract("I like jazz", "Noted.", "gpt-5.6-luna")
+
+        assert engine.calls[0][1] == "gpt-5.6-luna"
+
+    def test_local_answered_turn_keeps_the_configured_model(self):
+        engine = FakeEngine("[]")
+        extractor = FactExtractor(engine, "qwen3.5:4b")
+
+        extractor.extract("hi", "hello", "llama3.2")
+
+        assert engine.calls[0][1] == "qwen3.5:4b"
+
+    def test_unknown_answering_model_keeps_the_configured_model(self):
+        """Callers that never learned to pass a model must not change behaviour."""
+        engine = FakeEngine("[]")
+        extractor = FactExtractor(engine, "qwen3.5:4b")
+
+        extractor.extract("hi", "hello")
+
+        assert engine.calls[0][1] == "qwen3.5:4b"

@@ -63,8 +63,19 @@ class FactExtractor:
         self._max_fact_chars = max_fact_chars
         self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
 
-    def extract(self, user_text: str, assistant_text: str = "") -> List[str]:
-        """Return durable facts from the exchange. Never raises."""
+    def extract(
+        self,
+        user_text: str,
+        assistant_text: str = "",
+        answered_by: str = "",
+    ) -> List[str]:
+        """Return durable facts from the exchange. Never raises.
+
+        *answered_by* is the model that produced the turn. When it is a cloud
+        model, extraction follows it there, because the exchange has already
+        reached that provider and a local extraction model would otherwise
+        load several GB onto the GPU the user is watching video on.
+        """
         user_text = (user_text or "").strip()
         if not user_text:
             return []
@@ -78,12 +89,21 @@ class FactExtractor:
             Message(role=Role.USER, content=exchange),
         ]
 
+        model = self._resolve_model(answered_by)
+
         try:
             result = self._engine.generate(
                 messages,
-                model=self._model,
+                model=model,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
+                # Unload the moment this returns. Extraction is a one-shot
+                # background call, but the model it loads is charged to the
+                # GPU the user is also watching video on: measured 2.9 GB in
+                # use before a message and 7.2 GB of 8.1 GB after, held for
+                # five minutes. Non-Ollama engines strip the argument rather
+                # than ignoring it, so a cloud extraction model is safe too.
+                keep_alive=0,
             )
         except BrokenPipeError:
             # The classic failure mode: the model call's transport died.
@@ -100,6 +120,24 @@ class FactExtractor:
             content = str(result)
 
         return self._parse(content)
+
+    def _resolve_model(self, answered_by: str) -> str:
+        """Pick the extraction model for a turn answered by *answered_by*.
+
+        The configured ``extraction_model`` is the *local* choice. It is
+        deliberately overridden when the turn was answered in the cloud: the
+        toggle that put chat there means the user wants the GPU left alone,
+        and honouring a local override would reintroduce the exact stall it
+        was set to avoid.
+        """
+        if not answered_by:
+            return self._model
+        try:
+            from openjarvis.engine.cloud import is_cloud_model
+        except Exception:  # noqa: BLE001 — never let a missing import lose a fact
+            logger.debug("Cloud model check unavailable", exc_info=True)
+            return self._model
+        return answered_by if is_cloud_model(answered_by) else self._model
 
     # -- parsing ------------------------------------------------------------
 

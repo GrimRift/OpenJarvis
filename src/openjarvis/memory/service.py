@@ -98,7 +98,12 @@ class MemoryService:
 
     # -- submission ---------------------------------------------------------
 
-    def submit(self, user_text: str, assistant_text: str = "") -> bool:
+    def submit(
+        self,
+        user_text: str,
+        assistant_text: str = "",
+        answered_by: str = "",
+    ) -> bool:
         """Queue an exchange for extraction. Non-blocking; never raises.
 
         Returns True if the job was enqueued, False if the service is not
@@ -110,7 +115,7 @@ class MemoryService:
         if not user_text or not user_text.strip():
             return False
         try:
-            self._queue.put_nowait((user_text, assistant_text))
+            self._queue.put_nowait((user_text, assistant_text, answered_by))
             return True
         except queue.Full:
             logger.debug("Memory service queue full; dropping exchange")
@@ -142,6 +147,7 @@ class MemoryService:
         self.submit(
             str(data.get("user_text", "") or ""),
             str(data.get("assistant_text", "") or ""),
+            str(data.get("model", "") or ""),
         )
 
     # -- worker -------------------------------------------------------------
@@ -210,7 +216,7 @@ class MemoryService:
         return name in _BLOCKING_THREAT_LEVELS
 
     def _process(self, job: Any) -> None:
-        user_text, assistant_text = job
+        user_text, assistant_text, answered_by = job
         # Scan BEFORE extraction so an overt injection attempt never reaches the
         # extraction model or the store at all.
         if self._blocks_exchange(self._scan(f"{user_text}\n{assistant_text}")):
@@ -218,7 +224,7 @@ class MemoryService:
             # from "nothing to extract" in the logs.
             logger.info("Memory extraction skipped: injection detected in exchange")
             return
-        facts = self._extractor.extract(user_text, assistant_text)
+        facts = self._extractor.extract(user_text, assistant_text, answered_by)
         if not facts:
             return
         # Provenance is per fact, not per exchange: a fact whose own text trips
@@ -314,6 +320,7 @@ def publish_completed_exchange(
     assistant_text: str = "",
     *,
     source: str = "",
+    model: str = "",
 ) -> bool:
     """Publish a completed chat exchange for lifecycle subscribers."""
     if bus is None or not user_text or not user_text.strip():
@@ -324,6 +331,7 @@ def publish_completed_exchange(
             "user_text": user_text,
             "assistant_text": assistant_text or "",
             "source": source,
+            "model": model or "",
         },
     )
     return True

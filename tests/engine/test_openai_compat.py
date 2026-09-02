@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -70,6 +72,35 @@ class TestOpenAICompatGenerate:
             )
         assert result["content"] == "4"
         assert result["usage"]["total_tokens"] == 9
+
+    def test_keep_alive_is_stripped_from_the_body(self, engine: VLLMEngine) -> None:
+        """Ollama's unload hint must not become an unknown field on a real API."""
+        with respx.mock:
+            route = respx.post("http://testhost:8000/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {"message": {"content": "ok"}, "finish_reason": "stop"}
+                        ],
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 1,
+                            "total_tokens": 2,
+                        },
+                    },
+                )
+            )
+            engine.generate(
+                [Message(role=Role.USER, content="hi")],
+                model="m",
+                keep_alive=0,
+                top_p=0.9,
+            )
+
+        sent = json.loads(route.calls.last.request.content)
+        assert "keep_alive" not in sent
+        assert sent["top_p"] == 0.9, "unrelated kwargs must still pass through"
 
     def test_empty_choices_returns_graceful_fallback(
         self,

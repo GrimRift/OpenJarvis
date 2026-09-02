@@ -148,6 +148,13 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
                 "num_ctx": kwargs.get("num_ctx", _default_num_ctx()),
             },
         }
+        # How long Ollama keeps the model resident after answering. Ollama's
+        # own default is five minutes, which is right for a chat model being
+        # used repeatedly and wrong for a one-shot background call: a 3.6 GB
+        # model sat on an 8 GB GPU for five minutes after every message,
+        # leaving under 700 MB for the browser to decode video with.
+        if kwargs.get("keep_alive") is not None:
+            payload["keep_alive"] = kwargs["keep_alive"]
         # Disable extended thinking by default (Qwen3.5 etc.).
         # When enabled, thinking tokens consume the entire budget and
         # the visible content comes back empty.

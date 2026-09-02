@@ -658,6 +658,32 @@ class TestLocalOnlyParams:
             "Completions.create() got an unexpected keyword argument"
         )
 
+    def test_keep_alive_is_not_forwarded_to_the_provider(self):
+        from unittest.mock import MagicMock
+
+        from openjarvis.core.types import Message, Role
+        from openjarvis.engine.cloud import CloudEngine
+
+        engine = CloudEngine()
+        engine._openai_client = MagicMock()
+        engine._openai_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok", tool_calls=None))],
+            usage=MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+        engine.generate(
+            [Message(role=Role.USER, content="hi")],
+            model="gpt-4o-mini",
+            keep_alive=0,
+        )
+
+        sent = engine._openai_client.chat.completions.create.call_args.kwargs
+        assert "keep_alive" not in sent, (
+            "keep_alive is Ollama's unload hint; the memory extractor passes it "
+            "to whatever engine it holds, and a cloud extraction model must not "
+            "receive it"
+        )
+
     def test_other_kwargs_still_pass_through(self):
         from openjarvis.engine.cloud import _without_local_only
 

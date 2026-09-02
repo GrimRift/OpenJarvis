@@ -593,6 +593,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         response,
         bus=getattr(request.app.state, "bus", None),
         source="server.chat",
+        model=model,
     )
     return response
 
@@ -613,6 +614,7 @@ def _record_completed_exchange(
     *,
     bus=None,
     source: str = "server.chat",
+    model: str = "",
 ) -> None:
     """Publish or submit a completed exchange without blocking a reply."""
     if not user_text:
@@ -626,9 +628,10 @@ def _record_completed_exchange(
                 user_text,
                 assistant_text,
                 source=source,
+                model=model,
             )
         elif memory_service is not None:
-            memory_service.submit(user_text, assistant_text)
+            memory_service.submit(user_text, assistant_text, model)
     except Exception:  # noqa: BLE001 — memory is best-effort, never fail a reply
         logging.getLogger("openjarvis.server").debug(
             "Memory submit failed",
@@ -643,6 +646,7 @@ def _remember_exchange(
     *,
     bus=None,
     source: str = "server.chat",
+    model: str = "",
 ) -> None:
     """Record a completed non-streaming exchange."""
     _record_completed_exchange(
@@ -651,6 +655,7 @@ def _remember_exchange(
         _response_content(response),
         bus=bus,
         source=source,
+        model=model,
     )
 
 
@@ -1337,6 +1342,7 @@ async def _handle_streaming_orchestrator(
                 full_content,
                 bus=bus,
                 source="server.chat.stream",
+                model=model,
             )
 
         # Some streaming providers (including the currently configured OpenAI
@@ -1546,6 +1552,7 @@ async def _handle_agent_stream(
             content,
             bus=bus,
             source="server.chat.stream",
+            model=model,
         )
         yield "data: [DONE]\n\n"
 
@@ -1676,6 +1683,7 @@ async def _handle_stream_tools(
                 full_content,
                 bus=bus,
                 source="server.chat.stream",
+                model=model,
             )
         yield "data: [DONE]\n\n"
 
@@ -1841,6 +1849,7 @@ async def _handle_stream(
                 full_content,
                 bus=bus,
                 source="server.chat.stream",
+                model=model,
             )
 
         # Send finish chunk with usage data if available

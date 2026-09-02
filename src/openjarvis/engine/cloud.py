@@ -178,7 +178,10 @@ def _is_openai_model(model: str) -> bool:
 # forwarding one to a provider SDK raises TypeError: Completions.create() got
 # an unexpected keyword argument 'num_ctx'. Cloud providers size their own
 # context, so these are dropped rather than translated.
-_LOCAL_ONLY_PARAMS = frozenset({"num_ctx"})
+#: ``keep_alive`` asks Ollama to unload the model after answering. It is
+#: meaningless to a hosted provider and, splatted into an OpenAI-shaped body,
+#: is an unknown field that earns a 400.
+_LOCAL_ONLY_PARAMS = frozenset({"num_ctx", "keep_alive"})
 
 
 def _without_local_only(kwargs: Dict[str, Any]) -> Dict[str, Any]:
