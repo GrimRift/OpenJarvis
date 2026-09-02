@@ -216,7 +216,10 @@ class MemoryService:
         return name in _BLOCKING_THREAT_LEVELS
 
     def _process(self, job: Any) -> None:
-        user_text, assistant_text, answered_by = job
+        # The answering model was added to the job after the fact; a two-part
+        # job stays valid and simply extracts with the configured model.
+        user_text, assistant_text, *rest = job
+        answered_by = rest[0] if rest else ""
         # Scan BEFORE extraction so an overt injection attempt never reaches the
         # extraction model or the store at all.
         if self._blocks_exchange(self._scan(f"{user_text}\n{assistant_text}")):

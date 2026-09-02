@@ -34,8 +34,8 @@ class FakeExtractor:
         self._gate = gate  # optional threading.Event to block on
         self.calls = []
 
-    def extract(self, user_text, assistant_text=""):
-        self.calls.append((user_text, assistant_text))
+    def extract(self, user_text, assistant_text="", answered_by=""):
+        self.calls.append((user_text, assistant_text, answered_by))
         if self._gate is not None:
             self._gate.wait(timeout=2.0)
         if self._raises is not None:
@@ -162,7 +162,7 @@ def test_long_unicode_injection_cannot_kill_memory_worker(tmp_path):
         assert svc._thread is not None and svc._thread.is_alive()
 
         assert svc.submit("I like tea", "noted") is True
-        assert _wait_until(lambda: ("I like tea", "noted") in extractor.calls)
+        assert _wait_until(lambda: ("I like tea", "noted", "") in extractor.calls)
         assert svc._thread.is_alive()
     finally:
         svc.stop()
@@ -280,7 +280,7 @@ def test_completed_exchange_event_extracts_and_stores(tmp_path):
             source="test",
         )
         assert _wait_until(lambda: svc.fact_count() == 1)
-        assert extractor.calls == [("I like jazz", "Noted.")]
+        assert extractor.calls == [("I like jazz", "Noted.", "")]
     finally:
         svc.stop()
 
