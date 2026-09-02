@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 from typing import Any, List, Tuple
 
 from openjarvis.core.registry import ToolRegistry
@@ -144,3 +146,88 @@ class NotifyWindowsTool(BaseTool):
             success=bool(delivered),
             metadata={"title": title, "message": message, "delivered": delivered},
         )
+
+
+# --- Spoken alerts -------------------------------------------------------
+
+#: Windows writes this only once Do Not Disturb has been toggled at least
+#: once, so an absent value means notifications are allowed.
+_DND_KEY = r"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings"
+_DND_VALUE = "NOC_GLOBAL_SETTING_TOASTS_ENABLED"
+
+#: A spoken reminder is a sentence; nothing here should outlive that by much.
+_SPEAK_TIMEOUT_SECONDS = 30
+
+
+def do_not_disturb() -> bool:
+    """Whether Windows is currently suppressing notifications.
+
+    Reads the same switch the Action Center's Do Not Disturb toggle writes.
+    Fails open — an unreadable registry means "not suppressed", because a
+    reminder that stays silent on a broken lookup is the failure the user
+    would notice, and an extra spoken alert is the one they would not mind.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _DND_KEY) as key:
+            enabled, _ = winreg.QueryValueEx(key, _DND_VALUE)
+        return int(enabled) == 0
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def speak(text: str, *, respect_dnd: bool = True) -> bool:
+    """Say *text* aloud in Sage's own voice. Returns whether it spoke.
+
+    Silent under Do Not Disturb by default: the toast is still delivered, so
+    the reminder is not lost — only the noise is.
+
+    Playback goes through Windows Media Player's COM object rather than a
+    bundled player, because neither ffplay nor ffmpeg is installed here and
+    ``os.startfile`` would pop a visible media window for a one-line
+    reminder. Launched without waiting, so a scheduled check is not held open
+    for the length of the sentence.
+    """
+    if not (text or "").strip():
+        return False
+    if respect_dnd and do_not_disturb():
+        logger.info("Do Not Disturb is on; not speaking: %s", text[:60])
+        return False
+
+    try:
+        from openjarvis.core.paths import get_config_dir
+        from openjarvis.tools.text_to_speech import TextToSpeechTool
+
+        result = TextToSpeechTool().execute(
+            text=text, output_dir=str(get_config_dir() / "alerts")
+        )
+        audio_path = (result.metadata or {}).get("audio_path", "")
+        if not result.success or not audio_path:
+            return False
+    except Exception:
+        logger.warning("Could not synthesise the spoken alert", exc_info=True)
+        return False
+
+    script = (
+        "$p = New-Object -ComObject WMPlayer.OCX; "
+        f"$p.URL = '{audio_path}'; "
+        "$p.controls.play(); "
+        "Start-Sleep -Milliseconds 400; "
+        f"$limit = (Get-Date).AddSeconds({_SPEAK_TIMEOUT_SECONDS}); "
+        "while ($p.playState -eq 3 -and (Get-Date) -lt $limit) "
+        "{ Start-Sleep -Milliseconds 200 }"
+    )
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        logger.warning("Could not play the spoken alert", exc_info=True)
+        return False
+    return True

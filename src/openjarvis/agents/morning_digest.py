@@ -253,7 +253,7 @@ class MorningDigestAgent(ToolUsingAgent):
             arguments=json.dumps({"sources": sources, "hours_back": 24}),
         )
         collect_result = self._executor.execute(collect_call)
-        collected_data = collect_result.content
+        collected_data = _without_errors(collect_result.content)
         browser_results = self._collect_browser_sources()
         for label, result in browser_results:
             collected_data = f"{collected_data}\n\n[{label}]\n{result.content}"
@@ -546,6 +546,34 @@ def _cancel_digest_duplicates(
             logger.warning(
                 "Failed to cancel duplicate digest task %s", task.id, exc_info=True
             )
+
+
+#: ``digest_collect`` ends its output with a section listing every connector
+#: that failed or is unconfigured.
+_ERRORS_SECTION = "=== ERRORS ==="
+
+
+def _without_errors(collected: str) -> str:
+    """The collected evidence with the connector-failure section removed.
+
+    The briefing kept ending on "two connectors failed: Google Tasks returned
+    a 403, and Apple Health, Oura and Apple Music are unconnected" — true, and
+    a waste of a 200-word budget the user hears out loud. It survived an
+    explicit rule against naming unavailable sources, because the failures
+    were sitting in the evidence and the model treated them as material.
+
+    Removing them from the input settles it: there is nothing to narrate. The
+    failures are logged instead, which is where an unconfigured connector
+    actually belongs.
+    """
+    text = collected or ""
+    head, marker, errors = text.partition(_ERRORS_SECTION)
+    if not marker:
+        return text
+    trimmed = errors.strip()
+    if trimmed:
+        logger.info("digest sources unavailable: %s", " | ".join(trimmed.split("\n")))
+    return head.rstrip()
 
 
 #: Tool classes for the browser sources, resolved lazily.

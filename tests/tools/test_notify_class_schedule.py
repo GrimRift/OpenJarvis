@@ -18,7 +18,7 @@ _ROWS = [
 ]
 
 
-def _write_schedule(tmp_path, day_name: str):
+def _write_schedule(tmp_path, day_name: str, rows=None):
     path = tmp_path / "Class Schedule.md"
     header = (
         "# Class Schedule\n\n## Subjects\n\n"
@@ -29,17 +29,17 @@ def _write_schedule(tmp_path, day_name: str):
     body = "".join(
         f"| {code} | {desc} | {sec} | {day_name} | {time} "
         "| Room 1 | In-person | Prof X |\n"
-        for code, desc, sec, time in _ROWS
+        for code, desc, sec, time in (rows or _ROWS)
     )
     path.write_text(header + body, encoding="utf-8")
     return path
 
 
-def _make_tool(tmp_path, day_name):
+def _make_tool(tmp_path, day_name, rows=None):
     from openjarvis.tools.notify_class_schedule import NotifyClassScheduleTool
 
     return NotifyClassScheduleTool(
-        schedule_path=str(_write_schedule(tmp_path, day_name)),
+        schedule_path=str(_write_schedule(tmp_path, day_name, rows)),
         state_path=tmp_path / "state.json",
     )
 
@@ -107,21 +107,28 @@ def test_a_failed_toast_is_retried_rather_than_suppressed(tmp_path):
 
 def test_a_partial_failure_keeps_the_delivered_one_suppressed(tmp_path):
     """Two classes in one window: the one that went out must not repeat, the
-    one that did not must be retried."""
+    one that did not must be retried.
+
+    Both classes have to be inside a reminder stage. A wide lookahead no
+    longer brings distant classes in: the stages decide what notifies, so a
+    class 300 minutes away is found by the search and then skipped.
+    """
     now = datetime(2026, 3, 10, 9, 50)
-    tool = _make_tool(tmp_path, now.strftime("%A"))
-    # Both classes land in the window with a lookahead wide enough to span them.
-    lookahead = 400
+    rows = [
+        ("CS101", "Intro to Testing", "SEC1", "10:00AM-11:00AM"),
+        ("CS202", "Advanced Testing", "SEC2", "10:04AM-11:30AM"),
+    ]
+    tool = _make_tool(tmp_path, now.strftime("%A"), rows)
 
     with patch(
         "openjarvis.tools.notify_class_schedule.deliver",
         side_effect=[None, RuntimeError("backend down")],
     ) as deliver:
-        tool.execute(now=now, lookahead_minutes=lookahead)
+        tool.execute(now=now)
     assert deliver.call_count == 2
 
     with patch("openjarvis.tools.notify_class_schedule.deliver") as deliver:
-        tool.execute(now=now + timedelta(minutes=1), lookahead_minutes=lookahead)
+        tool.execute(now=now + timedelta(minutes=1))
 
     assert deliver.call_count == 1
     assert "CS202" in deliver.call_args[0][1]

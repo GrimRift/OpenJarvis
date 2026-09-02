@@ -173,3 +173,50 @@ class TestTheTeamsSectionIsDescribed:
     def test_each_browser_source_is_tied_to_a_section(self, section, tool):
         pairs = {(s, t) for s, t, _ in morning_digest._BROWSER_SOURCES}
         assert (section, tool) in pairs
+
+
+class TestUnavailableSourcesAreNotNarrated:
+    """The briefing kept ending on "two connectors failed: Google Tasks
+    returned a 403, and Apple Health, Oura and Apple Music are unconnected" —
+    true, and a waste of a 200-word budget the user hears out loud. It
+    survived an explicit rule against naming unavailable sources, because the
+    failures sat in the evidence and the model treated them as material.
+    Removing them from the input settles it: there is nothing to narrate."""
+
+    COLLECTED = (
+        "=== MESSAGES ===\n"
+        "[gmail] From: Bank — statement ready\n\n"
+        "=== MUSIC ===\n"
+        "Played: Frank Ocean\n\n"
+        "=== ERRORS ===\n"
+        "Connector 'oura' not connected (no credentials)\n"
+        "Error fetching from 'google_tasks': 403 Forbidden\n"
+    )
+
+    def test_the_errors_section_is_removed(self):
+        kept = morning_digest._without_errors(self.COLLECTED)
+        assert "ERRORS" not in kept
+        assert "oura" not in kept
+        assert "403" not in kept
+
+    def test_the_real_evidence_survives(self):
+        kept = morning_digest._without_errors(self.COLLECTED)
+        assert "statement ready" in kept
+        assert "Frank Ocean" in kept
+
+    def test_data_without_an_errors_section_is_untouched(self):
+        data = "=== MESSAGES ===\nsomething"
+        assert morning_digest._without_errors(data) == data
+
+    def test_empty_input_is_handled(self):
+        assert morning_digest._without_errors("") == ""
+        assert morning_digest._without_errors(None) == ""
+
+    def test_the_failures_are_logged_rather_than_dropped(self, caplog):
+        """An unconfigured connector is worth knowing about — in the log, not
+        in a spoken briefing."""
+        import logging
+
+        with caplog.at_level(logging.INFO, logger=morning_digest.logger.name):
+            morning_digest._without_errors(self.COLLECTED)
+        assert any("oura" in record.getMessage() for record in caplog.records)

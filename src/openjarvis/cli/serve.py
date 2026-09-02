@@ -759,6 +759,23 @@ def serve(
         except Exception as exc:
             logger.warning("Digest cron registration failed: %s", exc)
 
+    # The class-schedule poll. Registered in code because the task that did
+    # this through the orchestrator only ever narrated the tool call.
+    if task_scheduler is not None:
+        try:
+            from openjarvis.agents.class_notifier import (
+                POLL_SECONDS,
+                register_class_notifier_cron,
+            )
+
+            _class_task = register_class_notifier_cron(task_scheduler)
+            console.print(
+                f"  Class schedule: every [cyan]{POLL_SECONDS}s[/cyan] "
+                f"(next {_class_task.next_run})"
+            )
+        except Exception as exc:
+            logger.warning("Class notifier registration failed: %s", exc)
+
     # --- Channel Gateway: API key, sessions, ChannelBridge ---
     import os as _os
 

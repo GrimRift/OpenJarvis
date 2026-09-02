@@ -113,6 +113,10 @@ full run, fails alone),
 been seen; each passes when run alone). Repo-wide `ruff check .` is also not
 clean; lint only the files you changed.
 
+`test_orchestrator::TestOrchestratorParallelTools::test_parallel_tool_execution`
+joins that rotating set: it passes alone and with `tests/agents` alone, and
+fails only when `tests/tools` has run first in the same process.
+
 **The failing set rotates between runs.** `pytest-randomly` shuffles order and
 several tests here leak state, so a wide run fails a different subset each
 time — `test_git_tool`, `test_template_loader_security`,

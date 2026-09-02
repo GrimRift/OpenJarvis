@@ -30,7 +30,19 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.check_class_schedule import CheckClassScheduleTool
-from openjarvis.tools.notify_windows import deliver
+from openjarvis.tools.notify_windows import deliver, speak
+
+#: Minutes before a class to remind, largest first. Two alerts: one with
+#: enough time to move, and one that catches a first alert nobody noticed.
+#: The poll has to run more often than the smallest gap or the 5-minute
+#: reminder falls between checks.
+REMINDER_STAGES = (15, 5)
+
+
+def _stage_for(minutes_until: float) -> Optional[int]:
+    """Which reminder a class this close belongs to, or None if too far off."""
+    applicable = [stage for stage in REMINDER_STAGES if minutes_until <= stage]
+    return min(applicable) if applicable else None
 
 
 def _default_state_path() -> Path:
@@ -71,8 +83,10 @@ class NotifyClassScheduleTool(BaseTool):
                     "lookahead_minutes": {
                         "type": "integer",
                         "description": (
-                            "How many minutes ahead to look for an upcoming "
-                            "class. Default 15."
+                            "How far ahead to search. Reminders still only "
+                            "fire at the fixed stages (15 and 5 minutes "
+                            "before), so widening this finds more classes "
+                            "but does not notify about them sooner."
                         ),
                         "default": 15,
                     },
@@ -103,7 +117,18 @@ class NotifyClassScheduleTool(BaseTool):
         upcoming = (check_result.metadata or {}).get("upcoming") or []
         state = self._load_state(now)
         already = set(state.get("notified", []))
-        pending = [c for c in upcoming if self._occurrence_key(c, now) not in already]
+        # Each class earns two reminders, so the suppression key carries the
+        # stage. Keyed on the class alone, the 15-minute alert consumed the
+        # 5-minute one.
+        staged = []
+        for item in upcoming:
+            stage = _stage_for(float(item.get("minutes_until") or 0))
+            if stage is None:
+                continue
+            if self._occurrence_key(item, now, stage) in already:
+                continue
+            staged.append((item, stage))
+        pending = [item for item, _ in staged]
         if not pending:
             return ToolResult(
                 tool_name="notify_class_schedule",
@@ -113,13 +138,17 @@ class NotifyClassScheduleTool(BaseTool):
             )
 
         notified: List[str] = []
-        for cls in pending:
+        for cls, stage in staged:
             message = (
                 f"{cls['subject_description']} ({cls['subject_code']}) at "
                 f"{cls['start_time']} in {cls['room']} ({cls['mode']})"
             )
             try:
                 deliver("Class starting soon", message, duration="long")
+                # Spoken after the toast, and only ever as an addition to it:
+                # a reminder the user has to be looking at the screen to
+                # catch is the one they miss. Silent under Do Not Disturb.
+                speak(f"{cls['subject_description']} in {stage} minutes.")
             except Exception as exc:
                 # Record only what was delivered, so the classes that did not
                 # go out are retried on the next run instead of being
@@ -131,8 +160,8 @@ class NotifyClassScheduleTool(BaseTool):
                     success=False,
                     metadata={"notified": bool(notified), "upcoming": pending},
                 )
-            already.add(self._occurrence_key(cls, now))
-            notified.append(message)
+            already.add(self._occurrence_key(cls, now, stage))
+            notified.append(f"{message} [{stage}-minute reminder]")
 
         self._record(state, already, now)
         return ToolResult(
@@ -143,8 +172,11 @@ class NotifyClassScheduleTool(BaseTool):
         )
 
     @staticmethod
-    def _occurrence_key(item: Dict[str, Any], now: datetime) -> str:
-        return f"{item['subject_code']}|{now.strftime('%A')}|{item['section']}"
+    def _occurrence_key(item: Dict[str, Any], now: datetime, stage: int) -> str:
+        return (
+            f"{item['subject_code']}|{now.strftime('%A')}|"
+            f"{item['section']}|{stage}"
+        )
 
     def _load_state(self, now: datetime) -> Dict[str, Any]:
         try:
