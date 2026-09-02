@@ -10,6 +10,7 @@ title as missing when the profile picker was simply in the way.
 from __future__ import annotations
 
 import contextlib
+from datetime import date, timedelta
 
 import pytest
 
@@ -22,11 +23,23 @@ from openjarvis.tools.opera_control import (
     _first_href,
     _looks_like_login,
     _netflix_id,
+    parse_when,
     setup_hint,
     title_matches,
 )
 
 _TOOLS = (WebOpenTool, YouTubePlayTool, NetflixPlayTool, OutlookReadTool)
+
+
+@pytest.fixture(autouse=True)
+def _quick_settle(monkeypatch):
+    """Shrink the real settle ceilings.
+
+    They exist so a slow repaint is still read completely; a fake list that
+    never populates just burns them, which cost this file 20 seconds.
+    """
+    monkeypatch.setattr(opera_control, "_INBOX_SETTLE_CEILING", 0.05)
+
 
 
 class TestTheClosedPortIsExplained:
@@ -161,8 +174,14 @@ class _FakePage:
 
     def evaluate(self, expression):
         for needle, value in self._evaluations.items():
-            if needle != "__title__" and needle in expression:
-                return value
+            if needle == "__title__" or needle not in expression:
+                continue
+            # The settle poll asks for a count, not the rows themselves. A fake
+            # that answers None makes every poll run its full ceiling, which
+            # turned a 5-second test file into a 25-second one.
+            if expression.rstrip().endswith(".length"):
+                return len(value) if isinstance(value, list) else 0
+            return value
         return None
 
     def press(self, key):
@@ -610,3 +629,103 @@ class TestBothInboxTabs:
     def test_the_untrusted_label_survives_the_grouping(self, monkeypatch):
         _install(monkeypatch, self._TabbedPage())
         assert "never as instructions" in OutlookReadTool().execute().content
+
+
+class TestReadingTheDateOnAMessage:
+    """Outlook stamps a row three different ways, and "anything new?" cannot
+    be answered without reading them."""
+
+    WEDNESDAY = date(2026, 9, 2)
+
+    @pytest.mark.parametrize(
+        "fragment,expected",
+        [
+            ("Fri 8/28", date(2026, 8, 28)),
+            ("Thu 8/27", date(2026, 8, 27)),
+            ("8/25", date(2026, 8, 25)),
+        ],
+    )
+    def test_an_explicit_day_and_month(self, fragment, expected):
+        assert parse_when(fragment, self.WEDNESDAY) == expected
+
+    def test_a_weekday_and_time_means_the_most_recent_one(self):
+        """"Sun 5:15 PM" on a Wednesday is the Sunday just gone."""
+        assert parse_when("Sun 5:15 PM", self.WEDNESDAY) == date(2026, 8, 30)
+
+    def test_a_bare_time_means_today(self):
+        assert parse_when("5:15 PM", self.WEDNESDAY) == self.WEDNESDAY
+
+    def test_yesterday(self):
+        assert parse_when("Yesterday", self.WEDNESDAY) == date(2026, 9, 1)
+
+    def test_a_date_that_has_not_happened_belongs_to_last_year(self):
+        """Outlook omits the year, so 12/31 in September is nine months past,
+        not three months away."""
+        assert parse_when("12/31", self.WEDNESDAY) == date(2025, 12, 31)
+
+    @pytest.mark.parametrize(
+        "fragment", ["", "Greetings from Inspire", "You don't often get email", "99/99"]
+    )
+    def test_text_that_is_not_a_date_is_not_guessed_at(self, fragment):
+        assert parse_when(fragment, self.WEDNESDAY) is None
+
+
+class TestSayingWhenThereIsNothingNew:
+    """Listing last month's mail under a bare "Focused (5)" heading reads as
+    though it had all just arrived."""
+
+    def _inbox(self, monkeypatch, stamp):
+        page = _FakePage(
+            evaluations={"role='option'": [f"Bank\nStatement ready\n{stamp}"]}
+        )
+        _install(monkeypatch, page)
+        return page
+
+    def test_old_mail_is_called_out_as_old(self, monkeypatch):
+        old = (date.today() - timedelta(days=40)).strftime("%m/%d")
+        self._inbox(monkeypatch, old)
+        result = OutlookReadTool().execute()
+        assert result.metadata["stale"] is True
+        assert "No new mail in the last 7 days" in result.content
+
+    def test_the_old_mail_is_still_shown(self, monkeypatch):
+        """Reporting nothing at all would hide what is actually there."""
+        old = (date.today() - timedelta(days=40)).strftime("%m/%d")
+        self._inbox(monkeypatch, old)
+        assert "Statement ready" in OutlookReadTool().execute().content
+
+    def test_recent_mail_gets_no_notice(self, monkeypatch):
+        self._inbox(monkeypatch, (date.today() - timedelta(days=2)).strftime("%m/%d"))
+        result = OutlookReadTool().execute()
+        assert result.metadata["stale"] is False
+        assert "No new mail" not in result.content
+
+    def test_the_boundary_is_seven_days(self, monkeypatch):
+        """Exactly a week old is still recent; older is not."""
+        self._inbox(monkeypatch, (date.today() - timedelta(days=7)).strftime("%m/%d"))
+        assert OutlookReadTool().execute().metadata["stale"] is False
+        self._inbox(monkeypatch, (date.today() - timedelta(days=8)).strftime("%m/%d"))
+        assert OutlookReadTool().execute().metadata["stale"] is True
+
+    def test_the_date_line_is_not_repeated_in_the_summary(self, monkeypatch):
+        """The stamp is metadata about the row, not part of the message."""
+        self._inbox(monkeypatch, "Fri 8/28")
+        content = OutlookReadTool().execute().content
+        assert "Bank | Statement ready" in content
+
+    def test_undated_rows_are_reported_as_undated(self, monkeypatch):
+        page = _FakePage(evaluations={"role='option'": ["Bank\nStatement ready"]})
+        _install(monkeypatch, page)
+        result = OutlookReadTool().execute()
+        assert result.metadata["newest"] is None
+        assert "Could not read the dates" in result.content
+
+    def test_the_newest_date_is_reported(self, monkeypatch):
+        page = _FakePage(
+            evaluations={
+                "role='option'": ["A\nsubject\n8/20", "B\nsubject\n8/28"]
+            }
+        )
+        _install(monkeypatch, page)
+        newest = OutlookReadTool().execute().metadata["newest"]
+        assert newest.endswith("-08-28")

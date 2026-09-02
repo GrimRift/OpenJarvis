@@ -24,6 +24,10 @@ import json
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+#: A close handshake is a courtesy, not a requirement — the browser drops the
+#: target either way, so this never blocks a call for long.
+_CLOSE_TIMEOUT = 1.5
+
 
 class CDPError(RuntimeError):
     """Any failure talking to the browser."""
@@ -91,11 +95,33 @@ class Connection:
             raise CDPError(f"{method} failed: {error}") from error
 
     def close(self) -> None:
-        for step in (self._socket.close(),):
-            try:
-                self._run(step)
-            except Exception:
-                pass
+        """Drop the socket without waiting on a polite close handshake.
+
+        Closing used to reuse the request timeout, so a socket the browser was
+        slow to release held the call for up to 20 seconds — three of them
+        turned a 5-second Teams read into 15. Nothing here needs the handshake
+        to complete: the browser tears the target down regardless.
+
+        Pending reads are cancelled and drained before the loop goes, because
+        closing a proactor loop with a read in flight logs "Cancelling an
+        overlapped future failed" and leaves the traceback in Sage's output.
+        """
+        try:
+            self._loop.run_until_complete(
+                asyncio.wait_for(self._socket.close(), timeout=_CLOSE_TIMEOUT)
+            )
+        except Exception:
+            pass
+        try:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+        except Exception:
+            pass
         try:
             self._loop.close()
         except Exception:

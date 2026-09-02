@@ -16,6 +16,17 @@ from openjarvis.tools import opera_control, teams_read
 from openjarvis.tools.teams_read import TeamsReadTool, read_activity
 
 
+@pytest.fixture(autouse=True)
+def _quick_settle(monkeypatch):
+    """Shrink the real waits. A fake panel that never fills burns the whole
+    ceiling, which cost this file 16 seconds."""
+    monkeypatch.setattr(teams_read, "_STABLE_CEILING", 0.05)
+    monkeypatch.setattr(teams_read, "_IFRAME_TIMEOUT", 0.2)
+    monkeypatch.setattr(teams_read, "_IFRAME_POLL", 0.02)
+    monkeypatch.setattr(teams_read, "_PANEL_TIMEOUT", 0.2)
+
+
+
 class _FakePage:
     def __init__(self, *, rows=None, ready=True):
         self._rows = rows or {}
@@ -38,10 +49,15 @@ class _FakePage:
                     self.panel = name
                     return True
             return False
+        # The settle poll asks for a count. Answering None makes every poll run
+        # its full ceiling, which is slow and stops the poll being tested.
+        counting = expression.rstrip().endswith(".length")
         if "activity-feed-item-title" in expression:
-            return self._rows.get("activity", [])
+            rows = self._rows.get("activity", [])
+            return len(rows) if counting else rows
         if 'role="listitem"' in expression:
-            return self._rows.get("assignments", [])
+            rows = self._rows.get("assignments", [])
+            return len(rows) if counting else rows
         return None
 
     def sleep(self, seconds):
@@ -173,3 +189,55 @@ class TestBothSections:
         result = TeamsReadTool().execute()
         assert result.success is True
         assert "Nothing to report" in result.content
+
+
+class TestTheDueDate:
+    """An assignment without a date reads "Due at 11:59 PM" with no day
+    attached, which is the one thing needed from it. Teams keeps the date in a
+    wrapper around the card, not in the card."""
+
+    class _DatedFrame(_FakePage):
+        def evaluate(self, expression):
+            if 'role="listitem"' in expression:
+                if expression.rstrip().endswith(".length"):
+                    return 1
+                # Mirrors what the real JS builds: heading, then the card.
+                return ["Sep 3rd - Tomorrow - Case Study Due at 11:59 PM"]
+            return super().evaluate(expression)
+
+    def test_the_date_is_kept_with_the_assignment(self, monkeypatch):
+        _install(monkeypatch, _FakePage(), self._DatedFrame())
+        content = TeamsReadTool().execute(sections="assignments").content
+        assert "Sep 3rd" in content
+        assert "Case Study" in content
+
+
+class TestItWaitsOnContentNotTheClock:
+    """Flat 4s and 6s sleeps were the entire cost of a Teams read -- 13.1s, of
+    which 10s was waiting on nothing. Polling brings the same read under 5s."""
+
+    class _GrowingPage(_FakePage):
+        """Reports a row count that climbs, then holds."""
+
+        def __init__(self, final=3):
+            super().__init__()
+            self.final = final
+            self.polls = 0
+
+        def evaluate(self, expression):
+            if expression.rstrip().endswith(".length"):
+                self.polls += 1
+                return min(self.polls, self.final)
+            return super().evaluate(expression)
+
+    def test_it_waits_for_the_list_to_stop_growing(self, monkeypatch):
+        monkeypatch.setattr(teams_read, "_STABLE_CEILING", 3.0)
+        monkeypatch.setattr(teams_read, "_STABLE_POLL", 0.01)
+        page = self._GrowingPage()
+        assert teams_read.wait_until_settled(page, "whatever") == 3
+        assert page.polls >= 4
+
+    def test_a_list_that_never_fills_gives_up_rather_than_hanging(self):
+        """The ceiling is a ceiling, not a delay."""
+        page = _FakePage()
+        assert teams_read.wait_until_settled(page, "whatever") == 0

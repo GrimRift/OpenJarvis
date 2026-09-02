@@ -43,9 +43,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
-from typing import Any, List, Optional
+from datetime import date, timedelta
+from typing import Any, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
@@ -934,14 +936,82 @@ _ROWS_JS = (
     ".slice(0, {count}).map(r => (r.innerText || '').trim())"
 )
 
+#: How far back still counts as "recent mail".
+RECENT_DAYS = 7
 
-def _tidy(rows) -> List[str]:
-    messages = []
+#: Outlook dates a row one of a few ways: "Sun 5:15 PM" for the last week,
+#: "Fri 8/28" once it is older, a bare time for today. Read so that "anything
+#: new?" can be answered with a real no rather than a list of last month's mail.
+_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_DATED = re.compile(
+    r"^(?:(?P<day>mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+)?"
+    r"(?P<month>\d{1,2})/(?P<date>\d{1,2})(?:/(?P<year>\d{2,4}))?$",
+    re.IGNORECASE,
+)
+_WEEKDAY_TIME = re.compile(
+    r"^(?P<day>mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+\d{1,2}:\d{2}", re.IGNORECASE
+)
+_TIME_ONLY = re.compile(r"^\d{1,2}:\d{2}\s*(am|pm)?$", re.IGNORECASE)
+
+#: Ceiling on waiting for a tab switch to finish repainting. Named so tests
+#: can shrink it; a flat sleep here was most of the cost of reading mail.
+_INBOX_SETTLE_CEILING = 4.0
+
+
+def parse_when(fragment: str, today: Optional[date] = None) -> Optional[date]:
+    """The date an Outlook row is stamped with, or None if it is not a date."""
+    today = today or date.today()
+    text = " ".join((fragment or "").split())
+    if not text:
+        return None
+    if text.lower().startswith("yesterday"):
+        return today - timedelta(days=1)
+    if text.lower().startswith("today") or _TIME_ONLY.match(text):
+        return today
+    dated = _DATED.match(text)
+    if dated:
+        month, day = int(dated.group("month")), int(dated.group("date"))
+        year = dated.group("year")
+        if year:
+            value = int(year)
+            year = value + 2000 if value < 100 else value
+        else:
+            year = today.year
+        try:
+            found = date(year, month, day)
+        except ValueError:
+            return None
+        # Outlook omits the year, so a date that has not happened yet belongs
+        # to the year before rather than to the future.
+        if found > today + timedelta(days=1) and not dated.group("year"):
+            try:
+                found = date(year - 1, month, day)
+            except ValueError:
+                return None
+        return found
+    weekday = _WEEKDAY_TIME.match(text)
+    if weekday:
+        wanted = _WEEKDAYS.index(weekday.group("day")[:3].lower())
+        # A bare weekday only ever means the most recent one.
+        return today - timedelta(days=(today.weekday() - wanted) % 7)
+    return None
+
+
+def _tidy(rows) -> Tuple[List[str], Optional[date]]:
+    """``(summaries, newest)``. The date line is kept out of the summary."""
+    messages: List[str] = []
+    newest: Optional[date] = None
     for text in rows or []:
         lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-        if lines:
-            messages.append(" | ".join(lines[:3]))
-    return messages
+        if not lines:
+            continue
+        stamped = [(line, parse_when(line)) for line in lines]
+        for _, when in stamped:
+            if when and (newest is None or when > newest):
+                newest = when
+        body = [line for line, when in stamped if when is None]
+        messages.append(" | ".join(body[:3] or lines[:3]))
+    return messages, newest
 
 
 def _select_inbox_tab(page, label: str) -> bool:
@@ -965,8 +1035,33 @@ def _select_inbox_tab(page, label: str) -> bool:
         return False
 
 
+def _rows_after_switch(page, count: int):
+    """Read a tab's rows once the list has finished swapping.
+
+    Polled rather than slept: a flat 1.2s per tab was most of the cost of
+    reading the inbox, and on a slow switch it was not enough anyway.
+    """
+    import time
+
+    selector = "div[role='option']"
+    deadline = time.monotonic() + _INBOX_SETTLE_CEILING
+    previous = -1
+    while time.monotonic() < deadline:
+        try:
+            current = int(
+                page.evaluate(f"document.querySelectorAll({selector!r}).length") or 0
+            )
+        except Exception:
+            break
+        if current and current == previous:
+            break
+        previous = current
+        page.sleep(0.2)
+    return _tidy(page.evaluate(_ROWS_JS.format(count=count)))
+
+
 def _read_inbox_tabs(page, count: int):
-    """``[(label, messages)]`` across Focused and Other.
+    """``[(label, messages, newest)]`` across Focused and Other.
 
     When Outlook is not splitting the inbox there are no tabs at all, so the
     single list is read as-is rather than reported as an empty Focused tab.
@@ -975,10 +1070,11 @@ def _read_inbox_tabs(page, count: int):
     for label in _INBOX_TABS:
         if not _select_inbox_tab(page, label):
             if not groups:
-                return [("Inbox", _tidy(page.evaluate(_ROWS_JS.format(count=count))))]
+                messages, newest = _rows_after_switch(page, count)
+                return [("Inbox", messages, newest)]
             continue
-        page.sleep(1.2)
-        groups.append((label, _tidy(page.evaluate(_ROWS_JS.format(count=count)))))
+        messages, newest = _rows_after_switch(page, count)
+        groups.append((label, messages, newest))
     # Leave the mailbox on Focused, the way the user keeps it.
     _select_inbox_tab(page, _INBOX_TABS[0])
     return groups
@@ -997,8 +1093,11 @@ class OutlookReadTool(_OperaTool):
             description=(
                 "Read the user's Outlook inbox through their browser. Use when "
                 "they ask what mail they have. Returns sender, subject and "
-                "preview for recent messages. Read-only: it never replies, "
-                "sends, deletes or opens links."
+                "preview for recent messages, from both the Focused and "
+                "Other tabs. Says so explicitly when nothing has arrived "
+                "in the last week. The user has TWO mailboxes — for 'check "
+                "my inbox' or 'any new mail', read this AND gmail_read. "
+                "Read-only: it never replies, sends, deletes or opens links."
             ),
             parameters={
                 "type": "object",
@@ -1043,15 +1142,29 @@ class OutlookReadTool(_OperaTool):
         except Exception as error:
             return self._fail(f"could not read the inbox: {error}")
 
-        total = sum(len(messages) for _, messages in groups)
+        total = sum(len(messages) for _, messages, _ in groups)
         if not total:
             return ToolResult(
                 tool_name=self.tool_id,
                 content="The inbox looks empty, or the list did not render.",
                 success=True,
             )
+        stamps = [newest for _, _, newest in groups if newest]
+        newest = max(stamps) if stamps else None
+        today = date.today()
+        stale = newest is not None and (today - newest).days > RECENT_DAYS
+
         sections = []
-        for label, messages in groups:
+        if stale:
+            # Answer "anything new?" with an actual no. Listing last month's
+            # mail under a bare heading reads as though it just arrived.
+            sections.append(
+                f"No new mail in the last {RECENT_DAYS} days — the most recent "
+                f"is from {newest.strftime('%d %b %Y')}. Showing it anyway:"
+            )
+        elif newest is None:
+            sections.append("(Could not read the dates on these.)")
+        for label, messages, _ in groups:
             if not messages:
                 sections.append(f"{label}: nothing.")
                 continue
@@ -1070,7 +1183,9 @@ class OutlookReadTool(_OperaTool):
             success=True,
             metadata={
                 "count": total,
-                "groups": {label: len(messages) for label, messages in groups},
+                "groups": {label: len(messages) for label, messages, _ in groups},
+                "newest": newest.isoformat() if newest else None,
+                "stale": stale,
             },
         )
 

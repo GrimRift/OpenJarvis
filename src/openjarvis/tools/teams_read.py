@@ -44,9 +44,22 @@ _ACTIVITY_ROWS = '[data-tid="activity-feed-item-title"]'
 _ASSIGNMENT_HOST = "assignments.edu"
 _ASSIGNMENT_ROWS = '[role="listitem"]'
 
-#: Teams is a heavy app and the panels mount well after the shell does.
-_PANEL_SETTLE = 4.0
-_IFRAME_SETTLE = 6.0
+#: Teams mounts its panels well after the shell, but *how long* varies. Fixed
+#: sleeps of 4s and 6s were the whole cost of a read — 13.1s end to end, of
+#: which 10s was waiting on nothing. Polling for the content instead brings the
+#: same read to under 5s. These are ceilings, not delays: they are only reached
+#: when the panel genuinely never arrives.
+_PANEL_TIMEOUT = 10.0
+_IFRAME_TIMEOUT = 12.0
+_IFRAME_POLL = 0.3
+
+#: Rows stream in, so a count that has stopped growing means the list is done.
+_STABLE_POLL = 0.25
+_STABLE_CEILING = 2.0
+
+#: The due date sits in a wrapper around each card, not in the card itself —
+#: the class carries a build hash, hence the prefix match.
+_ASSIGNMENT_GROUP = '[class*="group-container"]'
 
 
 def _click_rail(page, name: str) -> bool:
@@ -78,6 +91,40 @@ def _tidy(rows, limit: int) -> List[str]:
     return out
 
 
+def wait_until_settled(
+    page, selector: str, timeout: Optional[float] = None
+) -> int:
+    """Poll until the number of *selector* matches stops growing.
+
+    Rows stream in, so reading the instant the first one appears truncates the
+    list; sleeping a flat few seconds wastes them. Waiting for the count to
+    hold still costs only as long as the list actually takes.
+
+    The ceiling is read here rather than bound as a default argument: a default
+    is evaluated once at import, so ``_STABLE_CEILING`` could never be changed
+    afterwards — a constant that silently ignores being set is worse than no
+    constant.
+    """
+    import time
+
+    deadline = time.monotonic() + (
+        _STABLE_CEILING if timeout is None else timeout
+    )
+    previous = -1
+    while time.monotonic() < deadline:
+        try:
+            current = int(
+                page.evaluate(f"document.querySelectorAll({selector!r}).length") or 0
+            )
+        except Exception:
+            return 0
+        if current and current == previous:
+            return current
+        previous = current
+        page.sleep(_STABLE_POLL)
+    return max(previous, 0)
+
+
 def read_activity(page, count: int) -> List[str]:
     """Recent Activity items, newest first as Teams orders them.
 
@@ -87,10 +134,11 @@ def read_activity(page, count: int) -> List[str]:
     """
     if not _click_rail(page, "Activity"):
         return []
-    page.wait_for(
-        f"document.querySelector({_ACTIVITY_ROWS!r})", timeout=_SELECTOR_TIMEOUT
-    )
-    page.sleep(_PANEL_SETTLE)
+    if not page.wait_for(
+        f"document.querySelector({_ACTIVITY_ROWS!r})", timeout=_PANEL_TIMEOUT
+    ):
+        return []
+    wait_until_settled(page, _ACTIVITY_ROWS)
     try:
         rows = page.evaluate(
             f"""Array.from(document.querySelectorAll({_ACTIVITY_ROWS!r}))
@@ -108,22 +156,41 @@ def read_activity(page, count: int) -> List[str]:
 
 
 def read_assignments(browser, page, count: int) -> List[str]:
-    """Assignments, read from the iframe's own CDP target."""
+    """Assignments with their due dates, from the iframe's own CDP target.
+
+    The due date is not in the card. Teams groups cards under a date heading —
+    "Sep 3rd", "Tomorrow" — held by a wrapper around them, so the heading is
+    recovered as the part of the wrapper's text that precedes the card. Without
+    it an assignment reads "Due at 11:59 PM" with no day attached, which is the
+    one thing the user needs from it.
+    """
     if not _click_rail(page, "Assignments"):
         return []
-    page.sleep(_IFRAME_SETTLE)
-    frame = browser.attach_by_url(_ASSIGNMENT_HOST)
+    frame = _await_assignments_frame(browser, page)
     if frame is None:
         return []
     try:
-        frame.wait_for(
-            f"document.querySelector({_ASSIGNMENT_ROWS!r})",
-            timeout=_SELECTOR_TIMEOUT,
-        )
+        if not frame.wait_for(
+            f"document.querySelector({_ASSIGNMENT_ROWS!r})", timeout=_PANEL_TIMEOUT
+        ):
+            return []
+        wait_until_settled(frame, _ASSIGNMENT_ROWS)
         rows = frame.evaluate(
             f"""Array.from(document.querySelectorAll({_ASSIGNMENT_ROWS!r}))
                 .slice(0, {count})
-                .map(e => e.innerText || '')"""
+                .map(e => {{
+                    const card = e.innerText || '';
+                    const group = e.closest({_ASSIGNMENT_GROUP!r});
+                    let when = '';
+                    if (group) {{
+                        const whole = group.innerText || '';
+                        const at = whole.indexOf(card);
+                        if (at > 0) when = whole.slice(0, at);
+                    }}
+                    when = when.split('\\n').map(s => s.trim())
+                        .filter(Boolean).join(' - ');
+                    return when ? when + ' - ' + card : card;
+                }})"""
         )
     except Exception:
         rows = []
@@ -131,6 +198,23 @@ def read_assignments(browser, page, count: int) -> List[str]:
         with contextlib.suppress(Exception):
             frame.close()
     return _tidy(rows, count)
+
+
+def _await_assignments_frame(browser, page):
+    """Wait for the Assignments iframe to become a debuggable target.
+
+    Polled rather than slept: the iframe usually appears in about a second, and
+    a flat six-second wait was most of what made a Teams read feel slow.
+    """
+    import time
+
+    deadline = time.monotonic() + _IFRAME_TIMEOUT
+    while time.monotonic() < deadline:
+        frame = browser.attach_by_url(_ASSIGNMENT_HOST)
+        if frame is not None:
+            return frame
+        page.sleep(_IFRAME_POLL)
+    return None
 
 
 @ToolRegistry.register("teams_read")
