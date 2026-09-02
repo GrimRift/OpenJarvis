@@ -148,7 +148,13 @@ class NotifyClassScheduleTool(BaseTool):
                 # Spoken after the toast, and only ever as an addition to it:
                 # a reminder the user has to be looking at the screen to
                 # catch is the one they miss. Silent under Do Not Disturb.
-                speak(f"{cls['subject_description']} in {stage} minutes.")
+                # The real remaining time, not the stage that triggered it.
+                # A poll interval as long as the stage means a 5-minute alert
+                # can fire with one minute left, and "in 5 minutes" would then
+                # be the one thing the user acts on and the one thing wrong.
+                left = max(1, round(float(cls.get("minutes_until") or stage)))
+                unit = "minute" if left == 1 else "minutes"
+                speak(f"{cls['subject_description']} in {left} {unit}.")
             except Exception as exc:
                 # Record only what was delivered, so the classes that did not
                 # go out are retried on the next run instead of being

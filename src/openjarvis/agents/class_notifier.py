@@ -31,10 +31,12 @@ _TASK_PROMPT = "Check the class schedule and notify about anything imminent."
 _TASK_KEY = "class-schedule-notify"
 _TASK_KEY_FIELD = "openjarvis_task_key"
 
-#: Must be shorter than the smallest reminder stage, or the 5-minute alert
-#: falls between two checks. The old task polled every 10 minutes, which could
-#: not have delivered a 5-minute reminder even had it worked.
-POLL_SECONDS = 180
+#: At most the smallest reminder stage, or the 5-minute alert falls between
+#: two checks entirely. The old task polled every 10 minutes, which could not
+#: have delivered a 5-minute reminder even had it worked. At exactly the stage
+#: length the alert still lands, but late by up to one interval, which is why
+#: the spoken reminder states the real remaining time rather than the stage.
+POLL_SECONDS = 300
 
 
 @AgentRegistry.register("class_notifier")

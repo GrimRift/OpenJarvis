@@ -127,17 +127,30 @@ class TestItSpeaksAsWellAsShows:
             notify_class_schedule, "speak", lambda text: self.spoken.append(text)
         )
 
-    def test_it_says_the_subject_and_the_minutes(self, tmp_path):
+    def test_it_says_the_subject_and_the_real_minutes(self, tmp_path):
+        """The remaining time, not the stage that triggered the reminder.
+
+        A stage fires for any class at or under it, so the two drift apart by
+        as much as one poll interval -- and the number is the whole point of
+        the alert. This class is twelve minutes out, not fifteen.
+        """
         tool = NotifyClassScheduleTool(state_path=tmp_path / "s.json")
         tool._checker = _Checker(12)
         tool.execute(now=datetime(2026, 9, 2, 12, 48))
-        assert self.spoken == ["Methods of Research in 15 minutes."]
+        assert self.spoken == ["Methods of Research in 12 minutes."]
 
-    def test_the_second_reminder_says_five(self, tmp_path):
+    def test_the_second_reminder_says_what_is_left(self, tmp_path):
         tool = NotifyClassScheduleTool(state_path=tmp_path / "s.json")
         tool._checker = _Checker(3)
         tool.execute(now=datetime(2026, 9, 2, 12, 57))
-        assert self.spoken == ["Methods of Research in 5 minutes."]
+        assert self.spoken == ["Methods of Research in 3 minutes."]
+
+    def test_one_minute_is_singular(self, tmp_path):
+        """A five-minute poll can land with a single minute to spare."""
+        tool = NotifyClassScheduleTool(state_path=tmp_path / "s.json")
+        tool._checker = _Checker(1)
+        tool.execute(now=datetime(2026, 9, 2, 12, 59))
+        assert self.spoken == ["Methods of Research in 1 minute."]
 
 
 class TestDoNotDisturbSilencesTheVoiceOnly:
@@ -178,10 +191,16 @@ class TestDoNotDisturbSilencesTheVoiceOnly:
 class TestThePollIsFasterThanTheShortestReminder:
     def test_the_interval_can_catch_the_five_minute_alert(self):
         """The old task polled every 10 minutes, so a 5-minute reminder could
-        not have been delivered even if the model had called the tool."""
+        not have been delivered even if the model had called the tool.
+
+        The bound is inclusive: at exactly the stage length every occurrence
+        is still caught, because the stage matches any class *at or under* it
+        rather than one at that precise minute. What a longer interval costs
+        is punctuality, not delivery -- hence the spoken-time test below.
+        """
         from openjarvis.agents.class_notifier import POLL_SECONDS
 
-        assert POLL_SECONDS < min(REMINDER_STAGES) * 60
+        assert POLL_SECONDS <= min(REMINDER_STAGES) * 60
 
 
 class TestTheVoiceIsActuallyAudible:
@@ -268,3 +287,40 @@ class TestTheVoiceIsActuallyAudible:
             lambda text: pytest.fail("fell back despite the good voice working"),
         )
         assert notify_windows.speak("Class in 5 minutes.") is True
+
+
+class TestTheVoiceIsLoudEnoughToNotice:
+    """Firing is not the same as being heard.
+
+    The alert fired correctly and was still missed: Cartesia masters its
+    output well below full scale -- the reminder measured 0.228 of it, some
+    13 dB down -- which beside a playing video is quiet enough to ignore.
+    """
+
+    def test_a_quiet_clip_is_brought_up(self):
+        from openjarvis.tools.notify_windows import _TARGET_PEAK, _normalised
+
+        out = _normalised([0.2, -0.1, 0.05])
+
+        assert max(abs(v) for v in out) == pytest.approx(_TARGET_PEAK)
+
+    def test_a_loud_clip_is_left_alone(self):
+        """Normalising is a floor, not a leveller: never turn a clip down."""
+        from openjarvis.tools.notify_windows import _normalised
+
+        loud = [0.99, -0.98]
+
+        assert _normalised(loud) == loud
+
+    def test_silence_is_not_amplified(self):
+        """Guards the divide, and stops a dead clip becoming a hiss."""
+        from openjarvis.tools.notify_windows import _normalised
+
+        assert _normalised([0.0, 0.0]) == [0.0, 0.0]
+
+    def test_gain_is_capped(self):
+        from openjarvis.tools.notify_windows import _MAX_GAIN, _normalised
+
+        out = _normalised([1e-6])
+
+        assert out[0] == pytest.approx(1e-6 * _MAX_GAIN)

@@ -7,7 +7,7 @@ import struct
 import subprocess
 import sys
 import wave
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
@@ -226,6 +226,7 @@ def _voice_wav(text: str) -> Optional[str]:
         payload = raw[start + 8 :]
         count = len(payload) // 4
         samples = struct.unpack(f"<{count}f", payload[: count * 4])
+        samples = _normalised(samples)
 
         destination = get_config_dir() / "alerts" / "reminder.wav"
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -243,6 +244,34 @@ def _voice_wav(text: str) -> Optional[str]:
     except Exception:
         logger.warning("Could not synthesise the spoken alert", exc_info=True)
         return None
+
+
+#: Leave a little headroom rather than normalising to the very top, so
+#: rounding into 16-bit cannot clip the loudest sample.
+_TARGET_PEAK = 0.95
+
+#: A ceiling on the gain. Without one, a clip that is silent or nearly so
+#: gets multiplied until its noise floor is the alert.
+_MAX_GAIN = 8.0
+
+
+def _normalised(samples: Sequence[float]) -> Sequence[float]:
+    """Scale a voice clip up to a consistent, audible level.
+
+    Cartesia's output is mastered well below full scale -- the reminder
+    measured 0.228 of it, some 13 dB down -- which on laptop speakers next to
+    a video is quiet enough to miss, and missing it is the entire failure the
+    spoken alert exists to prevent. Nothing here is clipping, so this is only
+    a gain change: the loudest sample is brought to just under full scale and
+    everything else moves with it.
+    """
+    peak = max((abs(value) for value in samples), default=0.0)
+    if peak <= 0.0:
+        return samples
+    gain = min(_MAX_GAIN, _TARGET_PEAK / peak)
+    if gain <= 1.0:
+        return samples
+    return [value * gain for value in samples]
 
 
 def _wav_sample_rate(raw: bytes) -> Optional[int]:
