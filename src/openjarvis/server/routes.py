@@ -237,9 +237,7 @@ def _canned_reply(
             id=chunk_id,
             model=model,
             choices=[
-                StreamChoice(
-                    delta=DeltaMessage(content=content), finish_reason="stop"
-                )
+                StreamChoice(delta=DeltaMessage(content=content), finish_reason="stop")
             ],
         )
         yield f"data: {body.model_dump_json()}\n\n"
@@ -250,6 +248,7 @@ def _canned_reply(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
 
 # Bare Spotify transport commands ("next song", "skip", "pause") reliably
 # get hallucinated by the configured model instead of actually calling
@@ -1000,6 +999,22 @@ def _merge_agent_tool_call_fragments(
 # Tools that a bounded/terminal search result retires for the rest of the turn.
 _SEARCH_TOOL_NAMES = frozenset({"web_search"})
 
+#: Tools retired for the rest of the turn once a search has answered.
+#:
+#: ``web_open`` navigates and returns only "Opened <title>." -- it never reads
+#: the page back, so every word of a research answer comes from the search
+#: tool either way. Left available after a search, the model opened one tab
+#: per source to "show" its sources: measured 4 new Opera tabs for a single
+#: "do a deep research about AI", one of them a 4xx error page it neither
+#: noticed nor needed. The tabs cost time and contributed nothing.
+#:
+#: Retired structurally rather than discouraged in the tool description,
+#: because prompt-level rules have not held here before. Asking to open
+#: something directly still works: that turn calls no search, so nothing is
+#: retired. The deliberate cost is "search X and open the top result" within
+#: one turn, which now needs a follow-up turn to do the opening.
+_BROWSER_OPEN_TOOL_NAMES = frozenset({"web_open"})
+
 
 async def _handle_streaming_orchestrator(
     agent,
@@ -1251,6 +1266,16 @@ async def _handle_streaming_orchestrator(
                             if (tool.get("function") or {}).get("name")
                             not in _SEARCH_TOOL_NAMES
                         ]
+                    if any(
+                        getattr(result, "tool_name", "") in _SEARCH_TOOL_NAMES
+                        for result in results_by_index.values()
+                    ):
+                        active_tools = [
+                            tool
+                            for tool in active_tools
+                            if (tool.get("function") or {}).get("name")
+                            not in _BROWSER_OPEN_TOOL_NAMES
+                        ]
                     continue
 
                 full_content += turn_content
@@ -1281,9 +1306,7 @@ async def _handle_streaming_orchestrator(
                                 model=model,
                                 choices=[
                                     StreamChoice(
-                                        delta=DeltaMessage(
-                                            content=stream_chunk.content
-                                        )
+                                        delta=DeltaMessage(content=stream_chunk.content)
                                     )
                                 ],
                             )

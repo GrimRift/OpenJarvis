@@ -741,9 +741,7 @@ class TestChatCompletions:
             for event in events
             if event.get("tool") == "web_search" and event.get("success") is True
         )
-        assert tool_end["metadata"]["sources"][0]["image_url"].endswith(
-            "story.jpg"
-        )
+        assert tool_end["metadata"]["sources"][0]["image_url"].endswith("story.jpg")
         assert tool_end["metadata"]["explicit_image_search"] is True
         assert tool_end["metadata"]["images"][0]["description"] == "Story image"
 
@@ -1019,9 +1017,7 @@ class TestDigestIntentRouting:
         the agent is only built when there is nothing stored, or when the user
         asks for the latest one.
         """
-        monkeypatch.setattr(
-            "openjarvis.server.routes._stored_digest", lambda: ""
-        )
+        monkeypatch.setattr("openjarvis.server.routes._stored_digest", lambda: "")
 
     def test_a_stored_briefing_is_served_without_building_an_agent(
         self, client_with_agent, monkeypatch
@@ -1966,6 +1962,135 @@ class TestBoundedSearchRetiresOnlyTheSearchTool:
         # The search is spent; playback is not.
         assert "web_search" not in _names(stream_kwargs[1])
         assert "spotify_control" in _names(stream_kwargs[1])
+
+
+class TestSearchRetiresTheBrowserOpener:
+    """After a search answers, the model must not open its sources in Opera.
+
+    ``web_open`` navigates and returns only "Opened <title>." -- it never
+    reads the page, so a research answer comes from the search tool either
+    way. Left available, the model opened one tab per source: measured 4 new
+    Opera tabs for one "do a deep research about AI", one of them a 4xx error
+    page. Pure cost, no content.
+
+    Asserted structurally rather than trusted to the tool description, because
+    prompt-level rules have not held in this codebase before.
+    """
+
+    def _run(self, user_message, search_metadata):
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        stream_kwargs: list[dict] = []
+        called_search = search_metadata is not None
+
+        class _SearchTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="web_search",
+                    description="Search the web",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(
+                    tool_name="web_search",
+                    content="Three sources.",
+                    success=True,
+                    metadata=search_metadata or {},
+                )
+
+        class _OpenTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="web_open",
+                    description="Open a page",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):  # pragma: no cover - must not be reached
+                return ToolResult(tool_name="web_open", content="Opened.", success=True)
+
+        engine = _make_engine(content="ENGINE BYPASS")
+        stream_turn = 0
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            nonlocal stream_turn
+            stream_turn += 1
+            stream_kwargs.append(kwargs)
+            if stream_turn == 1 and called_search:
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "web_search", "arguments": "{}"},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            yield StreamChunk(content="Done.")
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_SearchTool(), _OpenTool()],
+            bus=EventBus(),
+            max_turns=3,
+            system_prompt="Use the configured tools.",
+        )
+        app = create_app(
+            engine,
+            "test-model",
+            agent=agent,
+            bus=EventBus(),
+            config=_test_config(),
+        )
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": user_message}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+
+        def _names(kwargs):
+            return {
+                (tool.get("function") or {}).get("name")
+                for tool in kwargs.get("tools", [])
+            }
+
+        return [_names(k) for k in stream_kwargs]
+
+    def test_web_open_is_gone_after_a_search(self):
+        turns = self._run("do a deep research about AI", {"sources": []})
+        assert "web_open" in turns[0]
+        assert "web_open" not in turns[1]
+
+    def test_a_plain_search_also_retires_it(self):
+        """Not only the bounded/terminal case -- any answered search counts."""
+        turns = self._run(
+            "search reddit for claude ai discussions",
+            {"bounded_search_complete": True, "sources": []},
+        )
+        assert "web_open" not in turns[1]
+
+    def test_opening_directly_still_works(self):
+        """A turn that never searches must keep the opener.
+
+        "Pull up the dashboard on my second monitor" is what web_open is for.
+        """
+        turns = self._run("open the deepgram dashboard", None)
+        assert "web_open" in turns[0]
 
 
 class TestExtractionFollowsTheModelThatAnswered:
