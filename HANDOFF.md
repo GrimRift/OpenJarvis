@@ -6,6 +6,15 @@ Build Sage into a broadly capable Windows assistant. Expand access progressively
 
 ## Verified completed work
 
+- **Voice degrades fast when Deepgram is unreachable, and a stalled greeting can no longer disarm the wake word (2026-09-02).**
+  - **Deepgram is not blocked here, it is flaky.** Measured directly, outside Sage: the certificate is genuine, TLS completes, but **one connection in five succeeds and that one took 19s**, the rest timing out at 21-30s. `FluxSession.connect` passed no `open_timeout`, so every voice turn sat through the library default before falling back to local Whisper. That is exactly what the user reported -- *"it waits so long before it starts, or it never starts... like it didn't even hear me"*.
+  - `CONNECT_TIMEOUT_SECONDS = 4.0` bounds the attempt: measured **4.04s to give up** versus 20-30s before. Nothing is lost, since a connection that slow is useless for live speech anyway.
+  - `CONNECT_COOLDOWN_SECONDS = 60` stops every *subsequent* turn re-paying even that. A success clears it immediately, so a network that recovers is picked up on the next attempt rather than needing a restart.
+  - **`playGreeting` could hang forever.** It resolved on `ended`, on `error`, and on a rejected `play()`, but a clip that starts and then stalls fires none of them. The wake word awaits that promise *while holding* `wakeWordBusyRef`, so one stalled greeting disarmed the wake word for the rest of the session -- only a page reload recovered it, which is precisely what the user had to do. Now capped at 8s with the reason surfaced.
+  - **I introduced a fresh instance of the pollution I documented this morning**: the cooldown is process-global, so one test's failure verdict short-circuited every later test in the file -- passing alone, failing in the file. Fixed with an autouse reset fixture rather than by weakening the test.
+  - 220 frontend tests, 484 server tests, ruff and `tsc --noEmit` clean. Verified live after restart.
+  - **Still open:** Sage's spoken replies going silent is a *separate* fault the user reports, not explained by any of this. Cartesia and OpenAI are both reachable (200), so it is not the network. Not yet diagnosed.
+
 - **BM25 and Hybrid memory can delete and clear again (2026-09-02).**
   - **The methods existed; the bindings did not.** `BM25Memory.delete/clear` in Python delegate to the Rust backend, and the Rust `BM25Memory` implements both -- but `PyBM25Memory`'s `#[pymethods]` block exposed only `new`, `backend_id`, `store`, `retrieve` and `count`. Calling either raised `AttributeError: 'builtins.BM25Memory' object has no attribute 'clear'`, the `builtins.` prefix being the tell that the object was the native type rather than the Python wrapper. So the backend did not satisfy `MemoryBackend`, and any caller selecting it would fail on eviction or reset.
   - **`HybridMemory` had the identical gap** and was fixed in the same pass, since one rebuild covers both and the alternative was stopping Sage twice. `FAISSMemory`, `SQLiteMemory` and `ColBERTMemory` were already complete -- so the remaining faiss failures are a different fault, not this one.

@@ -8,11 +8,25 @@ import inspect
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from openjarvis.core.config import JarvisConfig
 from openjarvis.server import flux_routes
+
+
+@pytest.fixture(autouse=True)
+def _reset_flux_connect_cooldown():
+    """The cooldown is process-global, so one test's verdict reaches the next.
+
+    Without this, a test that records a connect failure leaves every later
+    test in this file short-circuited before it reaches Deepgram at all --
+    which is how it first showed up: passing alone, failing in the file.
+    """
+    flux_routes._last_connect_failure = 0.0
+    yield
+    flux_routes._last_connect_failure = 0.0
 
 
 def _app(config: JarvisConfig, api_key: str = "") -> FastAPI:
@@ -430,3 +444,47 @@ def test_the_socket_route_points_at_the_real_handler():
     endpoints = {r.path: r.endpoint.__name__ for r in router.routes}
 
     assert endpoints["/v1/speech/flux"] == "flux_stream"
+
+
+class TestConnectCooldown:
+    """A bad path to Deepgram must cost one stalled turn, not every turn.
+
+    Measured on the reporting machine: one connection in five succeeded and
+    that one took 19s, the rest timing out at 21-30s. Without a cooldown every
+    voice turn re-paid the timeout, which the user experiences as Sage not
+    hearing them.
+    """
+
+    def test_no_cooldown_before_any_failure(self):
+        from openjarvis.server.flux_routes import _in_connect_cooldown
+
+        assert _in_connect_cooldown() is False
+
+    def test_a_failure_suppresses_the_next_attempt(self):
+        from openjarvis.server.flux_routes import (
+            _in_connect_cooldown,
+            _note_connect_failure,
+        )
+
+        _note_connect_failure()
+
+        assert _in_connect_cooldown() is True
+
+    def test_the_cooldown_expires(self):
+        import time
+
+        from openjarvis.server import flux_routes
+
+        flux_routes._note_connect_failure()
+        later = time.monotonic() + flux_routes.CONNECT_COOLDOWN_SECONDS + 1
+
+        assert flux_routes._in_connect_cooldown(now=later) is False
+
+    def test_success_clears_it_immediately(self):
+        """A network that comes back must not stay locked out for the window."""
+        from openjarvis.server import flux_routes
+
+        flux_routes._note_connect_failure()
+        flux_routes._note_connect_success()
+
+        assert flux_routes._in_connect_cooldown() is False

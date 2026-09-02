@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -31,6 +32,37 @@ router = APIRouter(tags=["speech"])
 # the existing wake-word socket, so reuse it for consistency.
 CLOSE_UNAUTHORIZED = 1008
 CLOSE_UNAVAILABLE = 1011
+
+
+#: How long to stop trying Deepgram after a failed connection.
+#:
+#: A bad network path costs the connect timeout *per voice turn*, and the
+#: answer is the same every time within a few seconds of each other. Holding
+#: the verdict briefly turns "every turn stalls" into "one turn stalls", and
+#: the window is short enough that a network which comes back is picked up on
+#: the next attempt rather than needing a restart.
+CONNECT_COOLDOWN_SECONDS = 60.0
+
+_last_connect_failure: float = 0.0
+
+
+def _in_connect_cooldown(now: Optional[float] = None) -> bool:
+    """Whether a recent failure means we should not try Deepgram again yet."""
+    if not _last_connect_failure:
+        return False
+    current = time.monotonic() if now is None else now
+    return (current - _last_connect_failure) < CONNECT_COOLDOWN_SECONDS
+
+
+def _note_connect_failure() -> None:
+    global _last_connect_failure
+    _last_connect_failure = time.monotonic()
+
+
+def _note_connect_success() -> None:
+    """Clear the cooldown: the path is working again."""
+    global _last_connect_failure
+    _last_connect_failure = 0.0
 
 
 def speculation_model_for(requested: Optional[str], server_model: str) -> str:
@@ -107,9 +139,21 @@ async def flux_stream(websocket: WebSocket) -> None:
 
     await websocket.accept(subprotocol=subprotocol)
 
+    if _in_connect_cooldown():
+        with contextlib.suppress(Exception):
+            await websocket.send_json(
+                {
+                    "type": "FluxUnavailable",
+                    "reason": "cloud transcription recently unreachable",
+                }
+            )
+            await websocket.close(code=CLOSE_UNAVAILABLE)
+        return
+
     try:
         await session.connect()
     except Exception as exc:
+        _note_connect_failure()
         logger.warning("Flux connect failed: %s", exc)
         with contextlib.suppress(Exception):
             await websocket.send_json(
@@ -117,6 +161,8 @@ async def flux_stream(websocket: WebSocket) -> None:
             )
             await websocket.close(code=CLOSE_UNAVAILABLE)
         return
+
+    _note_connect_success()
 
     # Guarded separately from the main loop below, whose own
     # `except WebSocketDisconnect` starts only after this point. A client that

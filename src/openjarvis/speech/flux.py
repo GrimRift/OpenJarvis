@@ -173,6 +173,19 @@ def build_url(
     return f"{FLUX_URL}?{urlencode(params)}"
 
 
+#: How long to wait for Deepgram's handshake before giving up and letting the
+#: caller fall back to local transcription.
+#:
+#: The library default is long enough that a bad path to Deepgram is felt as
+#: Sage simply not responding: measured on one machine, one connection in five
+#: succeeded and that one took 19s, the rest timing out at 21-30s. Every voice
+#: turn then began with a stall before local transcription took over, which
+#: reads as "it didn't hear me". A short bound turns that into a fallback the
+#: user barely notices; anything slower than this is useless for live speech
+#: anyway, so there is nothing to lose by not waiting for it.
+CONNECT_TIMEOUT_SECONDS = 4.0
+
+
 class FluxSession:
     """One Deepgram Flux connection for one voice session.
 
@@ -210,6 +223,7 @@ class FluxSession:
         self._ws = await websockets.connect(
             self._url,
             additional_headers={"Authorization": f"Token {self._key}"},
+            open_timeout=CONNECT_TIMEOUT_SECONDS,
         )
 
     async def send_audio(self, chunk: bytes) -> None:

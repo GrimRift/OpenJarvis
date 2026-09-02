@@ -71,6 +71,9 @@ export interface GreetingOptions {
 }
 
 /** Resolves when the clip has finished playing (or could not play at all). */
+/** Longest a greeting clip may take before the caller stops waiting on it. */
+const GREETING_TIMEOUT_MS = 8000;
+
 export function playGreeting(options: GreetingOptions): Promise<void> {
   return loadManifest().then(
     (manifest) =>
@@ -84,11 +87,23 @@ export function playGreeting(options: GreetingOptions): Promise<void> {
 
         const audio = new Audio(clip);
         let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const finish = () => {
           if (settled) return;
           settled = true;
+          if (timer !== undefined) clearTimeout(timer);
           resolve();
         };
+        // A clip that starts and then stalls fires neither `ended` nor
+        // `error`, so without this the promise never settles. The wake word
+        // awaits it while holding its busy flag, so one stalled greeting
+        // disarmed the wake word for the rest of the session -- only a page
+        // reload brought it back. The clips are a second or two; anything
+        // past this cap is not going to arrive.
+        timer = setTimeout(() => {
+          options.onFailure?.(`${clip} stalled during playback`);
+          finish();
+        }, GREETING_TIMEOUT_MS);
         audio.onended = finish;
         // Never leave the caller waiting on a clip that can't play (missing
         // file, autoplay policy, decode error) — listening must still start.
