@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import struct
 import subprocess
 import sys
-from typing import Any, List, Tuple
+import wave
+from typing import Any, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
@@ -155,10 +157,6 @@ class NotifyWindowsTool(BaseTool):
 _DND_KEY = r"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings"
 _DND_VALUE = "NOC_GLOBAL_SETTING_TOASTS_ENABLED"
 
-#: A spoken reminder is a sentence; nothing here should outlive that by much.
-_SPEAK_TIMEOUT_SECONDS = 30
-
-
 def do_not_disturb() -> bool:
     """Whether Windows is currently suppressing notifications.
 
@@ -185,11 +183,11 @@ def speak(text: str, *, respect_dnd: bool = True) -> bool:
     Silent under Do Not Disturb by default: the toast is still delivered, so
     the reminder is not lost — only the noise is.
 
-    Playback goes through Windows Media Player's COM object rather than a
-    bundled player, because neither ffplay nor ffmpeg is installed here and
-    ``os.startfile`` would pop a visible media window for a one-line
-    reminder. Launched without waiting, so a scheduled check is not held open
-    for the length of the sentence.
+    Falls back to the built-in Windows synthesiser if the good voice cannot
+    be produced or played. A robotic reminder beats a silent one, and silence
+    is exactly how this failed the first time: Windows Media Player's COM
+    object reported success while never leaving "Transitioning", so the toast
+    appeared and nothing was ever heard.
     """
     if not (text or "").strip():
         return False
@@ -197,29 +195,67 @@ def speak(text: str, *, respect_dnd: bool = True) -> bool:
         logger.info("Do Not Disturb is on; not speaking: %s", text[:60])
         return False
 
+    path = _voice_wav(text)
+    if path and _play_wav(path):
+        return True
+    # Never leave the reminder silent because the nice voice failed. The
+    # built-in synthesiser is robotic, but it is always installed and it
+    # always makes sound.
+    return _speak_builtin(text)
+
+
+def _voice_wav(text: str) -> Optional[str]:
+    """Sage's voice as a 16-bit PCM wav, or None.
+
+    Converted rather than played as-is. Cartesia returns 32-bit float samples
+    under a streaming header whose length field is ``ffffffff``, and
+    ``SoundPlayer`` rejects that outright as "not a valid wave file"; the
+    sample rate has to come from the header too, since assuming 44.1kHz plays
+    a 24kHz clip half again too fast.
+    """
     try:
         from openjarvis.core.paths import get_config_dir
-        from openjarvis.tools.text_to_speech import TextToSpeechTool
+        from openjarvis.speech.cartesia_tts import CartesiaTTSBackend
 
-        result = TextToSpeechTool().execute(
-            text=text, output_dir=str(get_config_dir() / "alerts")
-        )
-        audio_path = (result.metadata or {}).get("audio_path", "")
-        if not result.success or not audio_path:
-            return False
+        result = CartesiaTTSBackend().synthesize(text, output_format="wav")
+        raw = result.audio
+        rate = _wav_sample_rate(raw)
+        start = raw.find(b"data")
+        if rate is None or start < 0:
+            return None
+        payload = raw[start + 8 :]
+        count = len(payload) // 4
+        samples = struct.unpack(f"<{count}f", payload[: count * 4])
+
+        destination = get_config_dir() / "alerts" / "reminder.wav"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(destination), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(rate)
+            out.writeframes(
+                b"".join(
+                    struct.pack("<h", max(-32768, min(32767, int(value * 32767))))
+                    for value in samples
+                )
+            )
+        return str(destination)
     except Exception:
         logger.warning("Could not synthesise the spoken alert", exc_info=True)
-        return False
+        return None
 
-    script = (
-        "$p = New-Object -ComObject WMPlayer.OCX; "
-        f"$p.URL = '{audio_path}'; "
-        "$p.controls.play(); "
-        "Start-Sleep -Milliseconds 400; "
-        f"$limit = (Get-Date).AddSeconds({_SPEAK_TIMEOUT_SECONDS}); "
-        "while ($p.playState -eq 3 -and (Get-Date) -lt $limit) "
-        "{ Start-Sleep -Milliseconds 200 }"
-    )
+
+def _wav_sample_rate(raw: bytes) -> Optional[int]:
+    marker = raw.find(b"fmt ")
+    if marker < 0 or len(raw) < marker + 16:
+        return None
+    try:
+        return int(struct.unpack("<I", raw[marker + 12 : marker + 16])[0])
+    except struct.error:
+        return None
+
+
+def _run_hidden(script: str) -> bool:
     try:
         subprocess.Popen(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
@@ -227,7 +263,27 @@ def speak(text: str, *, respect_dnd: bool = True) -> bool:
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        return True
     except Exception:
-        logger.warning("Could not play the spoken alert", exc_info=True)
+        logger.warning("Could not start the spoken alert", exc_info=True)
         return False
-    return True
+
+
+def _play_wav(path: str) -> bool:
+    """Play a wav without waiting for it.
+
+    ``SoundPlayer`` rather than Windows Media Player's COM object: the latter
+    never left playState 9 (Transitioning) in a non-interactive session, so
+    the reminder was silent while every check reported success.
+    """
+    escaped = path.replace("'", "''")
+    return _run_hidden(f"(New-Object Media.SoundPlayer '{escaped}').PlaySync()")
+
+
+def _speak_builtin(text: str) -> bool:
+    escaped = text.replace("'", "''")
+    return _run_hidden(
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.Speak('{escaped}')"
+    )

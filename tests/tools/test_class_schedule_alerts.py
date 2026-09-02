@@ -182,3 +182,89 @@ class TestThePollIsFasterThanTheShortestReminder:
         from openjarvis.agents.class_notifier import POLL_SECONDS
 
         assert POLL_SECONDS < min(REMINDER_STAGES) * 60
+
+
+class TestTheVoiceIsActuallyAudible:
+    """The toast always worked and the voice never did.
+
+    Windows Media Player's COM object sat at playState 9 (Transitioning)
+    forever in a non-interactive session while reporting success, and the wait
+    loop checked ``playState -eq 3`` 400ms in — still transitioning — so it
+    exited at once and released the object mid-load. Silent, twice over.
+    """
+
+    def _wav(self, rate=24000, samples=(0.0, 0.5, -0.5)):
+        import struct
+
+        body = struct.pack(f"<{len(samples)}f", *samples)
+        # A streaming header: the RIFF length field is left as ffffffff, which
+        # is what SoundPlayer rejects outright as "not a valid wave file".
+        fmt = struct.pack("<HHIIHH", 3, 1, rate, rate * 4, 4, 32)
+        return (
+            b"RIFF\xff\xff\xff\xffWAVE"
+            + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+            + b"data" + struct.pack("<I", len(body)) + body
+        )
+
+    def test_the_sample_rate_comes_from_the_header(self):
+        """Assuming 44.1kHz plays a 24kHz clip half again too fast."""
+        assert notify_windows._wav_sample_rate(self._wav(rate=24000)) == 24000
+        assert notify_windows._wav_sample_rate(self._wav(rate=44100)) == 44100
+
+    def test_a_headerless_blob_yields_no_rate(self):
+        assert notify_windows._wav_sample_rate(b"not audio at all") is None
+
+    def test_it_writes_a_16_bit_wav_soundplayer_accepts(self, tmp_path, monkeypatch):
+        import wave
+
+        raw = self._wav()
+
+        class _Backend:
+            def synthesize(self, text, output_format="mp3"):
+                return type("R", (), {"audio": raw, "format": output_format})()
+
+        monkeypatch.setattr(
+            "openjarvis.speech.cartesia_tts.CartesiaTTSBackend", _Backend
+        )
+        monkeypatch.setattr(
+            "openjarvis.core.paths.get_config_dir", lambda: tmp_path
+        )
+        path = notify_windows._voice_wav("hello")
+        assert path is not None
+        with wave.open(path) as handle:
+            assert handle.getsampwidth() == 2
+            assert handle.getframerate() == 24000
+            assert handle.getnchannels() == 1
+
+    def test_a_failed_voice_falls_back_rather_than_going_silent(self, monkeypatch):
+        """A robotic reminder beats no reminder."""
+        monkeypatch.setattr(notify_windows, "do_not_disturb", lambda: False)
+        monkeypatch.setattr(notify_windows, "_voice_wav", lambda text: None)
+        spoken = []
+        monkeypatch.setattr(
+            notify_windows, "_speak_builtin", lambda text: spoken.append(text) or True
+        )
+        assert notify_windows.speak("Class in 5 minutes.") is True
+        assert spoken == ["Class in 5 minutes."]
+
+    def test_playback_failure_also_falls_back(self, monkeypatch):
+        monkeypatch.setattr(notify_windows, "do_not_disturb", lambda: False)
+        monkeypatch.setattr(notify_windows, "_voice_wav", lambda text: "x.wav")
+        monkeypatch.setattr(notify_windows, "_play_wav", lambda path: False)
+        fell_back = []
+        monkeypatch.setattr(
+            notify_windows, "_speak_builtin", lambda text: fell_back.append(1) or True
+        )
+        assert notify_windows.speak("Class in 5 minutes.") is True
+        assert fell_back == [1]
+
+    def test_the_good_voice_is_preferred_when_it_works(self, monkeypatch):
+        monkeypatch.setattr(notify_windows, "do_not_disturb", lambda: False)
+        monkeypatch.setattr(notify_windows, "_voice_wav", lambda text: "x.wav")
+        monkeypatch.setattr(notify_windows, "_play_wav", lambda path: True)
+        monkeypatch.setattr(
+            notify_windows,
+            "_speak_builtin",
+            lambda text: pytest.fail("fell back despite the good voice working"),
+        )
+        assert notify_windows.speak("Class in 5 minutes.") is True

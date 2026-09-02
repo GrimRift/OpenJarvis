@@ -12,10 +12,25 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 _ROWS = [
     ("CS101", "Intro to Testing", "SEC1", "10:00AM–11:00AM"),
     ("CS202", "Advanced Testing", "SEC2", "03:00PM–05:00PM"),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_voice(monkeypatch):
+    """Keep the spoken half out of the tests.
+
+    These patch ``deliver`` only, so once reminders learned to talk every case
+    called Cartesia for real and played audio on the machine running them --
+    a network round trip and a noise per test.
+    """
+    monkeypatch.setattr(
+        "openjarvis.tools.notify_class_schedule.speak", lambda text: True
+    )
 
 
 def _write_schedule(tmp_path, day_name: str, rows=None):
