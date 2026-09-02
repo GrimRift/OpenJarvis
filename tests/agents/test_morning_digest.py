@@ -407,3 +407,50 @@ class TestEmptyGeneration:
 
         assert result.content == "Good morning sir."
         assert engine.generate.call_count == 1
+
+
+class TestConfiguredModel:
+    """[digest] model/engine must reach the scheduled run.
+
+    The 05:00 briefing and an on-demand one from the Web UI went through the
+    same agent and produced different quality, because only the Web UI sends a
+    model. The cron run has no way to name one, so it fell through to the
+    server default and dropped a whole source from the briefing.
+    """
+
+    def _agent(self, model="", engine=""):
+        from openjarvis.agents.morning_digest import MorningDigestAgent
+        from openjarvis.core.config import JarvisConfig
+
+        cfg = JarvisConfig()
+        cfg.digest.model = model
+        cfg.digest.engine = engine
+        default_engine = MagicMock(name="default-engine")
+        with patch("openjarvis.agents.morning_digest.load_config", return_value=cfg):
+            return MorningDigestAgent(default_engine, "qwen3.5:4b"), default_engine
+
+    def test_a_configured_model_replaces_the_server_default(self):
+        agent, _ = self._agent(model="gpt-5.6-luna")
+        assert agent._model == "gpt-5.6-luna"
+
+    def test_no_configuration_leaves_the_default_alone(self):
+        """An unset [digest] model must not change existing behaviour."""
+        agent, default_engine = self._agent()
+        assert agent._model == "qwen3.5:4b"
+        assert agent._engine is default_engine
+
+    def test_a_configured_engine_is_resolved_and_swapped_in(self):
+        cloud = MagicMock(name="cloud-engine")
+        with patch(
+            "openjarvis.engine._discovery.get_engine", return_value=("cloud", cloud)
+        ):
+            agent, default_engine = self._agent(model="gpt-5.6-luna", engine="cloud")
+        assert agent._engine is cloud
+        assert agent._engine is not default_engine
+
+    def test_an_unresolvable_engine_keeps_the_default_rather_than_failing(self):
+        """A briefing on the wrong model beats no briefing at all."""
+        with patch("openjarvis.engine._discovery.get_engine", return_value=None):
+            agent, default_engine = self._agent(model="gpt-5.6-luna", engine="cloud")
+        assert agent._engine is default_engine
+        assert agent._model == "gpt-5.6-luna"

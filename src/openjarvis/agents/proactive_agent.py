@@ -150,7 +150,9 @@ User context is provided below — use it to tailor decisions to their patterns.
 
 # Digest lines that address a specific fetched item carry an id, e.g.
 # ``[gmail id=gmail:18f9abc] From: someone — "subject" (3h ago)``.
-_DIGEST_ID_RE = re.compile(r"^\[(?P<source>\w+)\s+id=(?P<doc_id>[^\]]+)\]\s*(?P<label>.*)$")
+_DIGEST_ID_RE = re.compile(
+    r"^\[(?P<source>\w+)\s+id=(?P<doc_id>[^\]]+)\]\s*(?P<label>.*)$"
+)
 
 # Actions that act on one specific fetched item, so a wrong doc_id destroys or
 # answers the wrong thing. Proposals for these are dropped unless their doc_id
@@ -337,49 +339,14 @@ class ProactiveAgent(ToolUsingAgent):
     ) -> tuple:
         """Swap in ``[proactive]`` model/engine before BaseAgent stores them.
 
-        Callers pass ``(engine, model)`` positionally (the orchestrator) or by
-        keyword (tests, scripts), so handle both. Naming only a model is
-        usually enough: the server's engine is normally a ``MultiEngine``,
-        which routes by model-name prefix and sends a ``gpt-*`` model to the
-        cloud engine on its own. ``engine`` is the escape hatch for a
-        single-backend setup, where swapping the model alone would ask the
-        local runtime for a model it does not have.
+        Kept as a method because the tests target it here; the logic is shared
+        with the digest, which needs the same lever for the same reason.
         """
-        if not model and not engine_key:
-            return args, kwargs
+        from openjarvis.agents._model_override import apply_configured_model
 
-        args = list(args)
-        if model:
-            if len(args) > 1:
-                args[1] = model
-            elif "model" in kwargs:
-                kwargs["model"] = model
-
-        if engine_key:
-            try:
-                from openjarvis.engine._discovery import get_engine
-
-                resolved = get_engine(
-                    load_config(), engine_key=engine_key, model=model or None
-                )
-                if resolved is not None and resolved[0] == engine_key:
-                    if args:
-                        args[0] = resolved[1]
-                    elif "engine" in kwargs:
-                        kwargs["engine"] = resolved[1]
-                else:
-                    logger.warning(
-                        "Proactive engine %r unavailable for model %r; "
-                        "keeping the default engine",
-                        engine_key,
-                        model,
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to resolve proactive engine %r", engine_key, exc_info=True
-                )
-
-        return tuple(args), kwargs
+        return apply_configured_model(
+            args, kwargs, model, engine_key, label="Proactive"
+        )
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._notification_channel_id: str = kwargs.pop("notification_channel_id", "")
@@ -736,9 +703,13 @@ class ProactiveAgent(ToolUsingAgent):
         # short summary is not mistaken for a complete one.
         summary = notification or "Nothing requires your attention."
         if failed_sources:
-            summary += "\n\nI couldn't read " + ", ".join(
-                err.split("'")[1] if "'" in err else err for err in failed_sources
-            ) + " this run, so this update may be incomplete."
+            summary += (
+                "\n\nI couldn't read "
+                + ", ".join(
+                    err.split("'")[1] if "'" in err else err for err in failed_sources
+                )
+                + " this run, so this update may be incomplete."
+            )
         return AgentResult(
             content=summary,
             turns=1,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -63,12 +64,27 @@ def create_digest_router(*, db_path: str = "") -> APIRouter:
 
     @router.post("/generate")
     async def generate_digest():
-        """Force re-generation of the digest."""
-        try:
+        """Force re-generation of the digest.
+
+        Offloaded to a thread because the briefing reads Outlook and Teams
+        over CDP, and ``CDPSession`` drives its own event loop with
+        ``run_until_complete``. Called on the loop thread that raises, the
+        pending ``wait_for`` is discarded ("coroutine was never awaited"), and
+        ``_collect_browser_sources`` drops a failed source rather than raising
+        -- so the endpoint returned a perfectly healthy-looking briefing with
+        Outlook, Teams and the assignment deadline silently missing. The chat
+        route never had this because it already runs the agent on a worker
+        thread; only this endpoint called straight through.
+        """
+
+        def _generate() -> str:
             from openjarvis.sdk import Jarvis
 
             with Jarvis() as j:
-                result = j.ask("Generate my morning digest", agent="morning_digest")
+                return j.ask("Generate my morning digest", agent="morning_digest")
+
+        try:
+            result = await asyncio.to_thread(_generate)
             return {"status": "ok", "text": result}
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))

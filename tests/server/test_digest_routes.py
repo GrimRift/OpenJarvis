@@ -133,3 +133,53 @@ def test_get_history(store, tmp_path):
     data = resp.json()
     assert len(data) == 1
     assert data[0]["voice_used"] == "jarvis"
+
+
+def test_generate_runs_where_no_event_loop_is_running(tmp_path):
+    """Generating must not happen on a thread that already runs a loop.
+
+    The briefing reads Outlook and Teams over CDP, and ``CDPSession`` drives
+    its own loop with ``run_until_complete`` -- which raises when a loop is
+    already running on that thread. ``_collect_browser_sources`` then drops
+    the failed source instead of raising, so the endpoint answered 200 with a
+    briefing that had silently lost Outlook, Teams and the assignment
+    deadline. Nothing in the response distinguished that from a quiet news
+    day, which is why this asserts the calling context rather than the text.
+
+    Asserted as "no running loop" rather than "a different thread": thread
+    identity is what TestClient happens to vary per request, while a running
+    loop is the actual thing CDP cannot tolerate.
+    """
+    import asyncio
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    seen = {}
+
+    class _FakeJarvis:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def ask(self, *args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                seen["loop_running"] = True
+            except RuntimeError:
+                seen["loop_running"] = False
+            return "briefing"
+
+    db_path = str(tmp_path / "digest.db")
+    DigestStore(db_path=db_path).close()
+    app = _make_app(db_path)
+
+    fake_sdk = type("_M", (), {"Jarvis": _FakeJarvis})
+    with patch.dict("sys.modules", {"openjarvis.sdk": fake_sdk}):
+        response = TestClient(app).post("/api/digest/generate")
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "briefing"
+    assert seen["loop_running"] is False

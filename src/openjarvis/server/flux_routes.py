@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -39,9 +39,20 @@ CLOSE_UNAVAILABLE = 1011
 #: `api.deepgram.com` resolves to a rotating set of addresses, and from this
 #: machine one of them is unreachable while another connects in about a
 #: second: measured 8/8 successes on 216.200.21.204 against repeated timeouts
-#: on 38.68.64.132. A single attempt therefore fails purely on which address
-#: DNS happened to hand out. A retry usually lands somewhere else, and with
-#: the connect already bounded the worst case is still seconds, not minutes.
+#: on 38.68.64.132, and 38.68.64.132 was still 0/4 a day later.
+#:
+#: **A bare retry does not help, and the earlier note here claiming it
+#: "usually lands somewhere else" was wrong.** Deepgram answers with a single
+#: A record and Windows caches it for the record's TTL -- measured at 853s on
+#: this machine -- so both attempts re-dial the identical dead address and the
+#: whole TTL window becomes voice turns that never start. Measured against
+#: that: 5% of single attempts fail in isolation, which would put two
+#: independent failures at ~0.25%, yet the server log showed both attempts
+#: failing in 2 of 7 sessions. The attempts were never independent.
+#:
+#: So each attempt now targets a *different* address chosen by
+#: ``flux.connect_candidates``, which remembers addresses that have worked
+#: before precisely because the resolver will not offer one.
 CONNECT_ATTEMPTS = 2
 
 #: How long to stop trying Deepgram after every attempt has failed.
@@ -131,9 +142,7 @@ async def flux_stream(websocket: WebSocket) -> None:
     eager_requested = websocket.query_params.get("eager") in ("1", "true", "yes")
     eager_threshold: Optional[float] = None
     if eager_requested and getattr(speech_cfg, "flux_eager_enabled", True):
-        eager_threshold = float(
-            getattr(speech_cfg, "flux_eager_eot_threshold", 0.6)
-        )
+        eager_threshold = float(getattr(speech_cfg, "flux_eager_eot_threshold", 0.6))
 
     try:
         session = flux.FluxSession(
@@ -161,19 +170,29 @@ async def flux_stream(websocket: WebSocket) -> None:
             await websocket.close(code=CLOSE_UNAVAILABLE)
         return
 
+    # One address per attempt. An empty list means the resolver gave us
+    # nothing to pin, in which case we fall back to letting websockets
+    # resolve as before rather than refusing to try at all.
+    candidates = flux.connect_candidates(limit=CONNECT_ATTEMPTS)
+    attempts: List[str] = candidates or [""]
+
     last_error: Optional[Exception] = None
-    for attempt in range(CONNECT_ATTEMPTS):
+    for attempt, address in enumerate(attempts):
         try:
-            await session.connect()
+            await session.connect(address)
+            flux.note_address_ok(address)
             last_error = None
             break
         except Exception as exc:
             last_error = exc
-            if attempt + 1 < CONNECT_ATTEMPTS:
+            flux.note_address_failed(address)
+            if attempt + 1 < len(attempts):
                 logger.info(
-                    "Flux connect attempt %d failed (%s); retrying",
+                    "Flux connect attempt %d to %s failed (%s); retrying on %s",
                     attempt + 1,
+                    address or "resolver default",
                     exc,
+                    attempts[attempt + 1] or "resolver default",
                 )
 
     if last_error is not None:
@@ -316,9 +335,7 @@ async def flux_stream(websocket: WebSocket) -> None:
             if exc is not None and not isinstance(exc, WebSocketDisconnect):
                 logger.warning("Flux stream ended with an error: %s", exc)
                 with contextlib.suppress(Exception):
-                    await websocket.send_json(
-                        {"type": "FluxError", "reason": str(exc)}
-                    )
+                    await websocket.send_json({"type": "FluxError", "reason": str(exc)})
     except WebSocketDisconnect:
         pass
     finally:

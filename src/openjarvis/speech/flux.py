@@ -12,12 +12,15 @@ takes no view on what to do about it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import socket
+import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +189,142 @@ def build_url(
 CONNECT_TIMEOUT_SECONDS = 4.0
 
 
+#: How long an address that failed to connect is passed over when a
+#: known-good alternative exists. Deepgram's bad address stayed bad across
+#: two days of measurement, so this is deliberately much longer than a
+#: transient blip: it is remembering a broken route, not rate-limiting.
+BAD_ADDRESS_SECONDS = 600.0
+
+#: How long an address that connected successfully stays a retry candidate.
+#: The point of remembering one at all is that a *fresh* resolution cannot be
+#: obtained -- see ``connect_candidates`` -- so this has to outlive the DNS
+#: TTL that caused the problem (measured at 853s on this machine).
+GOOD_ADDRESS_SECONDS = 3600.0
+
+#: ip -> last time a connection to it succeeded / failed.
+_address_ok: Dict[str, float] = {}
+_address_bad: Dict[str, float] = {}
+
+
+def note_address_ok(address: str) -> None:
+    """Record that *address* accepted a connection."""
+    if not address:
+        return
+    _address_ok[address] = time.monotonic()
+    _address_bad.pop(address, None)
+
+
+def note_address_failed(address: str) -> None:
+    """Record that *address* did not accept a connection."""
+    if not address:
+        return
+    _address_bad[address] = time.monotonic()
+    _address_ok.pop(address, None)
+
+
+def _is_recently_bad(address: str, now: Optional[float] = None) -> bool:
+    stamp = _address_bad.get(address)
+    if stamp is None:
+        return False
+    current = time.monotonic() if now is None else now
+    return (current - stamp) < BAD_ADDRESS_SECONDS
+
+
+def _reset_address_memory() -> None:
+    """Clear both tables. Process-global state, so tests must reset it."""
+    _address_ok.clear()
+    _address_bad.clear()
+
+
+def flux_host(url: str = FLUX_URL) -> str:
+    """The hostname the Flux socket connects to."""
+    return urlparse(url).hostname or ""
+
+
+def resolve_addresses(host: str = "") -> List[str]:
+    """Every address the resolver currently returns for *host*.
+
+    Deliberately not the whole story, and that is the bug this exists to work
+    around: ``api.deepgram.com`` answers with a *single* rotating A record and
+    Windows caches it for the record's TTL (measured at 853s here), so every
+    call inside that window returns the same one address. Resolving again is
+    therefore not a way to reach a different server.
+    """
+    name = host or flux_host()
+    if not name:
+        return []
+    try:
+        infos = socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)
+    except OSError:
+        logger.debug("Could not resolve %s", name, exc_info=True)
+        return []
+    seen: List[str] = []
+    for info in infos:
+        addr = info[4][0]
+        if addr not in seen:
+            seen.append(addr)
+    return seen
+
+
+def connect_candidates(limit: int = 2, host: str = "") -> List[str]:
+    """Addresses to try, in order, for one connection.
+
+    One of Deepgram's rotating addresses is unreachable from some networks --
+    ``38.68.64.132`` timed out 0/4 here while three siblings connected in
+    ~0.4s -- and the resolver hands out one address at a time, cached for its
+    TTL. So a plain retry re-dials the *same* dead address for the whole TTL
+    window, which is what turned a bad rotation into ~14 minutes of voice
+    turns that never started.
+
+    Breaking that needs an address the resolver is not currently offering, so
+    addresses that have connected before are remembered and used as the
+    fallback. A currently-resolved address that recently failed is demoted
+    rather than dropped: if every address is failing, the network is down and
+    trying the obvious one is still the right move.
+    """
+    now = time.monotonic()
+    resolved = resolve_addresses(host)
+
+    preferred = [a for a in resolved if not _is_recently_bad(a, now)]
+    demoted = [a for a in resolved if _is_recently_bad(a, now)]
+
+    remembered = sorted(
+        (
+            addr
+            for addr, stamp in _address_ok.items()
+            if addr not in resolved
+            and (now - stamp) < GOOD_ADDRESS_SECONDS
+            and not _is_recently_bad(addr, now)
+        ),
+        key=lambda addr: _address_ok[addr],
+        reverse=True,
+    )
+
+    ordered: List[str] = []
+    for addr in preferred + remembered + demoted:
+        if addr not in ordered:
+            ordered.append(addr)
+    return ordered[:limit] if limit > 0 else ordered
+
+
+async def open_socket(address: str, timeout: float) -> socket.socket:
+    """A connected TCP socket to *address*, without blocking the loop.
+
+    Bound separately from the TLS/WebSocket handshake so a dead address costs
+    only the TCP timeout, and so the caller knows which address it got.
+    """
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.setblocking(False)
+    try:
+        loop = asyncio.get_running_loop()
+        await asyncio.wait_for(loop.sock_connect(sock, (address, 443)), timeout)
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
 class FluxSession:
     """One Deepgram Flux connection for one voice session.
 
@@ -215,16 +354,33 @@ class FluxSession:
     def connected(self) -> bool:
         return self._ws is not None
 
-    async def connect(self) -> None:
+    async def connect(self, address: str = "") -> None:
+        """Open the Flux socket, optionally against a specific *address*.
+
+        Passing ``sock=`` bypasses the resolver for this connection only.
+        ``websockets`` still takes SNI and certificate validation from the
+        URI's hostname, so pinning the address does not weaken TLS -- a
+        wrong or hostile address fails the handshake exactly as it should.
+        """
         if not self._key:
             raise RuntimeError("DEEPGRAM_API_KEY is not set")
         import websockets
 
-        self._ws = await websockets.connect(
-            self._url,
-            additional_headers={"Authorization": f"Token {self._key}"},
-            open_timeout=CONNECT_TIMEOUT_SECONDS,
-        )
+        kwargs: Dict[str, Any] = {
+            "additional_headers": {"Authorization": f"Token {self._key}"},
+            "open_timeout": CONNECT_TIMEOUT_SECONDS,
+        }
+        sock: Optional[socket.socket] = None
+        if address:
+            sock = await open_socket(address, CONNECT_TIMEOUT_SECONDS)
+            kwargs["sock"] = sock
+
+        try:
+            self._ws = await websockets.connect(self._url, **kwargs)
+        except BaseException:
+            if sock is not None:
+                sock.close()
+            raise
 
     async def send_audio(self, chunk: bytes) -> None:
         """Forward one PCM chunk. No-op once closed, so a late frame from a
@@ -263,12 +419,13 @@ class FluxSession:
                 yield TurnEvent.from_message(data)
             elif kind in ("Error", "ConfigureFailure"):
                 raise RuntimeError(
-                    f"Deepgram Flux error: {data.get('code')} "
-                    f"{data.get('description')}"
+                    f"Deepgram Flux error: {data.get('code')} {data.get('description')}"
                 )
 
 
 __all__ = [
+    "BAD_ADDRESS_SECONDS",
+    "GOOD_ADDRESS_SECONDS",
     "EAGER_EOT_THRESHOLD_RANGE",
     "ENCODING",
     "EOT_THRESHOLD_RANGE",
@@ -285,6 +442,12 @@ __all__ = [
     "TurnEvent",
     "api_key",
     "build_url",
+    "connect_candidates",
+    "flux_host",
     "is_available",
+    "note_address_failed",
+    "note_address_ok",
+    "open_socket",
+    "resolve_addresses",
     "validate_thresholds",
 ]

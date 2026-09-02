@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from openjarvis.speech import flux as flux_mod
 from openjarvis.speech.flux import (
     EVENT_EAGER_END_OF_TURN,
     EVENT_END_OF_TURN,
@@ -144,3 +145,79 @@ class TestTurnEventParsing:
             self._msg(EVENT_END_OF_TURN, end_of_turn_confidence="not-a-number")
         )
         assert ev.end_of_turn_confidence == 0.0
+
+
+class TestAddressCandidates:
+    """Choosing which address to dial.
+
+    The failure these guard against is not a slow network: one of Deepgram's
+    rotating addresses is unreachable from some networks, the resolver serves
+    a single A record, and Windows caches it for its TTL. Retrying then
+    re-dials the identical dead address until the cache expires.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        flux_mod._reset_address_memory()
+        yield
+        flux_mod._reset_address_memory()
+
+    def test_a_remembered_address_backs_up_the_resolved_one(self):
+        """The whole point: an alternative the resolver is not offering."""
+        flux_mod.note_address_ok("203.0.113.9")
+        with patch.object(flux_mod, "resolve_addresses", return_value=["198.51.100.1"]):
+            assert flux_mod.connect_candidates(limit=2) == [
+                "198.51.100.1",
+                "203.0.113.9",
+            ]
+
+    def test_a_failed_address_is_demoted_not_dropped(self):
+        """If everything is failing the network is down, and the obvious
+        address is still worth a try -- just not first."""
+        flux_mod.note_address_ok("203.0.113.9")
+        flux_mod.note_address_failed("198.51.100.1")
+        with patch.object(flux_mod, "resolve_addresses", return_value=["198.51.100.1"]):
+            assert flux_mod.connect_candidates(limit=2) == [
+                "203.0.113.9",
+                "198.51.100.1",
+            ]
+
+    def test_success_clears_an_earlier_failure(self):
+        flux_mod.note_address_failed("198.51.100.1")
+        flux_mod.note_address_ok("198.51.100.1")
+        with patch.object(flux_mod, "resolve_addresses", return_value=["198.51.100.1"]):
+            assert flux_mod.connect_candidates(limit=2) == ["198.51.100.1"]
+
+    def test_a_stale_good_address_is_forgotten(self):
+        """Remembering forever would keep dialling a decommissioned host."""
+        flux_mod.note_address_ok("203.0.113.9")
+        flux_mod._address_ok["203.0.113.9"] -= flux_mod.GOOD_ADDRESS_SECONDS + 1
+        with patch.object(flux_mod, "resolve_addresses", return_value=["198.51.100.1"]):
+            assert flux_mod.connect_candidates(limit=2) == ["198.51.100.1"]
+
+    def test_a_bad_address_becomes_eligible_again_after_its_window(self):
+        flux_mod.note_address_failed("198.51.100.1")
+        flux_mod.note_address_ok("203.0.113.9")
+        flux_mod._address_bad["198.51.100.1"] -= flux_mod.BAD_ADDRESS_SECONDS + 1
+        with patch.object(flux_mod, "resolve_addresses", return_value=["198.51.100.1"]):
+            assert flux_mod.connect_candidates(limit=2) == [
+                "198.51.100.1",
+                "203.0.113.9",
+            ]
+
+    def test_no_resolution_still_offers_what_worked_before(self):
+        """DNS itself failing must not mean giving up on a known-good host."""
+        flux_mod.note_address_ok("203.0.113.9")
+        with patch.object(flux_mod, "resolve_addresses", return_value=[]):
+            assert flux_mod.connect_candidates(limit=2) == ["203.0.113.9"]
+
+    def test_nothing_known_yields_nothing_to_pin(self):
+        """An empty list is the signal to let websockets resolve as before."""
+        with patch.object(flux_mod, "resolve_addresses", return_value=[]):
+            assert flux_mod.connect_candidates(limit=2) == []
+
+    def test_the_limit_is_honoured(self):
+        for addr in ("203.0.113.9", "203.0.113.10", "203.0.113.11"):
+            flux_mod.note_address_ok(addr)
+        with patch.object(flux_mod, "resolve_addresses", return_value=["198.51.100.1"]):
+            assert len(flux_mod.connect_candidates(limit=2)) == 2

@@ -13,8 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
 
+from openjarvis.agents._model_override import apply_configured_model
 from openjarvis.agents._stubs import AgentContext, AgentResult, ToolUsingAgent
 from openjarvis.agents.digest_store import DigestArtifact, DigestStore
+from openjarvis.core.config import load_config
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import Message, Role, ToolCall
@@ -94,6 +96,25 @@ class MorningDigestAgent(ToolUsingAgent):
         self._generate_audio = bool(kwargs.pop("generate_audio", True))
         self._digest_store_path = kwargs.pop("digest_store_path", "")
         self._honorific = kwargs.pop("honorific", "sir")
+
+        # The scheduled 05:00 run wrote a visibly worse briefing than the same
+        # digest asked for from the Web UI, which sends the chat model: on the
+        # full evidence set (Gmail plus Outlook, Teams and a required deadline
+        # preamble) the small local default overran the 200-word limit by 30%
+        # and dropped Gmail entirely, while the cloud model covered every
+        # source in 155 words. Same code, same data, different model.
+        configured_model = ""
+        configured_engine = ""
+        try:
+            digest_cfg = load_config().digest
+            configured_model = digest_cfg.model
+            configured_engine = digest_cfg.engine
+        except Exception:
+            pass
+        args, kwargs = apply_configured_model(
+            args, kwargs, configured_model, configured_engine, label="Digest"
+        )
+
         super().__init__(*args, **kwargs)
 
     def _build_system_prompt(self) -> str:
@@ -199,9 +220,7 @@ class MorningDigestAgent(ToolUsingAgent):
                     tool_name,
                     (getattr(result, "content", "") or "")[:200],
                 )
-        logger.info(
-            "digest browser sources: %s", [label for label, _ in gathered]
-        )
+        logger.info("digest browser sources: %s", [label for label, _ in gathered])
         return gathered
 
     def _generate_narrative(self, messages: List[Message]) -> str:

@@ -1659,6 +1659,14 @@ class DigestConfig:
     schedule: str = "0 6 * * *"
     timezone: str = "America/Los_Angeles"
     persona: str = "jarvis"
+    # Model/engine the scheduled briefing is written with, overriding the
+    # server's single default. The cron run has no other way to name one:
+    # neither schedule_task nor JarvisSystem.ask() takes a model, so without
+    # this the 05:00 briefing is written by whatever the server started with
+    # while an on-demand one from the Web UI uses the chat model -- the same
+    # briefing, two different qualities. Empty means use the default.
+    model: str = ""
+    engine: str = ""
     sections: List[str] = field(
         default_factory=lambda: ["messages", "calendar", "health", "world"]
     )

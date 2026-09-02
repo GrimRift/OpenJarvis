@@ -140,7 +140,7 @@ class TestEagerIsOptIn:
             def __init__(self, **kwargs):
                 captured.update(kwargs)
 
-            async def connect(self):
+            async def connect(self, address: str = ""):
                 raise RuntimeError("stop here — construction is what is under test")
 
         client = TestClient(_app(cfg))
@@ -337,12 +337,9 @@ class TestSpeculativeTemperature:
             for node in ast.walk(tree)
             if isinstance(node, ast.Call)
             and any(
-                kw.arg == "temperature"
-                for kw in node.keywords
-                if kw.arg is not None
+                kw.arg == "temperature" for kw in node.keywords if kw.arg is not None
             )
-            and "generate_speculative"
-            in ast.dump(node)
+            and "generate_speculative" in ast.dump(node)
         ]
         assert calls, "generate_speculative must be given an explicit temperature"
 
@@ -362,7 +359,7 @@ class TestStopKeepsTheSessionAlive:
             self.audio: list[bytes] = []
             self.closed = False
 
-        async def connect(self):
+        async def connect(self, address: str = ""):
             return None
 
         async def send_audio(self, data):
@@ -488,3 +485,60 @@ class TestConnectCooldown:
         flux_routes._note_connect_success()
 
         assert flux_routes._in_connect_cooldown() is False
+
+
+class TestRetryUsesADifferentAddress:
+    """The retry has to change something, or it is not a retry.
+
+    Before this, both attempts went through the resolver -- which serves one
+    cached address -- so a dead address was dialled twice and every voice turn
+    inside the DNS TTL failed. Asserted at the route because the defect was
+    invisible in the connect code itself: it looked like two tries.
+    """
+
+    def _run(self, candidates, fail):
+        dialled: list[str] = []
+
+        class _FakeSession:
+            def __init__(self, **kwargs):
+                pass
+
+            async def connect(self, address: str = ""):
+                dialled.append(address)
+                if address in fail:
+                    raise OSError("timed out during opening handshake")
+
+            async def send_audio(self, data):
+                pass
+
+            async def events(self):
+                await asyncio.Event().wait()
+                yield  # pragma: no cover
+
+            async def close(self):
+                pass
+
+        client = TestClient(_app(_enabled_config()))
+        with patch.object(flux_routes.flux, "is_available", return_value=True):
+            with patch.object(flux_routes.flux, "FluxSession", _FakeSession):
+                with patch.object(
+                    flux_routes.flux, "connect_candidates", return_value=candidates
+                ):
+                    with patch.object(flux_routes.flux, "note_address_ok"):
+                        with patch.object(flux_routes.flux, "note_address_failed"):
+                            with client.websocket_connect("/v1/speech/flux") as ws:
+                                first = ws.receive_json()
+        return dialled, first
+
+    def test_a_dead_address_is_not_dialled_twice(self):
+        dialled, first = self._run(
+            ["198.51.100.1", "203.0.113.9"], fail={"198.51.100.1"}
+        )
+        assert dialled == ["198.51.100.1", "203.0.113.9"]
+        assert first["type"] == "FluxReady"
+
+    def test_no_candidates_falls_back_to_letting_the_resolver_choose(self):
+        """Never refuse to try just because the address list came back empty."""
+        dialled, first = self._run([], fail=set())
+        assert dialled == [""]
+        assert first["type"] == "FluxReady"
