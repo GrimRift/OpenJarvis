@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -59,8 +60,31 @@ def build_safe_env(
     return env
 
 
+def _new_process_group() -> Dict[str, object]:
+    """Popen keywords that start the child in its own process group."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
 def kill_process_tree(pid: int) -> None:
-    """Kill a process and all its children (best effort)."""
+    """Kill a process and all its children (best effort).
+
+    Process groups, ``SIGKILL`` and ``killpg`` are POSIX-only. On Windows the
+    equivalent is ``taskkill /T``, which walks the child tree the process
+    group would otherwise have given us.
+    """
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            logger.debug("Failed to kill process tree %d: %s", pid, exc)
+        return
+
     try:
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except (OSError, ProcessLookupError) as exc:
@@ -101,7 +125,11 @@ def run_sandboxed(
             text=True,
             env=env,
             cwd=cwd,
-            preexec_fn=os.setsid,  # New process group
+            # Put the child in its own group so a timeout can kill the whole
+            # tree, not just the shell. `os.setsid` does not exist on Windows
+            # -- passing it there raised AttributeError before the process
+            # ever started, so the sandbox could not run at all.
+            **_new_process_group(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)

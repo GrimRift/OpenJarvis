@@ -86,6 +86,37 @@ run: **643s → 132s**.
 
 If it looks hung again, check `--durations` before assuming a deadlock.
 
+### That list was hiding real bugs (2026-09-02)
+
+Every entry below was re-checked against its actual cause rather than its
+label. Several were not environmental at all:
+
+- **`test_subprocess_sandbox` (7 cases) was a real defect.** `run_sandboxed`
+  passed `preexec_fn=os.setsid` unconditionally, and `os.setsid` does not
+  exist on Windows, so the sandbox raised `AttributeError` before starting
+  anything. Now `start_new_session=True` on POSIX and
+  `CREATE_NEW_PROCESS_GROUP` on Windows, with `taskkill /T` for the tree.
+  All 11 pass. No production caller today, so it was latent, not live.
+- **`test_file_permissions` is environmental, but the gap it hides is not.**
+  `secure_create`/`secure_mkdir` are pure `os.chmod`, which on NTFS toggles
+  only the read-only flag. Credentials pass through them while the names
+  promise 0600. Skipped with that reason, and the gap is written into
+  `file_utils`'s module docstring. Restricting properly on Windows (an
+  `icacls` grant to the owner) is outstanding work.
+- **`faiss` and `pdfplumber` are installed**, so failures naming them are not
+  missing dependencies. `test_bm25` is a real defect: `BM25Memory` has no
+  `clear`/`delete`, so the backend does not satisfy the store interface.
+- **Google Tasks (403) is deliberately left failing.** It is configured and
+  the API refuses; that is a fault, not an absent credential. Oura, Strava
+  and gemma.cpp *are* gated now, on the presence of their own config.
+- `test_live_smoke` fails with `PermissionError [WinError 32]` — a SQLite
+  handle not closed before the temp directory is removed.
+- `test_integration_live` finds an empty skill catalogue.
+
+The lesson: a standing-failures list earns its keep only if each entry's
+cause is re-checked occasionally. This one had become a place bugs went to
+be ignored.
+
 ### Known pre-existing test failures — do not chase
 
 Confirmed environmental or order-dependent, identical on a clean tree:
@@ -95,10 +126,6 @@ Confirmed environmental or order-dependent, identical on a clean tree:
 `test_claude_code::TestEnsureRunner` (2 cases),
 `test_scan::test_run_quick_returns_subset`,
 `test_credentials::test_file_permissions` (POSIX modes on Windows),
-`test_subprocess_sandbox` (7 cases — `os.setsid` is POSIX-only and does not
-exist on Windows; fails identically on a clean tree),
-`test_file_permissions::TestSecureMkdir` / `TestSecureCreate` (5 cases — same
-cause: 700/600 modes do not exist on NTFS),
 `test_data_boundary_audit::test_local_engine_vendor_model_names_are_not_cloud`
 (3 parametrised cases) and
 `test_data_boundary_audit::test_builtin_registry_tools_are_classified_or_explicitly_exempt`

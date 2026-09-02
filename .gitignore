@@ -131,3 +131,6 @@ learning.db
 minion_logs/
 *.oj-debug.json
 oj-debug.*.json
+
+# A vendored CPython distribution lives here; never repo content.
+Python/

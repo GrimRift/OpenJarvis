@@ -370,7 +370,24 @@ class TestGemmaCppDiscovery:
         assert EngineRegistry.contains("gemma_cpp")
 
 
+def _gemma_weights_configured() -> bool:
+    """gemma.cpp needs weights downloaded from Kaggle and a path configured."""
+    import os
+
+    from openjarvis.core.config import load_config
+
+    if os.environ.get("GEMMA_CPP_MODEL_PATH"):
+        return True
+    engine_cfg = getattr(load_config(), "engine", None)
+    gemma_cfg = getattr(engine_cfg, "gemma_cpp", None)
+    return bool(getattr(gemma_cfg, "model_path", ""))
+
+
 @pytest.mark.live
+@pytest.mark.skipif(
+    not _gemma_weights_configured(),
+    reason="gemma.cpp weights are not downloaded/configured on this machine",
+)
 class TestGemmaCppLive:
     """Integration tests — require pygemma and downloaded Gemma weights.
 

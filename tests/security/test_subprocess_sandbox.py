@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
+import sys
 import tempfile
+from pathlib import Path
 
 from openjarvis.core import get_python_executable
 from openjarvis.security.subprocess_sandbox import (
@@ -64,6 +67,18 @@ class TestBuildSafeEnv:
 # ---------------------------------------------------------------------------
 
 
+def _py_command(source: str) -> str:
+    """A shell command running *source* through this interpreter.
+
+    `shlex.quote` produces POSIX single-quoting, which cmd.exe treats as part
+    of the filename -- the sandbox runs with `shell=True`, so the quoting has
+    to match the shell it will actually meet.
+    """
+    if sys.platform == "win32":
+        return subprocess.list2cmdline([get_python_executable(), "-c", source])
+    return f"{shlex.quote(get_python_executable())} -c {shlex.quote(source)}"
+
+
 class TestRunSandboxed:
     def test_simple_echo(self) -> None:
         result = run_sandboxed("echo hello", timeout=10.0)
@@ -79,10 +94,20 @@ class TestRunSandboxed:
         assert result.returncode == -1
 
     def test_working_dir(self) -> None:
+        # Not `pwd`: it is POSIX-only, and where a POSIX shell does exist on
+        # Windows it prints `/tmp/...` for a path the test holds as `C:\...`.
+        # Asking Python for the directory compares like with like everywhere.
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = run_sandboxed("pwd", working_dir=tmpdir, timeout=10.0)
+            result = run_sandboxed(
+                _py_command("import os; print(os.getcwd())"),
+                working_dir=tmpdir,
+                timeout=10.0,
+            )
             assert result.returncode == 0
-            assert tmpdir in result.stdout.strip()
+            # Last line only: the interpreter launcher can print its own
+            # banner ("Extracting: ...") ahead of the program's output.
+            reported = result.stdout.strip().splitlines()[-1]
+            assert Path(reported).resolve() == Path(tmpdir).resolve()
 
     def test_env_isolation(self) -> None:
         os.environ["TEST_SECRET"] = "super_secret_value"
@@ -99,7 +124,7 @@ class TestRunSandboxed:
     def test_output_truncation(self) -> None:
         # Generate output larger than max_output_bytes
         result = run_sandboxed(
-            f"{shlex.quote(get_python_executable())} -c \"print('A' * 200)\"",
+            _py_command("print('A' * 200)"),
             timeout=10.0,
             max_output_bytes=50,
         )

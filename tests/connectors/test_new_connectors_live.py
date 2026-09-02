@@ -12,7 +12,24 @@ import pytest
 from openjarvis.connectors._stubs import Document
 
 
+
+def _connector_configured(name: str) -> bool:
+    """Whether this machine has credentials for *name*.
+
+    These are live tests: without the connector's own JSON they raise
+    FileNotFoundError, which reads as a failure when it only means the
+    account was never linked here. Note the Google Tasks case is NOT gated
+    this way -- it is configured and returns 403, which is a real fault.
+    """
+    from openjarvis.core.paths import get_data_dir
+
+    return (get_data_dir() / "connectors" / f"{name}.json").exists()
+
+
 @pytest.mark.cloud
+@pytest.mark.skipif(
+    not _connector_configured("oura"), reason="Oura is not linked on this machine"
+)
 class TestOuraLive:
     def test_sync_returns_documents(self):
         from openjarvis.connectors.oura import OuraConnector
@@ -25,6 +42,10 @@ class TestOuraLive:
 
 
 @pytest.mark.cloud
+@pytest.mark.skipif(
+    not _connector_configured("strava"),
+    reason="Strava is not linked on this machine",
+)
 class TestStravaLive:
     def test_sync_returns_documents(self):
         from openjarvis.connectors.strava import StravaConnector

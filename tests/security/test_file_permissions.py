@@ -4,8 +4,22 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
+
+# `os.chmod` on Windows sets only the read-only flag -- NTFS has no mode bits
+# to assert, so these cases can never pass there. Skipped rather than left
+# failing, so that a genuine regression in this file is visible: they were
+# five of the standing failures everyone had learned to ignore. That Windows
+# gets no real restriction is a live gap, recorded in the module docstring of
+# `openjarvis.security.file_utils` -- skipping the test does not close it.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX mode bits; NTFS uses ACLs and os.chmod cannot express 0600",
+)
 
 
 class TestSecureMkdir:

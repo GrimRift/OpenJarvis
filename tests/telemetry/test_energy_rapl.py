@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,16 @@ from openjarvis.telemetry.energy_rapl import (
     RaplEnergyMonitor,
     _discover_domains,
 )
+
+# Intel RAPL reads /sys/class/powercap, which exists only on Linux. The
+# fixtures here build a fake sysfs tree, and even that cannot be laid out on
+# Windows (NotADirectoryError on the `intel-rapl:0` nodes). Skipped so a real
+# regression in energy accounting stands out instead of joining the noise.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Intel RAPL exposes /sys/class/powercap on Linux only",
+)
+
 from tests.telemetry.energy_test_helpers import (
     assert_close_sets_uninitialized,
     assert_sample_result_basics,

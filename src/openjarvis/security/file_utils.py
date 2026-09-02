@@ -2,6 +2,15 @@
 
 All OpenJarvis data files under ``~/.openjarvis/`` should be created
 through these helpers to ensure consistent, restrictive permissions.
+
+**These modes are enforced on POSIX only.** ``os.chmod`` on Windows sets
+nothing but the read-only flag: it cannot express "owner only", because NTFS
+uses ACLs rather than mode bits. A file created here on Windows is therefore
+as readable as its inherited ACL allows -- in practice the user-profile ACL,
+which keeps out other non-administrator accounts but is not the 0600 these
+functions name. Credentials do pass through here, so restricting them
+properly on Windows (an ``icacls`` grant to the owner alone) is real
+outstanding work, not a documentation nicety.
 """
 
 from __future__ import annotations
