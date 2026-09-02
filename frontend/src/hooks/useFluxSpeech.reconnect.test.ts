@@ -21,3 +21,4 @@ describe('reconnectDelay', () => {
     expect(reconnectDelay(MAX_FLUX_RECONNECTS + 5)).toBeNull();
   });
 });
+

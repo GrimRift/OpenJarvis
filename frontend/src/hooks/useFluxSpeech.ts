@@ -157,7 +157,7 @@ export function interpretFluxMessage(
   }
 }
 
-function buildFluxWsUrl(eager: boolean, model?: string): string {
+export function buildFluxWsUrl(eager: boolean, model?: string): string {
   const base = getBase();
   const url = new URL('/v1/speech/flux', base || window.location.origin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -194,6 +194,15 @@ function downsample(input: Float32Array, fromRate: number): Int16Array {
  */
 export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const { enabled, eager, model } = options;
+  // Read at connect time, never a dependency of the connect effect. Making it
+  // one tore the socket down whenever the selected model changed -- and
+  // `setCloudModelAvailable` changes it on load. A reconnect mid-turn means
+  // the EndOfTurn that clears `fluxTurnActive` never arrives, the orb stays
+  // stuck in 'recording', and the wake word can never re-arm because it only
+  // fires from an idle state. A model chosen mid-session applies to the next
+  // connection, which is the right trade against dropping a live turn.
+  const modelRef = useRef(model);
+  modelRef.current = model;
   const [status, setStatus] = useState<FluxStatus>('idle');
   const [reason, setReason] = useState<string>('');
 
@@ -365,7 +374,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     }
     streamRef.current = stream;
 
-    const ws = new WebSocket(buildFluxWsUrl(eager, model), buildWsProtocols());
+    const ws = new WebSocket(buildFluxWsUrl(eager, modelRef.current), buildWsProtocols());
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
@@ -441,7 +450,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     source.connect(processor);
     processor.connect(silent);
     silent.connect(ctx.destination);
-  }, [eager, model, fail, handleMessage]);
+  }, [eager, fail, handleMessage]);
 
   const beginTurn = useCallback(() => {
     pendingRef.current = [];
@@ -489,7 +498,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // connect/teardown are stable; re-running on `eager` is intended, since
     // the flag is part of the socket URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, eager, model]);
+  }, [enabled, eager]);
 
   return {
     status,
