@@ -21,6 +21,20 @@ export type FluxStatus =
   | 'unavailable'
   | 'error';
 
+/**
+ * Whether a turn opened on the socket can still be in flight.
+ *
+ * Only a connected socket can deliver the EndOfTurn that ends a turn. Every
+ * other status means the socket that started it is gone -- including an
+ * intentional teardown, which never reports itself through `onUnavailable`.
+ * A turn left open outlives its socket and, because the caller reports
+ * 'recording' while one is open and the wake word only fires from 'idle',
+ * silently disables the wake word for the rest of the session.
+ */
+export function turnSurvivesStatus(status: FluxStatus): boolean {
+  return status === 'connected';
+}
+
 export interface FluxTurn {
   event: 'StartOfTurn' | 'Update' | 'EagerEndOfTurn' | 'TurnResumed' | 'EndOfTurn';
   turnIndex: number;

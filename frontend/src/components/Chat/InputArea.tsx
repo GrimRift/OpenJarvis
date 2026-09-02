@@ -26,7 +26,7 @@ import { useStreamingTts } from '../../hooks/useStreamingTts';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
-import { useFluxSpeech } from '../../hooks/useFluxSpeech';
+import { turnSurvivesStatus, useFluxSpeech } from '../../hooks/useFluxSpeech';
 import type {
   ChatMessage,
   MessageTelemetry,
@@ -1173,6 +1173,22 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     },
     onUnavailable: handleFluxUnavailable,
   });
+
+  // A turn cannot outlive the socket that owns it.
+  //
+  // `fluxTurnActive` is cleared by EndOfTurn, and by onUnavailable when a
+  // drop is detected — but an *intentional* teardown (the effect re-running,
+  // Flux being switched off, a reconnect) sets `intentionalStopRef` and so
+  // never calls back. A turn open at that moment stayed open forever, and
+  // since `effectiveSpeechState` reports 'recording' while it is set and the
+  // wake word only fires from 'idle', the wake word could never re-arm for
+  // the rest of the session. Only a page reload cleared it.
+  //
+  // Keying off the status rather than off each teardown path covers every
+  // way a socket can stop being the one that started the turn.
+  useEffect(() => {
+    if (!turnSurvivesStatus(flux.status)) setFluxTurnActive(false);
+  }, [flux.status]);
 
   // Entry point for both the wake word and continuous-conversation re-arm.
   // Real silence detection (see useSpeech's VAD) stops the recording as soon

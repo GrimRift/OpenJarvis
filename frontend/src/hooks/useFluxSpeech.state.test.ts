@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { interpretFluxMessage } from './useFluxSpeech';
+import { interpretFluxMessage, turnSurvivesStatus } from './useFluxSpeech';
 
 const turnInfo = (event: string, over: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -210,5 +210,30 @@ describe('speculative answer release', () => {
       1,
     );
     expect(action.kind).toBe('ignore');
+  });
+});
+
+
+// A turn used to outlive its socket. EndOfTurn and onUnavailable both clear
+// it, but an intentional teardown — the effect re-running, Flux switched off,
+// a reconnect — sets intentionalStopRef and never calls back, so a turn open
+// at that moment stayed open forever. InputArea reports 'recording' while one
+// is open and the wake word only fires from 'idle', so the wake word could
+// never re-arm until the page was reloaded.
+describe('turnSurvivesStatus', () => {
+  it('keeps a turn while the socket is connected', () => {
+    expect(turnSurvivesStatus('connected')).toBe(true);
+  });
+
+  it.each(['idle', 'connecting', 'unavailable', 'error'] as const)(
+    'ends a turn on status %s, so the wake word can re-arm',
+    (status) => {
+      expect(turnSurvivesStatus(status)).toBe(false);
+    },
+  );
+
+  it('ends a turn while reconnecting, not just on a hard failure', () => {
+    // The reconnect path is the one that stranded it: no error is surfaced.
+    expect(turnSurvivesStatus('connecting')).toBe(false);
   });
 });
