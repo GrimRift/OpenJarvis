@@ -30,6 +30,8 @@ mention the very identifiers some of these forbid.
 from __future__ import annotations
 
 import ast
+import gc
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -37,16 +39,41 @@ import pytest
 SRC = Path(__file__).resolve().parents[2] / "src" / "openjarvis"
 
 
+@cache
 def _modules() -> list[tuple[Path, ast.Module]]:
-    """Every shipped module, parsed once."""
+    """Every shipped module, parsed once — now actually once.
+
+    The docstring always claimed this, but nothing enforced it: all ten
+    invariants called it, so 698 files were re-parsed eleven times per run.
+
+    On its own that is cheap (~2s a test). Run *after* ``tests/tools``, with
+    998 tests' worth of imported modules and fixtures still on the heap, each
+    call inflated to 40-86s — the whole suite went from 24s standalone to 559s,
+    and looked like it had hung. Allocating millions of AST nodes against a
+    large heap is what the cyclic collector is worst at.
+
+    Caching is safe because every caller only reads: no test mutates the list
+    or the trees.
+    """
     parsed = []
-    for path in sorted(SRC.rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
-        try:
-            parsed.append((path, ast.parse(path.read_text(encoding="utf-8"))))
-        except SyntaxError as exc:  # pragma: no cover - a broken tree fails loudly
-            pytest.fail(f"{path} does not parse: {exc}")
+    # The collector is paused for the one parse that happens. Building 698
+    # syntax trees allocates millions of container objects, and every
+    # generation-0 sweep then walks the whole inherited heap looking for cycles
+    # that these do not have. Measured at 2.5x on a small heap and far more on
+    # the one this inherits. It is re-enabled unconditionally.
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        for path in sorted(SRC.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            try:
+                parsed.append((path, ast.parse(path.read_text(encoding="utf-8"))))
+            except SyntaxError as exc:  # pragma: no cover - fails loudly
+                pytest.fail(f"{path} does not parse: {exc}")
+    finally:
+        if collecting:
+            gc.enable()
     return parsed
 
 

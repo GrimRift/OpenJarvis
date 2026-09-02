@@ -71,6 +71,21 @@ distinguishes "fixed" from "never broken":
 - Prefer one live end-to-end check of the actual reported symptom over more
   unit tests. Most real bugs here were found by using the app, not by testing.
 
+### The suite is slow, not hung
+
+`tests/tools tests/architecture` together took **10m43s** and looked stuck near
+the end. It was not: the 11 architecture invariants accounted for 559s of it,
+40–86s each, against 24s for the same suite run alone.
+
+`_modules()` parses all 698 source files and every invariant called it, so the
+whole tree was parsed eleven times per run. Alone that is ~2s a call; run after
+`tests/tools`, with 998 tests' worth of imports and fixtures still on the heap,
+each call inflated more than twentyfold. It is now `@cache`d (safe — every
+caller only reads) and the collector is paused for the single parse. Combined
+run: **643s → 132s**.
+
+If it looks hung again, check `--durations` before assuming a deadlock.
+
 ### Known pre-existing test failures — do not chase
 
 Confirmed environmental or order-dependent, identical on a clean tree:
