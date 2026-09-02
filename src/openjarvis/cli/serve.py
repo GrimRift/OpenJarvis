@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 
 import click
 from rich.console import Console
@@ -528,6 +529,22 @@ def serve(
         speech_backend = get_speech_backend(config)
         if speech_backend:
             console.print(f"  Speech: [cyan]{speech_backend.backend_id}[/cyan]")
+
+            # Load the weights now, off the request path. The model is built
+            # lazily on first use, so without this the first thing said after
+            # a restart waits for it -- measured at 2.4s for
+            # distil-large-v3.5, on top of the transcription itself. It runs
+            # on a daemon thread so startup does not block on it, and
+            # `health()` is simply the existing method that forces the load.
+            def _warm_speech(backend: object = speech_backend) -> None:
+                try:
+                    backend.health()  # type: ignore[attr-defined]
+                except Exception as exc:  # noqa: BLE001 — warmup is optional
+                    logger.debug("Speech warmup failed: %s", exc)
+
+            threading.Thread(
+                target=_warm_speech, name="speech-warmup", daemon=True
+            ).start()
     except Exception as exc:
         logger.debug("Speech backend discovery failed: %s", exc)
 

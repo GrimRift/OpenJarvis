@@ -34,14 +34,25 @@ CLOSE_UNAUTHORIZED = 1008
 CLOSE_UNAVAILABLE = 1011
 
 
-#: How long to stop trying Deepgram after a failed connection.
+#: How many times to try Deepgram before falling back to local.
 #:
-#: A bad network path costs the connect timeout *per voice turn*, and the
-#: answer is the same every time within a few seconds of each other. Holding
-#: the verdict briefly turns "every turn stalls" into "one turn stalls", and
-#: the window is short enough that a network which comes back is picked up on
-#: the next attempt rather than needing a restart.
-CONNECT_COOLDOWN_SECONDS = 60.0
+#: `api.deepgram.com` resolves to a rotating set of addresses, and from this
+#: machine one of them is unreachable while another connects in about a
+#: second: measured 8/8 successes on 216.200.21.204 against repeated timeouts
+#: on 38.68.64.132. A single attempt therefore fails purely on which address
+#: DNS happened to hand out. A retry usually lands somewhere else, and with
+#: the connect already bounded the worst case is still seconds, not minutes.
+CONNECT_ATTEMPTS = 2
+
+#: How long to stop trying Deepgram after every attempt has failed.
+#:
+#: Deliberately short. The cooldown exists only to stop a burst of turns each
+#: re-paying the connect timeout; it is not a judgement that cloud is down.
+#: If cloud transcription really has stopped working, switching the setting to
+#: local is one click and a better answer than Sage deciding to stay offline,
+#: so the window is kept to five seconds -- barely more than one stalled
+#: turn, and set by the user for exactly that reason.
+CONNECT_COOLDOWN_SECONDS = 5.0
 
 _last_connect_failure: float = 0.0
 
@@ -150,14 +161,27 @@ async def flux_stream(websocket: WebSocket) -> None:
             await websocket.close(code=CLOSE_UNAVAILABLE)
         return
 
-    try:
-        await session.connect()
-    except Exception as exc:
+    last_error: Optional[Exception] = None
+    for attempt in range(CONNECT_ATTEMPTS):
+        try:
+            await session.connect()
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < CONNECT_ATTEMPTS:
+                logger.info(
+                    "Flux connect attempt %d failed (%s); retrying",
+                    attempt + 1,
+                    exc,
+                )
+
+    if last_error is not None:
         _note_connect_failure()
-        logger.warning("Flux connect failed: %s", exc)
+        logger.warning("Flux connect failed: %s", last_error)
         with contextlib.suppress(Exception):
             await websocket.send_json(
-                {"type": "FluxUnavailable", "reason": f"connect failed: {exc}"}
+                {"type": "FluxUnavailable", "reason": f"connect failed: {last_error}"}
             )
             await websocket.close(code=CLOSE_UNAVAILABLE)
         return

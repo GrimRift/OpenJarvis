@@ -807,6 +807,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // numbers don't get stuck on the last sample.
       useAppStore.getState().setLiveEnergy(null);
     } finally {
+      // First, before anything that can throw.
+      //
+      // `isStreaming` feeds `micDisabled`, so a turn that leaves it set
+      // disables the microphone and the wake word can never re-arm -- for the
+      // rest of the session, recoverable only by reloading the page. This
+      // reset used to sit some fifty lines further down, behind
+      // `updateLastAssistant`, `flushSources()` and the telemetry maths: one
+      // unusual message throwing anywhere in there took the wake word with
+      // it, which is exactly the "it stopped re-arming after a while" report.
+      // Bookkeeping is worth doing, but never at the cost of the microphone.
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      resetStream();
+      abortRef.current = null;
+
       if (!accumulatedContent) {
         accumulatedContent = 'No response was generated. Please try again.';
       }
@@ -855,16 +872,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         researchTraces.length > 0 ? researchTraces : undefined,
         researchSourcesByRef.size > 0 ? flushSources() : undefined,
       );
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      resetStream();
       useAppStore.getState().addLogEntry({
         timestamp: Date.now(), level: 'info', category: 'chat',
         message: `Response: ${accumulatedContent.length} chars`,
       });
-      abortRef.current = null;
 
       const incrementalSpeechResult = incrementalSpeech?.finish();
 
