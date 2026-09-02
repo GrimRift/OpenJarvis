@@ -383,3 +383,50 @@ class TestStopKeepsTheSessionAlive:
                         time.sleep(0.02)
 
         assert session.audio == [b"turn-one", b"turn-two"]
+
+
+class TestSpeculationFollowsTheChatModel:
+    """The draft is made by whichever model will answer.
+
+    Drafting used to use the server's startup model unconditionally, which is
+    the local one: every voice turn loaded a 3.6 GB model onto the GPU while
+    the real reply came from the cloud, and Ollama held it for five minutes
+    after. Measured live at 7.0 GB of 8.0 GB with a video playing.
+    """
+
+    def test_the_clients_model_wins(self):
+        from openjarvis.server.flux_routes import speculation_model_for
+
+        assert speculation_model_for("gpt-5.6-luna", "qwen3.5:4b") == "gpt-5.6-luna"
+
+    def test_a_local_selection_still_drafts_locally(self):
+        """Prefer-cloud switched off must keep drafting on-device."""
+        from openjarvis.server.flux_routes import speculation_model_for
+
+        assert speculation_model_for("qwen3.5:4b", "qwen3.5:4b") == "qwen3.5:4b"
+
+    def test_an_older_client_falls_back_to_the_server_model(self):
+        from openjarvis.server.flux_routes import speculation_model_for
+
+        assert speculation_model_for(None, "qwen3.5:4b") == "qwen3.5:4b"
+
+    def test_an_empty_model_param_is_not_a_selection(self):
+        """A blank query value must not leave drafting with no model at all."""
+        from openjarvis.server.flux_routes import speculation_model_for
+
+        assert speculation_model_for("", "qwen3.5:4b") == "qwen3.5:4b"
+
+
+def test_the_socket_route_points_at_the_real_handler():
+    """A helper defined under the decorator silently steals the route.
+
+    Inserting a plain function between ``@router.websocket`` and
+    ``flux_stream`` registered *the helper* as the endpoint: every voice
+    connection dropped instantly, with no import error and no failing unit
+    test outside the socket cases. The registration is worth asserting.
+    """
+    from openjarvis.server.flux_routes import router
+
+    endpoints = {r.path: r.endpoint.__name__ for r in router.routes}
+
+    assert endpoints["/v1/speech/flux"] == "flux_stream"

@@ -1161,6 +1161,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const flux = useFluxSpeech({
     enabled: fluxActive,
     eager: fluxEagerEnabled,
+    model: selectedModel,
     onEndOfTurn: handleFluxEndOfTurn,
     onTurnStarted: () => {
       // Real speech: from here Deepgram owns the ending.

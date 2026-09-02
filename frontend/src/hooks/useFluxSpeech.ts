@@ -33,6 +33,17 @@ export interface UseFluxSpeechOptions {
   enabled: boolean;
   /** Ultra mode — ask the server for speculative EagerEndOfTurn events. */
   eager: boolean;
+  /**
+   * The model this chat is actually using, so the speculative draft is made
+   * by the same one that will answer.
+   *
+   * The server used to draft with its own startup model, which is always the
+   * local one: every voice turn loaded a 3.6 GB model onto the GPU while the
+   * real reply came from the cloud, and Ollama held it for five minutes
+   * after. Sending the selection means "Prefer cloud model" governs drafting
+   * too, and turning it off keeps drafting on-device as before.
+   */
+  model?: string;
   onEndOfTurn: (
     transcript: string,
     turnIndex: number,
@@ -146,11 +157,12 @@ export function interpretFluxMessage(
   }
 }
 
-function buildFluxWsUrl(eager: boolean): string {
+function buildFluxWsUrl(eager: boolean, model?: string): string {
   const base = getBase();
   const url = new URL('/v1/speech/flux', base || window.location.origin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   if (eager) url.searchParams.set('eager', '1');
+  if (model) url.searchParams.set('model', model);
   return url.toString();
 }
 
@@ -181,7 +193,7 @@ function downsample(input: Float32Array, fromRate: number): Int16Array {
  * Sage is speaking.
  */
 export function useFluxSpeech(options: UseFluxSpeechOptions) {
-  const { enabled, eager } = options;
+  const { enabled, eager, model } = options;
   const [status, setStatus] = useState<FluxStatus>('idle');
   const [reason, setReason] = useState<string>('');
 
@@ -353,7 +365,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     }
     streamRef.current = stream;
 
-    const ws = new WebSocket(buildFluxWsUrl(eager), buildWsProtocols());
+    const ws = new WebSocket(buildFluxWsUrl(eager, model), buildWsProtocols());
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
@@ -429,7 +441,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     source.connect(processor);
     processor.connect(silent);
     silent.connect(ctx.destination);
-  }, [eager, fail, handleMessage]);
+  }, [eager, model, fail, handleMessage]);
 
   const beginTurn = useCallback(() => {
     pendingRef.current = [];
@@ -477,7 +489,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // connect/teardown are stable; re-running on `eager` is intended, since
     // the flag is part of the socket URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, eager]);
+  }, [enabled, eager, model]);
 
   return {
     status,

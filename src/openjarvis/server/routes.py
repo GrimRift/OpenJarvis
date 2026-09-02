@@ -593,7 +593,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         response,
         bus=getattr(request.app.state, "bus", None),
         source="server.chat",
-        model=model,
+        model=_answering_model(model, agent),
     )
     return response
 
@@ -605,6 +605,20 @@ def _response_content(response) -> str:
     if choices:
         content = getattr(choices[0].message, "content", "") or ""
     return content
+
+
+def _answering_model(model: str, agent: Any) -> str:
+    """The model that actually answered, not the one the request named.
+
+    Every agent path generates with ``model or agent._model``, so a request
+    that names no model is still answered -- by the agent's own, which here is
+    a cloud model. Memory extraction keys off this value, and passing the raw
+    request model meant it saw ``""`` and fell back to the configured local
+    model: the browser chatted in the cloud while a 3.6 GB extraction model
+    loaded onto the GPU behind it, which is the exact stall this was all
+    changed to remove.
+    """
+    return model or getattr(agent, "_model", "") or ""
 
 
 def _record_completed_exchange(
@@ -1342,7 +1356,7 @@ async def _handle_streaming_orchestrator(
                 full_content,
                 bus=bus,
                 source="server.chat.stream",
-                model=model,
+                model=_answering_model(model, agent),
             )
 
         # Some streaming providers (including the currently configured OpenAI
@@ -1552,7 +1566,7 @@ async def _handle_agent_stream(
             content,
             bus=bus,
             source="server.chat.stream",
-            model=model,
+            model=_answering_model(model, agent),
         )
         yield "data: [DONE]\n\n"
 

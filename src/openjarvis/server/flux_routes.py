@@ -33,6 +33,21 @@ CLOSE_UNAUTHORIZED = 1008
 CLOSE_UNAVAILABLE = 1011
 
 
+def speculation_model_for(requested: Optional[str], server_model: str) -> str:
+    """Which model drafts the speculative reply.
+
+    It used to be the server's startup model unconditionally -- always the
+    local one -- so every voice turn put a 3.6 GB draft model on the GPU while
+    the real answer came from the cloud, and Ollama held it for five minutes
+    afterwards: measured at 7.0 GB of 8.0 GB with a video playing. The client
+    sends the model it is actually chatting with, so a cloud-answered turn
+    drafts in the cloud and never touches the GPU, while "Prefer cloud model"
+    switched off sends a local id and keeps drafting on-device. An older
+    client sends nothing, and falls back to the server's own model.
+    """
+    return requested or server_model
+
+
 @router.websocket("/v1/speech/flux")
 async def flux_stream(websocket: WebSocket) -> None:
     """Stream microphone audio to Deepgram Flux and relay turn events back.
@@ -65,6 +80,11 @@ async def flux_stream(websocket: WebSocket) -> None:
     # must agree, and the server flag allows by default for the same reason
     # flux_enabled does — otherwise the Settings toggle could never take
     # effect without hand-editing config.toml.
+    speculation_model = speculation_model_for(
+        websocket.query_params.get("model"),
+        getattr(websocket.app.state, "model", ""),
+    )
+
     eager_requested = websocket.query_params.get("eager") in ("1", "true", "yes")
     eager_threshold: Optional[float] = None
     if eager_requested and getattr(speech_cfg, "flux_eager_enabled", True):
@@ -152,7 +172,7 @@ async def flux_stream(websocket: WebSocket) -> None:
         if spec is None:
             return
         engine = getattr(websocket.app.state, "engine", None)
-        model = getattr(websocket.app.state, "model", "")
+        model = speculation_model
         if engine is None or not model:
             return
         try:

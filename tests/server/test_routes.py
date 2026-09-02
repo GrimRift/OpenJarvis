@@ -1966,3 +1966,36 @@ class TestBoundedSearchRetiresOnlyTheSearchTool:
         # The search is spent; playback is not.
         assert "web_search" not in _names(stream_kwargs[1])
         assert "spotify_control" in _names(stream_kwargs[1])
+
+
+class TestExtractionFollowsTheModelThatAnswered:
+    """The request's model is not always the one that answered.
+
+    Every agent path generates with ``model or agent._model``, so a request
+    naming no model is still answered -- by the agent's own. Recording the raw
+    request value sent memory extraction back to the configured local model
+    while the browser was chatting in the cloud, which put a 3.6 GB model on
+    the GPU behind every message.
+    """
+
+    def test_the_agents_model_is_recorded_when_the_request_names_none(self):
+        from openjarvis.server.routes import _answering_model
+
+        class Agent:
+            _model = "gpt-5.6-luna"
+
+        assert _answering_model("", Agent()) == "gpt-5.6-luna"
+
+    def test_an_explicit_request_model_still_wins(self):
+        from openjarvis.server.routes import _answering_model
+
+        class Agent:
+            _model = "gpt-5.6-luna"
+
+        assert _answering_model("qwen3.5:4b", Agent()) == "qwen3.5:4b"
+
+    def test_no_agent_is_not_an_error(self):
+        """The direct paths have no agent at all."""
+        from openjarvis.server.routes import _answering_model
+
+        assert _answering_model("", None) == ""
