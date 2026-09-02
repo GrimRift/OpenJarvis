@@ -310,6 +310,7 @@ class QueryOrchestrator:
                     "voice_volume": dc.voice_volume,
                     "tts_backend": dc.tts_backend,
                     "honorific": dc.honorific,
+                    "generate_audio": getattr(dc, "generate_audio", True),
                 }
             )
             from openjarvis.tools.digest_collect import DigestCollectTool

@@ -745,6 +745,20 @@ def serve(
         except Exception as exc:
             logger.warning("Proactive cron registration failed: %s", exc)
 
+    # Pre-generate the briefing text on the same cron. Asking for it then
+    # costs a database read instead of waiting on Teams and two mailboxes.
+    if task_scheduler is not None and config.digest.enabled:
+        try:
+            from openjarvis.agents.morning_digest import register_digest_cron
+
+            _digest_task = register_digest_cron(task_scheduler)
+            console.print(
+                f"  Digest: [cyan]{config.digest.schedule}[/cyan] UTC "
+                f"(next {_digest_task.next_run})"
+            )
+        except Exception as exc:
+            logger.warning("Digest cron registration failed: %s", exc)
+
     # --- Channel Gateway: API key, sessions, ChannelBridge ---
     import os as _os
 

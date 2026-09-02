@@ -1009,6 +1009,68 @@ class TestDigestIntentRouting:
     (already parametrized in tests/test_query_orchestrator.py).
     """
 
+    @pytest.fixture(autouse=True)
+    def _nothing_pre_generated(self, monkeypatch):
+        """These cover the rebuild path, so start with an empty store.
+
+        A briefing is normally pre-generated at 05:00 and served from there;
+        the agent is only built when there is nothing stored, or when the user
+        asks for the latest one.
+        """
+        monkeypatch.setattr(
+            "openjarvis.server.routes._stored_digest", lambda: ""
+        )
+
+    def test_a_stored_briefing_is_served_without_building_an_agent(
+        self, client_with_agent, monkeypatch
+    ):
+        """The whole point of pre-generating: no wait on Teams or the mail."""
+        monkeypatch.setattr(
+            "openjarvis.server.routes._stored_digest",
+            lambda: "Sir, your stored briefing.\n\n(Briefing from 5:00 AM today.)",
+        )
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent"
+        ) as mock_build:
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "morning digest"}],
+                },
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()["choices"][0]["message"]["content"]
+        assert "Sir, your stored briefing." in body
+        assert "Briefing from 5:00 AM today" in body
+        mock_build.assert_not_called()
+
+    def test_asking_for_the_latest_rebuilds_even_when_one_is_stored(
+        self, client_with_agent, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "openjarvis.server.routes._stored_digest", lambda: "stale text"
+        )
+        digest_agent = _make_digest_agent(content="Sir, a fresh briefing.")
+        with patch(
+            "openjarvis.agents.morning_digest.build_morning_digest_agent",
+            return_value=digest_agent,
+        ) as mock_build:
+            resp = client_with_agent.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "test-model",
+                    "messages": [
+                        {"role": "user", "content": "give me the latest briefing"}
+                    ],
+                },
+            )
+
+        assert resp.status_code == 200
+        assert "fresh briefing" in resp.json()["choices"][0]["message"]["content"]
+        mock_build.assert_called_once()
+
     def test_digest_phrase_routes_to_digest_agent(self, client_with_agent):
         digest_agent = _make_digest_agent(content="Sir, here is your briefing.")
         with patch(

@@ -325,6 +325,11 @@ class TeamsReadTool(BaseTool):
             metadata={
                 "count": total,
                 "groups": {label: len(items) for label, items in groups},
+                # The items themselves, not just how many. The morning digest
+                # needs the assignments as data it can put first: buried in
+                # prose after a long mail block, a due date got dropped for
+                # length twice in a row.
+                "items": {label: list(items) for label, items in groups},
             },
         )
 

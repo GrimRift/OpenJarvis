@@ -1670,6 +1670,10 @@ class DigestConfig:
     voice_speed: float = 1.0
     voice_volume: float = 1.9
     tts_backend: str = "cartesia"
+    # Whether a digest run renders its own audio file. The Web UI speaks the
+    # text itself after rendering, so a pre-generated briefing only needs the
+    # words; the CLI's `jarvis digest run` is the path that plays a file.
+    generate_audio: bool = True
     messages: DigestSectionConfig = field(
         default_factory=lambda: DigestSectionConfig(
             sources=["gmail", "slack", "google_tasks"]

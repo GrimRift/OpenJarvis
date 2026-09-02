@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
@@ -31,7 +32,27 @@ _SECTION_PROMPTS = {
     "world": "WORLD — Summarize only provided world items.",
     "music": "MUSIC — Summarize only provided listening information.",
     "notes": "NOTES — Briefly mention only the provided recently-edited notes.",
+    "teams": (
+        "TEAMS — Cover mentions and replies needing a response, and state "
+        "every assignment with its due date. Never drop a due date."
+    ),
 }
+
+# Sources read through the browser rather than a connector.
+#
+# ``digest_collect`` works off ConnectorRegistry, and the Outlook connector on
+# this account reports ``is_connected: False`` — Microsoft's API is not
+# available here, which is the whole reason ``outlook_read`` scrapes the page
+# instead. Teams has no connector at all. So both are collected as ordinary
+# tool calls and appended to the same evidence block the model is shown.
+#
+# Outlook folds into MESSAGES beside Gmail; Teams is its own section, because
+# an assignment due date buried inside a mail summary is the one thing the
+# user most needs not to lose.
+_BROWSER_SOURCES = (
+    ("messages", "outlook_read", "OUTLOOK MAIL"),
+    ("teams", "teams_read", "MICROSOFT TEAMS"),
+)
 
 
 def _load_persona(persona_name: str) -> str:
@@ -108,7 +129,15 @@ class MorningDigestAgent(ToolUsingAgent):
             "Do not add conversational offers or personal asides.\n\n"
             "ABSOLUTE RULES (violations are unacceptable):\n"
             "- ONLY facts from the data. Zero hallucination.\n"
-            "- NEVER mention disconnected or unavailable sources.\n"
+            # A briefing that spends its budget on who reacted to a message
+            # and then runs out before the assignment due tomorrow has failed
+            # at the one thing it was asked to do. Observed: the assignment
+            # was collected and simply never made it into the 200 words.
+            "- DEADLINES FIRST. State every assignment, due date and deadline "
+            "in the data before anything else, and never drop one for length.\n"
+            "- NEVER mention disconnected or unavailable sources. Do not say "
+            "a source had nothing, was unavailable, or was not reported — "
+            "stay silent about it and spend the words on what is there.\n"
             "- NEVER invent personal context or claim, offer, or suggest actions.\n"
             "- Acknowledge every source that returned data, even briefly.\n"
             "- No markdown, emojis, bullets, or headers.\n"
@@ -138,6 +167,42 @@ class MorningDigestAgent(ToolUsingAgent):
             )
             sources.update(section_sources)
         return list(sources)
+
+    def _collect_browser_sources(self) -> List[tuple]:
+        """Read Outlook and Teams, which have no working connector.
+
+        Each is skipped unless its section is configured, so turning off
+        ``teams`` in config also stops paying for the slowest source. A failure
+        is dropped rather than raised: a briefing missing one section is worth
+        more than no briefing, and the model is told to omit absent sources
+        anyway.
+        """
+        wanted = {
+            str(section).strip().casefold()
+            for section in self._sections
+            if str(section).strip()
+        }
+        gathered = []
+        for section, tool_name, label in _BROWSER_SOURCES:
+            if section not in wanted:
+                continue
+            try:
+                result = _run_browser_tool(tool_name)
+            except Exception:
+                logger.warning("%s failed for the digest", tool_name, exc_info=True)
+                continue
+            if result is not None and result.success and (result.content or "").strip():
+                gathered.append((label, result))
+            else:
+                logger.info(
+                    "%s returned nothing for the digest: %s",
+                    tool_name,
+                    (getattr(result, "content", "") or "")[:200],
+                )
+        logger.info(
+            "digest browser sources: %s", [label for label, _ in gathered]
+        )
+        return gathered
 
     def _generate_narrative(self, messages: List[Message]) -> str:
         """Generate the briefing, retrying once with real headroom if empty.
@@ -189,6 +254,10 @@ class MorningDigestAgent(ToolUsingAgent):
         )
         collect_result = self._executor.execute(collect_call)
         collected_data = collect_result.content
+        browser_results = self._collect_browser_sources()
+        for label, result in browser_results:
+            collected_data = f"{collected_data}\n\n[{label}]\n{result.content}"
+        deadlines = _deadline_lines(browser_results)
 
         # Step 2: Synthesize narrative via LLM
         system_prompt = self._build_system_prompt()
@@ -199,7 +268,18 @@ class MorningDigestAgent(ToolUsingAgent):
                 content=(
                     "The following collected data is the only factual evidence for "
                     f"the briefing:\n\n<collected_data>\n{collected_data}\n"
-                    "</collected_data>\n\nUse configured sections only. Omit missing "
+                    "</collected_data>\n\n"
+                    # Stated here, outside the evidence block, because inside
+                    # it the model read the instruction as more data and
+                    # skipped the assignment three runs running — leading
+                    # instead with a mail item it mistook for a deadline.
+                    + (
+                        "REQUIRED: begin the briefing with these deadlines, each "
+                        f"with its own date, before any other item:\n{deadlines}\n\n"
+                        if deadlines
+                        else ""
+                    )
+                    + "Use configured sections only. Omit missing "
                     "data and sources. Do not add personal context or activities. "
                     "Use the honorific no more than three times and keep the "
                     "briefing under 200 words."
@@ -224,6 +304,10 @@ class MorningDigestAgent(ToolUsingAgent):
                 turns=1,
                 metadata={"error": "empty_generation", "sources_used": sources},
             )
+
+        preamble = _deadline_preamble(deadlines, narrative)
+        if preamble:
+            narrative = preamble + "\n\n" + narrative
 
         # Step 2b: Self-evaluate and optionally regenerate
         quality_score = 0.0
@@ -307,7 +391,11 @@ class MorningDigestAgent(ToolUsingAgent):
         self._emit_turn_end(turns=1)
         return AgentResult(
             content=narrative,
-            tool_results=[collect_result] + ([tts_result] if tts_result else []),
+            tool_results=(
+                [collect_result]
+                + [result for _, result in browser_results]
+                + ([tts_result] if tts_result else [])
+            ),
             turns=1,
             metadata={
                 "audio_path": audio_path,
@@ -363,6 +451,19 @@ def build_morning_digest_agent(
     from openjarvis.tools.digest_collect import DigestCollectTool
 
     tools = [DigestCollectTool()]
+    # Outlook and Teams have no usable connector, so the digest reads them the
+    # same way the user does. Imported defensively: both need the browser
+    # tools' optional dependencies, and a missing one should cost those
+    # sections, not the whole briefing.
+    for module_name, class_name in (
+        ("openjarvis.tools.opera_control", "OutlookReadTool"),
+        ("openjarvis.tools.teams_read", "TeamsReadTool"),
+    ):
+        try:
+            module = __import__(module_name, fromlist=[class_name])
+            tools.append(getattr(module, class_name)())
+        except Exception:  # pragma: no cover - optional dependency surface
+            logger.warning("%s unavailable for the digest", class_name, exc_info=True)
     if generate_audio:
         from openjarvis.tools.text_to_speech import TextToSpeechTool
 
@@ -370,3 +471,155 @@ def build_morning_digest_agent(
     agent_kwargs["tools"] = tools
 
     return MorningDigestAgent(engine, model, **agent_kwargs)
+
+
+_DIGEST_CRON_PROMPT = "Generate my morning digest."
+_DIGEST_TASK_KEY = "digest-daily"
+_DIGEST_TASK_KEY_FIELD = "openjarvis_task_key"
+
+
+def register_digest_cron(scheduler: Any, *, cron_expr: str = "") -> Any:
+    """Register the daily pre-generation of the briefing text.
+
+    Pre-generating is the whole point: a briefing built on demand waits on
+    Teams and both mailboxes, and the user asking at 7am should not pay for
+    that. The scheduled run writes the text to ``digest.db``; the chat route
+    serves it instantly and only rebuilds when asked for the *latest* one.
+
+    Idempotent in the same way as the proactive cron, and for the same reason:
+    this runs on every startup, and a paused task is an explicit user choice
+    that must survive a restart.
+    """
+    from openjarvis.core.config import load_config
+
+    if not cron_expr:
+        try:
+            cron_expr = load_config().digest.schedule
+        except Exception:
+            cron_expr = "0 21 * * *"
+
+    metadata = {_DIGEST_TASK_KEY_FIELD: _DIGEST_TASK_KEY}
+    existing = [
+        task
+        for task in scheduler.list_tasks()
+        if task.status in {"active", "paused"}
+        and task.agent == "morning_digest"
+        and task.metadata.get(_DIGEST_TASK_KEY_FIELD) == _DIGEST_TASK_KEY
+    ]
+
+    paused = [task for task in existing if task.status == "paused"]
+    if paused:
+        keep = min(paused, key=lambda task: task.id)
+        _cancel_digest_duplicates(scheduler, existing, keep=keep)
+        return keep
+
+    matching = [
+        task
+        for task in existing
+        if task.schedule_type == "cron" and task.schedule_value == cron_expr
+    ]
+    if matching:
+        keep = min(matching, key=lambda task: task.id)
+        _cancel_digest_duplicates(scheduler, existing, keep=keep)
+        return keep
+
+    _cancel_digest_duplicates(scheduler, existing)
+    return scheduler.create_task(
+        prompt=_DIGEST_CRON_PROMPT,
+        schedule_type="cron",
+        schedule_value=cron_expr,
+        agent="morning_digest",
+        context_mode="isolated",
+        metadata=metadata,
+    )
+
+
+def _cancel_digest_duplicates(
+    scheduler: Any, tasks: List[Any], *, keep: Optional[Any] = None
+) -> None:
+    for task in tasks:
+        if keep is not None and task.id == keep.id:
+            continue
+        try:
+            scheduler.cancel_task(task.id)
+        except Exception:
+            logger.warning(
+                "Failed to cancel duplicate digest task %s", task.id, exc_info=True
+            )
+
+
+#: Tool classes for the browser sources, resolved lazily.
+_BROWSER_TOOL_CLASSES = {
+    "outlook_read": ("openjarvis.tools.opera_control", "OutlookReadTool"),
+    "teams_read": ("openjarvis.tools.teams_read", "TeamsReadTool"),
+}
+
+
+def _run_browser_tool(tool_name: str, count: int = 8) -> Any:
+    """Run a browser source directly, without going through an executor.
+
+    The agent instantiates these itself rather than relying on whoever built
+    it to have passed them in. There are at least two construction sites —
+    ``system/orchestrator.py`` and ``cli/ask.py`` — and wiring only the first
+    produced a briefing that ran fine, collected Gmail and calendar, and
+    silently answered "Unknown tool: teams_read", losing the assignment due
+    the next day. A source the agent cannot function without is the agent's
+    responsibility, not its caller's.
+    """
+    module_name, class_name = _BROWSER_TOOL_CLASSES[tool_name]
+    module = __import__(module_name, fromlist=[class_name])
+    return getattr(module, class_name)().execute(count=count)
+
+
+#: Groups from a browser source whose items are dated commitments.
+_DEADLINE_GROUPS = ("assignments",)
+
+
+def _deadline_preamble(deadlines: str, narrative: str) -> str:
+    """A plain statement of any deadline the narrative left out.
+
+    The model was told three different ways to lead with these — in the
+    section prompt, in the absolute rules, and as a REQUIRED line outside the
+    evidence block. It dropped the assignment due the next day every time, and
+    on the last attempt opened with "no urgent deadlines", which is worse than
+    silence because it is confidently wrong.
+
+    So the guarantee is made in code instead. A briefing may be imperfect
+    prose; it may not lose a due date.
+    """
+    lowered = (narrative or "").casefold()
+    missing = []
+    for line in (deadlines or "").splitlines():
+        item = line.lstrip("- ").strip()
+        if not item:
+            continue
+        # The title runs up to the first "Due"/"at"; enough to tell whether
+        # the narrative already covered it without matching on boilerplate.
+        subject = re.split(r"\bdue\b", item, flags=re.IGNORECASE)[0]
+        words = [word for word in re.findall(r"[A-Za-z]{4,}", subject)]
+        if words and all(word.casefold() in lowered for word in words[-3:]):
+            continue
+        missing.append(item)
+    if not missing:
+        return ""
+    if len(missing) == 1:
+        return f"First, a deadline: {missing[0]}."
+    listed = " ".join(f"{index}. {item}." for index, item in enumerate(missing, 1))
+    return f"First, your deadlines: {listed}"
+
+
+def _deadline_lines(browser_results: List[tuple]) -> str:
+    """Dated commitments pulled out of the browser sources, one per line.
+
+    Read from tool metadata rather than by parsing the rendered prose: the
+    tool already knows which lines are assignments, and re-deriving that from
+    its own output is a second, worse copy of the same knowledge.
+    """
+    lines = []
+    for _, result in browser_results:
+        items = (result.metadata or {}).get("items") or {}
+        for label, entries in items.items():
+            if str(label).strip().casefold() not in _DEADLINE_GROUPS:
+                continue
+            lines.extend(f"- {' '.join(str(entry).split())}" for entry in entries)
+    return "\n".join(lines)

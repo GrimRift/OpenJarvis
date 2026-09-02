@@ -148,9 +148,108 @@ def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message
 # duplicated here rather than imported, matching the one already proven by
 # tests/test_query_orchestrator.py::TestDetectAgentIntent.
 _DIGEST_INTENT_RE = re.compile(
-    r"\b(good\s+morning|morning\s+digest|daily\s+briefing|morning\s+briefing)\b",
+    # A bare "briefing" counts: "give me the latest briefing" is how the user
+    # actually asks, and requiring "daily" or "morning" in front of it sent
+    # that phrasing to the ordinary chat agent instead.
+    r"\b(good\s+morning|morning\s+digest|digest|briefing)\b",
     re.IGNORECASE,
 )
+
+# Asking for a briefing serves the one already built at 05:00 — instant,
+# because rebuilding it means waiting on Teams and two mailboxes. These words
+# are how the user asks for it to be built again instead.
+_DIGEST_FRESH_RE = re.compile(
+    r"\b(latest|newest|new|fresh|current|again|re-?generate|re-?build|"
+    r"update|updated|right\s+now|just\s+now)\b",
+    re.IGNORECASE,
+)
+
+
+def _digest_age(generated_at: Any) -> str:
+    """How old a stored briefing is, in words worth hearing.
+
+    Always stated. A briefing served silently reads as current, and one built
+    before yesterday's mail arrived is worse than no briefing at all.
+    """
+    from datetime import datetime
+
+    if not isinstance(generated_at, datetime):
+        return "Age unknown"
+    now = datetime.now(tz=generated_at.tzinfo)
+    days = (now.date() - generated_at.date()).days
+    clock = generated_at.strftime("%I:%M %p").lstrip("0")
+    if days <= 0:
+        return f"Briefing from {clock} today"
+    if days == 1:
+        return f"Briefing from {clock} yesterday"
+    return f"Briefing from {generated_at.strftime('%d %b')}, {days} days ago"
+
+
+def _stored_digest() -> str:
+    """The most recent pre-generated briefing, or "" if there is none."""
+    try:
+        from openjarvis.agents.digest_store import DigestStore
+
+        store = DigestStore()
+        try:
+            artifact = store.get_latest()
+        finally:
+            store.close()
+    except Exception:
+        logging.getLogger("openjarvis.server").warning(
+            "Could not read the stored digest", exc_info=True
+        )
+        return ""
+    if artifact is None or not (artifact.text or "").strip():
+        return ""
+    age = _digest_age(artifact.generated_at)
+    return (
+        f"{artifact.text}\n\n"
+        f"({age}. Ask for the latest briefing if you want it rebuilt.)"
+    )
+
+
+def _canned_reply(
+    content: str, model: str, stream: bool, complexity_info: Any = None
+) -> Any:
+    """Return *content* as a chat completion, streamed or not.
+
+    Shared by the paths that answer without consulting the model at all, so
+    the SSE framing exists once rather than once per shortcut.
+    """
+    if not stream:
+        return ChatCompletionResponse(
+            model=model,
+            choices=[Choice(message=ChoiceMessage(content=content))],
+            complexity=complexity_info,
+        )
+
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+    async def _generate():
+        first = ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+        )
+        yield f"data: {first.model_dump_json()}\n\n"
+        body = ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[
+                StreamChoice(
+                    delta=DeltaMessage(content=content), finish_reason="stop"
+                )
+            ],
+        )
+        yield f"data: {body.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
 
 # Bare Spotify transport commands ("next song", "skip", "pause") reliably
 # get hallucinated by the configured model instead of actually calling
@@ -328,6 +427,17 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         and query_text_for_complexity
         and _DIGEST_INTENT_RE.search(query_text_for_complexity)
     ):
+        # Serve the briefing built at 05:00 unless asked for a new one.
+        # Rebuilding waits on Teams and both mailboxes, which is the whole
+        # reason it is pre-generated; the stored text says how old it is so a
+        # yesterday's briefing never reads as this morning's.
+        if not _DIGEST_FRESH_RE.search(query_text_for_complexity):
+            stored = await asyncio.to_thread(_stored_digest)
+            if stored:
+                return _canned_reply(
+                    stored, model, request_body.stream, complexity_info
+                )
+
         from openjarvis.agents.morning_digest import build_morning_digest_agent
 
         digest_agent = build_morning_digest_agent(
