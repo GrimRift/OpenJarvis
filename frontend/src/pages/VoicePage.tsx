@@ -90,12 +90,7 @@ export function VoicePage() {
         </div>
       </div>
 
-      {showTranscript && (
-        <VoiceTranscript
-          messages={messages}
-          onClose={() => setShowTranscript(false)}
-        />
-      )}
+      {showTranscript && <VoiceTranscript messages={messages} />}
     </div>
   );
 }

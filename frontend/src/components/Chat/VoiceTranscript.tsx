@@ -7,13 +7,7 @@ import type { ChatMessage } from '../../types';
  * Floats over the right edge rather than sitting in the layout, so showing or
  * hiding it never moves the orb off the window's centre.
  */
-export function VoiceTranscript({
-  messages,
-  onClose,
-}: {
-  messages: ChatMessage[];
-  onClose: () => void;
-}) {
+export function VoiceTranscript({ messages }: { messages: ChatMessage[] }) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,8 +24,12 @@ export function VoiceTranscript({
         boxShadow: 'var(--shadow-sm)',
       }}
     >
+      {/* No close control here. The panel toggle beside the mic already opens
+          and closes this and shows its state while open, so a second control
+          for the same thing was only clutter on a surface meant to be glanced
+          at rather than operated. */}
       <header
-        className="flex items-center justify-between px-3 py-2 shrink-0"
+        className="px-3 py-2 shrink-0"
         style={{ borderBottom: '1px solid var(--color-border)' }}
       >
         <span
@@ -40,16 +38,6 @@ export function VoiceTranscript({
         >
           TRANSCRIPT
         </span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Hide transcript"
-          title="Hide transcript"
-          className="text-xs px-1.5 rounded cursor-pointer"
-          style={{ color: 'var(--color-text-tertiary)' }}
-        >
-          ✕
-        </button>
       </header>
 
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
