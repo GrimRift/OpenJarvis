@@ -6,6 +6,18 @@ Build Sage into a broadly capable Windows assistant. Expand access progressively
 
 ## Verified completed work
 
+- **Voice latency measured end to end: STT is not the bottleneck, and neither change made it worse (2026-09-03, no code change).** The user reported voice feeling slow -- "I just said how are you today? and it waited 2-3 seconds" -- with Flux and Ultra both on, and said it had been faster before that day's TTS work. Measured rather than argued, and **the reported regression did not reproduce**.
+
+  - **Where the time actually goes**, per stage, on this machine:
+    - **Deepgram Flux to `EndOfTurn`: 0.37-0.94s** after speech ends, transcript correct. Streamed a Cartesia-synthesised "How are you today?" as real-time 20 ms frames at 16 kHz and timed the events.
+    - **TTS text to first audio byte: 0.28s** (median of 5), handshake 0.46s.
+    - **Cloud model to first token: ~5.7s on the first turn after a restart, then ~2.9-3.25s** steady. That is the entire perceived wait.
+  - **Why the prompt costs that much:** telemetry recorded **4,776 prompt tokens** for the greeting. For contrast, the local `qwen3.5:4b` rows in the same table show first-token times of **0.07-0.17s**.
+  - **Both of the day's suspect changes were A/B'd by reverting the files, restarting, and re-measuring.** TTS context-rebuild: first audio 0.28s before and after. Flux address-pinning: connect 3.3-11.8s on the *pre*-change build against 3.2-9.4s on the new one. Neither caused a regression; the pre-change build was fractionally worse on both. **Flux connect is slow and highly variable in both**, which is the documented DNS flakiness -- but it is paid once per socket, not per utterance, so it is not what a per-turn delay feels like.
+  - **The likely explanation for "it was faster before":** the first turn after a restart is ~5.7s against ~3.0s warm, and this session restarted Sage roughly eight times while testing. A turn tried just after one of those lands on the cold path.
+  - **Ultra buys nothing on a short utterance.** Across three runs `EagerEndOfTurn` and `EndOfTurn` fired at the *same instant* (0.37s, 0.94s): for a short, clearly finished question Deepgram is already certain, so there is no speculative head start to exploit. It only helps on longer or trailing-off speech. Worth knowing before anyone attributes latency to it being off.
+  - **Left as-is by the user's decision.** Three fixes were offered and declined: trimming the voice-turn prompt (no GPU cost), a local instant draft while the cloud answer arrives (fastest perceived reply, but reintroduces the GPU load that `speculation_model_for` was changed on 2026-09-02 to remove), and routing trivial turns to a faster cloud model. **Do not re-diagnose this as an STT problem** -- the numbers above are where the time is.
+
 - **A spoken reply no longer dies when the model pauses — very likely the long-open "replies go silent" fault (2026-09-03).** The user reported that when Tavily is called twice for thin evidence, the voice stops midway and never resumes.
 
   - **Cartesia ends an idle continuation context by itself.** Measured directly against the API with no further text: ``done`` arrived **6.14s after the transcript on three consecutive runs**, and 4.05s after ``flush_done`` on another — the window is real but not a fixed number, so it cannot be out-waited by tuning a keepalive interval. That is why a keepalive was offered and not chosen.
