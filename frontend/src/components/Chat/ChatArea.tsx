@@ -107,10 +107,18 @@ export function ChatArea() {
           so the scroll area (and its scrollbar) hug the actual readable
           column instead of spanning the full ChatArea width. */}
       <div className="relative flex-1 min-h-0 w-full max-w-[var(--chat-max-width)] mx-auto">
+      {/* overflow-x-hidden is load-bearing, not tidying. `overflow-y-auto`
+          alone leaves the x axis `visible`, which CSS promotes to `auto` the
+          moment the other axis is not visible -- so one long unbroken URL in
+          a reply gave the whole column a horizontal scrollbar (measured:
+          scrollWidth 720 -> 1054), and scrolling it clipped the first
+          characters off every message. Long text now wraps instead (see
+          `.prose` in index.css); code blocks and tables keep their own
+          internal scroll, which is where sideways scrolling belongs. */}
       <div
         ref={listRef}
         onScroll={handleScroll}
-        className="h-full overflow-y-auto"
+        className="h-full overflow-y-auto overflow-x-hidden"
       >
         {isEmpty ? (
           <div className="flex flex-col items-center justify-center h-full px-4">

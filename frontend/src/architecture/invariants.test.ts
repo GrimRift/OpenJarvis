@@ -257,3 +257,60 @@ describe('audioPlaying has a single writer', () => {
     expect(offenders, 'audioPlaying assigned outside the store').toEqual([]);
   });
 });
+
+/**
+ * The chat scroll area must pin its horizontal overflow.
+ *
+ * `overflow-y-auto` alone leaves the x axis `visible`, and CSS promotes
+ * `visible` to `auto` as soon as the other axis is not visible. So the
+ * container quietly had a horizontal scrollbar: one long unbroken URL in a
+ * reply widened it (measured scrollWidth 720 -> 1054) and scrolling sideways
+ * clipped the first characters off every message in the thread.
+ *
+ * Asserted against the AST rather than the file text on purpose. The fix's
+ * own comment in `ChatArea.tsx` names both classes, so a grep-shaped check
+ * would match the explanation and pass while the class was gone -- the exact
+ * trap this file warns about at the top.
+ */
+describe('the chat scroll area does not scroll sideways', () => {
+  function scrollContainerClasses(): string | null {
+    const file = join(SRC, 'components', 'Chat', 'ChatArea.tsx');
+    const source = parse(file);
+    let found: string | null = null;
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isJsxOpeningLikeElement(node)) {
+        const props = node.attributes.properties;
+        const named = props.filter(ts.isJsxAttribute);
+        const isScroller = named.some(
+          (attr) =>
+            attr.name.getText() === 'ref' &&
+            attr.initializer &&
+            ts.isJsxExpression(attr.initializer) &&
+            attr.initializer.expression?.getText() === 'listRef',
+        );
+        if (isScroller) {
+          const className = named.find((attr) => attr.name.getText() === 'className');
+          if (
+            className?.initializer &&
+            ts.isStringLiteral(className.initializer)
+          ) {
+            found = className.initializer.text;
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return found;
+  }
+
+  it('has a scroll container to check', () => {
+    expect(scrollContainerClasses()).not.toBeNull();
+  });
+
+  it('hides horizontal overflow instead of inheriting a scrollbar', () => {
+    const classes = scrollContainerClasses() ?? '';
+    expect(classes.split(/\s+/)).toContain('overflow-x-hidden');
+  });
+});

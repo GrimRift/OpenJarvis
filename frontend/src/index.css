@@ -301,6 +301,20 @@
     font-family: "SF Mono", "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
   }
 
+  /* A URL long enough to outrun the column used to widen the whole chat and
+     summon a horizontal scrollbar. Wrapping it is the fix; `anywhere` rather
+     than `break-word` because a bare URL has no break opportunity a normal
+     wrap would take. Applies to prose text only -- `pre` below keeps its own
+     horizontal scroll, since breaking code mid-token changes what it says. */
+  .prose {
+    overflow-wrap: anywhere;
+  }
+
+  .prose pre,
+  .prose code {
+    overflow-wrap: normal;
+  }
+
   .prose pre {
     margin: 0.75em 0;
     border-radius: var(--radius-md);
