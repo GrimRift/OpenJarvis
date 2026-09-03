@@ -104,10 +104,21 @@ class CartesiaTTSContext:
         self._inputs_finished = False
         self._done = False
         self._cancelled = False
+        self._flushes = 0
 
     @property
     def context_id(self) -> str:
         return self._context_id
+
+    @property
+    def flushes(self) -> int:
+        """How many submitted transcripts Cartesia has finished speaking.
+
+        Lets a caller tell which of its sends actually became audio. When an
+        idle context is rebuilt mid-turn, the transcripts sent to it but never
+        flushed are the ones that would otherwise be lost silently.
+        """
+        return self._flushes
 
     async def __aenter__(self) -> "CartesiaTTSContext":
         self._socket = await websockets.connect(
@@ -192,6 +203,8 @@ class CartesiaTTSContext:
             if event.get("type") == "error":
                 message = event.get("message") or event.get("error") or "unknown error"
                 raise RuntimeError(f"Cartesia stream failed: {message}")
+            if event.get("type") == "flush_done":
+                self._flushes += 1
             data = event.get("data")
             if event.get("type") == "chunk" and data:
                 yield base64.b64decode(data)

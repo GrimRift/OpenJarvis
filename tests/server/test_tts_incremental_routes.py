@@ -28,7 +28,18 @@ class _FakeCartesiaContext:
         self.cancelled = False
         self.closed = False
         self._audio: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._flushes = 0
         self.__class__.instances.append(self)
+
+    @property
+    def flushes(self) -> int:
+        """Transcripts Cartesia has finished speaking.
+
+        Part of the context contract: the route uses it to tell which of its
+        sends became audio, so that rebuilding a timed-out context re-sends
+        only what was never spoken.
+        """
+        return self._flushes
 
     async def __aenter__(self):
         return self
@@ -52,6 +63,7 @@ class _FakeCartesiaContext:
             chunk = await self._audio.get()
             if chunk is None:
                 return
+            self._flushes += 1
             yield chunk
 
 

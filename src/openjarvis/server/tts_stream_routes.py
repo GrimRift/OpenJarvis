@@ -12,6 +12,7 @@ browser talks only to this endpoint.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from typing import Any, Optional
@@ -132,6 +133,25 @@ async def tts_stream(websocket: WebSocket) -> None:
             pass
 
 
+#: How many times one turn may rebuild its Cartesia context.
+#:
+#: Cartesia ends an idle continuation context on its own and sends ``done``.
+#: Measured directly against the API: with no further text, ``done`` arrived
+#: 6.14s after the transcript on three consecutive runs, and 4.05s after
+#: ``flush_done`` on another -- the window is real but not a fixed number, so
+#: it cannot be out-waited by tuning a keepalive interval.
+#:
+#: That mattered because a spoken reply is fed incrementally as the model
+#: streams. A reply that opens with "Let me search for that", then stalls on a
+#: tool call, hands Cartesia nothing for the length of that call -- and a
+#: *second* Tavily search (the escalation for thin evidence) reliably outruns
+#: the window. The context ended, ``receive_audio`` returned, and the socket
+#: was torn down mid-sentence with the rest of the answer never spoken.
+#:
+#: Bounded rather than unbounded so a genuinely broken context cannot spin.
+MAX_CONTEXT_REBUILDS = 5
+
+
 async def _stream_incremental_turn(
     websocket: WebSocket,
     config: Any,
@@ -155,6 +175,35 @@ async def _stream_incremental_turn(
         speed=_resolve_speed(config, begin.get("speed")),
         volume=_resolve_volume(config, begin.get("volume")),
     )
+
+    # ``context`` stays the object the `async with` will close. The live one
+    # can be replaced mid-turn when Cartesia times out an idle context, so
+    # every send goes through ``current`` under the lock rather than closing
+    # over the original.
+    current = context
+    context_lock = asyncio.Lock()
+    rebuilds = 0
+    # Transcripts handed to the live context, in order. Cartesia acknowledges
+    # each one with `flush_done`, so anything past `current.flushes` was sent
+    # but never spoken -- which is exactly what a rebuild would otherwise
+    # drop. Seen as a 3s gap still failing while 6s and 20s recovered: the
+    # next sentence landed inside the ~0.2s window between the send and the
+    # context ending.
+    sent_to_current: list[str] = []
+    # Whether the queue's end-of-input sentinel has actually been consumed.
+    # `inputs_finished` only says the *client* said finish; segments queued
+    # behind that flag are still on their way, and finishing a rebuilt
+    # context before they land closes it under them ("Cartesia context is
+    # closed", the whole turn lost).
+    finish_consumed = False
+
+    def _fresh_context() -> CartesiaTTSContext:
+        return CartesiaTTSContext(
+            api_key,
+            _resolve_voice(config, begin.get("voice_id", "")),
+            speed=_resolve_speed(config, begin.get("speed")),
+            volume=_resolve_volume(config, begin.get("volume")),
+        )
 
     async with context:
         await websocket.send_json(
@@ -199,30 +248,81 @@ async def _stream_incremental_turn(
                     await segment_queue.put((segment + " ", False))
 
         async def send_segments() -> None:
+            nonlocal finish_consumed
             while True:
                 item = await segment_queue.get()
                 try:
                     if item is None:
-                        await context.finish()
+                        async with context_lock:
+                            await current.finish()
+                            finish_consumed = True
                         return
                     segment, _is_tail = item
-                    await context.send_text(segment)
+                    async with context_lock:
+                        sent_to_current.append(segment)
+                        await current.send_text(segment)
                 finally:
                     segment_queue.task_done()
 
         async def relay_audio() -> None:
-            nonlocal started
-            async for chunk in context.receive_audio():
-                if not started:
-                    started = True
-                    await websocket.send_json(
-                        {
-                            "type": "start",
-                            "sample_rate": STREAM_SAMPLE_RATE,
-                            "encoding": STREAM_ENCODING,
-                        }
-                    )
-                await websocket.send_bytes(chunk)
+            nonlocal started, current, rebuilds
+            while True:
+                speaking = current
+                async for chunk in speaking.receive_audio():
+                    if not started:
+                        started = True
+                        await websocket.send_json(
+                            {
+                                "type": "start",
+                                "sample_rate": STREAM_SAMPLE_RATE,
+                                "encoding": STREAM_ENCODING,
+                            }
+                        )
+                    await websocket.send_bytes(chunk)
+
+                # The audio stream ended. Whether the turn is over is not
+                # "did the client say finish" -- it is "has everything handed
+                # to Cartesia actually been spoken". A sentence submitted in
+                # the ~0.2s before an idle context ends is acknowledged by
+                # nothing, and treating `finish` as the end dropped it: a 3.0s
+                # gap kept failing while 2.5s and 3.2s recovered.
+                async with context_lock:
+                    if current is not speaking:
+                        continue
+                    unspoken = sent_to_current[speaking.flushes :]
+                    # Over only when no more text is coming *and* everything
+                    # sent has been spoken. Either half alone is wrong: after
+                    # `finish` a sentence can still be unacknowledged, and an
+                    # idle context that spoke everything is still needed for
+                    # the text that has not arrived yet.
+                    if inputs_finished and not unspoken:
+                        return
+                    if rebuilds >= MAX_CONTEXT_REBUILDS:
+                        return
+                    replacement = _fresh_context()
+                    await replacement.__aenter__()
+                    current = replacement
+                    sent_to_current.clear()
+                    rebuilds += 1
+                    for segment in unspoken:
+                        sent_to_current.append(segment)
+                        await replacement.send_text(segment)
+                    if finish_consumed:
+                        # The sentinel is already spent, so nothing else will
+                        # finish this one. Only safe here: while segments are
+                        # still queued, `send_segments` keeps feeding the
+                        # replacement and finishes it when it reaches the end.
+                        await replacement.finish()
+                if speaking is not context:
+                    with contextlib.suppress(Exception):
+                        await speaking.__aexit__(None, None, None)
+                logger.info(
+                    "Cartesia context timed out mid-turn; rebuilt (%d/%d), "
+                    "re-sent %d unspoken segment(s)",
+                    rebuilds,
+                    MAX_CONTEXT_REBUILDS,
+                    len(unspoken),
+                )
 
         input_task = asyncio.create_task(receive_text())
         sender_task = asyncio.create_task(send_segments())
@@ -248,19 +348,19 @@ async def _stream_incremental_turn(
             await asyncio.gather(input_task, return_exceptions=True)
             await websocket.send_json({"type": "done"})
         except _ClientCancelled:
-            await context.cancel()
+            await current.cancel()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await websocket.send_json({"type": "cancelled"})
         except WebSocketDisconnect:
-            await context.cancel()
+            await current.cancel()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         except Exception as exc:  # noqa: BLE001
-            await context.cancel()
+            await current.cancel()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -273,7 +373,7 @@ async def _stream_incremental_turn(
                 pass
         finally:
             if not finished:
-                await context.cancel()
+                await current.cancel()
 
 
 async def _speak(

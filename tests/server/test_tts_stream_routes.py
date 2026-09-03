@@ -212,3 +212,119 @@ class TestDefaults:
         assert tts_stream_routes._resolve_volume(cfg, 0) > 0
         assert tts_stream_routes._resolve_volume(cfg, None) > 0
         assert tts_stream_routes._resolve_volume(cfg, "loud") > 0
+
+
+class _RebuildableContext:
+    """A Cartesia context whose audio stream can end while text is still due.
+
+    Models the real behaviour that broke spoken replies: Cartesia ends an idle
+    continuation context on its own and sends ``done``, which closes the audio
+    iterator even though the model has more to say.
+    """
+
+    created: list["_RebuildableContext"] = []
+
+    def __init__(self, *args, **kwargs):
+        import asyncio
+
+        self.sent: list[str] = []
+        self.finished = False
+        self.cancelled = False
+        self._flushes = 0
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._ended = False
+        _RebuildableContext.created.append(self)
+
+    @property
+    def flushes(self) -> int:
+        return self._flushes
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send_text(self, text: str) -> None:
+        if self.finished:
+            raise RuntimeError("Cartesia context is closed")
+        self.sent.append(text)
+        # The first context accepts its first transcript and then times out
+        # before speaking it; every later one behaves normally.
+        if self is _RebuildableContext.created[0] and len(self.sent) == 1:
+            await self._queue.put("end")
+        else:
+            await self._queue.put(b"pcm-audio")
+
+    async def finish(self) -> None:
+        self.finished = True
+        await self._queue.put("end")
+
+    async def cancel(self) -> None:
+        self.cancelled = True
+        await self._queue.put("end")
+
+    async def receive_audio(self):
+        while True:
+            item = await self._queue.get()
+            if item == "end":
+                return
+            self._flushes += 1
+            yield item
+
+
+class TestASpokenReplySurvivesAnIdleContext:
+    """A pause mid-reply must not end the turn.
+
+    Cartesia ends an idle continuation context by itself -- measured at 6.14s
+    after the transcript on three consecutive runs. A spoken reply is fed
+    incrementally as the model streams, so a reply that opens with "Let me
+    search for that" and then stalls on a tool call hands Cartesia nothing for
+    the length of that call. A second Tavily search reliably outran the
+    window: the context ended, ``receive_audio`` returned, and the socket was
+    torn down with the rest of the answer never spoken.
+    """
+
+    def _run(self):
+        _RebuildableContext.created = []
+        with (
+            patch.dict("os.environ", {"CARTESIA_API_KEY": "k"}, clear=False),
+            patch.object(
+                tts_stream_routes, "CartesiaTTSContext", _RebuildableContext
+            ),
+        ):
+            client = TestClient(_app())
+            with client.websocket_connect("/v1/speech/tts-stream") as ws:
+                ws.send_json({"type": "begin", "voice_id": "v"})
+                assert ws.receive_json()["type"] == "ready"
+                ws.send_json({"type": "text", "delta": "Let me search for that. "})
+                ws.send_json({"type": "text", "delta": "Here is the answer. "})
+                ws.send_json({"type": "finish"})
+                frames = []
+                while True:
+                    message = ws.receive()
+                    if "bytes" in message and message["bytes"] is not None:
+                        frames.append("audio")
+                        continue
+                    import json as _json
+
+                    payload = _json.loads(message["text"])
+                    frames.append(payload["type"])
+                    if payload["type"] in {"done", "error"}:
+                        break
+        return frames, _RebuildableContext.created
+
+    def test_the_turn_completes_instead_of_dying_with_the_context(self):
+        frames, contexts = self._run()
+        assert "error" not in frames
+        assert frames[-1] == "done"
+        assert len(contexts) >= 2, "the timed-out context was never rebuilt"
+
+    def test_a_transcript_the_context_never_spoke_is_re_sent(self):
+        """The sentence in flight when the context ended must not vanish."""
+        _frames, contexts = self._run()
+        first, second = contexts[0], contexts[1]
+        assert first.sent, "nothing reached the first context"
+        assert first.sent[0] in second.sent, (
+            "the unspoken transcript was dropped rather than re-sent"
+        )
