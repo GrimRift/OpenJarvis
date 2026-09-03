@@ -289,9 +289,7 @@ class TestASpokenReplySurvivesAnIdleContext:
         _RebuildableContext.created = []
         with (
             patch.dict("os.environ", {"CARTESIA_API_KEY": "k"}, clear=False),
-            patch.object(
-                tts_stream_routes, "CartesiaTTSContext", _RebuildableContext
-            ),
+            patch.object(tts_stream_routes, "CartesiaTTSContext", _RebuildableContext),
         ):
             client = TestClient(_app())
             with client.websocket_connect("/v1/speech/tts-stream") as ws:

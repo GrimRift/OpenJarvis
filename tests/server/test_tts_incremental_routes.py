@@ -154,6 +154,7 @@ def test_stop_still_cancels_after_model_text_has_finished() -> None:
     assert _SlowFinishCartesiaContext.instances[0].cancelled is True
     assert _SlowFinishCartesiaContext.instances[0].closed is True
 
+
 def test_turn_limit_fails_closed_before_unbounded_buffering() -> None:
     _FakeCartesiaContext.instances.clear()
     with (
