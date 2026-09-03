@@ -161,3 +161,52 @@ class TestDeliver:
             ):
                 assert deliver("t", "m") == ["channel"]
         toast.assert_not_called()
+
+
+class TestSpokenReminderIsFlattened:
+    """A reminder must not reach a synthesiser as raw text.
+
+    ``speak`` sends the reminder to Cartesia, so the text leaves the machine.
+    Unflattened, a verification code or booking reference is uploaded to a
+    third party verbatim and then read out loud in full. The toast still
+    carries the original, so nothing is lost -- only unsaid.
+    """
+
+    def _spoken(self, text):
+        from openjarvis.tools import notify_windows
+
+        seen = {}
+
+        def _fake_voice_wav(value):
+            seen["text"] = value
+            return None  # force the builtin fallback too
+
+        def _fake_builtin(value):
+            seen["builtin"] = value
+            return True
+
+        with patch.object(notify_windows, "_voice_wav", _fake_voice_wav):
+            with patch.object(notify_windows, "_speak_builtin", _fake_builtin):
+                with patch.object(notify_windows, "do_not_disturb", lambda: False):
+                    notify_windows.speak(text)
+        return seen
+
+    def test_an_authentication_code_never_reaches_the_cloud_voice(self):
+        seen = self._spoken("Your verification code is 483920")
+        assert "483920" not in seen["text"]
+        assert "the authentication code" in seen["text"]
+
+    def test_the_builtin_fallback_gets_the_same_flattened_text(self):
+        """Local playback still reads a code aloud in a room."""
+        seen = self._spoken("Your verification code is 483920")
+        assert "483920" not in seen["builtin"]
+        assert seen["builtin"] == seen["text"]
+
+    def test_a_long_reference_is_replaced(self):
+        seen = self._spoken("Case Study due. Ref BN-20260902-69185569")
+        assert "69185569" not in seen["text"]
+
+    def test_ordinary_wording_is_left_alone(self):
+        """Flattening must not mangle a normal reminder."""
+        seen = self._spoken("Class starts in 10 minutes")
+        assert "Class starts in 10 minutes" in seen["text"]

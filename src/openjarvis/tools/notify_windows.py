@@ -11,6 +11,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
+from openjarvis.speech.spoken_text import to_spoken_text
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,7 @@ class NotifyWindowsTool(BaseTool):
 _DND_KEY = r"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings"
 _DND_VALUE = "NOC_GLOBAL_SETTING_TOASTS_ENABLED"
 
+
 def do_not_disturb() -> bool:
     """Whether Windows is currently suppressing notifications.
 
@@ -195,13 +197,24 @@ def speak(text: str, *, respect_dnd: bool = True) -> bool:
         logger.info("Do Not Disturb is on; not speaking: %s", text[:60])
         return False
 
-    path = _voice_wav(text)
+    # Flatten before either synthesiser sees it. This is a data boundary as
+    # much as a formatting one: the good voice is Cartesia, so the reminder
+    # text leaves the machine, and an unflattened one carries verification
+    # codes, booking references and long identifiers verbatim -- uploaded to
+    # a third party and read out loud in full. `to_spoken_text` replaces
+    # those with "the authentication code" / "an identifier", and strips
+    # markdown that would otherwise be spoken as punctuation. The toast keeps
+    # the original, so nothing is lost, only unsaid.
+    spoken = to_spoken_text(text) or text
+
+    path = _voice_wav(spoken)
     if path and _play_wav(path):
         return True
     # Never leave the reminder silent because the nice voice failed. The
     # built-in synthesiser is robotic, but it is always installed and it
-    # always makes sound.
-    return _speak_builtin(text)
+    # always makes sound. Same flattened text: local playback still reads a
+    # code out loud in a room, which is the other half of the concern.
+    return _speak_builtin(spoken)
 
 
 def _voice_wav(text: str) -> Optional[str]:

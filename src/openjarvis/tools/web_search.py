@@ -246,8 +246,7 @@ def _query_subject_terms(query: str) -> list[str]:
 
 def _result_searchable_text(result: dict[str, Any]) -> str:
     return " ".join(
-        str(result.get(field) or "")
-        for field in ("title", "content", "snippet", "url")
+        str(result.get(field) or "") for field in ("title", "content", "snippet", "url")
     ).lower()
 
 
@@ -370,6 +369,50 @@ def _result_domain_count(results: list[dict[str, Any]]) -> int:
     )
 
 
+#: Host labels too generic to prove the user meant a particular site.
+_GENERIC_HOST_LABELS = frozenset(
+    {"www", "com", "net", "org", "news", "blog", "web", "app", "site", "home"}
+)
+
+
+def _query_names_the_only_domain(results: list[dict[str, Any]], query: str) -> bool:
+    """Whether every result is from a site the query itself asked for.
+
+    "Search reddit for X" can only ever come back from one domain, so the
+    two-domain rule would escalate it every single time -- two provider calls
+    for a search that did exactly what was asked. Read off the results rather
+    than a list of known sites, so it holds for any site the user names.
+    """
+    hosts = {
+        (urlparse(str(result.get("url") or "")).hostname or "").lower()
+        for result in results
+        if result.get("url")
+    }
+    if len(hosts) != 1:
+        return False
+    lowered = query.lower()
+    return any(
+        len(label) >= 4 and label not in _GENERIC_HOST_LABELS and label in lowered
+        for label in hosts.pop().split(".")
+    )
+
+
+#: What an ordinary search has to come back with before it is accepted.
+#:
+#: This used to be ``bool(results)`` -- one result from one site counted as
+#: sufficient, so the escalation below effectively never fired and a thin
+#: answer was returned as though it were a good one. The domain rule is the
+#: point of the pair: three results from a single blog is one claim repeated,
+#: not corroboration.
+MIN_SUFFICIENT_RESULTS = 3
+MIN_SUFFICIENT_DOMAINS = 2
+
+#: How wide the one permitted retry goes when evidence came back thin.
+#: Above the default rather than at the ceiling: advanced depth already costs
+#: more per call, and the two-call bound is deliberately kept.
+ESCALATED_MAX_RESULTS = 8
+
+
 def _results_are_sufficient(
     results: list[dict[str, Any]],
     query: str,
@@ -383,7 +426,12 @@ def _results_are_sufficient(
         return any(_is_official_source(result, query) for result in results)
     if plan.news and _ROUNDUP_RE.search(query):
         return len(results) >= 3 and _result_domain_count(results) >= 2
-    return bool(results)
+    if len(results) < MIN_SUFFICIENT_RESULTS:
+        return False
+    if _result_domain_count(results) >= MIN_SUFFICIENT_DOMAINS:
+        return True
+    # One domain is the right answer when the user named that domain.
+    return _query_names_the_only_domain(results, query)
 
 
 def _retry_query(query: str) -> str:
@@ -394,9 +442,11 @@ def _retry_query(query: str) -> str:
     )
     if named_match:
         named_entity = named_match.group(1).strip(" .")
-        suffix = " official game overview" if re.search(
-            r"\bgame\b", query, re.IGNORECASE
-        ) else " authoritative source"
+        suffix = (
+            " official game overview"
+            if re.search(r"\bgame\b", query, re.IGNORECASE)
+            else " authoritative source"
+        )
         return f'"{named_entity}"{suffix}'
     terms = _query_subject_terms(query)
     if not terms:
@@ -459,7 +509,7 @@ class WebSearchTool(BaseTool):
     def __init__(
         self,
         api_key: str | None = None,
-        max_results: int = 3,
+        max_results: int = 4,
         *,
         force_advanced: bool = False,
     ):
@@ -491,7 +541,7 @@ class WebSearchTool(BaseTool):
                     "max_results": {
                         "type": "integer",
                         "description": "Maximum results to return (1-10).",
-                        "default": 3,
+                        "default": 4,
                     },
                 },
                 "required": ["query"],
@@ -614,11 +664,11 @@ class WebSearchTool(BaseTool):
             max_results = self._max_results
         max_results = max(1, min(max_results, 10))
         plan = _build_plan(query, force_advanced=self._force_advanced)
+        # ``max_results`` is honoured as given. It used to be quietly capped
+        # at 3 for a basic search unless the query *text* happened to name a
+        # number ("give 8 sources"), so passing max_results=10 returned 3 and
+        # nothing said why -- measured before this changed.
         provider_max_results = max_results
-        if plan.depth == "basic" and not re.search(
-            r"\b(?:[4-9]|10)\s+(?:results|sources|links)\b", query, re.IGNORECASE
-        ):
-            provider_max_results = min(max_results, 3)
 
         try:
             from tavily import TavilyClient
@@ -628,6 +678,10 @@ class WebSearchTool(BaseTool):
             )
         if not self._api_key:
             return self._error("TAVILY_API_KEY is not configured.")
+
+        # The one retry is the chance to do better, so it asks for more than
+        # the first attempt did -- and never fewer than the caller wanted.
+        retry_max_results = min(max(max_results, ESCALATED_MAX_RESULTS), 10)
 
         client = TavilyClient(api_key=self._api_key)
         provider_calls = 0
@@ -654,7 +708,7 @@ class WebSearchTool(BaseTool):
                 provider_calls += 1
                 response = client.search(
                     _retry_query(query),
-                    **self._search_kwargs(plan, "advanced", max_results),
+                    **self._search_kwargs(plan, "advanced", retry_max_results),
                 )
             except Exception as retry_exc:
                 logger.debug("Tavily search error after escalation: %s", retry_exc)
@@ -667,9 +721,7 @@ class WebSearchTool(BaseTool):
         raw_results = list(response.get("results") or [])
         results = _filter_relevant_results(raw_results, query, news=plan.news)
         images = _top_level_images(response) if plan.explicit_images else []
-        quality_passed = _results_are_sufficient(
-            results, query, plan, images=images
-        )
+        quality_passed = _results_are_sufficient(results, query, plan, images=images)
 
         if initial_depth == "basic" and not escalated and not quality_passed:
             escalated = True
@@ -678,7 +730,7 @@ class WebSearchTool(BaseTool):
                 provider_calls += 1
                 response = client.search(
                     _retry_query(query),
-                    **self._search_kwargs(plan, "advanced", max_results),
+                    **self._search_kwargs(plan, "advanced", retry_max_results),
                 )
             except Exception as exc:
                 logger.debug("Tavily search error after escalation: %s", exc)

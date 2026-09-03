@@ -117,12 +117,26 @@ class TestRouting:
     def test_simple_named_game_uses_one_basic_search(self):
         fake_module, mock_client_cls = _fake_tavily_module(
             search_return={
+                # Three sources across three domains: what Tavily actually
+                # returns for a query like this (measured at 4). A one-result
+                # fixture now reads as thin evidence and escalates, which is
+                # not what this test is about.
                 "results": [
                     _result(
                         "Crimson Desert - official game overview",
                         "https://crimsondesert.pearlabyss.com/",
                         "Crimson Desert is an open-world action game.",
-                    )
+                    ),
+                    _result(
+                        "Crimson Desert review",
+                        "https://games.example/crimson-desert",
+                        "Crimson Desert gameplay and platforms.",
+                    ),
+                    _result(
+                        "Crimson Desert on Steam",
+                        "https://store.steam.example/crimson-desert",
+                        "Crimson Desert store page and release information.",
+                    ),
                 ]
             }
         )
@@ -140,7 +154,13 @@ class TestRouting:
         assert result.metadata["final_depth"] == "basic"
         assert result.metadata["quality_passed"] is True
 
-    def test_expanded_game_overview_stays_basic_and_caps_results(self):
+    def test_expanded_game_overview_stays_basic_and_forwards_max_results(self):
+        """The requested count is sent as asked.
+
+        This used to assert the opposite -- a basic search was silently capped
+        at 3 unless the query text happened to name a number, so passing
+        max_results=5 sent 3 and nothing explained why.
+        """
         fake_module, mock_client_cls = _fake_tavily_module(
             search_return={
                 "results": [
@@ -148,7 +168,17 @@ class TestRouting:
                         "Crimson Desert overview",
                         "https://games.example/crimson-desert",
                         "Crimson Desert gameplay, platforms, and information.",
-                    )
+                    ),
+                    _result(
+                        "Crimson Desert official",
+                        "https://crimsondesert.pearlabyss.com/",
+                        "Official Crimson Desert information.",
+                    ),
+                    _result(
+                        "Crimson Desert news",
+                        "https://news.example/crimson-desert",
+                        "Crimson Desert release coverage.",
+                    ),
                 ]
             }
         )
@@ -163,7 +193,7 @@ class TestRouting:
 
         kwargs = mock_client_cls.return_value.search.call_args.kwargs
         assert kwargs["search_depth"] == "basic"
-        assert kwargs["max_results"] == 3
+        assert kwargs["max_results"] == 5
 
     def test_simple_fact_uses_basic(self):
         fake_module, mock_client_cls = _fake_tavily_module(
@@ -173,7 +203,19 @@ class TestRouting:
                         "Mount Apo",
                         "https://example.com/mount-apo",
                         "Mount Apo is the highest mountain in the Philippines.",
-                    )
+                    ),
+                    _result(
+                        "Mount Apo facts",
+                        "https://britannica.example/mount-apo",
+                        "Mount Apo is the highest mountain in the Philippines "
+                        "at 2,954 metres.",
+                    ),
+                    _result(
+                        "Climbing Mount Apo",
+                        "https://travel.example/mount-apo",
+                        "The highest mountain in the Philippines, Mount Apo, "
+                        "is on Mindanao.",
+                    ),
                 ]
             }
         )
@@ -181,9 +223,10 @@ class TestRouting:
             WebSearchTool(api_key="key").execute(
                 query="What is the highest mountain in the Philippines?"
             )
-        assert mock_client_cls.return_value.search.call_args.kwargs[
-            "search_depth"
-        ] == "basic"
+        assert (
+            mock_client_cls.return_value.search.call_args.kwargs["search_depth"]
+            == "basic"
+        )
 
     def test_news_starts_advanced_without_retry(self):
         fake_module, mock_client_cls = _fake_tavily_module(
@@ -285,9 +328,10 @@ class TestRouting:
             WebSearchTool(api_key="key").execute(
                 query="What is the exact current gasoline price in Manila?"
             )
-        assert mock_client_cls.return_value.search.call_args.kwargs[
-            "search_depth"
-        ] == "advanced"
+        assert (
+            mock_client_cls.return_value.search.call_args.kwargs["search_depth"]
+            == "advanced"
+        )
 
     def test_verification_starts_advanced(self):
         fake_module, mock_client_cls = _fake_tavily_module(
@@ -297,9 +341,10 @@ class TestRouting:
             WebSearchTool(api_key="key").execute(
                 query="Verify whether this product claim is accurate"
             )
-        assert mock_client_cls.return_value.search.call_args.kwargs[
-            "search_depth"
-        ] == "advanced"
+        assert (
+            mock_client_cls.return_value.search.call_args.kwargs["search_depth"]
+            == "advanced"
+        )
 
     def test_deep_research_forces_one_advanced_search(self):
         fake_module, mock_client_cls = _fake_tavily_module(
@@ -599,18 +644,21 @@ class TestUrlDetection:
         assert WebSearchTool._is_url("what are the Punic wars") is False
 
     def test_extract_url(self):
-        assert WebSearchTool._extract_url(
-            "Summarize https://example.com/page."
-        ) == "https://example.com/page"
+        assert (
+            WebSearchTool._extract_url("Summarize https://example.com/page.")
+            == "https://example.com/page"
+        )
         assert WebSearchTool._extract_url("no URLs") is None
 
     def test_normalize_arxiv_pdf(self):
-        assert WebSearchTool._normalize_url(
-            "https://arxiv.org/pdf/2310.03714.pdf"
-        ) == "https://arxiv.org/abs/2310.03714"
-        assert WebSearchTool._normalize_url(
-            "https://example.com/page"
-        ) == "https://example.com/page"
+        assert (
+            WebSearchTool._normalize_url("https://arxiv.org/pdf/2310.03714.pdf")
+            == "https://arxiv.org/abs/2310.03714"
+        )
+        assert (
+            WebSearchTool._normalize_url("https://example.com/page")
+            == "https://example.com/page"
+        )
 
     def test_url_query_fetches_directly(self):
         response = MagicMock()
@@ -660,9 +708,7 @@ class TestUrlDetection:
             patch("openjarvis.tools.web_search.check_ssrf", return_value=None),
             patch("httpx.get", return_value=response),
         ):
-            content = WebSearchTool._fetch_url(
-                "https://example.com/long", max_chars=20
-            )
+            content = WebSearchTool._fetch_url("https://example.com/long", max_chars=20)
         assert content == ("x" * 20) + "\n\n[Content truncated]"
 
 
@@ -700,3 +746,154 @@ class TestImageIntentSurvivesModelRewording:
     def test_ordinary_queries_do_not_become_image_searches(self, query):
         """A noun buried mid-query is not a request for pictures."""
         assert _build_plan(query, force_advanced=False).explicit_images is False
+
+
+class TestThinEvidenceEscalates:
+    """A thin result set must buy a wider second look, not be served as-is.
+
+    Sufficiency used to be ``bool(results)``: one result from one site passed,
+    so the escalation below never fired for an ordinary query and a thin
+    answer was returned as though it were a good one.
+    """
+
+    def _search(self, results, **params):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": results}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="what is the melting point of gallium", **params
+            )
+        return result, mock_client_cls.return_value.search
+
+    def _gallium(self, n, *, domains=None):
+        return [
+            _result(
+                f"Gallium melting point {i}",
+                f"https://{(domains or [f'site{i}.example'] * n)[i]}/gallium-{i}",
+                "The melting point of gallium is 29.76 degrees Celsius.",
+            )
+            for i in range(n)
+        ]
+
+    def test_two_results_are_not_enough(self):
+        result, search = self._search(self._gallium(2))
+        assert search.call_count == 2
+        assert result.metadata["final_depth"] == "advanced"
+
+    def test_three_results_from_one_site_are_not_enough(self):
+        """Three pages of one blog is one claim repeated, not corroboration."""
+        result, search = self._search(self._gallium(3, domains=["one.example"] * 3))
+        assert search.call_count == 2
+
+    def test_three_results_across_two_sites_are_enough(self):
+        result, search = self._search(
+            self._gallium(3, domains=["a.example", "b.example", "b.example"])
+        )
+        assert search.call_count == 1
+        assert result.metadata["final_depth"] == "basic"
+
+    def test_the_retry_asks_for_more_than_the_first_attempt(self):
+        _result_, search = self._search(self._gallium(1))
+        first, second = search.call_args_list
+        assert first.kwargs["max_results"] == 4
+        assert second.kwargs["max_results"] == 8
+        assert second.kwargs["search_depth"] == "advanced"
+
+    def test_the_retry_never_narrows_a_wider_request(self):
+        """Asking for 10 must not be answered with 8 on the retry."""
+        _result_, search = self._search(self._gallium(1), max_results=10)
+        assert search.call_args_list[1].kwargs["max_results"] == 10
+
+    def test_the_two_call_ceiling_still_holds(self):
+        """Thin twice is still only two calls; the bound is deliberate."""
+        _result_, search = self._search(self._gallium(1))
+        assert search.call_count == 2
+
+
+class TestMaxResultsIsHonoured:
+    def test_the_default_is_four(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": []}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(query="anything at all")
+        assert (
+            mock_client_cls.return_value.search.call_args_list[0].kwargs["max_results"]
+            == 4
+        )
+
+    def test_a_requested_count_is_not_silently_capped(self):
+        """max_results=9 used to reach Tavily as 3 unless the query said so."""
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": []}
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(query="anything at all", max_results=9)
+        assert (
+            mock_client_cls.return_value.search.call_args_list[0].kwargs["max_results"]
+            == 9
+        )
+
+
+class TestASiteTheUserNamedCountsAsEnough:
+    """One domain is the right answer when the query asked for that domain.
+
+    "Search reddit for X" can only come back from reddit, so the two-domain
+    rule escalated every single one -- two provider calls for a search that
+    did exactly what was asked. Measured before this exemption: the reddit
+    query took 2 calls, an open-web query took 1.
+    """
+
+    def _search(self, query, hosts):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={
+                "results": [
+                    _result(
+                        f"Mechanical keyboard thread {i}",
+                        f"https://{host}/thread-{i}",
+                        "Discussion about mechanical keyboards and switches.",
+                    )
+                    for i, host in enumerate(hosts)
+                ]
+            }
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(query=query)
+        return mock_client_cls.return_value.search
+
+    def test_naming_the_site_makes_one_domain_enough(self):
+        search = self._search(
+            "reddit discussions about mechanical keyboards",
+            ["www.reddit.com"] * 3,
+        )
+        assert search.call_count == 1
+
+    def test_an_unnamed_single_domain_still_escalates(self):
+        """The rule still catches one site quietly dominating an open search."""
+        search = self._search(
+            "discussions about mechanical keyboards",
+            ["www.reddit.com"] * 3,
+        )
+        assert search.call_count == 2
+
+    def test_a_generic_label_does_not_count_as_naming_a_site(self):
+        """A word like "blog" must not excuse one host serving every result.
+
+        Deliberately not "news": that word routes the search to advanced depth
+        before sufficiency is ever consulted, so it would pass for a reason
+        this test is not about.
+        """
+        search = self._search(
+            "mechanical keyboard blog posts",
+            ["blog.example.com"] * 3,
+        )
+        assert search.call_count == 2
+
+    def test_the_exemption_does_not_rescue_too_few_results(self):
+        """Naming a site earns a domain pass, not a result-count pass."""
+        search = self._search(
+            "reddit discussions about mechanical keyboards",
+            ["www.reddit.com"] * 2,
+        )
+        assert search.call_count == 2
