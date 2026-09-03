@@ -314,3 +314,70 @@ describe('the chat scroll area does not scroll sideways', () => {
     expect(classes.split(/\s+/)).toContain('overflow-x-hidden');
   });
 });
+
+/**
+ * Remote images must not be requested in CORS mode, and must degrade when
+ * they fail.
+ *
+ * `crossOrigin="anonymous"` makes the browser send a CORS request, and a host
+ * that does not answer with `Access-Control-Allow-Origin` then fails to load
+ * an image a plain request fetches fine. Measured on one real search: three
+ * of five thumbnails failed with it and all five loaded without it --
+ * Wikimedia opts into CORS so its image appeared, Britannica does not so its
+ * two did not. Nothing here reads pixels off a canvas, which is the only
+ * thing the attribute would buy.
+ *
+ * `onError` is the other half: a thumbnail can still 404 or be hotlink
+ * blocked, and without a handler that failure renders as a bordered box of
+ * alt text rather than as one fewer picture.
+ *
+ * Scoped to images that set `referrerPolicy`, which is what marks a remote
+ * third-party URL here. The user's own pasted attachments are `data:` URLs --
+ * they cannot be hotlink blocked, and hiding someone's own image because it
+ * momentarily failed would be worse than showing it.
+ */
+describe('search and preview images fail quietly', () => {
+  function chatImages(): Array<{ file: string; attrs: string[] }> {
+    const dir = join(SRC, 'components', 'Chat');
+    const found: Array<{ file: string; attrs: string[] }> = [];
+    for (const file of sourceFiles(dir)) {
+      const source = parse(file);
+      const visit = (node: ts.Node): void => {
+        if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+          if (node.tagName.getText() === 'img') {
+            found.push({
+              file: relative(SRC, file).split(sep).join('/'),
+              attrs: node.attributes.properties
+                .filter(ts.isJsxAttribute)
+                .map((attr) => attr.name.getText()),
+            });
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+    }
+    return found;
+  }
+
+  const remoteImages = () =>
+    chatImages().filter((img) => img.attrs.includes('referrerPolicy'));
+
+  it('has remote images to check', () => {
+    expect(remoteImages().length).toBeGreaterThan(0);
+  });
+
+  it('never requests a remote image in CORS mode', () => {
+    const offenders = chatImages()
+      .filter((img) => img.attrs.includes('crossOrigin'))
+      .map((img) => img.file);
+    expect(offenders).toEqual([]);
+  });
+
+  it('handles a failed load rather than showing a broken box', () => {
+    const offenders = remoteImages()
+      .filter((img) => !img.attrs.includes('onError'))
+      .map((img) => img.file);
+    expect(offenders).toEqual([]);
+  });
+});

@@ -120,6 +120,14 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   );
   const linkPreview = useMemo(() => selectLinkPreview(message), [message]);
   const searchImages = useMemo(() => selectSearchImages(message), [message]);
+  // A search image is a third-party URL nobody has fetched yet, so some of
+  // them will not load: hotlink blocks, 404s, a URL that was never an image.
+  // Without this the tile kept its border and showed the alt text as a wall
+  // of prose, which reads as a broken page rather than as one fewer picture.
+  const [failedImages, setFailedImages] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const visibleImages = searchImages.filter((image) => !failedImages.has(image.url));
 
   // Build a ref→source lookup once per render. Memoized so the rehype plugin
   // identity stays stable until the source list actually changes.
@@ -217,9 +225,9 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
 
       {linkPreview && <LinkPreviewCard preview={linkPreview} />}
 
-      {searchImages.length > 0 && (
+      {visibleImages.length > 0 && (
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {searchImages.map((image) => (
+          {visibleImages.map((image) => (
             <a
               key={image.url}
               href={image.url}
@@ -234,8 +242,15 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
                 alt={image.description || ''}
                 loading="lazy"
                 decoding="async"
-                crossOrigin="anonymous"
                 referrerPolicy="no-referrer"
+                onError={() =>
+                  setFailedImages((previous) => {
+                    if (previous.has(image.url)) return previous;
+                    const next = new Set(previous);
+                    next.add(image.url);
+                    return next;
+                  })
+                }
                 className="aspect-video h-full w-full object-cover"
               />
             </a>
