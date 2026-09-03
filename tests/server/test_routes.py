@@ -2084,6 +2084,107 @@ class TestSearchRetiresTheBrowserOpener:
         )
         assert "web_open" not in turns[1]
 
+    def test_reading_a_page_survives_the_search(self):
+        """web_read is the fallback, so a search must not retire it.
+
+        The retirement above removes web_open once a search has answered.
+        web_read exists precisely to be used *after* a search, when the
+        summaries did not contain the detail asked for -- sweeping it into the
+        same set would silently remove the only way to answer those.
+        """
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        stream_kwargs: list[dict] = []
+
+        class _SearchTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="web_search",
+                    description="Search the web",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(
+                    tool_name="web_search",
+                    content="Three sources.",
+                    success=True,
+                    metadata={"bounded_search_complete": True, "sources": []},
+                )
+
+        class _ReadTool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="web_read",
+                    description="Read a page",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):  # pragma: no cover - not reached
+                return ToolResult(tool_name="web_read", content="text", success=True)
+
+        engine = _make_engine(content="ENGINE BYPASS")
+        stream_turn = 0
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            nonlocal stream_turn
+            stream_turn += 1
+            stream_kwargs.append(kwargs)
+            if stream_turn == 1:
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "web_search", "arguments": "{}"},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            yield StreamChunk(content="Done.")
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_SearchTool(), _ReadTool()],
+            bus=EventBus(),
+            max_turns=3,
+            system_prompt="Use the configured tools.",
+        )
+        app = create_app(
+            engine,
+            "test-model",
+            agent=agent,
+            bus=EventBus(),
+            config=_test_config(),
+        )
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "what time is the film"}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+
+        def _names(kwargs):
+            return {
+                (tool.get("function") or {}).get("name")
+                for tool in kwargs.get("tools", [])
+            }
+
+        assert "web_search" not in _names(stream_kwargs[1])
+        assert "web_read" in _names(stream_kwargs[1])
+
     def test_opening_directly_still_works(self):
         """A turn that never searches must keep the opener.
 

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
+from openjarvis.security import page_access
 from openjarvis.security.ssrf import check_ssrf
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
@@ -413,6 +414,28 @@ MIN_SUFFICIENT_DOMAINS = 2
 ESCALATED_MAX_RESULTS = 8
 
 
+def _read_hint(sources: list[dict[str, Any]], quality_passed: bool) -> str:
+    """Point at the page to open when a summary cannot hold the answer.
+
+    Offered only when there is a page worth opening. Silent on a search that
+    already answered well, so an ordinary lookup does not grow a suggestion to
+    go and browse.
+    """
+    if not sources:
+        return ""
+    thin = not quality_passed or all(
+        len((source.get("summary") or "").strip()) < 200 for source in sources
+    )
+    if not thin:
+        return ""
+    return (
+        "If the detail asked for is not in these summaries, it may exist only "
+        "on the page itself -- pages often draw schedules, prices and tables "
+        "after loading, and no summary will contain those. Use web_read on "
+        f"{sources[0]['url']} to read it."
+    )
+
+
 def _results_are_sufficient(
     results: list[dict[str, Any]],
     query: str,
@@ -785,12 +808,27 @@ class WebSearchTool(BaseTool):
             )
 
         formatted = "\n\n---\n\n".join(formatted_parts)
+
+        # Reading one of these is the same intent as clicking it, so they
+        # are permitted for the rest of the turn. A link found later
+        # *inside* one of these pages is not, which is the distinction
+        # `web_read` enforces.
+        page_access.allow(source["url"] for source in sources)
         if not quality_passed:
             warning = (
                 "Search results were insufficient or off-topic. State that clearly "
                 "and do not invent missing details."
             )
             formatted = f"{warning}\n\n{formatted}" if formatted else warning
+
+        # Said in the result rather than as a prompt rule, because
+        # prompt-level rules have not held here. A summary is the search
+        # provider's precis; when the answer is a detail the page draws
+        # after loading -- showtimes, a price, a table -- no summary will
+        # ever contain it, and the model needs telling where it lives.
+        hint = _read_hint(sources, quality_passed)
+        if hint:
+            formatted = f"{formatted}\n\n{hint}" if formatted else hint
 
         return ToolResult(
             tool_name="web_search",

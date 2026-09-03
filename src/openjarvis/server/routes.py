@@ -300,9 +300,15 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     # request as it arrived, ahead of memory injection, so the key does not
     # move when recalled facts change between the ask and the answer.
     # Each request runs in its own task, so this ContextVar is request-local.
-    from openjarvis.security import confirmations
+    from openjarvis.security import confirmations, page_access
 
     confirmations.set_turn(request_body.messages)
+
+    # Which pages `web_read` may open. Registered from the user's own message;
+    # `web_search` adds what it returned. A URL from anywhere else -- the body
+    # of an email, or of a page just read -- is refused, so a page cannot
+    # choose what Sage fetches next.
+    page_access.set_turn(confirmations.last_user_text(request_body.messages))
 
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
@@ -1040,6 +1046,16 @@ async def _handle_streaming_orchestrator(
 
     from openjarvis.agents._stubs import AgentContext
     from openjarvis.core.types import ToolResult
+    from openjarvis.security import confirmations, page_access
+
+    # Bound again here, and not only in `chat_completions`, because
+    # `AuthMiddleware` is a `BaseHTTPMiddleware`: it runs the endpoint in an
+    # inner task and streams the response body from its own. A ContextVar set
+    # in the endpoint is therefore invisible by the time this generator runs
+    # the tools -- `web_read` saw no allowance at all and refused every page,
+    # while the route logged the URL as permitted. This generator is the task
+    # the tools actually execute in.
+    page_access.set_turn(confirmations.last_user_text(req.messages))
 
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     input_text = req.messages[-1].content if req.messages else ""
@@ -1462,6 +1478,17 @@ async def _handle_agent_stream(
             break
 
     async def generate():
+        # Bound here rather than in `chat_completions` for the same reason
+        # as the orchestrator generator: `AuthMiddleware` is a
+        # `BaseHTTPMiddleware`, so the endpoint runs in one task and the
+        # response body streams from another. Whatever the endpoint set is
+        # gone by the time this generator runs the agent, which is why
+        # `web_read` saw no allowance and refused a URL the user had typed.
+        from openjarvis.security import confirmations as _confirmations
+        from openjarvis.security import page_access as _page_access
+
+        _page_access.set_turn(_confirmations.last_user_text(req.messages))
+
         first_chunk = ChatCompletionChunk(
             id=chunk_id,
             model=model,

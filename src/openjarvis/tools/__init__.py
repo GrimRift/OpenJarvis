@@ -47,6 +47,14 @@ try:
 except ImportError:
     pass
 
+# Its own try block, not shared with web_search: one import failure silently
+# dropping both would leave search working and reading gone, which reads as
+# "the page had nothing" rather than as a missing tool.
+try:
+    import openjarvis.tools.web_read  # noqa: F401
+except ImportError:
+    pass
+
 try:
     import openjarvis.tools.code_interpreter  # noqa: F401
 except ImportError:

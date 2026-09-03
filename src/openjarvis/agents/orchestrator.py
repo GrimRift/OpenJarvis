@@ -13,6 +13,7 @@ Supports two modes:
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import json
 import re
 from typing import Any, List, Optional
@@ -443,10 +444,23 @@ class OrchestratorAgent(ToolUsingAgent):
                         )
                     return tc, result
 
+                # Each submission runs in its own copy of the calling
+                # context. `ThreadPoolExecutor.submit` does not carry
+                # contextvars the way `asyncio.to_thread` does, so without
+                # this every per-request guard held in a ContextVar is simply
+                # absent here: `security/page_access` saw no allowance and
+                # refused every read, and `security/confirmations` sees no
+                # bound turn on this path either. A fresh copy per call
+                # because one Context cannot be entered by two threads at
+                # once; the values inside are shared objects, so what a tool
+                # records still reaches the caller.
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=len(tool_calls),
                 ) as pool:
-                    futures = {pool.submit(_exec_tool, tc): tc for tc in tool_calls}
+                    futures = {
+                        pool.submit(contextvars.copy_context().run, _exec_tool, tc): tc
+                        for tc in tool_calls
+                    }
                     results_map: dict[int, tuple] = {}
                     for future in concurrent.futures.as_completed(futures):
                         tc_orig = futures[future]

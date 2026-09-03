@@ -897,3 +897,87 @@ class TestASiteTheUserNamedCountsAsEnough:
             ["www.reddit.com"] * 2,
         )
         assert search.call_count == 2
+
+
+class TestItPointsAtThePageWhenSummariesCannotHelp:
+    """A summary is the provider's precis, not the page.
+
+    Asked for cinema showtimes, search found the right listings page and Sage
+    still could not answer: the times are drawn by JavaScript, so the served
+    HTML holds no showtime, no film title, not even the word "Showtimes".
+    No summary will ever contain that, which is why the result now says where
+    the answer actually lives instead of leaving the model to guess.
+    """
+
+    def _run(self, results):
+        fake_module, _ = _fake_tavily_module(search_return={"results": results})
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            return WebSearchTool(api_key="key").execute(
+                query="SM City Calamba showtimes today"
+            )
+
+    def _thin(self, n=3):
+        return [
+            _result(
+                f"SM City Calamba schedule {i}",
+                f"https://cinema{i}.example/sm-city-calamba",
+                "Movie schedules for today.",
+            )
+            for i in range(n)
+        ]
+
+    def test_a_thin_result_names_the_page_to_read(self):
+        result = self._run(self._thin())
+        assert "web_read" in result.content
+        assert "cinema0.example" in result.content
+
+    def test_a_good_result_does_not_suggest_browsing(self):
+        """An ordinary answered lookup must not grow a nudge to go and read."""
+        rich = [
+            _result(
+                f"Mount Apo {i}",
+                f"https://site{i}.example/mount-apo",
+                "Mount Apo is the highest mountain in the Philippines, standing "
+                "2,954 metres above sea level on the island of Mindanao, and it "
+                "is the country's most prominent peak by a considerable margin, "
+                "drawing climbers from across the region throughout the year.",
+            )
+            for i in range(3)
+        ]
+        result = self._run(rich)
+        assert "web_read" not in result.content
+
+    def test_no_results_means_no_suggestion(self):
+        result = self._run([])
+        assert "web_read" not in result.content
+
+
+class TestSearchResultsBecomeReadable:
+    """Reading a search result is the same intent as clicking it."""
+
+    def test_returned_urls_are_permitted_for_the_turn(self):
+        from openjarvis.security import page_access
+
+        page_access.clear()
+        try:
+            fake_module, _ = _fake_tavily_module(
+                search_return={
+                    "results": [
+                        _result(
+                            "SM City Calamba movie schedule",
+                            "https://clickthecity.example/sm-city-calamba",
+                            "SM City Calamba showtimes and movie schedule for today.",
+                        )
+                    ]
+                }
+            )
+            with patch.dict(sys.modules, {"tavily": fake_module}):
+                WebSearchTool(api_key="key").execute(
+                    query="SM City Calamba showtimes today"
+                )
+            assert page_access.is_allowed(
+                "https://clickthecity.example/sm-city-calamba"
+            )
+            assert not page_access.is_allowed("https://elsewhere.example/page")
+        finally:
+            page_access.clear()
