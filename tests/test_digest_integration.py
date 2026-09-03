@@ -13,8 +13,17 @@ from openjarvis.core.types import ToolResult
 
 
 def test_full_digest_pipeline(tmp_path):
-    """Verify collect -> synthesize -> TTS -> store -> retrieve."""
+    """Verify collect -> synthesize -> TTS -> store -> retrieve.
+
+    Runs against a stub config rather than the machine's own. Without that,
+    `[digest] model` on the real install replaces the model this test passes
+    in, and an integration test of the pipeline starts failing because of
+    something in the install's own config.toml -- which is the same
+    coupling that once had connector tests writing to the user's real data
+    directory.
+    """
     from openjarvis.agents.morning_digest import MorningDigestAgent
+    from openjarvis.core.config import JarvisConfig
 
     # Mock engine returns a narrative
     mock_engine = MagicMock()
@@ -51,13 +60,17 @@ def test_full_digest_pipeline(tmp_path):
 
     db_path = str(tmp_path / "digest.db")
 
-    agent = MorningDigestAgent(
-        mock_engine,
-        "claude-sonnet-4-6",
-        tools=[],
-        persona="neutral",
-        digest_store_path=db_path,
-    )
+    with patch(
+        "openjarvis.agents.morning_digest.load_config",
+        return_value=JarvisConfig(),
+    ):
+        agent = MorningDigestAgent(
+            mock_engine,
+            "claude-sonnet-4-6",
+            tools=[],
+            persona="neutral",
+            digest_store_path=db_path,
+        )
 
     with patch.object(
         agent._executor,
