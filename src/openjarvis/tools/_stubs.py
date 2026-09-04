@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from openjarvis.core.events import EventBus, EventType
 from openjarvis.core.types import ToolCall, ToolResult
+from openjarvis.security.credential_stripper import CredentialStripper
 
 # ---------------------------------------------------------------------------
 # ToolSpec — metadata describing a tool's interface
@@ -131,6 +132,9 @@ def _label_injection(result: ToolResult) -> ToolResult:
     )
     result.content = f"{INJECTION_NOTICE}\n{result.content}"
     return result
+
+
+_STRIPPER = CredentialStripper()
 
 
 class ToolExecutor:
@@ -345,9 +349,16 @@ class ToolExecutor:
                 success=False,
             )
         except Exception as exc:
+            # Stripped because this is the one path every tool's unexpected
+            # failure passes through, and an HTTP client's message quotes the
+            # request it failed on -- URL included. Credentials ride in those
+            # URLs: an OpenWeatherMap key reached a tool result, the model's
+            # context and the logs exactly this way. A tool that formats its
+            # own error still has to be careful; this covers the rest, and
+            # every tool written from here on.
             result = ToolResult(
                 tool_name=tool_call.name,
-                content=f"Tool execution error: {exc}",
+                content=_STRIPPER.strip(f"Tool execution error: {exc}"),
                 success=False,
             )
         latency = time.time() - t0
