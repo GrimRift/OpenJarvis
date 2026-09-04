@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import uuid
@@ -245,7 +246,12 @@ async def attach_document(file: UploadFile = File(...)) -> AttachedDocument:
             ),
         )
 
-    text, note, reread = read_document(data, ext)
+    # Off the event loop, always. Reading a mangled paper takes minutes, and
+    # run inline it froze the entire server: measured 12 of 12 `/health`
+    # probes timing out during one attach, which took the wake-word socket,
+    # Flux and TTS down with it and left the user refreshing the page. The
+    # identical mistake was diagnosed in `digest_routes` earlier the same day.
+    text, note, reread = await asyncio.to_thread(read_document, data, ext)
     text = text.strip()
     if not text:
         raise HTTPException(
@@ -289,7 +295,8 @@ async def ingest_files(
 
         data = await upload.read()
 
-        text, _note, _reread = read_document(data, ext)
+        # Same reason as `/attach`: this can spend minutes in the vision path.
+        text, _note, _reread = await asyncio.to_thread(read_document, data, ext)
 
         text = text.strip()
         if not text:

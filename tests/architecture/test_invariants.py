@@ -243,9 +243,8 @@ class TestGoogleCallsRefreshTheirToken:
             if _rel(path) != self.MODULE:
                 continue
             for call in _calls(tree):
-                if (
-                    isinstance(call.func, ast.Name)
-                    and call.func.id.startswith("_gcal_api_")
+                if isinstance(call.func, ast.Name) and call.func.id.startswith(
+                    "_gcal_api_"
                 ):
                     offenders.append(f"{call.func.id}:{call.lineno}")
         return offenders
@@ -367,3 +366,72 @@ class TestEveryOpenAISerializerHandlesImages:
             f"{unlisted} emit OpenAI image parts but are not listed here. Add "
             "them, so the next vision change updates every payload builder."
         )
+
+
+class TestMinutesOfWorkNeverRunOnTheEventLoop:
+    """A slow call inside an ``async def`` route freezes the whole server.
+
+    This happened twice in one day. First in ``/api/digest/generate``, where
+    CDP reads ran inline and silently lost Outlook and Teams. Then in
+    ``/v1/connectors/upload/attach``, where re-reading a mangled PDF takes
+    minutes: measured **12 of 12 `/health` probes timing out** during a single
+    attach -- the wake-word socket, Flux and TTS all went down with it, and
+    the only way back was reloading the page.
+
+    Asserted structurally because the symptom never points at the cause. The
+    server does not error; it stops answering, and every unrelated feature
+    looks broken at once.
+    """
+
+    #: Calls that can spend seconds to minutes and must be handed to a thread.
+    SLOW_CALLS = frozenset({"read_document"})
+
+    def _offending(self) -> dict[str, list[int]]:
+        found: dict[str, list[int]] = {}
+        for path, tree in _modules():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.AsyncFunctionDef):
+                    continue
+                for call in _calls_in(node):
+                    if _call_name(call) not in self.SLOW_CALLS:
+                        continue
+                    if not _inside_to_thread(node, call):
+                        found.setdefault(_rel(path), []).append(call.lineno)
+        return found
+
+    def test_the_invariant_has_something_to_guard(self):
+        """Fails loudly if the guarded call is renamed out from under it."""
+        names = {
+            _call_name(call) for _path, tree in _modules() for call in _calls(tree)
+        }
+        assert self.SLOW_CALLS & names, (
+            "no call named in SLOW_CALLS exists any more; update this test "
+            "rather than letting it pass vacuously"
+        )
+
+    def test_slow_work_is_handed_to_a_thread(self):
+        offenders = self._offending()
+        assert not offenders, (
+            f"these run minutes of work on the event loop: {offenders}. "
+            "Wrap them in `await asyncio.to_thread(...)` -- inline, they stop "
+            "the server answering anything at all."
+        )
+
+
+def _calls_in(node: ast.AST) -> list[ast.Call]:
+    return [child for child in ast.walk(node) if isinstance(child, ast.Call)]
+
+
+def _inside_to_thread(scope: ast.AST, target: ast.Call) -> bool:
+    """Whether *target* is an argument to ``asyncio.to_thread``."""
+    for call in _calls_in(scope):
+        if _call_name(call) != "to_thread":
+            continue
+        for arg in call.args:
+            if arg is target.func or arg is target:
+                return True
+            # `to_thread(read_document, data, ext)` passes the function by
+            # name, so the slow call never appears as a Call node at all.
+            if isinstance(arg, ast.Name) and arg.id in ("read_document",):
+                return True
+    return False
