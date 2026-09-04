@@ -12,8 +12,13 @@ from pydantic import BaseModel
 
 from openjarvis.connectors.store import KnowledgeStore
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
+from openjarvis.server import document_read
 
 logger = logging.getLogger(__name__)
+
+#: Largest attachment accepted. Generous for a paper or a report, bounded
+#: so one file cannot occupy the whole request.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 router = APIRouter(prefix="/v1/connectors/upload", tags=["upload"])
 
@@ -53,6 +58,57 @@ def _chunk_text(text: str, max_chars: int = 1000) -> List[str]:
         if chunk:
             final.append(chunk)
     return final
+
+
+def _extract_pdf_pages(data: bytes) -> List[str]:
+    """One string per page, so extraction quality can be judged page by page."""
+    try:
+        import pdfplumber  # type: ignore[import-untyped]
+
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            return [p.extract_text() or "" for p in pdf.pages]
+    except ImportError:
+        pass
+    try:
+        from PyPDF2 import PdfReader  # type: ignore[import-untyped]
+
+        return [p.extract_text() or "" for p in PdfReader(io.BytesIO(data)).pages]
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "PDF parsing requires pdfplumber or PyPDF2. "
+                "Install one with: pip install pdfplumber"
+            ),
+        )
+
+
+def read_document(data: bytes, ext: str) -> tuple[str, str, int]:
+    """A document's text, re-reading any pages the extractor mangled.
+
+    Returns the text, a note describing anything the caller should say out
+    loud, and how many pages had to be re-read. A silently partial or garbled
+    read is the failure this guards: the extractor returns plenty of
+    characters either way, so nothing downstream can tell a clean page from
+    one with table rows spliced into the prose.
+    """
+    if ext in (".txt", ".md", ".csv"):
+        try:
+            return data.decode("utf-8"), "", 0
+        except UnicodeDecodeError:
+            return data.decode("latin-1"), "", 0
+    if ext == ".docx":
+        return _extract_text_from_docx(data), "", 0
+    if ext != ".pdf":
+        return "", "", 0
+
+    pages = _extract_pdf_pages(data)
+    judged = document_read.assess(pages)
+    if not any(page.needs_eyes for page in judged):
+        return document_read.assemble(judged), "", 0
+
+    replacements, note = document_read.read_pages_with_vision(data, judged)
+    return document_read.assemble(judged, replacements), note, len(replacements)
 
 
 def _extract_text_from_pdf(data: bytes) -> str:
@@ -152,6 +208,63 @@ async def ingest_paste(body: PasteRequest) -> IngestResponse:
     return IngestResponse(chunks_added=len(chunks))
 
 
+class AttachedDocument(BaseModel):
+    """One document read for a single conversation, never indexed."""
+
+    filename: str
+    text: str
+    chars: int
+    pages_reread: int = 0
+    note: str = ""
+
+
+@router.post("/attach", response_model=AttachedDocument)
+async def attach_document(file: UploadFile = File(...)) -> AttachedDocument:
+    """Read one document for the current conversation without storing it.
+
+    The ephemeral half of an attachment: nothing reaches ``knowledge.db``, so a
+    one-off file does not silently join the searchable corpus. Indexing is the
+    other, explicit choice and goes through ``/ingest/files``.
+    """
+    filename = file.filename or "untitled"
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in _ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(_ALLOWED_EXTENSIONS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}. Allowed: {allowed}",
+        )
+
+    data = await file.read()
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"{filename} is larger than the "
+                f"{MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB limit."
+            ),
+        )
+
+    text, note, reread = read_document(data, ext)
+    text = text.strip()
+    if not text:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Nothing readable came out of {filename}. It may be empty, or "
+                "an image-only document that could not be read."
+            ),
+        )
+
+    return AttachedDocument(
+        filename=filename,
+        text=text,
+        chars=len(text),
+        pages_reread=reread,
+        note=note.strip(),
+    )
+
+
 @router.post("/ingest/files", response_model=IngestResponse)
 async def ingest_files(
     files: List[UploadFile] = File(...),
@@ -176,18 +289,7 @@ async def ingest_files(
 
         data = await upload.read()
 
-        # Parse content based on extension
-        if ext in (".txt", ".md", ".csv"):
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                text = data.decode("latin-1")
-        elif ext == ".pdf":
-            text = _extract_text_from_pdf(data)
-        elif ext == ".docx":
-            text = _extract_text_from_docx(data)
-        else:
-            continue
+        text, _note, _reread = read_document(data, ext)
 
         text = text.strip()
         if not text:

@@ -27,6 +27,13 @@ from openjarvis.core.types import ToolResult
 from openjarvis.security.screen_redaction import is_sensitive_title
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.desktop_monitors import list_monitors
+from openjarvis.vision.ask import (
+    VISION_MAX_TOKENS,
+    VISION_RETRY_MAX_TOKENS,
+    ask_vision,
+    downscale,
+    resolve_vision_model,
+)
 
 DEFAULT_QUESTION = "What is on this screen?"
 
@@ -43,59 +50,25 @@ _BREVITY = (
 #: "high" for any tool-free call, which is the wrong default here and buys
 #: nothing measurable: high 3.4s/138 tokens versus minimal 2.4s/100 on the same
 #: capture.
-VISION_REASONING_EFFORT = "minimal"
 
 #: A reasoning model spends tokens thinking before it writes anything, and a
 #: dense screenshot is a lot to think about. Measured on a 1280px capture of a
 #: busy browser window: 600 tokens produced `finish_reason: length` and **zero
 #: characters**, all of it spent reasoning; 3000 produced a full answer using
 #: 1523. The first test passed only because that screen was simpler.
-VISION_MAX_TOKENS = 3000
 
 #: One retry with real headroom, mirroring morning_digest's handling of the
 #: same failure. Empty output must never be reported as "nothing to see".
-VISION_RETRY_MAX_TOKENS = 8000
 
 
 def _resolve_vision_model(config: Any) -> str:
-    """Which model gets the picture.
-
-    An explicit setting wins. Otherwise prefer the cloud model already
-    configured for chat — it is the stronger reader and needs no download —
-    and fall back to the local vision model when there is no cloud key.
-    """
-    vision = getattr(config, "vision", None)
-    explicit = str(getattr(vision, "model", "") or "").strip()
-    if explicit:
-        return explicit
-
-    intelligence = getattr(config, "intelligence", None)
-    candidate = str(getattr(intelligence, "default_model", "") or "").strip()
-    try:
-        from openjarvis.server.cloud_router import _load_keys, is_cloud_model
-
-        if candidate and is_cloud_model(candidate) and _load_keys():
-            return candidate
-        if _load_keys().get("OPENAI_API_KEY"):
-            return "gpt-5.6-luna"
-    except Exception:
-        pass
-    return str(getattr(vision, "local_model", "") or "qwen3-vl:8b")
+    """See ``vision.ask.resolve_vision_model``; kept as a name the tests use."""
+    return resolve_vision_model(config)
 
 
 def _downscale(image: Any, max_edge: int) -> Any:
-    """Shrink so the long edge fits *max_edge*, preserving aspect."""
-    width, height = image.size
-    longest = max(width, height)
-    if longest <= max_edge:
-        return image
-    scale = max_edge / float(longest)
-    from PIL import Image
-
-    return image.resize(
-        (max(1, int(width * scale)), max(1, int(height * scale))),
-        Image.LANCZOS,
-    )
+    """See ``vision.ask.downscale``; kept as a name the tests use."""
+    return downscale(image, max_edge)
 
 
 @ToolRegistry.register("capture_screen")
@@ -170,50 +143,15 @@ class CaptureScreenTool(BaseTool):
         return ImageGrab.grab(bbox=box, all_screens=True)
 
     def _ask(self, model: str, data_url: str, question: str) -> Optional[str]:
-        from openjarvis.core.types import Message, Role
-
-        message = Message(role=Role.USER, content=question + _BREVITY)
-        message.images = [data_url]
-
-        engine = self._engine
-        if engine is None:
-            import os
-
-            # CloudEngine reads os.environ; the keys live in cloud-keys.env,
-            # which only cloud_router knows how to read. Without this the tool
-            # reports "OpenAI client not available" on a machine that is
-            # perfectly well configured for chat.
-            try:
-                from openjarvis.server.cloud_router import _load_keys
-
-                for name, value in _load_keys().items():
-                    os.environ.setdefault(name, value)
-            except Exception:
-                pass
-
-            from openjarvis.engine.cloud import CloudEngine
-
-            engine = CloudEngine()
-        result = engine.generate(
-            [message],
+        """See ``vision.ask.ask_vision``; the engine is the tool's own."""
+        return ask_vision(
+            data_url,
+            question + _BREVITY,
             model=model,
+            engine=self._engine,
             max_tokens=VISION_MAX_TOKENS,
-            reasoning_effort=VISION_REASONING_EFFORT,
+            retry_max_tokens=VISION_RETRY_MAX_TOKENS,
         )
-        answer = str((result or {}).get("content") or "").strip()
-        if answer:
-            return answer
-
-        # Ran out of budget mid-thought rather than having nothing to say.
-        if str((result or {}).get("finish_reason") or "") != "length":
-            return None
-        retry = engine.generate(
-            [message],
-            model=model,
-            max_tokens=VISION_RETRY_MAX_TOKENS,
-            reasoning_effort=VISION_REASONING_EFFORT,
-        )
-        return str((retry or {}).get("content") or "").strip() or None
 
     def execute(self, **params: Any) -> ToolResult:
         question = str(params.get("question", "") or "").strip() or DEFAULT_QUESTION

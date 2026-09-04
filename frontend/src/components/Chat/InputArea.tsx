@@ -15,6 +15,8 @@ import {
   getBase,
   synthesizeSpeech,
   transcribeAudio,
+  attachDocument,
+  ingestDocument,
 } from '../../lib/api';
 import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
@@ -144,6 +146,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // Ephemeral: images ride one request, show as a thumbnail while the tab is
   // open, and are stripped before conversations reach localStorage.
   const [attachments, setAttachments] = useState<AttachedImage[]>([]);
+  // Documents ride the conversation as text. Ephemeral by default: a one-off
+  // file must not silently join the searchable corpus, which is what the
+  // Data Sources page is for.
+  const [documents, setDocuments] = useState<
+    { id: string; name: string; text: string; note: string; indexed: boolean }[]
+  >([]);
+  const [docBusy, setDocBusy] = useState<string>('');
+  const [docIndexed, setDocIndexed] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState(false);
   // Read inside a stable callback, so attaching a second image sees the first
   // instead of a closure captured when the component mounted.
@@ -388,6 +399,46 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     [attachFiles],
   );
 
+  const handleDocument = useCallback(
+    async (file: File) => {
+      // Blocking, and it says why. A garbled paper is re-read page by page,
+      // measured at ~4 minutes for fifteen pages, and a silent spinner that
+      // long reads as a hang.
+      setDocBusy(`Reading ${file.name}…`);
+      try {
+        const doc = await attachDocument(file);
+        if (docIndexed) {
+          setDocBusy(`Indexing ${file.name}…`);
+          await ingestDocument(file);
+        }
+        setDocuments((prev) => [
+          ...prev,
+          {
+            id: generateId(),
+            name: doc.filename,
+            text: doc.text,
+            note: doc.note,
+            indexed: docIndexed,
+          },
+        ]);
+        if (doc.pages_reread > 0) {
+          toast.success(
+            `${doc.filename}: ${doc.pages_reread} page(s) re-read because the text came out garbled`,
+          );
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not read that file');
+      } finally {
+        setDocBusy('');
+      }
+    },
+    [docIndexed],
+  );
+
+  const removeDocument = useCallback((id: string) => {
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  }, []);
+
   const removeAttachment = useCallback((id: string) => {
     setAttachments((prev) => prev.filter((image) => image.id !== id));
   }, []);
@@ -419,6 +470,17 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       outgoingImages.length && visionUseLocal && visionLocalModel
         ? visionLocalModel
         : selectedModel;
+
+    // The whole document goes in, by the user's choice over truncating it.
+    // Taken before the state clears so a slow request cannot lose it.
+    const outgoingDocs = documents;
+    setDocuments([]);
+    const documentPreamble = outgoingDocs
+      .map((d) => `[Attached document: ${d.name}]\n${d.text}`)
+      .join('\n\n');
+    const contentWithDocs = documentPreamble
+      ? `${documentPreamble}\n\n${content}`
+      : content;
 
     const userMsg: ChatMessage = {
       id: generateId(),
@@ -470,7 +532,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       } else {
         apiMessages.push({
           role: m.role,
-          content: m.content,
+          // The bubble shows what was typed; the model gets the attached
+          // document text in front of it. Only on this turn's message, for the
+          // same reason as images below.
+          content:
+            m.id === userMsg.id && documentPreamble ? contentWithDocs : m.content,
           // Only this turn's images. Replaying earlier ones would re-send
           // megabytes and re-bill them on every later message.
           images:
@@ -1488,6 +1554,53 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             <Search size={12} />
             Deep Research
           </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.txt,.md,.csv"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleDocument(file);
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={streamState.isStreaming || Boolean(docBusy)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-colors cursor-pointer disabled:cursor-default disabled:opacity-50"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-tertiary)',
+            }}
+            title="Attach a document (.pdf, .docx, .txt, .md, .csv)"
+            aria-label="Attach a document"
+          >
+            <Paperclip size={12} />
+            Attach
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setDocIndexed((v) => !v)}
+            aria-pressed={docIndexed}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-colors cursor-pointer"
+            style={{
+              background: docIndexed ? 'var(--color-accent-subtle)' : 'transparent',
+              border: `1px solid ${docIndexed ? 'var(--color-accent)' : 'var(--color-border)'}`,
+              color: docIndexed ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
+            }}
+            title={
+              docIndexed
+                ? 'Attachments are also saved and stay searchable later'
+                : 'Attachments are used in this conversation only'
+            }
+          >
+            {docIndexed ? 'Save to knowledge' : 'This chat only'}
+          </button>
         </div>
         {deepResearch && corpusSync.syncing && corpusSync.itemsSynced > 0 && (
           <div
@@ -1502,6 +1615,42 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           </div>
         )}
       </div>
+      {(documents.length > 0 || docBusy) && (
+        <div className="flex flex-wrap items-center gap-2 px-1 pb-2">
+          {documents.map((doc) => (
+            <div
+              key={doc.id}
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs"
+              style={{
+                background: 'var(--color-bg-tertiary)',
+                border: '1px solid var(--color-input-border)',
+              }}
+              title={doc.note || `${doc.name} — this conversation only`}
+            >
+              <Paperclip size={12} aria-hidden="true" />
+              <span>{doc.name}</span>
+              {doc.indexed && (
+                <span style={{ color: 'var(--color-accent)' }}>saved</span>
+              )}
+              <button
+                onClick={() => removeDocument(doc.id)}
+                title={`Remove ${doc.name}`}
+                aria-label={`Remove ${doc.name}`}
+                className="cursor-pointer"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+          {docBusy && (
+            <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+              {docBusy} a page that did not extract cleanly is re-read by
+              looking at it, which can take a few minutes.
+            </span>
+          )}
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 px-1 pb-2">
           {attachments.map((image) => (

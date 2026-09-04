@@ -1192,3 +1192,49 @@ export async function setInferenceSource(
     throw new Error(e?.message ?? e ?? 'Failed to save inference source');
   }
 }
+
+export interface AttachedDocument {
+  filename: string;
+  text: string;
+  chars: number;
+  pages_reread: number;
+  note: string;
+}
+
+/**
+ * Read a document for this conversation only — nothing is indexed.
+ *
+ * Slow on purpose when it has to be: a paper whose text layer comes out
+ * garbled is re-read page by page by the vision model, measured at ~4 minutes
+ * for fifteen pages. The caller is expected to say so rather than hide it.
+ */
+export async function attachDocument(file: File): Promise<AttachedDocument> {
+  const body = new FormData();
+  body.append('file', file);
+  const response = await fetch(`${getBase()}/v1/connectors/upload/attach`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body,
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.detail || `Could not read ${file.name}`);
+  }
+  return response.json();
+}
+
+/** Read a document and index it, so it stays searchable afterwards. */
+export async function ingestDocument(file: File): Promise<{ chunks: number }> {
+  const body = new FormData();
+  body.append('files', file);
+  const response = await fetch(
+    `${getBase()}/v1/connectors/upload/ingest/files`,
+    { method: 'POST', headers: authHeaders(), body },
+  );
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.detail || `Could not ingest ${file.name}`);
+  }
+  const data = await response.json();
+  return { chunks: data.chunks_created ?? 0 };
+}
