@@ -106,6 +106,7 @@ label. Several were not environmental at all:
 - **`faiss` and `pdfplumber` are installed**, so failures naming them are not
   missing dependencies. `test_bm25` is a real defect: `BM25Memory` has no
   `clear`/`delete`, so the backend does not satisfy the store interface.
+- **Google Tasks (403) is a disabled API, not a permissions problem (diagnosed 2026-09-04).** The same access token that reads Gmail and Calendar is rejected by Tasks, Drive and Contacts with `PERMISSION_DENIED: <API> has not been used in project 708083691179 before or it is disabled`. Re-consenting cannot fix it; enabling each API in the console can, in one click and with no re-auth. Left disabled at the user's request. The original note below predates that diagnosis:
 - **Google Tasks (403) is deliberately left failing.** It is configured and
   the API refuses; that is a fault, not an absent credential. Oura, Strava
   and gemma.cpp *are* gated now, on the presence of their own config.
