@@ -213,8 +213,19 @@ BROWSER_TOOLS = {
     "web_browser",
 }
 GENERIC_NETWORK_TOOLS = {"http_request"}
-CHANNEL_OUTBOUND_TOOLS = {"channel_send"}
-CLOUD_MEDIA_TOOLS = {"audio_transcribe", "image_generate", "text_to_speech"}
+# notify_windows is here because deliver() fans a notification out to the
+# configured channel as well as the desktop toast -- the toast is local, the
+# channel leg is not.
+CHANNEL_OUTBOUND_TOOLS = {"channel_send", "notify_windows"}
+# notify_windows again: its speak() path synthesises reminder text through
+# Cartesia before falling back to the local voice, so reminder content -- the
+# body of a calendar or class alert -- reaches an external provider.
+CLOUD_MEDIA_TOOLS = {
+    "audio_transcribe",
+    "image_generate",
+    "notify_windows",
+    "text_to_speech",
+}
 CLOUD_TTS_BACKENDS = {"cartesia", "openai", "openai_tts"}
 # Local knowledge chunks scanned by an inference engine (Deep Research path).
 KNOWLEDGE_ENGINE_TOOLS = {"scan_chunks"}
@@ -232,6 +243,8 @@ CLOUD_API_SURFACES = CLOUD_MEDIA_TOOLS | WEB_SEARCH_TOOLS
 OUTBOUND_TOOL_SURFACES = EXTERNAL_TOOL_SURFACES
 LOCAL_ACCESS_TOOLS = {
     "apply_patch",
+    # Reads the user's class schedule from a local file; no egress of its own.
+    "check_class_schedule",
     # Reads file *names* across every fixed drive — no contents, but the paths
     # themselves describe what the user has, so it is a local-access surface.
     "find_file",
@@ -1010,6 +1023,10 @@ def _audit_tool_surfaces(config: Any, builder: _FindingBuilder) -> None:
             path_parts.append("local audio file -> external media provider")
         if "text_to_speech" in cloud_media:
             path_parts.append("text content -> external text-to-speech provider")
+        if "notify_windows" in cloud_media:
+            path_parts.append(
+                "reminder text -> external text-to-speech provider"
+            )
         builder.add(
             finding_id="cloud-media-tool-configured",
             status="warn",

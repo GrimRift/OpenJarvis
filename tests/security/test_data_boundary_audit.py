@@ -93,6 +93,22 @@ CLASSIFIED_TOOLS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_cloud_env(monkeypatch):
+    """Keep the verdict a function of the config, not of the shell.
+
+    Three parametrised cases here sat on the standing-failures list as
+    "environmental". The cause: the audit reads API_KEY_ENV_VARS, and anyone
+    running Sage on the same machine has CARTESIA_API_KEY and friends
+    exported, which adds cloud findings the test then trips over. They pass
+    on a machine with no keys set, which is why CI would never have seen it
+    and why the label stuck. Tests that need a key present still set their
+    own with monkeypatch.setenv, which runs after this.
+    """
+    for name in API_KEY_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 def _ids(report):
     return {finding.id for finding in report.findings}
 
