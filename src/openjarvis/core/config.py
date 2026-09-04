@@ -1693,8 +1693,15 @@ class DigestConfig:
     health: DigestSectionConfig = field(
         default_factory=lambda: DigestSectionConfig(sources=["oura", "apple_health"])
     )
+    # Populated like its siblings. Left empty, this section silently collected
+    # nothing: MorningDigestAgent falls back to its own source map only when a
+    # section has no configured entry at all, and an empty list is an entry.
+    # The briefing has listed "world" as enabled the whole time and never once
+    # asked for the weather.
     world: DigestSectionConfig = field(
-        default_factory=lambda: DigestSectionConfig(sources=[])
+        default_factory=lambda: DigestSectionConfig(
+            sources=["weather", "hackernews", "news_rss"]
+        )
     )
 
 

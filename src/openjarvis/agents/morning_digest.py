@@ -183,8 +183,14 @@ class MorningDigestAgent(ToolUsingAgent):
         }
         sources = set()
         for section in self._sections:
-            section_sources = self._section_sources.get(
-                section, default_source_map.get(section, [])
+            # An empty configured list means "not configured", not "collect
+            # nothing". Reading it as the latter is how the world section --
+            # weather, Hacker News, RSS -- stayed enabled in config while
+            # never being asked for: the key existed, so .get() returned the
+            # empty list and the default map below was never consulted. A
+            # section that should collect nothing is removed from `sections`.
+            section_sources = self._section_sources.get(section) or (
+                default_source_map.get(section, [])
             )
             sources.update(section_sources)
         return list(sources)

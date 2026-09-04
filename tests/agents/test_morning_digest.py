@@ -454,3 +454,46 @@ class TestConfiguredModel:
             agent, default_engine = self._agent(model="gpt-5.6-luna", engine="cloud")
         assert agent._engine is default_engine
         assert agent._model == "gpt-5.6-luna"
+
+
+class TestSectionsActuallyGetCollected:
+    """An empty configured source list means "unset", not "collect nothing".
+
+    The world section -- weather, Hacker News, RSS -- was listed as enabled in
+    config and never once asked for. DigestConfig.world defaulted to an empty
+    list while every sibling was populated, and _resolve_sources read that
+    empty list as the configured answer, so the default map was never
+    consulted. Nothing reported a problem: the briefing simply never mentioned
+    the weather.
+    """
+
+    def _agent(self, sections, section_sources):
+        from openjarvis.agents.morning_digest import MorningDigestAgent
+
+        agent = MorningDigestAgent.__new__(MorningDigestAgent)
+        agent._sections = sections
+        agent._section_sources = section_sources
+        return agent
+
+    def test_an_empty_configured_list_falls_back_to_the_default_map(self):
+        agent = self._agent(["world"], {"world": []})
+        assert sorted(agent._resolve_sources()) == [
+            "hackernews",
+            "news_rss",
+            "weather",
+        ]
+
+    def test_a_configured_list_still_wins(self):
+        agent = self._agent(["world"], {"world": ["weather"]})
+        assert agent._resolve_sources() == ["weather"]
+
+    def test_a_section_with_no_entry_uses_the_default_map(self):
+        agent = self._agent(["calendar"], {})
+        assert agent._resolve_sources() == ["gcalendar"]
+
+    def test_the_shipped_config_asks_for_the_weather(self):
+        """The regression this class exists for, against the real defaults."""
+        from openjarvis.core.config import DigestConfig
+
+        digest = DigestConfig()
+        assert "weather" in digest.world.sources
