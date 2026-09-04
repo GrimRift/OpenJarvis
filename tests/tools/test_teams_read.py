@@ -13,7 +13,12 @@ import contextlib
 import pytest
 
 from openjarvis.tools import opera_control, teams_read
-from openjarvis.tools.teams_read import TeamsReadTool, read_activity
+from openjarvis.tools.teams_read import (
+    TeamsReadTool,
+    _recent_past_due,
+    read_activity,
+    read_assignments,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -241,3 +246,90 @@ class TestItWaitsOnContentNotTheClock:
         """The ceiling is a ceiling, not a delay."""
         page = _FakePage()
         assert teams_read.wait_until_settled(page, "whatever") == 0
+
+class _FakeAssignmentsFrame(_FakePage):
+    """Two tabs, one of which is usually empty.
+
+    Modelled on the real thing: Upcoming holds nothing most of the time, and
+    Past due keeps everything ever missed, including work months old.
+    """
+
+    def __init__(self, upcoming, past_due):
+        super().__init__()
+        self._tabs = {"Upcoming": list(upcoming), "Past due": list(past_due)}
+        self.current = "Upcoming"
+        self.tabs_clicked = []
+
+    def evaluate(self, expression):
+        if "const wanted" in expression:
+            for label in self._tabs:
+                if repr(label) in expression:
+                    self.tabs_clicked.append(label)
+                    self.current = label
+                    return True
+            return False
+        if "new RegExp" in expression:
+            return not self._tabs[self.current]
+        if 'role="listitem"' in expression:
+            rows = self._tabs[self.current]
+            return len(rows) if expression.rstrip().endswith(".length") else rows
+        return None
+
+
+class TestPastDueFallback:
+    """Nothing due was the slowest answer and the least useful one."""
+
+    YESTERDAY = "Sep 3rd - Due yesterday - Case Study (By group)"
+    ANCIENT = "Mar 27th - Due 5 months ago - SPECIFICATIONS"
+
+    def _read(self, monkeypatch, upcoming, past_due):
+        frame = _FakeAssignmentsFrame(upcoming, past_due)
+        page = _FakePage()
+        _, browser = _install(monkeypatch, page, frame)
+        return read_assignments(browser, page, 10), frame
+
+    def test_an_empty_upcoming_tab_falls_back_to_past_due(self, monkeypatch):
+        rows, frame = self._read(monkeypatch, [], [self.YESTERDAY])
+        assert frame.tabs_clicked == ["Past due"]
+        assert rows == [f"Past due: {self.YESTERDAY}"]
+
+    def test_work_months_overdue_is_not_reported(self, monkeypatch):
+        rows, _ = self._read(
+            monkeypatch, [], [self.YESTERDAY, self.ANCIENT]
+        )
+        assert rows == [f"Past due: {self.YESTERDAY}"]
+
+    def test_upcoming_work_is_answered_without_touching_past_due(
+        self, monkeypatch
+    ):
+        rows, frame = self._read(
+            monkeypatch, ["Tomorrow - Quiz 2"], [self.YESTERDAY]
+        )
+        assert frame.tabs_clicked == []
+        assert rows == ["Tomorrow - Quiz 2"]
+
+    def test_nothing_anywhere_is_empty_not_an_error(self, monkeypatch):
+        rows, _ = self._read(monkeypatch, [], [])
+        assert rows == []
+
+
+class TestOverdueAge:
+    @pytest.mark.parametrize(
+        "heading,kept",
+        [
+            ("Sep 3rd - Due yesterday - x", True),
+            ("Sep 4th - Due today - x", True),
+            ("Sep 1st - Due 3 days ago - x", True),
+            ("Aug 28th - Due 7 days ago - x", True),
+            ("Aug 27th - Due 8 days ago - x", False),
+            ("Aug 25th - Due a week ago - x", False),
+            ("Mar 27th - Due 5 months ago - x", False),
+            ("Feb 2nd - Due 7 months ago - x", False),
+        ],
+    )
+    def test_the_week_boundary(self, heading, kept):
+        assert _recent_past_due(heading) is kept
+
+    def test_an_unreadable_age_is_kept(self):
+        """Showing one stale item beats hiding a real one."""
+        assert _recent_past_due("Due at 11:59 PM - no age given") is True

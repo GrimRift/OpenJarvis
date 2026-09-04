@@ -21,6 +21,7 @@ never followed as instructions.
 from __future__ import annotations
 
 import contextlib
+import re
 from typing import Any, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
@@ -60,6 +61,18 @@ _STABLE_CEILING = 2.0
 #: The due date sits in a wrapper around each card, not in the card itself —
 #: the class carries a build hash, hence the prefix match.
 _ASSIGNMENT_GROUP = '[class*="group-container"]'
+
+#: Teams renders "No upcoming assignments right now." when the tab is empty.
+#: Waiting for rows that will never exist cost the whole ``_PANEL_TIMEOUT``,
+#: which is why a read with nothing due took ten seconds longer than one with
+#: work in it — the empty answer was the slowest to give.
+_EMPTY_STATE = r"no (upcoming|past due|completed) assignments"
+
+#: Overdue work stays on the Past due tab forever; this user had items seven
+#: months old sitting beside yesterday's. Only the last week is worth
+#: reporting, and Teams already renders the age as "Due yesterday" or
+#: "Due 5 months ago" in the group heading.
+_PAST_DUE_DAYS = 7
 
 
 def _click_rail(page, name: str) -> bool:
@@ -155,6 +168,92 @@ def read_activity(page, count: int) -> List[str]:
     return _tidy(rows, count)
 
 
+def _recent_past_due(text: str, days: int = _PAST_DUE_DAYS) -> bool:
+    """Whether an overdue row fell due within the last *days*.
+
+    Reads the age Teams already renders rather than parsing "Sep 3rd", which
+    carries no year and is ambiguous every September. An age that cannot be
+    recognised is kept: showing one stale assignment is a smaller failure
+    than hiding a real one.
+    """
+    lowered = " ".join(text.lower().split())
+    if re.search(r"due (today|yesterday)", lowered):
+        return True
+    match = re.search(r"due (a|an|\d+) (day|week|month|year)s? ago", lowered)
+    if not match:
+        return True
+    amount = 1 if match.group(1) in {"a", "an"} else int(match.group(1))
+    unit = match.group(2)
+    if unit != "day":
+        return False
+    return amount <= days
+
+
+def _click_tab(frame, label: str) -> bool:
+    """Click a tab inside the assignments iframe by its visible label."""
+    script = (
+        "(() => { const wanted = %r;"
+        " const nodes = document.querySelectorAll('[role=\"tab\"], button, a');"
+        " for (const n of nodes) {"
+        "   const text = (n.innerText || '').trim();"
+        "   if (text === wanted || text.startsWith(wanted)) { n.click(); return true; }"
+        " } return false; })()" % label
+    )
+    try:
+        return bool(frame.evaluate(script))
+    except Exception:
+        return False
+
+
+def _await_rows_or_empty(frame, timeout: float = _PANEL_TIMEOUT) -> str:
+    """Return "rows", "empty" or "timeout" for the visible assignments tab.
+
+    Waiting only for rows makes an empty tab cost the full timeout, and an
+    empty tab is exactly when the fallback below needs to run quickly.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if int(
+                frame.evaluate(
+                    f"document.querySelectorAll({_ASSIGNMENT_ROWS!r}).length"
+                )
+                or 0
+            ):
+                return "rows"
+            if frame.evaluate(
+                f"new RegExp({_EMPTY_STATE!r}, 'i')"
+                ".test(document.body ? document.body.innerText : '')"
+            ):
+                return "empty"
+        except Exception:
+            return "timeout"
+        frame.sleep(_IFRAME_POLL)
+    return "timeout"
+
+
+def _scrape_rows(frame, count: int):
+    return frame.evaluate(
+        f"""Array.from(document.querySelectorAll({_ASSIGNMENT_ROWS!r}))
+            .slice(0, {count})
+            .map(e => {{
+                const card = e.innerText || '';
+                const group = e.closest({_ASSIGNMENT_GROUP!r});
+                let when = '';
+                if (group) {{
+                    const whole = group.innerText || '';
+                    const at = whole.indexOf(card);
+                    if (at > 0) when = whole.slice(0, at);
+                }}
+                when = when.split('\\n').map(s => s.trim())
+                    .filter(Boolean).join(' - ');
+                return when ? when + ' - ' + card : card;
+            }})"""
+    )
+
+
 def read_assignments(browser, page, count: int) -> List[str]:
     """Assignments with their due dates, from the iframe's own CDP target.
 
@@ -163,6 +262,11 @@ def read_assignments(browser, page, count: int) -> List[str]:
     recovered as the part of the wrapper's text that precedes the card. Without
     it an assignment reads "Due at 11:59 PM" with no day attached, which is the
     one thing the user needs from it.
+
+    When Upcoming is empty the Past due tab is read instead, filtered to the
+    last week. Nothing due is the common case here, and it used to be both the
+    slowest answer and the least useful one: ten seconds of waiting to say
+    nothing, while yesterday's overdue work sat one tab away.
     """
     if not _click_rail(page, "Assignments"):
         return []
@@ -170,34 +274,26 @@ def read_assignments(browser, page, count: int) -> List[str]:
     if frame is None:
         return []
     try:
-        if not frame.wait_for(
-            f"document.querySelector({_ASSIGNMENT_ROWS!r})", timeout=_PANEL_TIMEOUT
-        ):
+        state = _await_rows_or_empty(frame)
+        if state == "rows":
+            wait_until_settled(frame, _ASSIGNMENT_ROWS)
+            return _tidy(_scrape_rows(frame, count), count)
+        if state != "empty" or not _click_tab(frame, "Past due"):
+            return []
+        if _await_rows_or_empty(frame) != "rows":
             return []
         wait_until_settled(frame, _ASSIGNMENT_ROWS)
-        rows = frame.evaluate(
-            f"""Array.from(document.querySelectorAll({_ASSIGNMENT_ROWS!r}))
-                .slice(0, {count})
-                .map(e => {{
-                    const card = e.innerText || '';
-                    const group = e.closest({_ASSIGNMENT_GROUP!r});
-                    let when = '';
-                    if (group) {{
-                        const whole = group.innerText || '';
-                        const at = whole.indexOf(card);
-                        if (at > 0) when = whole.slice(0, at);
-                    }}
-                    when = when.split('\\n').map(s => s.trim())
-                        .filter(Boolean).join(' - ');
-                    return when ? when + ' - ' + card : card;
-                }})"""
-        )
+        rows = [
+            row
+            for row in (_scrape_rows(frame, count) or [])
+            if _recent_past_due(str(row or ""))
+        ]
+        return [f"Past due: {row}" for row in _tidy(rows, count)]
     except Exception:
-        rows = []
+        return []
     finally:
         with contextlib.suppress(Exception):
             frame.close()
-    return _tidy(rows, count)
 
 
 def _await_assignments_frame(browser, page):

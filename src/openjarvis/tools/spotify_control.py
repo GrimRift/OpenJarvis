@@ -115,6 +115,53 @@ def _list_playlists(token: str) -> List[Dict[str, Any]]:
     return playlists
 
 
+def _track_total(playlist: Dict[str, Any]) -> Optional[int]:
+    """How many tracks a playlist holds, or None when the API does not say.
+
+    Spotify returns this as ``items: {href, total}`` on this account, not the
+    ``tracks: {total}`` the docs describe and this module used to read. The
+    old lookup fell through to its default on every playlist, so a 63-track
+    playlist reported 0 -- and "(0 tracks)" was read downstream as "the
+    playlist is empty, so nothing could start", said about music that was
+    already playing. Both spellings are accepted; None means unknown, which
+    is deliberately not the same as zero.
+    """
+    for field in ("items", "tracks"):
+        value = playlist.get(field)
+        if isinstance(value, dict) and isinstance(value.get("total"), int):
+            return value["total"]
+    return None
+
+
+def _describe_track(track: Dict[str, Any]) -> str:
+    name = track.get("name") or "a track"
+    artists = ", ".join(a.get("name", "") for a in track.get("artists") or [])
+    return f"{name} by {artists}" if artists else name
+
+
+def _confirm_playback(token: str, attempts: int = 4) -> Dict[str, Any]:
+    """What Spotify is actually playing, once it has caught up.
+
+    The play call returns 204 before the player has switched, so asking
+    immediately reports the previous track or nothing at all. Reporting what
+    is really playing is the point: the failure this replaces described
+    playback as impossible while the speakers were already going.
+    """
+    import time
+
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(0.4)
+        try:
+            data = _request(token, "GET", "me/player/currently-playing")
+        except Exception:
+            continue
+        track = (data or {}).get("item") or {}
+        if track:
+            return track
+    return {}
+
+
 def _find_playlist(token: str, query: str) -> Dict[str, Any]:
     """Resolve a spoken playlist name to one of the user's playlists.
 
@@ -464,8 +511,12 @@ class SpotifyControlTool(BaseTool):
             if not playlists:
                 return "No playlists on this account."
             names = [
-                f"{item.get('name', 'Untitled')} "
-                f"({(item.get('tracks') or {}).get('total', 0)} tracks)"
+                f"{item.get('name', 'Untitled')}"
+                + (
+                    f" ({_track_total(item)} tracks)"
+                    if _track_total(item) is not None
+                    else ""
+                )
                 for item in playlists
             ]
             return f"{len(names)} playlist(s): " + ", ".join(names)
@@ -524,11 +575,20 @@ class SpotifyControlTool(BaseTool):
                 params=target,
                 json_body={"context_uri": playlist["uri"]},
             )
-            total = (playlist.get("tracks") or {}).get("total", 0)
             how = "shuffled" if shuffle else "in order"
+            total = _track_total(playlist)
+            size = f", {total} tracks" if total is not None else ""
+            playing = _confirm_playback(token)
+            if playing:
+                return (
+                    f"Playing {_describe_track(playing)} from your playlist "
+                    f"{playlist['name']!r} ({how}{size})."
+                )
+            # Never claim the playlist is empty here. Spotify accepted the
+            # call; what is unknown is only whether the player has caught up.
             return (
-                f"Playing your playlist {playlist['name']!r} "
-                f"({total} tracks), {how}."
+                f"Started your playlist {playlist['name']!r} ({how}{size}). "
+                "Spotify has not reported a track yet."
             )
 
         if action == "play_liked":
