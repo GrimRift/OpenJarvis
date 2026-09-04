@@ -69,6 +69,59 @@ class TestTheTool:
         path.write_text(json.dumps(payload), encoding="utf-8")
         return WeatherTool(token_path=str(path))
 
+    def test_it_does_not_name_the_place_you_are_standing_in(self, tmp_path):
+        """"Prinza: 25C" tells the user nothing they did not already know.
+
+        The barangay the coordinates land in is more precise than the city
+        and less useful than saying nothing, so a fix from the machine is
+        reported bare.
+        """
+        path = tmp_path / "weather.json"
+        path.write_text(
+            json.dumps({"api_key": "k", "location": "Calamba,PH"}),
+            encoding="utf-8",
+        )
+        tool = WeatherTool(token_path=str(path))
+        located = dict(CURRENT, name="Prinza")
+        with (
+            patch(
+                "openjarvis.core.device_location.current_coordinates",
+                return_value=(14.166, 121.139),
+            ),
+            patch.object(tool_module, "fetch_current", return_value=located),
+            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.1)),
+        ):
+            result = tool.execute()
+        assert "Prinza" not in result.content
+        assert result.content.startswith("28")
+        # Still recorded, because the UI and the model may want to know.
+        assert result.metadata["location"] == "Prinza"
+
+    def test_a_named_place_is_echoed_back(self, tmp_path):
+        """An answer about Tokyo must not be mistaken for one about here."""
+        tool = self._tool(tmp_path, location="Calamba,PH")
+        with (
+            patch.object(
+                tool_module, "fetch_current", return_value=dict(CURRENT, name="Tokyo")
+            ),
+            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.1)),
+        ):
+            result = tool.execute(location="Tokyo")
+        assert result.content.startswith("Tokyo:")
+
+    def test_the_configured_city_is_named_because_that_signals_no_fix(self, tmp_path):
+        tool = self._tool(tmp_path, location="Calamba,PH")
+        with (
+            patch.object(
+                tool_module,
+                "fetch_current",
+                return_value=dict(CURRENT, name="Calamba"),
+            ),
+            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.1)),
+        ):
+            result = tool.execute()
+        assert result.content.startswith("Calamba:")
+
     def test_it_reports_the_configured_location(self, tmp_path):
         tool = self._tool(tmp_path, location="Cebu City,PH")
         with (

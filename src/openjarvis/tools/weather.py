@@ -114,10 +114,20 @@ class WeatherTool(BaseTool):
             # The rain clause is worth losing; the temperature is not.
             forecast = None
 
-        # Report the place the provider answered for. When the coordinates
-        # came from the machine, the configured city is not where the user is.
+        # The place the provider answered for, which is not the configured
+        # city when the coordinates came from the machine.
         location = str(current.get("name") or location)
         summary = summarize(current, forecast, units)
+
+        # Naming the place is only worth the words when the user might not
+        # know it. Answering "what is the weather" with the barangay the
+        # coordinates landed in ("Prinza: 25C") tells them nothing they did
+        # not already know. A place they named is echoed back, so an answer
+        # about Tokyo cannot be mistaken for one about here; and the
+        # configured city is named too, because seeing it is the signal that
+        # the location fix did not happen.
+        located_here = coords is not None and not asked_for
+        spoken = summary if located_here else f"{location}: {summary}"
         main = current.get("main") or {}
         wind = current.get("wind") or {}
         upcoming: List[Dict[str, Any]] = []
@@ -132,7 +142,7 @@ class WeatherTool(BaseTool):
 
         return ToolResult(
             tool_name="weather",
-            content=f"{location}: {summary}",
+            content=spoken,
             success=True,
             metadata={
                 "location": location,
