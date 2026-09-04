@@ -246,10 +246,11 @@ def serve(
             logger.debug("Cloud engine init failed: %s", exc)
 
     # Wrap engine with InstrumentedEngine for telemetry recording
+    energy_mon = None
+    _instrument = None
     try:
         from openjarvis.telemetry.instrumented_engine import InstrumentedEngine
 
-        energy_mon = None
         try:
             from openjarvis.telemetry.energy_monitor import create_energy_monitor
 
@@ -262,7 +263,24 @@ def serve(
         except Exception as exc:
             logger.debug("Energy monitor creation failed: %s", exc)
 
-        engine = InstrumentedEngine(engine, bus, energy_monitor=energy_mon)
+        def _instrument(inner):  # noqa: F811
+            """Wrap one engine, or return it untouched if wrapping fails.
+
+            Every engine reachable through MultiEngine needs this, not just
+            the primary. Only the primary used to be wrapped, so a cloud model
+            -- which is what the chat default is -- was routed to a raw engine
+            that publishes no TELEMETRY_RECORD event. The dashboard read an
+            empty session and showed zeros while the machine had been busy all
+            day: 4,774 recorded calls on the local engine against 27 on cloud,
+            ever.
+            """
+            try:
+                return InstrumentedEngine(inner, bus, energy_monitor=energy_mon)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Engine instrumentation failed: %s", exc)
+                return inner
+
+        engine = _instrument(engine)
     except Exception as exc:
         logger.debug("Engine instrumentation failed: %s", exc)
 
@@ -272,12 +290,13 @@ def serve(
     for ek, model_ids in all_models.items():
         merge_discovered_models(ek, model_ids)
 
+    wrap = _instrument if _instrument is not None else (lambda inner: inner)
     multi_entries = [(engine_name, engine)]
     for discovered_name, discovered_engine in all_engines:
         if discovered_name != engine_name:
-            multi_entries.append((discovered_name, discovered_engine))
+            multi_entries.append((discovered_name, wrap(discovered_engine)))
     if cloud_engine is not None:
-        multi_entries.append(("cloud", cloud_engine))
+        multi_entries.append(("cloud", wrap(cloud_engine)))
 
     if len(multi_entries) > 1:
         from openjarvis.engine.multi import MultiEngine
