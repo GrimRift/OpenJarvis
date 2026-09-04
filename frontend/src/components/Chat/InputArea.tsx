@@ -539,13 +539,22 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         apiMessages.push({
           role: m.role,
           // The bubble shows what was typed; the model gets the attached
-          // document text in front of it. Replayed from history on every
-          // later turn, unlike images below: a document is attached in order
-          // to be discussed, and dropping it after one turn meant a follow-up
-          // question got "please reattach the file".
+          // document text in front of it, replayed from history on every
+          // later turn -- unlike images below, because a document is attached
+          // in order to be discussed.
+          //
+          // Framed so it cannot be mistaken for a filename to go and open.
+          // `[Attached document: name]` read as an instruction to fetch the
+          // file: the model called file_read, got "File not found:
+          // C:\\AI\\<name>", and answered that it had no file -- with the
+          // whole text sitting in the same message. Captured from a real
+          // request while chasing exactly that report.
           content: docs.length
             ? `${docs
-                .map((d) => `[Attached document: ${d.name}]\n${d.text}`)
+                .map(
+                  (d) =>
+                    `--- BEGIN ATTACHED DOCUMENT: ${d.name} ---\n${d.text}\n\n--- END ATTACHED DOCUMENT ---`,
+                )
                 .join('\n\n')}\n\n${m.content}`
             : m.content,
           // Only this turn's images. Replaying earlier ones would re-send
