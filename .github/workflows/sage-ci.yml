@@ -12,8 +12,10 @@ name: Sage CI
 on:
   push:
     branches: [feature/sage-customization]
+    paths-ignore: ["**.md"]
   pull_request:
     branches: [feature/sage-customization]
+    paths-ignore: ["**.md"]
   workflow_dispatch:
 
 concurrency:
@@ -91,6 +93,13 @@ jobs:
       # gives Linux the same zone database the Windows target already has.
       - run: uv pip install pillow tzdata
 
+      # --no-sync because `uv run` re-syncs the environment before every
+      # invocation. pytest's own timer said 254s while this step took 18.6
+      # minutes, so roughly 14 of those went somewhere other than running
+      # tests, and a sync that re-examines an environment maturin has just
+      # written into is the only candidate in the step. If the next run does
+      # not drop, the overhead is elsewhere and this comment is wrong.
+      #
       # -p no:randomly is load-bearing, not tidiness. pytest-randomly shuffles
       # order and several tests here leak state, so a shuffled run fails a
       # different subset every time (AGENTS.md, "The failing set rotates").
@@ -116,7 +125,7 @@ jobs:
       - name: Run the suites that pass
         run: |
           set -o pipefail
-          uv run pytest -p no:randomly -q --tb=short \
+          uv run --no-sync pytest -p no:randomly -q --tb=short \
             -m "not live and not cloud and not hub" \
             tests/analytics tests/architecture tests/core tests/daemon \
             tests/engine tests/operators tests/scheduler tests/server \

@@ -57,13 +57,17 @@ class TestArithmetic:
     """The failure this tool exists for: UTC+9 called '3 hours ahead' of UTC+8."""
 
     def test_japan_is_one_hour_ahead_of_philippine_time(self):
+        # compare_to is explicit because the difference is otherwise measured
+        # against whatever zone the machine is set to: this passed only on a
+        # box in Asia/Manila, and read "9 hours ahead" on a UTC CI runner.
+        # The sibling tests below already pass compare_to for the same reason.
         with patch("openjarvis.tools.world_time.datetime") as fake:
             from datetime import datetime as real_datetime
 
             fake.now.return_value = real_datetime(
                 2026, 8, 26, 20, 56, tzinfo=timezone(timedelta(hours=8))
             )
-            result, payload = _run(location="Japan")
+            result, payload = _run(location="Japan", compare_to="Asia/Manila")
 
         assert result.success
         assert payload["difference"] == "1 hour ahead"
