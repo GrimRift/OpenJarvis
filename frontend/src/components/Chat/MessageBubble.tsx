@@ -107,6 +107,8 @@ function CopyMessageButton({ content }: { content: string }) {
   );
 }
 
+const GALLERY_IMAGE_LIMIT = 6;
+
 function MessageBubbleComponent({ message, isLive = false }: Props) {
   const isUser = message.role === 'user';
   // Session-only, keyed by message id — see the registry in store.ts.
@@ -132,7 +134,14 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   const [failedImages, setFailedImages] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const visibleImages = searchImages.filter((image) => !failedImages.has(image.url));
+  // Six fills the grid at both widths -- it divides by the 2 columns on a
+  // phone and the 3 on a desktop, where five left a ragged hole in the
+  // last row. Applied after the failure filter, so a hotlink-blocked image
+  // is replaced by the next candidate rather than leaving the gap it would
+  // have left if the list were capped before loading.
+  const visibleImages = searchImages
+    .filter((image) => !failedImages.has(image.url))
+    .slice(0, GALLERY_IMAGE_LIMIT);
 
   // Build a ref→source lookup once per render. Memoized so the rehype plugin
   // identity stays stable until the source list actually changes.

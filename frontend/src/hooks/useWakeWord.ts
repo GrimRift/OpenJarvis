@@ -53,6 +53,32 @@ function buildWakeWordWsUrl(): string {
   return url.toString();
 }
 
+/**
+ * The quietest frame worth scoring, as int16 RMS.
+ *
+ * Reported from real use: the wake word fired while every microphone was
+ * muted at the hardware key, most often during video playback, and heard
+ * nothing afterwards. Measured against the real model, digital silence peaks
+ * at 0.15 and ±2-LSB dither at 0.50, both under the 0.79 threshold -- so a
+ * genuinely silent frame cannot fire it and something was reaching the
+ * classifier that was not the room. echoCancellation is the only stage
+ * holding a signal the user is not making: it is fed the playback stream as
+ * its reference, which is why firing tracked whatever was on screen.
+ *
+ * Rather than depend on that diagnosis, nothing below this level is scored at
+ * all. Ordinary speech at arm's length measures in the hundreds to low
+ * thousands; a muted capture measures ~0. The floor sits far enough below
+ * speech to be inaudible as a change in sensitivity, and far enough above a
+ * dead mic to end this class of false trigger outright.
+ */
+export const MIN_FRAME_RMS = 40;
+
+export function carriesSound(frame: number[]): boolean {
+  let sum = 0;
+  for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+  return Math.sqrt(sum / frame.length) >= MIN_FRAME_RMS;
+}
+
 export function useWakeWord(onDetected: () => void, enabled: boolean) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +91,11 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const silentGainRef = useRef<GainNode | null>(null);
+  // Browsers set MediaStreamTrack.muted when the OS mutes the device, which
+  // is the exact signal a hardware mic-mute key produces. Trusted over the
+  // samples themselves: whatever reaches the buffer while the device is
+  // muted is by definition not the user speaking.
+  const trackMutedRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingSamplesRef = useRef<number[]>([]);
   const reconnectAttemptsRef = useRef(0);
@@ -102,6 +133,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
     processorRef.current = null;
     sourceRef.current?.disconnect();
     sourceRef.current = null;
+    trackMutedRef.current = false;
     silentGainRef.current?.disconnect();
     silentGainRef.current = null;
     audioCtxRef.current?.close().catch(() => {});
@@ -267,6 +299,17 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       const nativeSampleRate = audioCtx.sampleRate;
       const resampleRatio = TARGET_SAMPLE_RATE / nativeSampleRate;
 
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        trackMutedRef.current = track.muted;
+        track.onmute = () => {
+          trackMutedRef.current = true;
+        };
+        track.onunmute = () => {
+          trackMutedRef.current = false;
+        };
+      }
+
       const source = audioCtx.createMediaStreamSource(stream);
       sourceRef.current = source;
 
@@ -282,6 +325,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
         // new WebSocket, and audio must keep flowing to it.
         const ws = wsRef.current;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (trackMutedRef.current) return;
         const outLength = Math.round(input.length * resampleRatio);
         const pending = pendingSamplesRef.current;
 
@@ -297,7 +341,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
 
         while (pending.length >= CHUNK_SAMPLES) {
           const chunk = pending.splice(0, CHUNK_SAMPLES);
-          ws.send(new Int16Array(chunk).buffer);
+          if (carriesSound(chunk)) ws.send(new Int16Array(chunk).buffer);
         }
       };
 
