@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Send, Square, Paperclip, Search, VolumeX, Volume2, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAppStore, generateId } from '../../lib/store';
+import { useAppStore, generateId, documentsFor } from '../../lib/store';
 import {
   MAX_IMAGES,
   imageFilesFrom,
@@ -488,6 +488,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       content,
       timestamp: Date.now(),
       images: outgoingImages.length ? outgoingImages : undefined,
+      documents: outgoingDocs.length
+        ? outgoingDocs.map((d) => ({ name: d.name, text: d.text }))
+        : undefined,
     };
     addMessage(convId, userMsg);
 
@@ -530,13 +533,21 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           });
         }
       } else {
+        // From the session map: the store strips documents before
+        // persisting, exactly as it does images.
+        const docs = m.documents ?? documentsFor(m.id) ?? [];
         apiMessages.push({
           role: m.role,
           // The bubble shows what was typed; the model gets the attached
-          // document text in front of it. Only on this turn's message, for the
-          // same reason as images below.
-          content:
-            m.id === userMsg.id && documentPreamble ? contentWithDocs : m.content,
+          // document text in front of it. Replayed from history on every
+          // later turn, unlike images below: a document is attached in order
+          // to be discussed, and dropping it after one turn meant a follow-up
+          // question got "please reattach the file".
+          content: docs.length
+            ? `${docs
+                .map((d) => `[Attached document: ${d.name}]\n${d.text}`)
+                .join('\n\n')}\n\n${m.content}`
+            : m.content,
           // Only this turn's images. Replaying earlier ones would re-send
           // megabytes and re-bill them on every later message.
           images:

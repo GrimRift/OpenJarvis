@@ -147,6 +147,11 @@ export interface ChatMessage {
   /** Attached images as `data:` URLs. Session-only — stripped before
    *  conversations are written to localStorage. */
   images?: string[];
+  /** Documents attached to this turn, kept so later questions in the same
+   *  chat can still see them. Unlike images, these are deliberately replayed:
+   *  a paper is attached in order to be discussed, and dropping it after one
+   *  turn meant "what are its references?" got "please reattach the file". */
+  documents?: Array<{ name: string; text: string }>;
 }
 
 export interface Conversation {

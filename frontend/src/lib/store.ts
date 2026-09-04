@@ -57,6 +57,28 @@ export function imagesFor(messageId: string): string[] | undefined {
   return sessionImages.get(messageId);
 }
 
+/**
+ * Attached documents, kept for the same reason as images and with the same
+ * tradeoff. A paper runs to tens of thousands of characters, which would eat
+ * the storage quota if written per message, so it lives here and is gone when
+ * the tab closes. Unlike images it *is* replayed to the model on every later
+ * turn of that chat -- a document is attached in order to be discussed.
+ */
+const sessionDocuments = new Map<string, Array<{ name: string; text: string }>>();
+
+export function rememberDocuments(
+  messageId: string,
+  documents: Array<{ name: string; text: string }>,
+): void {
+  if (documents.length) sessionDocuments.set(messageId, documents);
+}
+
+export function documentsFor(
+  messageId: string,
+): Array<{ name: string; text: string }> | undefined {
+  return sessionDocuments.get(messageId);
+}
+
 // ── localStorage persistence ──────────────────────────────────────────
 
 const CONVERSATIONS_KEY = 'openjarvis-conversations';
@@ -567,7 +589,14 @@ export const useAppStore = create<AppState>((set, get) => {
       if (message.images?.length) {
         rememberImages(message.id, message.images);
       }
-      const { images: _ephemeral, ...persisted } = message;
+      if (message.documents?.length) {
+        rememberDocuments(message.id, message.documents);
+      }
+      const {
+        images: _ephemeral,
+        documents: _alsoEphemeral,
+        ...persisted
+      } = message;
       conv.messages.push(persisted);
       conv.updatedAt = Date.now();
       if (message.role === 'user' && conv.title === 'New chat') {
