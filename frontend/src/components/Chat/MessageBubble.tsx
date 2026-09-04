@@ -5,8 +5,8 @@ import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import 'katex/dist/katex.min.css';
-import { Copy, Check } from 'lucide-react';
-import { imagesFor } from '../../lib/store';
+import { Copy, Check, Paperclip } from 'lucide-react';
+import { imagesFor, documentsFor } from '../../lib/store';
 import { AudioPlayer } from './AudioPlayer';
 import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
@@ -111,6 +111,11 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   const isUser = message.role === 'user';
   // Session-only, keyed by message id — see the registry in store.ts.
   const sessionImages = imagesFor(message.id);
+  // Shown on the bubble so an attachment is visible where it is actually in
+  // effect. Without it there was no way to tell a turn that carried the paper
+  // from one that had quietly lost it -- which is exactly the confusion the
+  // user hit, twice, with only the token count as evidence.
+  const attachedDocuments = message.documents ?? documentsFor(message.id) ?? [];
 
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
   // Escaped only for rendering. Copy must still yield "$200", not "\$200".
@@ -158,6 +163,24 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
             wordBreak: 'break-word',
           }}
         >
+          {attachedDocuments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {attachedDocuments.map((doc) => (
+                <span
+                  key={doc.name}
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px]"
+                  style={{
+                    background: 'var(--color-bg-tertiary)',
+                    color: 'var(--color-text-secondary)',
+                  }}
+                  title={`${doc.name} — ${doc.text.length.toLocaleString()} characters sent with this turn`}
+                >
+                  <Paperclip size={10} aria-hidden="true" />
+                  {doc.name}
+                </span>
+              ))}
+            </div>
+          )}
           {sessionImages && sessionImages.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
               {sessionImages.map((src, index) => (
