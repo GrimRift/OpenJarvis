@@ -137,8 +137,13 @@ Confirmed environmental or order-dependent, identical on a clean tree:
 full run, fails alone),
 `test_manager::TestCheckpoints` (one case fails per run and which one moves —
 `test_checkpoint_retention_max_5` and `test_get_latest_checkpoint` have both
-been seen; each passes when run alone). Repo-wide `ruff check .` is also not
-clean; lint only the files you changed.
+been seen; each passes when run alone).
+
+`ruff check src/ tests/` is clean as of 2026-09-04 and is enforced by CI, so
+lint the whole thing, not just your own files. The 12 remaining repo-wide
+errors are all in `examples/twitter_bot/slack_preview.py`, which upstream's
+lint job does not cover either. `ruff format --check` still fails on 68 files
+(67 of them this fork's) and is deliberately not in CI.
 
 `test_orchestrator::TestOrchestratorParallelTools::test_parallel_tool_execution`
 joins that rotating set: it passes alone and with `tests/agents` alone, and
@@ -151,6 +156,23 @@ time — `test_git_tool`, `test_template_loader_security`,
 and all pass in isolation. Before blaming a change for one of these, re-run
 with `-p no:randomly` and compare against a stashed tree. A failure that moves
 when the seed moves is pollution, not your diff.
+
+### CI on this branch
+
+`.github/workflows/sage-ci.yml`. Upstream's `ci.yml` triggers on `main` only,
+and this fork's work never reaches `main`, so until 2026-09-04 nothing here had
+ever been checked automatically -- which is how a red architecture invariant sat
+unnoticed for a day.
+
+That lane runs deliberately less than `ci.yml`: `ruff check src/ tests/`, the
+frontend (vitest, `tsc --noEmit`, build), and the 16 python suites listed above
+as passing. The suites it leaves out are named in the file with the reason for
+each. Adding a suite back is the right way to close one of those gaps -- but
+only once it is actually green, because the value of this lane is that red means
+something.
+
+It runs with `-p no:randomly` on purpose. Under a shuffled order the failing set
+rotates, so a fixed order is the difference between a signal and a coin flip.
 
 ## Known traps in this codebase
 

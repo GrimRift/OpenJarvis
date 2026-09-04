@@ -1,0 +1,138 @@
+name: Sage CI
+
+# All of this fork's work lands on `feature/sage-customization`, which is never
+# merged to main, and every other workflow here triggers on main only -- so no
+# automated check had ever run on any of it. A red architecture invariant sat
+# unnoticed for a day because of that.
+#
+# This lane deliberately runs LESS than `ci.yml`. It runs only what is known to
+# pass today, so a red badge means "you broke something" rather than "this repo
+# is always red". The excluded areas are listed at the test step below; each one
+# is a real gap, not a permanent exemption.
+on:
+  push:
+    branches: [feature/sage-customization]
+  pull_request:
+    branches: [feature/sage-customization]
+  workflow_dispatch:
+
+concurrency:
+  group: sage-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v8.0.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --extra dev --extra server
+
+      - name: Ruff check
+        run: uv run ruff check src/ tests/
+
+      # `ruff format --check` is NOT run here. 68 files fail it, 67 of them
+      # touched by this fork, so turning it on means either a permanently red
+      # job or a 67-file mechanical reformat that would bury the next real
+      # diff. Worth doing deliberately one day; not worth doing as a side
+      # effect of switching CI on.
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v8.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - run: uv sync --extra dev --extra server
+
+      # Not optional. tests/core/test_rust_bridge.py asserts get_rust_module()
+      # returns the real module, and api_routes falls back to a different
+      # storage backend without it -- both pass locally only because a dev
+      # checkout already has the extension built.
+      - name: Build the PyO3 extension
+        run: uv run maturin develop --manifest-path rust/crates/openjarvis-python/Cargo.toml
+
+      # tests/tools/test_capture_screen.py builds real PIL images; every other
+      # optional dependency in these suites is imported lazily inside functions
+      # and mocked by the tests.
+      - run: uv pip install pillow
+
+      # -p no:randomly is load-bearing, not tidiness. pytest-randomly shuffles
+      # order and several tests here leak state, so a shuffled run fails a
+      # different subset every time (AGENTS.md, "The failing set rotates").
+      # Fixed order is the difference between a signal and a coin flip.
+      #
+      # tests/traces is in the list even though it errors 4 times on a
+      # Windows dev box: WinError 32 on unlinking an open SQLite file, which
+      # POSIX permits and Windows does not. The whole lane is 3040 passed /
+      # 0 failed locally apart from those four.
+      #
+      # Excluded suites, and why -- these are known-failing today, not
+      # uninteresting:
+      #   agents      rotating checkpoint/orchestrator failures under any order
+      #   security    4 failures: 3 vendor-model-name cases, plus
+      #               check_class_schedule and notify_windows never classified
+      #   prompt      test_persona_scope::test_named_persona_resolves_to_personas_dir
+      #   cli         test_importing_cli_does_not_import_numpy
+      #   connectors  needs real Oura/Strava/Spotify credentials
+      #   memory      test_bm25 -- BM25Memory has no clear/delete
+      #   channels, telemetry, hardware, evals, mcp, sandbox, integration,
+      #   deploy, deployment, install, learning, mining, pearl, recipes, a2a,
+      #   sdk, bench, intelligence  -- unverified on this branch
+      - name: Run the suites that pass
+        run: |
+          uv run pytest -p no:randomly -q --tb=short \
+            -m "not live and not cloud and not hub" \
+            tests/analytics tests/architecture tests/core tests/daemon \
+            tests/engine tests/operators tests/scheduler tests/server \
+            tests/sessions tests/skills tests/speech tests/system \
+            tests/templates tests/tools tests/traces tests/workflow
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc --noEmit
+      - run: npm run build
+        env:
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
