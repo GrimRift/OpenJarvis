@@ -128,6 +128,12 @@ notifications = ["win11toast>=0.35"]
 # Windows UI Automation: read the control tree of a window (M32 desktop
 # awareness). Windows-only; comtypes comes with it.
 desktop-awareness = ["uiautomation>=2.0.20; sys_platform == 'win32'"]
+# Windows Location Service, so a headless run (the 05:00 briefing) can ask
+# where the machine is rather than answer for a city configured months ago.
+# Windows-only, and optional: openjarvis.core.device_location reports
+# "unknown" when it is absent, which callers treat as "use the configured
+# place".
+desktop-location = ["winsdk>=1.0.0b10; sys_platform == 'win32'"]
 security-signing = ["cryptography>=43"]
 sandbox-wasm = ["wasmtime>=25"]
 sandbox-docker = ["docker>=7.0"]

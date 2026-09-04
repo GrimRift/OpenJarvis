@@ -4211,6 +4211,9 @@ desktop = [
 desktop-awareness = [
     { name = "uiautomation", marker = "sys_platform == 'win32'" },
 ]
+desktop-location = [
+    { name = "winsdk", marker = "sys_platform == 'win32'" },
+]
 dev = [
     { name = "maturin" },
     { name = "pre-commit" },
@@ -4460,11 +4463,12 @@ requires-dist = [
     { name = "wasmtime", marker = "extra == 'sandbox-wasm'", specifier = ">=25" },
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "win11toast", marker = "extra == 'notifications'", specifier = ">=0.35" },
+    { name = "winsdk", marker = "sys_platform == 'win32' and extra == 'desktop-location'", specifier = ">=1.0.0b10" },
     { name = "zeus-ml", extras = ["apple"], marker = "extra == 'energy-all'" },
     { name = "zeus-ml", extras = ["apple"], marker = "extra == 'energy-apple'" },
     { name = "zulip", marker = "extra == 'channel-zulip'", specifier = ">=0.9" },
 ]
-provides-extras = ["browser", "channel-discord", "channel-gmail", "channel-line", "channel-mastodon", "channel-messenger", "channel-nostr", "channel-reddit", "channel-rocketchat", "channel-slack", "channel-telegram", "channel-twilio", "channel-twitch", "channel-twitter", "channel-viber", "channel-xmpp", "channel-zulip", "dashboard", "desktop", "desktop-awareness", "dev", "docs", "energy-all", "energy-amd", "energy-apple", "eval-sheets", "eval-wandb", "framework-comparison", "gpu-metrics", "inference-cloud", "inference-gemma", "inference-google", "inference-litellm", "inference-mlx", "inference-vllm", "learning-dspy", "learning-gepa", "media", "memory-bm25", "memory-colbert", "memory-faiss", "memory-pdf", "mining-pearl-cpu", "mining-pearl-vllm", "notifications", "openhands", "orchestrator-training", "pdf", "sandbox-docker", "sandbox-wasm", "scheduler", "security-signing", "server", "speech", "speech-deepgram", "speech-gpu", "tools-search", "wake-word", "wake-word-training"]
+provides-extras = ["browser", "channel-discord", "channel-gmail", "channel-line", "channel-mastodon", "channel-messenger", "channel-nostr", "channel-reddit", "channel-rocketchat", "channel-slack", "channel-telegram", "channel-twilio", "channel-twitch", "channel-twitter", "channel-viber", "channel-xmpp", "channel-zulip", "dashboard", "desktop", "desktop-awareness", "desktop-location", "dev", "docs", "energy-all", "energy-amd", "energy-apple", "eval-sheets", "eval-wandb", "framework-comparison", "gpu-metrics", "inference-cloud", "inference-gemma", "inference-google", "inference-litellm", "inference-mlx", "inference-vllm", "learning-dspy", "learning-gepa", "media", "memory-bm25", "memory-colbert", "memory-faiss", "memory-pdf", "mining-pearl-cpu", "mining-pearl-vllm", "notifications", "openhands", "orchestrator-training", "pdf", "sandbox-docker", "sandbox-wasm", "scheduler", "security-signing", "server", "speech", "speech-deepgram", "speech-gpu", "tools-search", "wake-word", "wake-word-training"]
 
 [package.metadata.requires-dev]
 desktop-native = [{ name = "openjarvis-rust", directory = "rust/crates/openjarvis-python" }]
@@ -8751,6 +8755,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ab/34/eee24f0ff5522ff3d9c91c983c706fc2a06ed78a5aa84dd9b9fe51125b78/winrt_windows_ui_notifications-3.2.1-cp313-cp313-win32.whl", hash = "sha256:cff07f0193365c38a07cf87030c609b57b7ca7fcbf8740c720425edfa6205fa8", size = 154502, upload-time = "2025-06-06T14:11:52.135Z" },
     { url = "https://files.pythonhosted.org/packages/14/7c/8163639827003c411787d6f6f682e543206ecb47abd29291d184006b5834/winrt_windows_ui_notifications-3.2.1-cp313-cp313-win_amd64.whl", hash = "sha256:9f8d109c8c6634dac258a32d7f3d939aa50605bd7a6a43137a3ffc2ab4a8f667", size = 165795, upload-time = "2025-06-06T14:11:53.004Z" },
     { url = "https://files.pythonhosted.org/packages/0d/10/89012eeb14b932eb3f0ac541d8788d794e09f8fe1934fdae1760d0cbd252/winrt_windows_ui_notifications-3.2.1-cp313-cp313-win_arm64.whl", hash = "sha256:aec78f6a632e2ae57a55b7aee60f8df848ccffd1c4d14c3c9fbfaa6bb564e1a2", size = 155184, upload-time = "2025-06-06T14:11:53.863Z" },
+]
+
+[[package]]
+name = "winsdk"
+version = "1.0.0b10"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/01/005772332e79947013aa33c7cb20431e3efd6ac46eb54aed3472c14afe50/winsdk-1.0.0b10.tar.gz", hash = "sha256:8f39ea759626797449371f857c9085b84bb9f3b6d493dc6525e2cedcb3d15ea2", size = 7061492, upload-time = "2023-08-11T19:47:58.008Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/ef/f45dea4b452a29eb682ebca3818b5cea79f037bf07959c36feb2084bc429/winsdk-1.0.0b10-cp310-cp310-win32.whl", hash = "sha256:90f75c67e166d588a045bcde0117a4631c705904f7af4ac42644479dcf0d8c52", size = 9455364, upload-time = "2023-08-11T19:47:25.017Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/67/4789874fb923a56bf726cb24fa8ac0bdff9bb3a976653b6f6af9fccab32e/winsdk-1.0.0b10-cp310-cp310-win_amd64.whl", hash = "sha256:c3be3fbf692b8888bac8c0712c490c080ab8976649ef01f9f6365947f4e5a8b1", size = 12009746, upload-time = "2023-08-11T19:47:27.553Z" },
+    { url = "https://files.pythonhosted.org/packages/38/bb/c6770540a7f6c30aed352eafd60137150c1b53fcbec8e05b4e4c5f533978/winsdk-1.0.0b10-cp310-cp310-win_arm64.whl", hash = "sha256:6ab69dd65d959d94939c21974a33f4f1dfa625106c8784435ecacbd8ff0bf74d", size = 11610083, upload-time = "2023-08-11T19:47:30.078Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/74/4667edbe29a48e626e2660ae419ab0e5d7de9b7226aaf97fd40ccdfe815f/winsdk-1.0.0b10-cp311-cp311-win32.whl", hash = "sha256:9ea4fdad9ca8a542198aee3c753ac164b8e2f550d760bb88815095d64750e0f5", size = 9452941, upload-time = "2023-08-11T19:47:32.551Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/a2/65a7a7d812da3bb8d82acda13cfb832aed3d3d32e9e687074c192be0903b/winsdk-1.0.0b10-cp311-cp311-win_amd64.whl", hash = "sha256:f12e25bbf0a658270203615677520b8170edf500fba11e0f80359c5dbf090676", size = 12011233, upload-time = "2023-08-11T19:47:34.607Z" },
+    { url = "https://files.pythonhosted.org/packages/84/87/734f796735fd5205bc5b551a455f8402b6d3d34d78b307c274c5258405ec/winsdk-1.0.0b10-cp311-cp311-win_arm64.whl", hash = "sha256:e77bce44a9ff151562bd261b2a1a8255e258bb10696d0d31ef63267a27628af1", size = 11615569, upload-time = "2023-08-11T19:47:36.772Z" },
+    { url = "https://files.pythonhosted.org/packages/04/67/3eeaf41b0e7a4e1e627e1940fbf2f8e2c936161d0652dd9e462d70b79913/winsdk-1.0.0b10-cp312-cp312-win32.whl", hash = "sha256:775a55a71e05ec2aa262c1fd67d80f270d4186bbdbbee2f43c9c412cf76f0761", size = 9393830, upload-time = "2023-08-11T19:47:39.358Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/87/a5ffbb9613fcd3917183707ac16c88e82d22a1faf933bb9a3e04fff2f289/winsdk-1.0.0b10-cp312-cp312-win_amd64.whl", hash = "sha256:8231ce5f16e1fc88bb7dda0adf35633b5b26101eae3b0799083ca2177f03e4e5", size = 12015329, upload-time = "2023-08-11T19:47:41.942Z" },
+    { url = "https://files.pythonhosted.org/packages/39/9c/64365f88dead53c38dfb07e992c13fc66698ad7221be56e17e641448cca7/winsdk-1.0.0b10-cp312-cp312-win_arm64.whl", hash = "sha256:f4ab469ada19b34ccfc69a148090f98b40a1da1da797b50b9cbba0c090c365a5", size = 11596120, upload-time = "2023-08-11T19:47:43.974Z" },
 ]
 
 [[package]]

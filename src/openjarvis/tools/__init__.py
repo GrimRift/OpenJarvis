@@ -240,6 +240,11 @@ try:
 except ImportError:
     pass
 
+try:
+    import openjarvis.tools.weather  # noqa: F401
+except ImportError:
+    pass
+
 # Lives under openjarvis.scheduler rather than here, but still has to be
 # imported for its @ToolRegistry.register decorators to run.
 try:

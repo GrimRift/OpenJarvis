@@ -295,15 +295,20 @@ def _format_apple_music(doc: Document) -> str:
 
 
 def _format_weather(doc: Document) -> str:
-    """Format a weather document."""
-    data = _parse_content_json(doc)
-    if doc.doc_type == "current":
-        temp = data.get("temp_f", "?")
-        cond = data.get("conditions", "?")
-        humidity = data.get("humidity", "?")
-        return f"[weather] Current: {temp}°F, {cond}, humidity {humidity}%"
-    if doc.doc_type == "forecast":
-        return f"[weather] Forecast: {doc.content[:200]}"
+    """One decision-shaped line, from the summary the connector already built.
+
+    This used to parse the content as JSON and read ``temp_f``. The content is
+    prose and the field is ``temp``, so both lookups failed and every briefing
+    would have rendered "Current: ?°F, ?, humidity ?%" -- a line that
+    reads like a broken sensor rather than a missing API key. Neither failure
+    announced itself, because a failed parse and an absent key both fall back
+    to the same "?".
+    """
+    summary = doc.metadata.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        return f"[weather] {summary.strip()}"
+    if isinstance(doc.content, str) and doc.content.strip():
+        return f"[weather] {doc.content.strip()[:200]}"
     return f"[weather] {doc.title}"
 
 
