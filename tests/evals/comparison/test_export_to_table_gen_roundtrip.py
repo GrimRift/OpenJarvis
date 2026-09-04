@@ -14,7 +14,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from openjarvis.evals.comparison.table_gen import (
+import pytest
+
+# `table_gen` imports polars, which is not installed by default. Without this
+# the import raised during *collection*, and pytest aborts the whole run on a
+# collection error: `pytest tests/` reported "2 skipped" and **exit code 0**
+# having run nothing at all. A green run that executed no tests is worse than
+# a red one, so this skips the file instead of taking the suite down with it.
+pytest.importorskip("polars", reason="table_gen requires polars")
+
+from openjarvis.evals.comparison.table_gen import (  # noqa: E402
     _build_t1,
     load_results,
 )
