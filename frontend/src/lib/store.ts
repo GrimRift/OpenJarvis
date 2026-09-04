@@ -58,13 +58,22 @@ export function imagesFor(messageId: string): string[] | undefined {
 }
 
 /**
- * Attached documents, kept for the same reason as images and with the same
- * tradeoff. A paper runs to tens of thousands of characters, which would eat
- * the storage quota if written per message, so it lives here and is gone when
- * the tab closes. Unlike images it *is* replayed to the model on every later
- * turn of that chat -- a document is attached in order to be discussed.
+ * Attached documents.
+ *
+ * Unlike images these are **persisted**, and the difference is two orders of
+ * magnitude: a screenshot is megabytes, a research paper is about 20 KB of
+ * text. Keeping them only in memory was copied from the image path and was
+ * wrong -- a page reload, or Vite replacing this module during development,
+ * silently dropped the paper mid-conversation, and the next question got
+ * "please reattach the file" with no explanation.
+ *
+ * The session map remains for anything too large to store, so an oversized
+ * document still works for the life of the tab rather than failing outright.
  */
 const sessionDocuments = new Map<string, Array<{ name: string; text: string }>>();
+
+/** Largest document written to localStorage. Beyond this it stays in memory. */
+export const MAX_PERSISTED_DOCUMENT_CHARS = 400_000;
 
 export function rememberDocuments(
   messageId: string,
@@ -589,14 +598,17 @@ export const useAppStore = create<AppState>((set, get) => {
       if (message.images?.length) {
         rememberImages(message.id, message.images);
       }
-      if (message.documents?.length) {
-        rememberDocuments(message.id, message.documents);
+      // Documents ride the stored message so they survive a reload; only an
+      // unusually large one is held aside, to stay clear of the quota.
+      const documents = message.documents ?? [];
+      const tooBig =
+        documents.reduce((n, d) => n + d.text.length, 0) >
+        MAX_PERSISTED_DOCUMENT_CHARS;
+      if (documents.length && tooBig) {
+        rememberDocuments(message.id, documents);
       }
-      const {
-        images: _ephemeral,
-        documents: _alsoEphemeral,
-        ...persisted
-      } = message;
+      const { images: _ephemeral, ...rest } = message;
+      const persisted = tooBig ? { ...rest, documents: undefined } : rest;
       conv.messages.push(persisted);
       conv.updatedAt = Date.now();
       if (message.role === 'user' && conv.title === 'New chat') {
