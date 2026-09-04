@@ -399,3 +399,69 @@ class TestPrefixStabilityForPromptCache:
         out = guard.compress_context(messages, apply_token_budget=False)
 
         assert len(out) <= 10
+
+
+class TestAnAttachedDocumentIsNeverEvicted:
+    """The sliding window must not drop the thing the user attached.
+
+    Reported three times before it was found, because nothing says a message
+    was dropped. An attached paper is by far the largest message in a
+    conversation, so the window evicted it first -- one turn after it arrived.
+    The user got a correct answer, then "please upload the paper" to the very
+    next question, with the file still listed in the chat above.
+
+    Captured from the real request that finally proved it: the client sent
+    19,601 characters of document and the turn reported 4,556 input tokens.
+    """
+
+    MARKER = "--- BEGIN ATTACHED DOCUMENT: Chapter 2 - RRL (Local).docx ---"
+
+    def _guard(self):
+        from openjarvis.agents.loop_guard import LoopGuard, LoopGuardConfig
+
+        return LoopGuard(LoopGuardConfig(max_context_tokens=800))
+
+    def _messages(self, chatter_units: int = 12):
+        from openjarvis.core.types import Message, Role
+
+        messages = [Message(role=Role.SYSTEM, content="You are Sage.")]
+        # An attached document, early in the conversation.
+        messages.append(
+            Message(role=Role.USER, content=f"{self.MARKER}\n" + "body text. " * 200)
+        )
+        messages.append(Message(role=Role.ASSISTANT, content="I've read the paper."))
+        # Enough later chatter to push the window well past the budget.
+        for i in range(chatter_units):
+            messages.append(Message(role=Role.USER, content=f"question {i} " * 20))
+            messages.append(Message(role=Role.ASSISTANT, content=f"answer {i} " * 20))
+        return messages
+
+    def test_the_document_survives_a_window_that_drops_everything_else(self):
+        guard = self._guard()
+        kept = guard.compress_context(self._messages())
+        assert len(kept) < len(self._messages()), "the window must have trimmed"
+        assert any(self.MARKER in (m.content or "") for m in kept), (
+            "the attached document was evicted"
+        )
+
+    def test_it_keeps_its_place_in_the_conversation(self):
+        """Appending it out of order would misrepresent who said what when."""
+        guard = self._guard()
+        kept = guard.compress_context(self._messages())
+        non_system = [m for m in kept if m.role.value != "system"]
+        doc_index = next(
+            i for i, m in enumerate(non_system) if self.MARKER in (m.content or "")
+        )
+        assert doc_index == 0, "the document arrived first and should stay first"
+
+    def test_a_conversation_with_no_attachment_is_unchanged(self):
+        from openjarvis.core.types import Message, Role
+
+        guard = self._guard()
+        plain = [Message(role=Role.SYSTEM, content="You are Sage.")]
+        for i in range(12):
+            plain.append(Message(role=Role.USER, content=f"question {i} " * 20))
+            plain.append(Message(role=Role.ASSISTANT, content=f"answer {i} " * 20))
+        kept = guard.compress_context(plain)
+        assert len(kept) < len(plain), "still trims when nothing is pinned"
+        assert kept[0].role.value == "system"

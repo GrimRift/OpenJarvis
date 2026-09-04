@@ -219,9 +219,7 @@ class LoopGuard:
             if tool_calls:
                 result_end = index + 1
                 results = []
-                while result_end < len(messages) and cls._is_tool(
-                    messages[result_end]
-                ):
+                while result_end < len(messages) and cls._is_tool(messages[result_end]):
                     results.append(messages[result_end])
                     result_end += 1
 
@@ -281,14 +279,20 @@ class LoopGuard:
         much to drop, not what to bill, so ~4 chars per token is enough."""
         return sum(len(getattr(m, "content", "") or "") for m in messages) // 4
 
+    #: How the client marks a document the user attached to a message.
+    ATTACHMENT_MARKER = "--- BEGIN ATTACHED DOCUMENT:"
+
+    def _carries_attachment(self, message: object) -> bool:
+        """Whether this message carries a document the user attached."""
+        content = getattr(message, "content", None)
+        return isinstance(content, str) and self.ATTACHMENT_MARKER in content
+
     def _needs_compression(self, messages: list, apply_token_budget: bool) -> bool:
         if len(messages) > self._config.max_context_messages:
             return True
         budget = self._config.max_context_tokens
         return (
-            apply_token_budget
-            and budget > 0
-            and self._approx_tokens(messages) > budget
+            apply_token_budget and budget > 0 and self._approx_tokens(messages) > budget
         )
 
     def compress_context(
@@ -350,10 +354,30 @@ class LoopGuard:
         # are one unit; splitting them creates provider-invalid history.
         system_msgs = [m for m in compressed if self._is_system(m)]
         non_system = [m for m in compressed if not self._is_system(m)]
+
+        # A document the user attached is pinned, like the system prompt.
+        # The window keeps the newest messages that fit, and an attached paper
+        # is by far the largest thing in a conversation -- so it was always
+        # the first thing evicted, one turn after it arrived. The user saw a
+        # correct answer, then "please upload the paper" to the very next
+        # question, with the file still listed in the chat. It was reported
+        # three times before this was found, because nothing anywhere says a
+        # message was dropped.
+        pinned = [m for m in non_system if self._carries_attachment(m)]
+        if pinned:
+            pinned_ids = {id(m) for m in pinned}
+            non_system = [m for m in non_system if id(m) not in pinned_ids]
+
         max_msgs = max(0, self._config.max_context_messages - len(system_msgs))
         budget = self._config.max_context_tokens if apply_token_budget else 0
         if budget > 0:
-            budget = max(0, budget - self._approx_tokens(system_msgs))
+            # Pinned content is spent before the window opens: it is the thing
+            # the user explicitly asked to be read, so it is not what gets
+            # traded away to make room for older chatter.
+            budget = max(
+                0,
+                budget - self._approx_tokens(system_msgs) - self._approx_tokens(pinned),
+            )
         units = self._conversation_units(non_system)
         kept_units: list[list] = []
         kept_messages = 0
@@ -369,7 +393,16 @@ class LoopGuard:
             kept_messages += unit_messages
             used += cost
         kept = [message for unit in reversed(kept_units) for message in unit]
-        return system_msgs + kept
+        if not pinned:
+            return system_msgs + kept
+
+        # Rebuilt in the original order so a pinned message keeps its place in
+        # the conversation rather than being appended out of sequence.
+        kept_ids = {id(m) for m in kept} | {id(m) for m in pinned}
+        ordered = [
+            m for m in compressed if not self._is_system(m) and id(m) in kept_ids
+        ]
+        return system_msgs + ordered
 
     def reset(self) -> None:
         """Reset all tracking state — always via Rust backend."""
