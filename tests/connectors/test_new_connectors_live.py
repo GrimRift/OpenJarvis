@@ -12,7 +12,6 @@ import pytest
 from openjarvis.connectors._stubs import Document
 
 
-
 def _connector_configured(name: str) -> bool:
     """Whether this machine has credentials for *name*.
 

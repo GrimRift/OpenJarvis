@@ -11,7 +11,6 @@ from openjarvis.core.types import ToolResult
 from openjarvis.security.file_policy import is_sensitive_file
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
-
 _MAX_ENTRIES = 500
 
 # These may be shown in a directory listing, but we avoid recursively
@@ -62,7 +61,9 @@ class DirectoryListTool(BaseTool):
                     },
                     "recursive": {
                         "type": "boolean",
-                        "description": "Recursively list subdirectories. Default: false.",
+                        "description": (
+                            "Recursively list subdirectories. Default: false."
+                        ),
                     },
                     "max_depth": {
                         "type": "integer",

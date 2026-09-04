@@ -35,9 +35,12 @@ if os.name == "nt":
             _bin_dir = os.path.join(_pkg_dir, "bin")
             if os.path.isdir(_bin_dir):
                 _dll_dirs.append(_bin_dir)
-                os.add_dll_directory(_bin_dir)  # covers Python-level extension loading too
+                # Covers Python-level extension loading too.
+                os.add_dll_directory(_bin_dir)
         if _dll_dirs:
-            os.environ["PATH"] = os.pathsep.join(_dll_dirs) + os.pathsep + os.environ.get("PATH", "")
+            os.environ["PATH"] = (
+                os.pathsep.join(_dll_dirs) + os.pathsep + os.environ.get("PATH", "")
+            )
     except ImportError:
         pass
 
