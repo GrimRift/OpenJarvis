@@ -499,21 +499,71 @@ def _source_image(result: dict[str, Any]) -> str | None:
     return None
 
 
-def _top_level_images(response: dict[str, Any]) -> list[dict[str, str]]:
+#: How many pictures a gallery aims for. Six fills the grid at both widths --
+#: it divides by the 2 columns on a phone and the 3 on a desktop, where five
+#: left a ragged hole in the last row.
+GALLERY_IMAGE_TARGET = 6
+
+#: Page furniture that is an image but not a picture of anything. Measured on
+#: real responses: alongside genuine photographs, result pages carry shop
+#: banners, avatars and UI sprites, and one of those in a gallery of six looks
+#: worse than five good ones.
+_NON_PHOTO_RE = re.compile(
+    r"(logo|favicon|sprite|icon|avatar|badge|placeholder|spacer|banner|"
+    r"button|pixel|1x1|/ads?/)",
+    re.IGNORECASE,
+)
+
+
+def _image_entry(image: Any, seen: set[str]) -> dict[str, str] | None:
+    url = _https_image(image)
+    if not url or url in seen:
+        return None
+    seen.add(url)
+    description = ""
+    if isinstance(image, dict):
+        description = _clean_text(image.get("description"))
+    return {"url": url, "description": description}
+
+
+def _gallery_images(
+    response: dict[str, Any], target: int = GALLERY_IMAGE_TARGET
+) -> list[dict[str, str]]:
+    """Pictures for an explicit image search, best first.
+
+    Tavily's own image list is capped at five -- measured at exactly five
+    across every query tried, and unaffected by ``max_results``, so asking
+    for more results does not yield more pictures. A six-tile gallery cannot
+    be filled from it alone.
+
+    The results themselves carry the images found on each page, which are
+    plentiful (189 for one query against five curated) but mixed: real
+    photographs beside shop banners and interface furniture. They are used
+    only to top the curated list up, in result order, and only when they look
+    like photographs -- so the curated pictures still come first and a thin
+    response degrades to fewer tiles rather than to worse ones.
+    """
     output: list[dict[str, str]] = []
     seen: set[str] = set()
+
     images = response.get("images")
-    if not isinstance(images, list):
+    if isinstance(images, list):
+        for image in images:
+            if entry := _image_entry(image, seen):
+                output.append(entry)
+
+    if len(output) >= target:
         return output
-    for image in images:
-        url = _https_image(image)
-        if not url or url in seen:
+
+    for result in response.get("results") or []:
+        if not isinstance(result, dict):
             continue
-        seen.add(url)
-        description = ""
-        if isinstance(image, dict):
-            description = _clean_text(image.get("description"))
-        output.append({"url": url, "description": description})
+        for image in result.get("images") or []:
+            if len(output) >= target:
+                return output
+            entry = _image_entry(image, seen)
+            if entry and not _NON_PHOTO_RE.search(entry["url"]):
+                output.append(entry)
     return output
 
 
@@ -743,7 +793,7 @@ class WebSearchTool(BaseTool):
         credits += _credits(response)
         raw_results = list(response.get("results") or [])
         results = _filter_relevant_results(raw_results, query, news=plan.news)
-        images = _top_level_images(response) if plan.explicit_images else []
+        images = _gallery_images(response) if plan.explicit_images else []
         quality_passed = _results_are_sufficient(results, query, plan, images=images)
 
         if initial_depth == "basic" and not escalated and not quality_passed:
@@ -764,7 +814,7 @@ class WebSearchTool(BaseTool):
             results = _filter_relevant_results(
                 list(response.get("results") or []), query, news=plan.news
             )
-            images = _top_level_images(response) if plan.explicit_images else []
+            images = _gallery_images(response) if plan.explicit_images else []
             quality_passed = _results_are_sufficient(
                 results, query, plan, images=images
             )
