@@ -93,12 +93,16 @@ jobs:
       # gives Linux the same zone database the Windows target already has.
       - run: uv pip install pillow tzdata
 
-      # --no-sync because `uv run` re-syncs the environment before every
-      # invocation. pytest's own timer said 254s while this step took 18.6
-      # minutes, so roughly 14 of those went somewhere other than running
-      # tests, and a sync that re-examines an environment maturin has just
-      # written into is the only candidate in the step. If the next run does
-      # not drop, the overhead is elsewhere and this comment is wrong.
+      # This step takes ~18 minutes while pytest's own timer reports ~4.
+      # --no-sync was an attempt to explain the gap as `uv run` re-syncing
+      # the environment before each invocation. It is not: run 4 came in at
+      # 19m26s against 18m58s, 18m27s and 20m29s before it, so the flag
+      # changed nothing measurable. It is kept only because an implicit sync
+      # in a test step is undesirable regardless.
+      #
+      # Where the time actually goes is still unknown. The timestamps below
+      # bracket pytest so the next run says whether the gap is inside the
+      # command or around it -- do not replace them with another guess.
       #
       # -p no:randomly is load-bearing, not tidiness. pytest-randomly shuffles
       # order and several tests here leak state, so a shuffled run fails a
@@ -125,6 +129,7 @@ jobs:
       - name: Run the suites that pass
         run: |
           set -o pipefail
+          echo "pytest starting at $(date -u +%H:%M:%S)"
           uv run --no-sync pytest -p no:randomly -q --tb=short \
             -m "not live and not cloud and not hub" \
             tests/analytics tests/architecture tests/core tests/daemon \
@@ -132,6 +137,7 @@ jobs:
             tests/sessions tests/skills tests/speech tests/system \
             tests/templates tests/tools tests/traces tests/workflow \
             2>&1 | tee /tmp/pytest.log
+          echo "pytest finished at $(date -u +%H:%M:%S)"
 
       # Actions logs on a fork are readable only with write access to the
       # repository, so a failure here is invisible through the API -- the run
