@@ -124,7 +124,14 @@ class TestMetricsRoute:
         client = TestClient(_make_app())
         resp = client.get("/metrics")
         assert resp.status_code == 200
-        assert "openjarvis" in resp.text or "No metrics" in resp.text
+        # Three legitimate bodies: metric lines, no telemetry.db yet, or
+        # collection failed. The middle one appears on any checkout whose
+        # config dir has no telemetry.db -- which is why this passed for
+        # months on a developer box and failed on the first CI run.
+        assert "openjarvis" in resp.text or resp.text in (
+            "# no telemetry data\n",
+            "# No metrics available\n",
+        )
 
 
 class TestSkillRoutes:

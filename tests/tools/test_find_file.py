@@ -184,7 +184,10 @@ class TestTheTool:
         is not."""
         monkeypatch.setattr(find_file, "reveal", lambda path: None)
         monkeypatch.setattr(
-            os, "startfile", lambda path: pytest.fail("launched a program")
+            os,
+            "startfile",
+            lambda path: pytest.fail("launched a program"),
+            raising=False,
         )
         result = FindFileTool().execute(query="installer", open=True)
         assert "is a program" in result.content

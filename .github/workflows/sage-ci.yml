@@ -83,7 +83,13 @@ jobs:
       # tests/tools/test_capture_screen.py builds real PIL images; every other
       # optional dependency in these suites is imported lazily inside functions
       # and mocked by the tests.
-      - run: uv pip install pillow
+      #
+      # tzdata is pulled in by the lock file on win32 only, so on Linux zoneinfo
+      # falls back to the system database -- and Ubuntu keeps legacy aliases
+      # like `Japan` in a separate tzdata-legacy package. Without this,
+      # world_time resolves nothing for four of its tests. Installing it here
+      # gives Linux the same zone database the Windows target already has.
+      - run: uv pip install pillow tzdata
 
       # -p no:randomly is load-bearing, not tidiness. pytest-randomly shuffles
       # order and several tests here leak state, so a shuffled run fails a

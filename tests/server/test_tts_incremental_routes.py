@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -86,6 +87,20 @@ def _connect(client: TestClient):
     return client.websocket_connect("/v1/speech/tts-stream")
 
 
+def _eventually(predicate, timeout: float = 5.0) -> bool:
+    """Wait for server-side cleanup rather than assuming it has run.
+
+    A disconnect is handled in the endpoint's own task, so the client can
+    reach the assertion first.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
 def test_audio_starts_after_a_sentence_before_model_text_finishes() -> None:
     _FakeCartesiaContext.instances.clear()
     with (
@@ -120,14 +135,21 @@ def test_stop_cancels_context_and_disconnect_cleans_up() -> None:
             assert ws.receive_json()["type"] == "ready"
             ws.send_json({"type": "cancel"})
             assert ws.receive_json()["type"] == "cancelled"
+            assert _eventually(lambda: _FakeCartesiaContext.instances[-1].closed)
         assert _FakeCartesiaContext.instances[-1].cancelled is True
-        assert _FakeCartesiaContext.instances[-1].closed is True
 
         with _connect(client) as ws:
             ws.send_json({"type": "begin", "voice_id": "voice"})
             assert ws.receive_json()["type"] == "ready"
+            # Hang up here rather than by leaving the block. TestClient's
+            # __exit__ delivers the disconnect and cancels the app in the next
+            # breath, so an endpoint that ends *because* of that disconnect is
+            # racing the cancel -- 9 CancelledErrors in 30 runs, raised out of
+            # __exit__ rather than by anything this test asserts. close() only
+            # sends the disconnect, so the server can finish unwinding first.
+            ws.close(1000)
+            assert _eventually(lambda: _FakeCartesiaContext.instances[-1].closed)
         assert _FakeCartesiaContext.instances[-1].cancelled is True
-        assert _FakeCartesiaContext.instances[-1].closed is True
 
 
 def test_stop_still_cancels_after_model_text_has_finished() -> None:
