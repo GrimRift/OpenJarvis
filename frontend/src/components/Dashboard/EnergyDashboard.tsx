@@ -65,6 +65,13 @@ function StatCard({
 }
 
 export function EnergyDashboard() {
+  // These two tiles read telemetry first, savings second. /v1/savings counts
+  // only what ran locally, because its job is comparing local cost against
+  // cloud -- so on a machine whose chat model is a cloud one it is correctly
+  // zero. Reading it first hid the real totals: `??` falls through on null
+  // and undefined but not on 0, so a savings count of 0 won over a telemetry
+  // count of 6, and the card said "Total Requests 0" while the energy tiles
+  // beside it showed a busy machine.
   const savings = useAppStore((s) => s.savings);
   const [energy, setEnergy] = useState<EnergyData | null>(null);
   const [telemetry, setTelemetry] = useState<TelemetryStats | null>(null);
@@ -154,7 +161,7 @@ export function EnergyDashboard() {
         <StatCard
           icon={Hash}
           label="Total Requests"
-          value={String(savings?.total_calls ?? telemetry?.total_requests ?? 0)}
+          value={String(telemetry?.total_requests ?? savings?.total_calls ?? 0)}
         />
         <StatCard
           icon={Gauge}
@@ -164,7 +171,7 @@ export function EnergyDashboard() {
         <StatCard
           icon={Hash}
           label="Tokens Processed"
-          value={formatNumber(savings?.total_tokens ?? telemetry?.total_tokens ?? 0)}
+          value={formatNumber(telemetry?.total_tokens ?? savings?.total_tokens ?? 0)}
         />
       </div>
 
