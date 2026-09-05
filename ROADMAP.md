@@ -35,6 +35,13 @@ safely — I'll handle the rest."*
   microphone* rather than importing files, so Sage's Cartesia audio has to be
   played into the phone while recording. One-off, and then every turn is Sage.
   This is the only way to get Sage's voice onto turn-by-turn.
+- **Waze will not auto-start navigation from a deep link (verified 2026-09-05).**
+  `navigate=yes` is documented and correct, and Waze still shows a route preview
+  with a GO button that must be tapped. Reported by developers against both the
+  `waze://` and `https://waze.com/ul` forms, so no parameter gets past it. One
+  tap is the floor; do not spend time hunting for a flag. `q` is sent alongside
+  `ll` because the docs' examples do and it labels the destination -- not
+  because it changes this.
 - **The browser wake word cannot work while driving on iOS.** Mic capture stops
   when the PWA is backgrounded, and entirely with the screen off. A **Siri
   Shortcut** is the trigger — and it can play audio Sage returns, so the reply
