@@ -389,3 +389,45 @@ def test_disabled_new_places_is_named_without_provider_body(nav, monkeypatch):
     result = tool.execute(destination="mall", origin=ORIGIN)
     assert "Places API (New) is disabled" in result.content
     assert "private-value" not in result.content
+
+
+class TestTheAppLinkActuallyNavigates:
+    """Waze opened on the map with no route on the first real drive.
+
+    The https form carries navigate=yes but iOS can route it through Safari
+    and hand off to the app on a second hop, losing the intent. The app
+    scheme goes straight there. Chat keeps https: it is tappable and works
+    for someone without Waze installed.
+    """
+
+    POINT = {"latitude": 14.166002, "longitude": 121.13933}
+
+    def test_the_app_link_uses_the_waze_scheme(self):
+        from openjarvis.tools import navigate
+
+        link = navigate.waze_link("home", self.POINT, app=True)
+        assert link.startswith("waze://")
+        assert "navigate=yes" in link
+
+    def test_the_web_link_is_unchanged(self):
+        from openjarvis.tools import navigate
+
+        link = navigate.waze_link("home", self.POINT)
+        assert link.startswith("https://waze.com/ul?")
+        assert "navigate=yes" in link
+
+    def test_both_carry_the_same_coordinates(self):
+        from openjarvis.tools import navigate
+
+        web = navigate.waze_link("home", self.POINT)
+        app = navigate.waze_link("home", self.POINT, app=True)
+        assert "14.166002" in web and "14.166002" in app
+        assert "121.13933" in web and "121.13933" in app
+
+    def test_a_search_link_has_no_navigate_intent(self):
+        """Nothing to navigate to until a place is chosen."""
+        from openjarvis.tools import navigate
+
+        link = navigate.waze_link("SM Calamba", app=True)
+        assert link.startswith("waze://")
+        assert "navigate=yes" not in link

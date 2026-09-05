@@ -50,14 +50,31 @@ def coordinates(value: Any) -> dict[str, float]:
     return result
 
 
-def waze_link(destination: str, point: dict[str, float] | None = None) -> str:
+def waze_link(
+    destination: str,
+    point: dict[str, float] | None = None,
+    *,
+    app: bool = False,
+) -> str:
+    """A Waze link, either as a web URL or straight into the app.
+
+    Both forms carry ``navigate=yes``, but only the app scheme reliably acts
+    on it. Opening the https form on iOS can land in Safari first and hand
+    off to Waze on a second hop, which drops the intent: Waze opens showing
+    the map and no route, which is exactly what the first real drive did.
+
+    Chat keeps the https form -- it is tappable, and still works for someone
+    without Waze installed. The phone endpoint uses the app form, where Waze
+    is known to be present because the Shortcut is opening it.
+    """
     params = {"utm_source": "sage"}
     if point is None:
         params["q"] = destination
     else:
         params["ll"] = f"{point['latitude']},{point['longitude']}"
         params["navigate"] = "yes"
-    return "https://waze.com/ul?" + urlencode(params)
+    base = "waze://?" if app else "https://waze.com/ul?"
+    return base + urlencode(params)
 
 
 def _post(url: str, key: str, fields: str, body: dict) -> dict:
@@ -372,10 +389,12 @@ class NavigateTool(BaseTool):
             else "Weather unavailable: navigation weather is disabled."
         )
         link = waze_link(query, point)
-        line += (
-            f"At the destination: {weather_line} "
-            "Open the Waze link to start navigation."
-        )
+        # No instruction to open anything: this line is spoken aloud through
+        # the phone endpoint, where the Shortcut opens Waze itself, and
+        # hearing "open the Waze link" as Waze opens is a small lie. Chat
+        # still gets the tappable link in `content` below, which needs no
+        # narration to explain it.
+        line += f"At the destination: {weather_line} Drive safely."
         return ToolResult(
             tool_name=self.tool_id,
             success=True,
@@ -384,6 +403,7 @@ class NavigateTool(BaseTool):
                 "status": "ready",
                 "destination": query,
                 "maps_url": link,
+                "maps_app_url": waze_link(query, point, app=True),
                 "briefing": line,
                 "route": route,
                 "weather": weather_line,
@@ -406,6 +426,7 @@ class NavigateTool(BaseTool):
                 "status": "needs_selection",
                 "candidates": candidates,
                 "maps_url": link,
+                "maps_app_url": waze_link(query, app=True),
                 "route": None,
                 "navigation_started": False,
             },
