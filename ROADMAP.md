@@ -35,13 +35,27 @@ safely — I'll handle the rest."*
   microphone* rather than importing files, so Sage's Cartesia audio has to be
   played into the phone while recording. One-off, and then every turn is Sage.
   This is the only way to get Sage's voice onto turn-by-turn.
-- **Waze will not auto-start navigation from a deep link (verified 2026-09-05).**
-  `navigate=yes` is documented and correct, and Waze still shows a route preview
-  with a GO button that must be tapped. Reported by developers against both the
-  `waze://` and `https://waze.com/ul` forms, so no parameter gets past it. One
-  tap is the floor; do not spend time hunting for a flag. `q` is sent alongside
-  `ll` because the docs' examples do and it labels the destination -- not
-  because it changes this.
+- **Waze will not auto-start navigation from a deep link, but it does start
+  itself (verified on the phone 2026-09-05).** `navigate=yes` is documented and
+  correct, and Waze still shows a route preview with a GO button; developers
+  report this against both the `waze://` and `https://waze.com/ul` forms, so no
+  parameter gets past it. **The tap is still avoidable:** Waze starts on its own
+  after a few seconds, so opening it *first* and speaking the briefing over the
+  countdown costs no tap at all. An earlier version of this note called the tap
+  "the floor" -- that was wrong, and the user disproved it by noticing the
+  countdown. `q` rides with `ll` because the docs' examples do and it labels the
+  destination, not because it changes any of this.
+- **The Shortcut must open Waze before playing audio (verified 2026-09-05).**
+  Siri answers "Sorry, something went wrong" -- mid-sentence, while the Shortcut
+  carries on working -- if audio plays while Siri is still on screen. Opening
+  Waze first dismisses Siri, so playback happens with no Siri left to upset. It
+  is not a timeout and not the audio session in general: the same Shortcut run
+  from the play button never failed. This ordering is what makes the countdown
+  trick above work too, so do not reorder it back.
+- **The spoken briefing has a hard budget of about five seconds**, which is how
+  long Waze stays quiet before it starts talking. Anything longer is two voices
+  at once. It currently runs ~4.7s at 13 words; the destination weather
+  deliberately omits its forecast clause for this reason.
 - **The browser wake word cannot work while driving on iOS.** Mic capture stops
   when the PWA is backgrounded, and entirely with the screen off. A **Siri
   Shortcut** is the trigger — and it can play audio Sage returns, so the reply
