@@ -12,6 +12,20 @@ from fastapi.testclient import TestClient
 from openjarvis.server.auth_middleware import AuthMiddleware
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_api_key(monkeypatch):
+    """Keep the verdict a function of the argument, not of the shell.
+
+    AuthMiddleware resolves `api_key or os.environ["OPENJARVIS_API_KEY"]`,
+    which is correct: an operator setting the variable expects it to apply.
+    It makes the tests ambient, though -- passing "" to mean "no key
+    configured" gets whatever the developer has exported, so
+    test_no_key_configured_allows_all returns 401 on any machine that runs
+    Sage and passes in CI, which has no such variable.
+    """
+    monkeypatch.delenv("OPENJARVIS_API_KEY", raising=False)
+
+
 def _make_app(api_key: str) -> FastAPI:
     app = FastAPI()
     app.add_middleware(AuthMiddleware, api_key=api_key)
