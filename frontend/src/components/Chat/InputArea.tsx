@@ -587,6 +587,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     abortRef.current = controller;
 
     let accumulatedContent = '';
+    // Set when the turn ends because the user pressed Stop (or switched
+    // model). Speaking a reply the user just interrupted is the opposite
+    // of what Stop means, and the batch fallback that did it also mounted
+    // a player for a clip that could not load -- the slider that appears
+    // and vanishes.
+    let userStopped = false;
     let usage: TokenUsage | undefined;
     let complexity: { score: number; tier: string; suggested_max_tokens: number } | undefined;
     let audio: { url: string } | undefined;
@@ -879,6 +885,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // User cancelled or model switch — keep whatever was accumulated
+        userStopped = true;
         if (!accumulatedContent) accumulatedContent = '(Generation stopped)';
       } else {
         const errMsg = err?.message || String(err);
@@ -976,6 +983,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (incrementalSpeechResult) {
         incrementalSpeechResult
           .then((outcome) => {
+            // Guarded inside the handler rather than around the block so the
+            // promise keeps its .catch and a stopped turn cannot surface as
+            // an unhandled rejection.
+            if (userStopped) return;
             if (outcome !== 'failed-before-audio') return;
             // No streamed audio was heard, so batch fallback cannot replay
             // any opening. A manual Stop resolves as cancelled and never
@@ -997,6 +1008,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           })
           .catch(() => {});
       } else if (
+        !userStopped &&
         voiceRepliesEnabled &&
         shouldSynthesizeReplyAudio(
           wasVoice,
