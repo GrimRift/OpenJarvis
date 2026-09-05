@@ -1,5 +1,8 @@
 # OpenJarvis-Lab (Sage fork)
 
+Milestones and scoped-but-unbuilt work live in `ROADMAP.md`; shipped work,
+newest first, in `HANDOFF.md`.
+
 Branch: `feature/sage-customization`. Experimental fork, not production Sage
 Architect. Live config: `C:\AI\OpenJarvis-Data\config.toml`.
 
@@ -172,8 +175,43 @@ each. Adding a suite back is the right way to close one of those gaps -- but
 only once it is actually green, because the value of this lane is that red means
 something.
 
+Closing the remaining gaps is mostly test repair, not bug fixing. Of ~36
+failures in the excluded suites, roughly nine touch code Sage actually runs; the
+rest are `evals`, `install`, `pearl`, `mining`, `bench`, `learning` -- upstream
+features this fork never executes. The six `tests/telemetry` failures assert
+`0.0 > 0` and look alarming, but the live database has non-zero prefill/decode
+energy: the mocks no longer match the implementation. Every bug that actually
+cost the user something in the 2026-09-04 sessions was found by using Sage, not
+by a test.
+
 It runs with `-p no:randomly` on purpose. Under a shuffled order the failing set
 rotates, so a fixed order is the difference between a signal and a coin flip.
+
+## The bug this codebase keeps producing
+
+An empty or absent value read as a deliberate answer. Nothing crashes; something
+false is asserted confidently, which is far harder to notice than a failure.
+Seven instances on 2026-09-04 alone:
+
+- `.get("total", 0)` on a field the API renamed — a 63-track playlist reported as
+  empty, and the model said playback had failed while music was playing.
+- `DigestConfig.world` defaulting to `sources=[]`, so `.get(section, default)`
+  returned the empty list and the briefing's whole world section collected
+  nothing, for months, while showing as enabled.
+- `savings?.total_calls ?? telemetry?.total_requests` — `??` passes through null
+  and undefined but **not 0**, so a correct zero hid a real count.
+- Tests reading ambient state as configuration: a populated data directory, the
+  shell's API keys, the machine's timezone.
+- `CredentialStripper` matching credentials by shape, so a key with no
+  recognisable prefix passed through the one thing meant to catch it.
+
+**The rule:** when a lookup can fail, decide explicitly what absent means. It is
+almost never the same as zero, empty, or false. Prefer `or` over `??`/`.get(k, d)`
+where an empty value should fall back, and make "unknown" a distinct state from
+"none" in anything a user reads.
+
+**Corollary for tests:** if a test passes here, ask what it would do on a clean
+checkout with no credentials, no data directory, and a different timezone.
 
 ## Known traps in this codebase
 
