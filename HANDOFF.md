@@ -1,15 +1,66 @@
 # Sage Handoff for Claude Code
 
 **Current continuation (2026-09-05): `docs/CLAUDE-CONTINUE.md`.** Read that
-compact handoff first. M35 and the stream-auth fix remain uncommitted. Verify
-the user's real voice reply after hard-refresh before more M35 work; do not
-redesign fallback or reintroduce player controls without a new decision.
+compact handoff first. M35 is committed and pushed (`fb34814e`); the phone
+path works end to end and Sage's Waze voice pack is live. Only a real drive
+remains unverified. Do not redesign the voice fallback or reintroduce player
+controls without a new decision.
 
 ## Objective
 
 Build Sage into a broadly capable Windows assistant. Expand access progressively with tests, backups, recoverable actions, and logs. Permanent blocks remain for passwords and credentials, security databases, protected Windows system areas, and irreversible deletion.
 
 ## Verified completed work
+
+- **M35 Waze voice pack shipped by upload, not recording (2026-09-05).**
+  The in-app recorder needs 39 microphone takes and compresses badly. Packs can
+  instead be uploaded as mp3s under Waze's fixed filenames, which is how the
+  community AI-voice packs are made; the user found this route after being
+  steered toward the microphone. `scripts/waze_voice_pack.py package` renders
+  the prompts from `OPENJARVIS_DATA/waze_prompts.json` at 64 kbps: **457 kB
+  against Waze's 800 kB cap**, so the uploader never re-encodes Sage's audio.
+  Cartesia's default mp3 is ~140 kbps and came to 885 kB, so `synthesize()`
+  gained an optional `bit_rate` (the API accepts only 32000 and 64000; 48000 is
+  rejected). Live pack:
+  `https://waze.com/ul?acvp=0d455a0c-59db-40b8-aebc-dca0811d969f`, verified by
+  downloading it back — HTTP 200, 39 files, 434,658 bytes. 57 navigate/drive
+  tests and 128 speech tests passed. Committed and pushed as `fb34814e`.
+  **Traps:** the bare-number files (`200.mp3` ... `1500.mp3`) are the *imperial*
+  callouts; the metric ones are the `*meters` names. The uploader prints a
+  checkmark emoji that raises `UnicodeEncodeError` on a cp1252 Windows console
+  *after* the upload has already succeeded — the first run therefore left an
+  orphaned public pack whose UUID is unrecoverable. Run it with
+  `PYTHONIOENCODING=utf-8`. Tooling: github.com/pipeeeeees/waze-voicepack-links,
+  which logs in to Waze's private RPC API as a synthetic device and publishes a
+  publicly downloadable pack; the user accepted that trade knowingly.
+  **Still true after all this:** a prerecorded pack cannot speak street names.
+  Only voices Waze marks "Including street names" can, and those are TTS. Turn
+  instructions are Sage; road names are dropped or fall back to another voice.
+  An earlier note claiming the pack makes "every turn Sage" was an overclaim.
+
+- **M35 Siri Shortcuts completed (2026-09-05).** "Drive home" and "Drive to"
+  both work end to end with Sage audio. Findings that cost real debugging:
+  Siri's "OK"/"Done" **cannot** be suppressed from inside a Shortcut —
+  `Stop This Shortcut` does not do it, only the global iOS Siri Responses
+  setting, which the user turned off. That also silences the `Ask for Input`
+  prompt, so the prompt is now a pre-rendered Cartesia clip
+  (`OPENJARVIS_DATA/voice-clips/sage-where-headed.mp3`) played by `Get File` +
+  `Play Sound` before `Ask for Input`. `Play Sound` is unaffected by the Siri
+  Responses setting. Waze must still open **before** audio plays, or Siri
+  answers "Sorry, something went wrong" mid-sentence. A "file not found" here
+  was the `Get File` service (Shortcuts folder) disagreeing with the path
+  (On My iPhone/Downloads), plus a missing `.mp3` extension.
+
+- **Drive briefing punctuation (2026-09-05).** The weather summary ends without
+  punctuation, so the briefing spoke "light rain Drive safely" as one breath.
+  Only the spoken line is punctuated; `metadata["weather"]` stays raw.
+
+- **GitHub CLI is available (2026-09-05).** `gh` 2.100.0 at
+  `C:\Program Files\GitHub CLI\gh.exe`, logged in as `GrimRift` (scopes
+  `gist`, `read:org`, `repo`, `workflow`). **Not on the shell PATH** — call it
+  by full path, same quirk as `jarvis.exe`. `gh search code` searches real
+  source rather than articles; use it before accepting a platform wall, which
+  is exactly the mistake made with the Waze recorder.
 
 - **Streaming TTS authentication repair (2026-09-05).** Enabling server auth
   exposed `useStreamingTts` opening its socket without auth subprotocols. Live:

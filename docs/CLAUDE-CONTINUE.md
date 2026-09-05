@@ -1,110 +1,73 @@
-# Claude Code continuation — 2026-09-05
+# Claude Code continuation — 2026-09-05 (evening)
 
-## First task: verify voice, then resume M35
+## State
 
-The user is switching to Claude Code. Stop Codex edits; one active editor.
-Do not add an audio player, replay controls or sliders. Intended everyday
-voice UX is ephemeral streamed speech. User explicitly selected **only fix
-stream authentication for now** after being asked about fallback redesign.
+M35 is done bar a real drive. Committed and pushed: HEAD `fb34814e` on
+`feature/sage-customization`. The tree was clean at that commit.
 
-1. Ask the user whether a hard-refresh followed by one voice reply now speaks
-   normally and rearms. If not, measure the actual failure before changing code.
-2. Preserve the existing fallback pending a separate decision. It is already
-   present in InputArea.tsx: after a stream fails before audio, it synthesizes
-   a batch clip and attaches AudioPlayer. This is a known mismatch with the
-   intended UX, not a newly authorized redesign.
-3. Once voice is confirmed, continue private phone setup: Tailscale on PC and
-   iPhone, authenticated Siri Shortcut, then actual audio → Waze ordering.
-   Tailscale installation/account state has NOT been inspected or confirmed.
+Working end to end on the user's iPhone: "Hey Siri, drive home" and "Drive to
+<place>" both reach `/v1/drive` over Tailscale, speak a briefing in Sage's
+voice, and open Waze. Sage's Waze voice pack is live and installed.
 
-## Git and rollback
+## First task: pick up M34, unless the user says otherwise
 
-- Repo `C:\AI\OpenJarvis-Lab`; branch `feature/sage-customization`.
-- HEAD `19c2f2e86976e3866028a9f8f6ba2c27579a959a`; M35 and TTS fixes are
-  **uncommitted and unstaged**, including new untracked files. No push made.
-- Annotated rollback tag `rollback/pre-m35-2026-09-05` points to HEAD.
-  The tree was clean before this work. CI succeeded on `fdb35337`; only
-  AGENTS.md/HANDOFF.md/ROADMAP.md differ between that commit and the tag.
-- Live config is external: `C:\AI\OpenJarvis-Data\config.toml`.
-  Pre-M35 backup: `config.toml.pre-m35-20260905` beside it.
-- Git cannot roll back user environment variables or the Python environment.
-  Preserve current work before any rollback. Never `git add -A` (vendored
-  CPython tree). Do not commit or push unless requested.
+M34 (self-diagnostics) has been scoped since 2026-09-02 and deferred five
+times. Every defect found this week was found by the user noticing, never by
+Sage reporting: an empty system overview, the wake word firing on a muted mic,
+Spotify calling a full playlist empty, the dashboard reading zero all day.
+Scope and rationale are in ROADMAP.md and the M34 memory file.
 
-## Implemented changes
+Smaller open items, none urgent:
 
-- `src/openjarvis/tools/navigate.py`: registered read-only tool; saved names
-  in external `saved_places.json`, supplied coordinates, optional Google Places
-  candidate selection, traffic-aware Routes, destination weather, Waze links.
-  No location guessing from the PC, no app launch, no saved-place writes.
-  Unknown ETA/traffic stays unknown. Fixed endpoints, bounded requests, no
-  redirects/retries, no credential-bearing provider error text.
-- `src/openjarvis/core/config.py`: NavigationConfig and TOML loading, all flags
-  default false. Live flags are now true after user approval/setup.
-- `src/openjarvis/tools/__init__.py`: tool discovery; external `[agent].tools`
-  now includes navigate. Security audit classifies navigation egress.
-- `src/openjarvis/server/drive_routes.py` + app.py mount: `/v1/drive` requires
-  Sage bearer authentication and phone origin. Shared tool executes in a worker
-  thread; optional Cartesia MP3 uses Jarvis/Frieren profiles and spoken-text
-  sanitizer, returns inline base64, no audio file persistence. Candidate choice
-  precedes synthesis; audio failure preserves the link. Cache-Control no-store.
-- `frontend/src/hooks/useStreamingTts.ts` uses new
-  `frontend/src/lib/speech-transport.ts`: respects configured API base and uses
-  existing `buildWsProtocols()` authentication. New tests pin wiring.
-- **AudioPlayer.tsx has no remaining diff.** Codex's attempted player fix was
-  undone after the user's correction. InputArea.tsx fallback is untouched.
+- **A real drive** is the only unverified part of M35. Ask before assuming.
+- **`jarvis` -> `sage` voice profile rename.** Deferred all session to avoid
+  muddying debugging. It is why `/v1/drive` still takes `voice: "jarvis"`.
+- **On 11 September**, check whether publishing the Google OAuth app actually
+  removed the 7-day refresh-token expiry. Recorded as unproven. If it did not,
+  Google access breaks again and the morning digest silently reports nothing.
+- ~300 undeletable `jarvis-tts-*` temp dirs from an older bug. Needs a reboot.
+  The code no longer creates them.
 
-## Setup and measured evidence
+## Hard-won facts — do not re-litigate
 
-- User privately set `GOOGLE_MAPS_API_KEY` and separate `OPENJARVIS_API_KEY`
-  Windows user variables. Do not display/read out/enter/copy them to docs.
-- Google Routes and **Places API (New)** enabled on the same Google key;
-  separate 30 requests/day caps user-confirmed. Traffic requests use Routes
-  **Pro**, not Essentials; place names/coordinates use Text Search Pro.
-- Live authenticated `/v1/drive`: SM City Calamba resolved, route 436 seconds /
-  1,920 metres, weather, Waze URL, 298,029-byte MP3; HTTP 200 in 5.2 seconds.
-  Without auth: HTTP 401. Phone playback is NOT yet verified.
-- Auth change initially broke the browser: unauthenticated `/v1/models` returned
-  401; authenticated returned five models through both backend and Vite proxy.
-  Settings' Connected indicator is only public health, so it misleadingly stayed
-  green. User was directed to enter their Sage secret in Connection → API key.
-- TTS failure reproduced: unauthenticated TTS socket rejected; authenticated
-  accepted. Batch synthesis 200, plain media fetch 401, authenticated fetch 200
-  (27,693 bytes). Existing player hides itself on error, explaining its flash.
-- Authenticated live TTS stream completed with 199,680 PCM bytes. Stream-only
-  fix has 42 focused frontend tests passing, including wiring/architecture;
-  frontend built successfully after player changes were reverted. No observed
-  real microphone → reply → rearm cycle after the final fix yet.
-- Earlier backend checks: 143 tests across navigation/weather/config/architecture;
-  endpoint/navigation/architecture checks later passed 66 tests. Ruff src/tests
-  clean. No complete repository suite run. Wiring tests failed on baseline.
-- An attempted isolated headless player probe failed in the test harness
-  (`createRoot is not a function`), before mounting; it is NOT evidence of a
-  Sage player defect or successful playback. Do not report it as verification.
+- **Waze:** a prerecorded voice pack cannot speak street names; only voices
+  marked "Including street names" can, and those are TTS. Waze will not
+  auto-start from a deep link but starts itself after 3-5s, so the Shortcut
+  opens Waze first and talks over the countdown. That ordering is also what
+  stops Siri saying "Sorry, something went wrong" — audio must not play while
+  Siri is on screen. The spoken briefing has a ~5s budget before Waze talks.
+- **Siri:** "OK"/"Done" cannot be suppressed from inside a Shortcut. Only the
+  global iOS Siri Responses setting, which is now off. `Play Sound` is not a
+  Siri response and still plays.
+- **Voice pack uploads:** run the uploader with `PYTHONIOENCODING=utf-8`. It
+  prints a checkmark emoji that crashes a cp1252 console *after* the upload
+  succeeded, losing the pack UUID. That already orphaned one public pack.
+- **M32 is parked and should not be resumed by default.** Electron apps expose
+  no useful automation tree; that is structural, not effort.
 
-## Runtime and remaining risks
+## Ground rules
 
-- Use existing Start menu `Sage.lnk` / `Stop Sage.lnk`; start launcher runs
-  backend 8000 and Vite 5173. Browser URL: `http://localhost:5173`.
-- Start-Process inherits its parent's environment. A long-running agent shell
-  may not have newly created user variables; inherit them privately when
-  restarting, never echo them. Leave server bind at 127.0.0.1 until private
-  reachability is explicitly configured. Do not expose this server publicly.
-- Codex mistakenly ran plain `uv sync` during launcher repair, removing 84
-  optional third-party packages plus local Rust extension. Exact prior versions
-  were restored and Rust rebuilt; tests and live runtime checks passed after.
-  OpenJarvis editable distribution metadata advanced to current HEAD. No lock
-  file change. Use direct venv Python or `uv run --frozen --no-sync` for checks.
-- Authenticated fallback audio URLs and other media consumers may need a
-  separately scoped audit. Do not remove authentication or inject secrets into
-  URL query strings to solve them. Voice fallback redesign is not assigned.
-- Waze voice pack, Siri Shortcut, Tailscale and real drive remain pending.
-  M34 not started; M32 parked; unrelated Google APIs remain disabled by choice.
+- Never `git add -A` — there is a vendored CPython tree in the repo.
+- Live config is external: `C:\AI\OpenJarvis-Data\config.toml`. Roadmap and
+  data changes go there, not into repo code.
+- Do not expose the server publicly. It holds Google tokens and runs code.
+  Reachability is Tailscale only; that decision was explicit.
+- Do not add an audio player, replay controls or sliders to the chat voice UX.
+  Intended everyday behaviour is ephemeral streamed speech.
+- Start and stop through the Start menu `Sage` / `Stop Sage` shortcuts.
+- Checks: direct venv Python or `uv run --frozen --no-sync`. A plain `uv sync`
+  prunes optional extras and has already broken this environment once.
+- Always `-p no:randomly`; the failing set rotates under a shuffled order.
+- `gh` is installed and logged in but **not on PATH**:
+  `C:\Program Files\GitHub CLI\gh.exe`. Use `gh search code` to look for a
+  working implementation before concluding something is a platform wall — that
+  is exactly the mistake made with the Waze recorder.
 
 ## Efficient continuation
 
 Read AGENTS.md, ROADMAP.md and docs/m35-navigation.md once. For HANDOFF.md and
-other long files, scoped rg + relevant regions only. Do not re-read just-edited
-files. Batch independent checks; filter long output. Always `-p no:randomly`.
+other long files, scoped rg plus the relevant regions only. Do not re-read
+just-edited files. Batch independent checks and filter long output.
+
 Verification is not the waste: reproduce before fixing, measure intermittent
 failures repeatedly, and stop after two failed fixes to isolate the cause.
