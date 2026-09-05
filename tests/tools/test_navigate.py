@@ -256,6 +256,14 @@ def test_timeout_does_not_leak_exception_text(nav, monkeypatch):
     assert "unavailable" in result.content
 
 
+def routes():
+    return {
+        "routes": [
+            {"duration": "901s", "staticDuration": "600s", "distanceMeters": 12000}
+        ]
+    }
+
+
 def places():
     return {
         "places": [
@@ -270,20 +278,36 @@ def places():
     }
 
 
-def test_ambiguous_search_does_not_call_routes(nav, monkeypatch):
+def test_an_ambiguous_search_takes_the_top_result(nav, monkeypatch):
+    """Requiring exactly one match meant almost every real place asked.
+
+    "SM City Calamba" returns the mall, a diner inside it and the
+    supermarket, so the tool returned needs_selection -- no briefing, no
+    audio, and a Waze search rather than a route. A driver cannot pick from
+    a list, so Google's top-ranked result is taken and its name is spoken
+    back, which is the moment a wrong pick can be caught.
+
+    This costs a Routes call on an ambiguous query, which the previous
+    behaviour avoided. That is the accepted trade, not an oversight.
+    """
     module, tool = nav
     enable(tool, monkeypatch)
+    calls = []
 
     def post(url, **kwargs):
-        assert url == module.PLACES_URL
-        assert kwargs["json"]["textQuery"] == "mall"
-        return httpx.Response(200, json=places())
+        calls.append(url)
+        if url == module.PLACES_URL:
+            return httpx.Response(200, json=places())
+        return httpx.Response(200, json=routes())
 
     monkeypatch.setattr(httpx, "post", post)
     result = tool.execute(destination="mall", origin=ORIGIN)
-    assert result.metadata["status"] == "needs_selection"
-    assert len(result.metadata["candidates"]) == 2
-    assert "navigate=yes" not in result.metadata["maps_url"]
+
+    assert result.metadata["status"] == "ready"
+    assert module.ROUTES_URL in calls
+    # The first candidate, and the briefing names it rather than "mall".
+    assert result.metadata["destination"] == "Mall 0"
+    assert "Mall 0" in result.metadata["briefing"]
 
 
 def test_chosen_place_id_must_match_returned_candidates(nav, monkeypatch):

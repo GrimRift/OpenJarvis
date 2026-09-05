@@ -71,6 +71,12 @@ def waze_link(
     if point is None:
         params["q"] = destination
     else:
+        # q travels with ll, as every example in Waze's deep-link docs does.
+        # Coordinates alone opened the planned-drive planner ("Find the best
+        # time to leave") with a Go now button rather than navigating: with
+        # no name to show, Waze appears to treat the link as a trip to
+        # schedule instead of one to start.
+        params["q"] = destination
         params["ll"] = f"{point['latitude']},{point['longitude']}"
         params["navigate"] = "yes"
     base = "waze://?" if app else "https://waze.com/ul?"
@@ -338,7 +344,14 @@ class NavigateTool(BaseTool):
             if chosen_id:
                 selected = [c for c in candidates if c["place_id"] == chosen_id]
             else:
-                selected = candidates if len(candidates) == 1 else []
+                # Google ranks its text search by relevance, so the first
+                # result is taken rather than asking. Requiring exactly one
+                # candidate meant almost every real place asked instead --
+                # "SM City Calamba" returns the mall, a diner inside it and
+                # the supermarket -- and a driver cannot pick from a list.
+                # The chosen name is spoken back below, so a wrong pick is
+                # heard before the car moves rather than discovered later.
+                selected = candidates[:1]
             if len(selected) != 1:
                 return self._selection(
                     query,
@@ -371,6 +384,10 @@ class NavigateTool(BaseTool):
                 reason = ""
             except NavigationError as exc:
                 reason = f"ETA unavailable: {exc}"
+        # `query` is the chosen candidate's name by this point, not what was
+        # asked for -- which is the useful thing to say aloud, since "SM City
+        # Calamba" can resolve to a diner inside the mall and the only moment
+        # to catch that is before setting off.
         line = f"Directions to {query}. "
         if route is not None:
             minutes = math.ceil(route["duration_seconds"] / 60)
