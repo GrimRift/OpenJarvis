@@ -10,7 +10,14 @@ debugging sessions, read `AGENTS.md`.
 
 ---
 
-## M35 — Sage in the car (scoped 2026-09-04, not started)
+## M35 — Sage in the car (started 2026-09-05; tool slice implemented)
+
+The `navigate` tool now handles saved coordinates, unsaved place searches with
+candidate selection, traffic ETA, destination weather and Waze links. Routes,
+Places API (New), weather and authenticated drive audio are live-verified.
+User confirmed separate 30/day Google quota caps. Implementation and
+rollback instructions: `docs/m35-navigation.md`. The authenticated phone endpoint
+with Sage audio is built. Shortcut, Tailscale and Waze voice pack remain pending.
 
 **The experience.** In the car: *"Hey Siri, drive home."* Sage checks weather and
 traffic, speaks a briefing in its own voice through the phone, then opens
@@ -35,10 +42,12 @@ safely — I'll handle the rest."*
 
 **Decisions taken:**
 
-- **Traffic/ETA: Google Routes API** (Routes: Compute Routes Essentials) on the
-  existing project `708083691179`. 10,000 free calls/month against an expected
-  ~60; a billing account with a card is required even inside the free tier.
-  **Set a daily quota cap** so a runaway loop cannot bill anything.
+- **Traffic/ETA: Google Routes API** on project `708083691179`.
+  **Billing correction verified 2026-09-05:** `TRAFFIC_AWARE` requests use Pro,
+  not Essentials; do not apply the previously quoted Essentials free allowance.
+  New-place lookup also needs Places API (New), Text Search Pro for coordinates
+  and names. Each API needs its own enablement and quota review before live use.
+  A daily cap limits usage; it does not independently guarantee zero billing.
 - **Reachability: Tailscale.** Private network between phone and PC, no open
   ports, works on mobile data. Exposing the server to the internet was
   explicitly rejected: it holds Google tokens and can run code on the machine.
@@ -56,9 +65,10 @@ prompt pack generated from Cartesia.
 **Out of scope:** Sage implementing turn-by-turn, and any background wake word on
 iOS. Both are platform walls, not effort questions.
 
-**Blocked on the user:** Routes API enabled with a quota cap, Tailscale on both
-devices, and the list of saved places. The `navigate` tool itself is buildable
-and unit-testable without any of them.
+**Blocked on the user:** Routes API enabled with a quota cap, optional Places API
+for resolving new destinations, Tailscale on both devices, and saved places.
+Until lookup is enabled, an unsaved destination returns a Waze search link;
+saved or explicitly supplied coordinates produce a navigation link offline.
 
 **Unverified until a real drive:** whether the Shortcut reliably plays returned
 audio before opening Waze, and whether the recorded voice pack survives a

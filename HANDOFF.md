@@ -1,10 +1,63 @@
 # Sage Handoff for Claude Code
 
+**Current continuation (2026-09-05): `docs/CLAUDE-CONTINUE.md`.** Read that
+compact handoff first. M35 and the stream-auth fix remain uncommitted. Verify
+the user's real voice reply after hard-refresh before more M35 work; do not
+redesign fallback or reintroduce player controls without a new decision.
+
 ## Objective
 
 Build Sage into a broadly capable Windows assistant. Expand access progressively with tests, backups, recoverable actions, and logs. Permanent blocks remain for passwords and credentials, security databases, protected Windows system areas, and irreversible deletion.
 
 ## Verified completed work
+
+- **Streaming TTS authentication repair (2026-09-05).** Enabling server auth
+  exposed `useStreamingTts` opening its socket without auth subprotocols. Live:
+  unauthenticated socket rejected; authenticated socket accepted and delivered
+  199,680 PCM bytes. The fallback synthesized successfully but its plain audio
+  URL returned 401, causing the old player to flash then hide. User explicitly
+  chose **only fix streaming authentication for now**. AudioPlayer edits were
+  undone; fallback behavior is unchanged. The socket now uses existing
+  `buildWsProtocols` and the configured API base. Wiring test failed before
+  the fix; 42 focused frontend tests passed. No new replay controls added.
+
+- **M35 authenticated live drive verified (2026-09-05).** User enabled Places
+  API (New) and set the separate Sage user environment key. Restarted through
+  Start menu shortcuts with both user variables inherited. Unauthenticated
+  `/v1/drive` returned 401; authenticated public-destination request returned
+  200 in 5.2s: SM City Calamba resolved, 436s/1,920m route, destination weather,
+  Waze link, and 298,029-byte MP3 with a valid header. This supersedes the
+  setup blockers below. Phone playback/Tailscale/Shortcut remain unverified.
+
+- **M35 phone endpoint (2026-09-05).** `POST /v1/drive` shares NavigateTool,
+  requires phone coordinates and Sage bearer auth, and returns inline MP3 in
+  Jarvis/Frieren's profile. Tool and TTS are offloaded; ambiguous places skip
+  TTS and audio failure preserves the link. Places/weather flags enabled after
+  user confirmed 30/day Places cap. Live Places probe failed `SERVICE_DISABLED`
+  for `places.googleapis.com` (needs Places API **New**). Live endpoint correctly
+  returns 503 with server auth unset. No public bind changes. Setup contract in
+  `docs/m35-navigation.md`; phone setup and a real drive remain pending.
+
+- **M35 Routes live check (2026-09-05, follow-up).** User confirmed Routes API
+  enabled, a 30 requests/day quota, and the private user environment variable.
+  Enabled only navigation Routes flags; Places and navigation weather stay off.
+  One live public-location request returned 86 seconds, 463 metres, zero traffic
+  delay. Key never displayed or added to files. Restarted via Start menu shortcuts.
+
+- **M35 started: navigation tool slice (2026-09-05).** `navigate` handles saved
+  coordinates, optional Places candidates, traffic ETA, destination weather and
+  Waze links. Enabled in the external config; all new provider flags remain
+  false by user request. No Google calls made. **143 focused tests passed**,
+  full `ruff check src/ tests/` clean; registration fails on the stashed baseline.
+  Restarted through `Sage.lnk`; backend health and frontend both returned 200.
+  Rollback tag: `rollback/pre-m35-2026-09-05` (`19c2f2e8`), config backup:
+  `config.toml.pre-m35-20260905` in OpenJarvis-Data. CI now verified successful
+  on `fdb35337`; the rollback commit adds docs only. M35 changes uncommitted.
+  `docs/m35-navigation.md` covers setup, rollback, billing correction (traffic
+  uses Pro), and remaining phone endpoint/Shortcut/Tailscale/voice-pack work.
+  A mistaken plain `uv sync` pruned optional packages during restart; all 84
+  removed third-party packages were restored at exact versions, plus the local
+  Rust extension. Checks passed after restoration. Use `--no-sync` for checks.
 
 - **Weather, and the dashboard that had been reading zero all along (2026-09-04, evening).** Four faults in one evening, three of them pre-existing and invisible.
 

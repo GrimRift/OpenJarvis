@@ -19,6 +19,11 @@ Architect. Live config: `C:\AI\OpenJarvis-Data\config.toml`.
 ## Commands
 
 - Test: `uv run --frozen pytest <paths>`
+- In the configured live Windows environment, use `.venv\Scripts\python.exe -m
+  pytest <paths> -p no:randomly -q --tb=line` (or `uv run --frozen --no-sync`).
+  Plain `uv sync` prunes optional Sage packages; do not run it to repair a lock.
+  It removed `deepgram-sdk`, `anthropic`, `google-api-python-client` and
+  `google-auth-oauthlib` once; restore with `uv pip install <names>`.
 - Lint: `uv run --frozen ruff check <paths>`
 - CLI: `.venv\Scripts\jarvis.exe <command>`
 - Restart Sage after code or config changes; it does not hot-reload.
@@ -49,6 +54,10 @@ checks, and fail-closed behavior. Use `git_tool.py` for Git-specific patterns.
 - Do not reconnect Obsidian anywhere except `C:\AI\Sage-Vault` without asking.
 
 ## Working style
+
+- Keep verification thorough, but reads and narration compact. Read long files
+  by scoped search/region; do not re-read files just edited. Filter long output.
+  If a fix fails twice, stop changing it and reproduce/measure before a third.
 
 - Make narrow changes. Add comments only for non-obvious reasons.
 - Run focused tests and Ruff first, then proportionate regressions/live checks.
