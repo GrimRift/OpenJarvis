@@ -1706,6 +1706,17 @@ class DigestConfig:
 
 
 @dataclass
+class NavigationConfig:
+    """Provider calls are opt-in, separately from making a Waze link."""
+
+    routes_enabled: bool = False
+    routes_quota_confirmed: bool = False
+    places_enabled: bool = False
+    places_quota_confirmed: bool = False
+    weather_enabled: bool = False
+
+
+@dataclass
 class JarvisConfig:
     """Top-level configuration for OpenJarvis."""
 
@@ -1742,6 +1753,7 @@ class JarvisConfig:
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    navigation: NavigationConfig = field(default_factory=NavigationConfig)
     mining: Optional["MiningConfig"] = None
 
     @property
@@ -2029,6 +2041,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
             "digest",
             "proactive",
             "notifications",
+            "navigation",
             "memory_files",
             "system_prompt",
             "compression",

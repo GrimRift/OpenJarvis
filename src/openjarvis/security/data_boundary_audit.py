@@ -213,6 +213,7 @@ BROWSER_TOOLS = {
     "web_browser",
 }
 GENERIC_NETWORK_TOOLS = {"http_request"}
+NAVIGATION_TOOLS = {"navigate"}
 # notify_windows is here because deliver() fans a notification out to the
 # configured channel as well as the desktop toast -- the toast is local, the
 # channel leg is not.
@@ -237,6 +238,7 @@ EXTERNAL_TOOL_SURFACES = (
     | CHANNEL_OUTBOUND_TOOLS
     | CLOUD_MEDIA_TOOLS
     | KNOWLEDGE_ENGINE_TOOLS
+    | NAVIGATION_TOOLS
 )
 # Narrower cloud inference / media API key surfaces (not browser-only egress).
 CLOUD_API_SURFACES = CLOUD_MEDIA_TOOLS | WEB_SEARCH_TOOLS
@@ -981,6 +983,22 @@ def _audit_tool_surfaces(config: Any, builder: _FindingBuilder) -> None:
             evidence=f"configured tool(s) = {_format_tools(tools & BROWSER_TOOLS)}",
             recommendation=(
                 "Use browser automation only when web interactions are intentional."
+            ),
+        )
+
+    if tools & NAVIGATION_TOOLS:
+        builder.add(
+            finding_id="navigation-tool-configured",
+            status="warn",
+            title="Driving navigation tool is configured",
+            potential_data_path=(
+                "origin/destination -> Google Routes; place query -> Google Places; "
+                "destination -> OpenWeatherMap; opened link -> Waze"
+            ),
+            evidence=f"configured tool(s) = {_format_tools(tools & NAVIGATION_TOOLS)}",
+            recommendation=(
+                "Provider calls require navigation opt-in and quota confirmation. "
+                "Use phone coordinates for a phone-originated drive."
             ),
         )
 
