@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,50 @@ from openjarvis.core.registry import ToolRegistry, TTSRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.speech.spoken_text import to_spoken_text
 from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+#: Clips older than this are gone in every sense that matters: the token that
+#: addressed them lives in an in-memory map that dies with the server, so
+#: nothing can still be playing one from a previous day.
+_CLIP_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def _clip_dir() -> Path:
+    """One directory for generated clips, rather than one per clip.
+
+    ``tempfile.mkdtemp`` per synthesis left a directory behind every time:
+    377 of them had accumulated over sixteen days here, and once empty they
+    could not be removed at all -- rmtree and PowerShell both got
+    "Access is denied" on directories the user owned. Files inside a
+    directory we keep are deletable; directories Windows has finished with
+    are not always. So the clutter is not created in the first place.
+    """
+    directory = Path(tempfile.gettempdir()) / "jarvis-tts"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _prune_old_clips(directory: Path) -> None:
+    """Delete clips older than a day.
+
+    Best-effort: a file that will not delete is left alone rather than
+    failing a synthesis the user is waiting on. Deliberately not silent
+    about nothing happening -- an earlier version wrapped the whole sweep in
+    ``ignore_errors=True`` and removed almost nothing while appearing to
+    work.
+    """
+    import time
+
+    cutoff = time.time() - _CLIP_MAX_AGE_SECONDS
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
+                entry.unlink()
+        except OSError:
+            continue
 
 
 @ToolRegistry.register("text_to_speech")
@@ -100,14 +145,15 @@ class TextToSpeechTool(BaseTool):
         result = backend.synthesize(spoken_text, **synthesis_kwargs)
 
         # Save to file
+        ext = result.format or "mp3"
         if output_dir:
             out_dir = Path(output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = out_dir / f"digest.{ext}"
         else:
-            out_dir = Path(tempfile.mkdtemp(prefix="jarvis-tts-"))
-
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ext = result.format or "mp3"
-        audio_path = out_dir / f"digest.{ext}"
+            out_dir = _clip_dir()
+            _prune_old_clips(out_dir)
+            audio_path = out_dir / f"clip-{uuid.uuid4().hex}.{ext}"
         result.save(audio_path)
 
         return ToolResult(

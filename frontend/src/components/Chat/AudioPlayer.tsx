@@ -24,6 +24,10 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
   // dies with a restart while the chat history keeps its URL. Reopening an
   // old chat then renders a player that 404s and can never play.
   const [unavailable, setUnavailable] = useState(false);
+  // The controls wait until the clip has proved it can load. Rendering
+  // them first and removing them on error is what made a player appear
+  // and vanish a moment later when an old chat was reopened.
+  const [loadable, setLoadable] = useState(false);
 
   useEffect(() => {
     if (!autoPlay) return;
@@ -59,7 +63,10 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
     if (!el) return;
 
     const onTime = () => setCurrentTime(el.currentTime);
-    const onMeta = () => setDuration(el.duration);
+    const onMeta = () => {
+      setDuration(el.duration);
+      setLoadable(true);
+    };
     const onEnded = () => {
       setPlaying(false);
       setCurrentTime(0);
@@ -132,6 +139,7 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
 
   useEffect(() => {
     setUnavailable(false);
+    setLoadable(false);
   }, [src]);
 
   const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -145,7 +153,15 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
   // Nothing to offer: a dead clip's controls only mislead.
   if (unavailable) return null;
 
+  // The audio element always mounts, because it is the only thing that can
+  // discover whether the clip loads. Synthesized clips live in an in-memory
+  // map on the server, so every token dies on restart while the chat history
+  // keeps its URL -- reopening an old chat used to flash a full player that
+  // 404'd and removed itself.
   return (
+    <>
+      <audio ref={audioRef} src={src} preload="metadata" />
+      {loadable && (
     <div
       className="flex w-full max-w-md items-center gap-3 rounded-xl px-3 py-2 mb-3"
       style={{
@@ -153,8 +169,6 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
         border: '1px solid var(--color-border)',
       }}
     >
-      <audio ref={audioRef} src={src} preload="metadata" />
-
       <button
         onClick={toggle}
         aria-label={playing ? 'Pause voice reply' : 'Play voice reply'}
@@ -180,5 +194,7 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
         style={{ accentColor: 'var(--color-accent)' }}
       />
     </div>
+      )}
+    </>
   );
 }
