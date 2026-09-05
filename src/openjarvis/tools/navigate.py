@@ -388,16 +388,23 @@ class NavigateTool(BaseTool):
         # asked for -- which is the useful thing to say aloud, since "SM City
         # Calamba" can resolve to a diner inside the mall and the only moment
         # to catch that is before setting off.
+        # Kept short on purpose: this is spoken aloud in a car, and every
+        # extra clause is time the driver waits before Waze opens -- long
+        # enough that Siri gave up on the Shortcut mid-briefing. Dropped for
+        # that reason: naming the provider, which the driver cannot act on,
+        # and the caveat that Waze may pick a different route, which they are
+        # about to see for themselves.
         line = f"Directions to {query}. "
         if route is not None:
             minutes = math.ceil(route["duration_seconds"] / 60)
-            line += f"Google estimates {minutes} minutes driving. "
             delay = route["traffic_delay_seconds"]
-            if delay is not None:
-                line += f"Estimated traffic delay: {math.ceil(delay / 60)} minutes. "
+            if delay:
+                line += (
+                    f"About {minutes} minutes, "
+                    f"including {math.ceil(delay / 60)} in traffic. "
+                )
             else:
-                line += "Traffic delay unavailable. "
-            line += "Waze may choose a different route and ETA. "
+                line += f"About {minutes} minutes. "
         else:
             line += reason + " "
         weather_line = (
