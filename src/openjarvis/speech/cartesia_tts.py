@@ -38,6 +38,7 @@ def _cartesia_synthesize(
     volume: float = 1.0,
     emotion: str = "",
     language: str = "en",
+    bit_rate: int | None = None,
 ) -> bytes:
     """Call the Cartesia TTS API and return raw audio bytes."""
     resp = httpx.post(
@@ -54,6 +55,9 @@ def _cartesia_synthesize(
                 "container": output_format,
                 "sample_rate": 24000,
                 "encoding": "mp3" if output_format == "mp3" else "pcm_f32le",
+                # Cartesia accepts only 32000 and 64000 for mp3; 48000 is
+                # rejected outright, so callers pass one of the two or nothing.
+                **({"bit_rate": bit_rate} if bit_rate else {}),
             },
             "language": language,
             "generation_config": {
@@ -294,6 +298,7 @@ class CartesiaTTSBackend(TTSBackend):
         emotion: str = "",
         output_format: str = "mp3",
         language: str = "",
+        bit_rate: int | None = None,
     ) -> TTSResult:
         if not self._api_key:
             raise RuntimeError("CARTESIA_API_KEY not set")
@@ -311,6 +316,7 @@ class CartesiaTTSBackend(TTSBackend):
             volume=volume,
             emotion=emotion,
             language=language or self._language,
+            bit_rate=bit_rate,
         )
 
         return TTSResult(

@@ -422,7 +422,12 @@ class NavigateTool(BaseTool):
         # No "At the destination" label: the weather follows the drive
         # time, so what it describes is clear from position alone, and
         # three words is most of a second against Waze's countdown.
-        line += f"{weather_line} Drive safely."
+        # The weather text ends without punctuation, so it ran straight
+        # into the sign-off -- "light rain Drive safely" as one breath.
+        spoken_weather = weather_line.rstrip()
+        if spoken_weather and spoken_weather[-1] not in ".!?":
+            spoken_weather += "."
+        line += f"{spoken_weather} Drive safely."
         return ToolResult(
             tool_name=self.tool_id,
             success=True,

@@ -30,8 +30,32 @@ safely — I'll handle the rest."*
 - **No third party can read live turn-by-turn state out of Google Maps, Waze or
   Apple Maps.** Sage narrating a Maps route is impossible.
 - **Google Maps and Apple Maps cannot use a custom voice.** No API, no setting.
-- **Waze can, and still does in 2026, including on iPhone** — user-recorded
-  custom voices, a fixed list of ~40 prompts. Waze *records through the
+- **The voice pack is uploaded, not recorded (done 2026-09-05).** Waze's
+  in-app recorder works but compresses badly; packs can instead be uploaded as
+  mp3s, which is what the community AI-voice packs do. `scripts/
+  waze_voice_pack.py package` renders the 39 prompts under Waze's fixed
+  filenames (`TurnLeft.mp3`, `StartDrive1.mp3`, `1000meters.mp3`, ...) at 64
+  kbps — 457 kB against Waze's 800 kB pack cap, so nothing gets re-encoded.
+  Sage's live pack: `https://waze.com/ul?acvp=0d455a0c-59db-40b8-aebc-dca0811d969f`.
+  Prompt list in `OPENJARVIS_DATA/waze_prompts.json`, 43 in the app minus the
+  4 mile variants that never play on a km phone.
+  **Traps:** the bare-number files (`200.mp3` ... `1500.mp3`) are the *imperial*
+  callouts, not metres — the metric ones are the `*meters` names. The uploader
+  prints a checkmark emoji, which raises `UnicodeEncodeError` on a cp1252
+  Windows console *after* the upload has already succeeded, losing the pack
+  UUID; run it with `PYTHONIOENCODING=utf-8`.
+  Upload tooling: https://github.com/pipeeeeees/waze-voicepack-links (it logs in
+  to Waze's private RPC API as a synthetic device, and the resulting pack is
+  publicly downloadable — the user accepted that trade knowingly).
+- **A recorded voice cannot speak street names (verified 2026-09-05).** Only
+  voices Waze labels "Including street names" do, and those are text-to-speech;
+  a recorded pack is plain playback, so "Pan-Philippine Highway" has no clip to
+  play. Waze reportedly falls back to the last-used TTS voice for anything it
+  has no recording of, which would mean turn instructions in Sage's voice and
+  street names in another. An earlier note here said the pack makes "every turn
+  Sage" -- that was an overclaim. The user raised this before recording; it is
+  the trade the voice pack actually offers, and it is reversible from Waze's
+  voice settings. Waze *records through the
   microphone* rather than importing files, so Sage's Cartesia audio has to be
   played into the phone while recording. One-off, and then every turn is Sage.
   This is the only way to get Sage's voice onto turn-by-turn.
@@ -52,6 +76,14 @@ safely — I'll handle the rest."*
   is not a timeout and not the audio session in general: the same Shortcut run
   from the play button never failed. This ordering is what makes the countdown
   trick above work too, so do not reorder it back.
+- **Siri's "OK"/"Done" cannot be suppressed from inside the Shortcut
+  (verified 2026-09-05).** Ending with `Stop This Shortcut` does not silence it;
+  only the global iOS Siri Responses setting does. The user turned spoken
+  responses off, which also silences the `Ask for Input` prompt -- so the
+  prompt is a pre-generated Cartesia clip in Sage's voice
+  (`OPENJARVIS_DATA/voice-clips/sage-where-headed.mp3`), played by `Get File` +
+  `Play Sound` before `Ask for Input`. Siri asking anything in its own voice is
+  the thing being designed out; do not add it back.
 - **The spoken briefing has a hard budget of about five seconds**, which is how
   long Waze stays quiet before it starts talking. Anything longer is two voices
   at once. It currently runs ~4.7s at 13 words; the destination weather
