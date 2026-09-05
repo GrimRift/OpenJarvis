@@ -419,7 +419,10 @@ class NavigateTool(BaseTool):
         # hearing "open the Waze link" as Waze opens is a small lie. Chat
         # still gets the tappable link in `content` below, which needs no
         # narration to explain it.
-        line += f"At the destination: {weather_line} Drive safely."
+        # No "At the destination" label: the weather follows the drive
+        # time, so what it describes is clear from position alone, and
+        # three words is most of a second against Waze's countdown.
+        line += f"{weather_line} Drive safely."
         return ToolResult(
             tool_name=self.tool_id,
             success=True,
