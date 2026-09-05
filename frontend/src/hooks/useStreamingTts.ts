@@ -10,6 +10,7 @@ import {
   shouldShowSpeakingState,
 } from '../lib/pcm-playback';
 import { analyseInto } from '../lib/speech-analyser';
+import { openTtsSocket } from '../lib/speech-transport';
 import { useAppStore } from '../lib/store';
 import type { VoiceProfile } from '../lib/voice-profiles';
 
@@ -157,12 +158,9 @@ export function useStreamingTts() {
         gain.connect(ctx.destination);
       }
 
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       let socket: WebSocket;
       try {
-        socket = new WebSocket(
-          `${proto}://${window.location.host}/v1/speech/tts-stream`,
-        );
+        socket = openTtsSocket();
       } catch {
         setPlaying(false);
         settleOutcome('failed-before-audio');
