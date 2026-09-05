@@ -201,12 +201,13 @@ def destination_weather(root: Path, point: dict) -> str:
             return "Weather unavailable: weather is not configured."
         units = config.get("units") or weather.DEFAULT_UNITS
         coords = (point["latitude"], point["longitude"])
+        # Current conditions only. The forecast clause ("rain likely around
+        # 12 PM") earns its place in a morning briefing and not on a
+        # sixteen-minute drive, and it is spoken while Waze is counting down
+        # to start talking. Skipping it also drops an API call, so the
+        # briefing arrives sooner as well as ending sooner.
         current = weather.fetch_current(key, "", units, coords)
-        try:
-            forecast = weather.fetch_forecast(key, "", units, coords=coords)
-        except Exception:
-            forecast = None
-        return weather.summarize(current, forecast, units)
+        return weather.summarize(current, None, units)
     except Exception:
         return "Weather unavailable for this drive."
 
@@ -394,17 +395,17 @@ class NavigateTool(BaseTool):
         # that reason: naming the provider, which the driver cannot act on,
         # and the caveat that Waze may pick a different route, which they are
         # about to see for themselves.
-        line = f"Directions to {query}. "
+        # Every word is spoken into a roughly five-second gap: Waze opens
+        # first now, counts down, then starts talking itself. A briefing that
+        # runs past that gap is two voices at once.
+        line = f"{query}. "
         if route is not None:
             minutes = math.ceil(route["duration_seconds"] / 60)
             delay = route["traffic_delay_seconds"]
             if delay:
-                line += (
-                    f"About {minutes} minutes, "
-                    f"including {math.ceil(delay / 60)} in traffic. "
-                )
+                line += f"{minutes} minutes, {math.ceil(delay / 60)} in traffic. "
             else:
-                line += f"About {minutes} minutes. "
+                line += f"{minutes} minutes. "
         else:
             line += reason + " "
         weather_line = (

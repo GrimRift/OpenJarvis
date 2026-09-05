@@ -172,8 +172,7 @@ def test_traffic_request_and_briefing_use_same_destination_as_waze(nav, monkeypa
     # Spoken in a car: the drive time and how much of it is traffic, and
     # nothing else. The provider's name and the caveat that Waze may route
     # differently were dropped -- neither is something a driver can act on.
-    assert "About 16 minutes" in result.content
-    assert "including 6 in traffic" in result.content
+    assert "16 minutes, 6 in traffic" in result.content
     assert "Google" not in result.content
     assert "may choose a different route" not in result.content
     assert len(calls) == 1
@@ -225,7 +224,7 @@ def test_missing_static_duration_and_distance_stay_unknown(nav, monkeypatch):
     # The briefing is spoken in a car, so an unknown delay is simply not
     # mentioned rather than announced. What matters is that none is invented.
     assert "traffic" not in result.content.lower()
-    assert "About 0 minutes" in result.content
+    assert "0 minutes" in result.content
 
 
 @pytest.mark.parametrize("status", [301, 400, 403, 429, 500])
