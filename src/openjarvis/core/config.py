@@ -8,6 +8,7 @@ found in the TOML file.
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import platform
 import shutil
@@ -1422,11 +1423,25 @@ def apply_security_profile(
     server_cfg: "ServerConfig | None",
     *,
     overrides: "set[str] | None" = None,
+    server_overrides: "set[str] | None" = None,
 ) -> None:
     """Expand a named security profile into config fields.
 
-    Fields in *overrides* (explicitly set by the user in TOML) are
-    not overwritten by the profile.
+    Fields the user set explicitly are not overwritten by the profile:
+    *overrides* names keys they set under ``[security]``, *server_overrides*
+    keys they set under ``[server]``.
+
+    The two are separate because they were not. A single set, built from the
+    ``[security]`` keys alone, was checked against the profile's *server*
+    keys too -- so ``host`` under ``[server]`` could never appear in it, and
+    every profile silently replaced an explicit bind address with
+    127.0.0.1. Setting ``host = "0.0.0.0"`` did nothing and said nothing:
+    the server came up on loopback, and the only way to find out was
+    netstat.
+
+    A profile overriding a value the user chose is now logged. Refusing
+    would be worse -- the profiles exist to hold a floor -- but doing it
+    silently is how a setting gets set three times and never takes.
     """
     profile = security_cfg.profile
     if not profile:
@@ -1439,6 +1454,7 @@ def apply_security_profile(
         )
 
     _overrides = overrides or set()
+    _server_overrides = server_overrides or set()
     pdef = _SECURITY_PROFILES[profile]
 
     for key, value in pdef.get("security", {}).items():
@@ -1447,8 +1463,20 @@ def apply_security_profile(
 
     if server_cfg is not None:
         for key, value in pdef.get("server", {}).items():
-            if key not in _overrides and hasattr(server_cfg, key):
-                setattr(server_cfg, key, value)
+            if key in _server_overrides:
+                continue
+            if not hasattr(server_cfg, key):
+                continue
+            current = getattr(server_cfg, key)
+            if current != value:
+                logging.getLogger(__name__).info(
+                    "Security profile %r set server.%s to %r (was %r)",
+                    profile,
+                    key,
+                    value,
+                    current,
+                )
+            setattr(server_cfg, key, value)
 
 
 @dataclass(slots=True)
@@ -2065,7 +2093,13 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
 
         # Expand security profile (user TOML overrides take precedence)
         _user_security_keys = set(data.get("security", {}).keys())
-        apply_security_profile(cfg.security, cfg.server, overrides=_user_security_keys)
+        _user_server_keys = set(data.get("server", {}).keys())
+        apply_security_profile(
+            cfg.security,
+            cfg.server,
+            overrides=_user_security_keys,
+            server_overrides=_user_server_keys,
+        )
 
         # Mining: dedicated parser for tagged-union submit_target
         cfg.mining = _parse_mining_section(data)
