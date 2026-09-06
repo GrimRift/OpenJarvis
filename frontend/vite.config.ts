@@ -58,13 +58,17 @@ export default defineConfig({
       // Vite proxies the HTTP request but not the upgrade, so the socket never
       // opens — no error, no close event, just silence — and every live agent
       // view sits empty in dev while working in a production build.
+      // 127.0.0.1, not localhost: localhost resolves AAAA (::1) before A, and
+      // the backend binds 0.0.0.0, which is IPv4 only. Every proxied call then
+      // spends ~2s failing over IPv6 before falling back — measured at 2036ms
+      // via localhost against 72ms via 127.0.0.1.
       '/v1': {
-        target: process.env.VITE_API_URL || 'http://localhost:8000',
+        target: process.env.VITE_API_URL || 'http://127.0.0.1:8000',
         changeOrigin: true,
         ws: true,
       },
-      '/health': process.env.VITE_API_URL || 'http://localhost:8000',
-      '/api': process.env.VITE_API_URL || 'http://localhost:8000',
+      '/health': process.env.VITE_API_URL || 'http://127.0.0.1:8000',
+      '/api': process.env.VITE_API_URL || 'http://127.0.0.1:8000',
     },
   },
 });

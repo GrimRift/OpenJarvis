@@ -137,7 +137,13 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
                     try:
                         fn["arguments"] = json.loads(args)
                     except (json.JSONDecodeError, TypeError):
-                        pass
+                        # Ollama rejects a string here outright -- "Value looks
+                        # like object, but can't find closing '}' symbol" -- and
+                        # keeping the unparseable text poisons every later turn
+                        # in the conversation, not just this one. The arguments
+                        # were already unrecoverable; an empty object at least
+                        # lets the history replay.
+                        fn["arguments"] = {}
         payload: Dict[str, Any] = {
             "model": model,
             "messages": msg_dicts,
@@ -364,7 +370,13 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
                     try:
                         fn["arguments"] = json.loads(args)
                     except (json.JSONDecodeError, TypeError):
-                        pass
+                        # Ollama rejects a string here outright -- "Value looks
+                        # like object, but can't find closing '}' symbol" -- and
+                        # keeping the unparseable text poisons every later turn
+                        # in the conversation, not just this one. The arguments
+                        # were already unrecoverable; an empty object at least
+                        # lets the history replay.
+                        fn["arguments"] = {}
 
         payload: Dict[str, Any] = {
             "model": model,

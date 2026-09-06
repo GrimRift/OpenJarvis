@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 import sys
 import threading
 
@@ -919,4 +920,15 @@ def serve(
             "authenticated requests to your instance."
         )
 
-    uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")
+    # Binding 0.0.0.0 serves IPv4 only, but "localhost" resolves AAAA (::1)
+    # before A on Windows, so every client that uses the name pays ~2s failing
+    # over before it falls back. Binding "::" is worse: uvicorn makes it
+    # IPv6-only here, which would drop Tailscale and the desktop UI. An
+    # explicit dual-stack socket is the only shape that answers on both.
+    if bind_host in ("0.0.0.0", "::") and socket.has_dualstack_ipv6():
+        sock = socket.create_server(
+            ("::", bind_port), family=socket.AF_INET6, dualstack_ipv6=True
+        )
+        uvicorn.Server(uvicorn.Config(app, log_level="info")).run(sockets=[sock])
+    else:
+        uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")
