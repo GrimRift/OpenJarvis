@@ -122,7 +122,6 @@ jobs:
       #   prompt      test_persona_scope::test_named_persona_resolves_to_personas_dir
       #   cli         test_importing_cli_does_not_import_numpy
       #   connectors  needs real Oura/Strava/Spotify credentials
-      #   memory      test_bm25 -- BM25Memory has no clear/delete
       #   channels, telemetry, hardware, evals, mcp, sandbox, integration,
       #   deploy, deployment, install, learning, mining, pearl, recipes, a2a,
       #   sdk, bench, intelligence  -- unverified on this branch
@@ -133,9 +132,10 @@ jobs:
           uv run --no-sync pytest -p no:randomly -q --tb=short \
             -m "not live and not cloud and not hub" \
             tests/analytics tests/architecture tests/core tests/daemon \
-            tests/engine tests/operators tests/scheduler tests/server \
-            tests/sessions tests/skills tests/speech tests/system \
-            tests/templates tests/tools tests/traces tests/workflow \
+            tests/engine tests/memory tests/operators tests/scheduler \
+            tests/server tests/sessions tests/skills tests/speech \
+            tests/system tests/templates tests/tools tests/traces \
+            tests/workflow \
             2>&1 | tee /tmp/pytest.log
           echo "pytest finished at $(date -u +%H:%M:%S)"
 

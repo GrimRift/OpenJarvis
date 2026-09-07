@@ -55,14 +55,14 @@ def test_read_document_utf8_fallback(tmp_path: Path):
 
 
 def test_read_document_pdf_missing_dep(tmp_path: Path):
+    # pdfplumber is an optional extra, so this has to hold both with and
+    # without it installed; these bytes are deliberately not a real PDF.
     p = tmp_path / "doc.pdf"
     p.write_bytes(b"%PDF-1.4 fake pdf content")
-    # Should raise ImportError when pdfplumber not installed
-    # or succeed if it IS installed — either way just check it's handled
-    try:
+    with pytest.raises(Exception) as excinfo:
         read_document(p)
-    except ImportError as exc:
-        assert "pdfplumber" in str(exc)
+    if isinstance(excinfo.value, ImportError):
+        assert "pdfplumber" in str(excinfo.value)
 
 
 def test_read_document_not_found(tmp_path: Path):
