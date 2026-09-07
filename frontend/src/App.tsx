@@ -191,7 +191,7 @@ export default function App() {
           <Route index element={<ChatPage />} />
           <Route path="voice" element={<VoicePage />} />
           <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="health" element={<HealthPage />} />
+          <Route path="system-health" element={<HealthPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="get-started" element={<GetStartedPage />} />
           <Route path="data-sources" element={<DataSourcesPage />} />
