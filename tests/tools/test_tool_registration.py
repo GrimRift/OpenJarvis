@@ -79,6 +79,8 @@ EXPECTED_TOOLS = {
     "notify_windows",
     # check_class_schedule.py
     "check_class_schedule",
+    # system_health.py
+    "system_health",
 }
 
 

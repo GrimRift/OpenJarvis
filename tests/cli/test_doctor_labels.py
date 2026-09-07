@@ -40,9 +40,17 @@ class TestDoctorOptionalLabels:
         assert "Optional: pynvml (GPU monitoring)" not in names
 
     def test_labels_show_install_hint_on_missing(self) -> None:
-        """When a package is missing, show install hint in status."""
+        """When an applicable package is missing, show install hint in status.
+
+        Apple Silicon energy monitoring is only reported as missing on a Mac;
+        elsewhere it is not applicable, because warning a Windows box about it
+        forever is the noise that makes a health report get ignored.
+        """
         blocker = _selective_import_blocker("zeus")
-        with mock.patch("builtins.__import__", side_effect=blocker):
+        with (
+            mock.patch("builtins.__import__", side_effect=blocker),
+            mock.patch("openjarvis.core.health.sys.platform", "darwin"),
+        ):
             runner = CliRunner()
             result = runner.invoke(cli, ["doctor", "--json"])
         data = json.loads(result.output)

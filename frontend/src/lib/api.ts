@@ -416,6 +416,42 @@ export async function fetchSpeechHealth(): Promise<SpeechHealth> {
 }
 
 // ---------------------------------------------------------------------------
+// System health
+// ---------------------------------------------------------------------------
+
+export interface HealthCheck {
+  name: string;
+  status: 'ok' | 'warn' | 'fail';
+  message: string;
+  details: string | null;
+  section: string;
+  live: boolean;
+  fix: string | null;
+}
+
+export interface HealthSection {
+  id: string;
+  label: string;
+  checks: HealthCheck[];
+}
+
+export interface HealthReport {
+  status: 'ok' | 'warn' | 'fail';
+  live: boolean;
+  sections: HealthSection[];
+}
+
+/**
+ * Run Sage's diagnostics. `live` is opt-in: those probes are billable and
+ * count against a 30/day cap, so the page never passes it on its own.
+ */
+export async function fetchSystemHealth(live = false): Promise<HealthReport> {
+  const res = await apiFetch(`/v1/system/health?live=${live ? 'true' : 'false'}`);
+  if (!res.ok) throw new Error(`Health check failed (${res.status})`);
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Agent Manager
 // ---------------------------------------------------------------------------
 

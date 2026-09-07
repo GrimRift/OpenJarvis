@@ -42,6 +42,9 @@ EXPECTED_CLOUD_MEDIA_TOOLS = {
 EXPECTED_KNOWLEDGE_ENGINE_TOOLS = {"scan_chunks"}
 
 EXPECTED_LOCAL_ACCESS_TOOLS = {
+    # Reads local config, the scheduler database and credential files --
+    # by shape and age only, never their values.
+    "system_health",
     "file_write",
     "apply_patch",
     "docker_shell_exec",

@@ -1166,6 +1166,28 @@ async def speech_health(request: Request):
 
 # ---- Feedback routes ----
 
+system_router = APIRouter(prefix="/v1/system", tags=["system"])
+
+
+@system_router.get("/health")
+async def system_health(live: bool = False):
+    """Run Sage's own diagnostics.
+
+    Shares :func:`run_health_checks` with the ``system_health`` tool and
+    ``jarvis doctor`` so the surfaces cannot disagree. ``live`` is opt-in
+    because those probes are billable and count against daily caps, and the
+    page never runs on its own -- the user presses the button.
+    """
+    from openjarvis.core.health import run_health_checks  # noqa: PLC0415
+
+    try:
+        report = run_health_checks(live=live)
+    except Exception as exc:
+        logger.exception("Health check failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return report.to_dict()
+
+
 feedback_router = APIRouter(prefix="/v1/feedback", tags=["feedback"])
 
 
@@ -1280,6 +1302,7 @@ def include_all_routes(app) -> None:
     app.include_router(websocket_router)
     app.include_router(learning_router)
     app.include_router(speech_router)
+    app.include_router(system_router)
     app.include_router(feedback_router)
     app.include_router(optimize_router)
 

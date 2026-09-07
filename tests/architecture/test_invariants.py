@@ -297,6 +297,67 @@ class TestToolResultsAreLabelledInOnePlace:
         )
 
 
+class TestHealthChecksHaveOneOwner:
+    """Every health surface must run the same checks.
+
+    There are three of them -- ``jarvis doctor``, ``GET /v1/system/health``
+    and the ``system_health`` tool -- and the whole point of the feature is
+    that Sage's answer about itself is trustworthy. A surface that assembled
+    its own list would report something different from the other two, which
+    is this codebase's oldest failure shape: the code was correct, it just
+    was not the code being run.
+
+    Written against the AST, because this docstring names the identifier it
+    forbids.
+    """
+
+    OWNER = "core/health.py"
+    TARGET = "run_health_checks"
+
+    def _call_sites(self) -> list[str]:
+        sites = []
+        for path, tree in _modules():
+            if _rel(path) == self.OWNER:
+                continue
+            for call in _calls(tree):
+                if _call_name(call) == self.TARGET:
+                    sites.append(_rel(path))
+        return sorted(set(sites))
+
+    def test_only_the_known_surfaces_run_the_checks(self):
+        allowed = {
+            "cli/doctor_cmd.py",
+            "server/api_routes.py",
+            "tools/system_health.py",
+        }
+        unexpected = set(self._call_sites()) - allowed
+        assert not unexpected, (
+            f"{self.TARGET} is called from {sorted(unexpected)}. A new health "
+            "surface must go through the shared run, not its own list."
+        )
+
+    def test_the_invariant_has_something_to_guard(self):
+        """A rename would otherwise make the check above vacuously pass."""
+        assert self._call_sites(), (
+            f"no {self.TARGET} call site outside {self.OWNER} — did it move?"
+        )
+
+    def test_no_surface_assembles_its_own_check_list(self):
+        """``CheckResult`` is constructed only where the checks live."""
+        builders = set()
+        for path, tree in _modules():
+            rel = _rel(path)
+            if rel == self.OWNER:
+                continue
+            for call in _calls(tree):
+                if _call_name(call) == "CheckResult":
+                    builders.add(rel)
+        assert not builders, (
+            f"CheckResult is built in {sorted(builders)}. Checks belong in "
+            f"{self.OWNER} so every surface reports the same thing."
+        )
+
+
 class TestEveryOpenAISerializerHandlesImages:
     """There is more than one place that builds an OpenAI message payload.
 

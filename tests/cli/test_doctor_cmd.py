@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from openjarvis.cli import cli
-from openjarvis.cli.doctor_cmd import (
+from openjarvis.core.health import (
     CheckResult,
     _check_config_exists,
     _check_default_model,
@@ -34,15 +34,15 @@ class TestDoctorRuns:
         mock_config.intelligence.default_model = ""
 
         with (
-            patch("openjarvis.cli.doctor_cmd.load_config", return_value=mock_config),
+            patch("openjarvis.core.health.load_config", return_value=mock_config),
             patch(
-                "openjarvis.cli.doctor_cmd.DEFAULT_CONFIG_PATH",
+                "openjarvis.core.health.DEFAULT_CONFIG_PATH",
                 Path("/tmp/nonexistent/config.toml"),
             ),
-            patch("openjarvis.cli.doctor_cmd._check_engines", return_value=[]),
-            patch("openjarvis.cli.doctor_cmd._check_models", return_value=[]),
+            patch("openjarvis.core.health._check_engines", return_value=[]),
+            patch("openjarvis.core.health._check_models", return_value=[]),
             patch(
-                "openjarvis.cli.doctor_cmd._check_speech_backend",
+                "openjarvis.core.health._check_speech_backend",
                 return_value=CheckResult("Speech backend", "ok", "mock ready"),
             ),
         ):
@@ -58,15 +58,15 @@ class TestDoctorJsonOutput:
         mock_config.intelligence.default_model = ""
 
         with (
-            patch("openjarvis.cli.doctor_cmd.load_config", return_value=mock_config),
+            patch("openjarvis.core.health.load_config", return_value=mock_config),
             patch(
-                "openjarvis.cli.doctor_cmd.DEFAULT_CONFIG_PATH",
+                "openjarvis.core.health.DEFAULT_CONFIG_PATH",
                 Path("/tmp/nonexistent/config.toml"),
             ),
-            patch("openjarvis.cli.doctor_cmd._check_engines", return_value=[]),
-            patch("openjarvis.cli.doctor_cmd._check_models", return_value=[]),
+            patch("openjarvis.core.health._check_engines", return_value=[]),
+            patch("openjarvis.core.health._check_models", return_value=[]),
             patch(
-                "openjarvis.cli.doctor_cmd._check_speech_backend",
+                "openjarvis.core.health._check_speech_backend",
                 return_value=CheckResult("Speech backend", "ok", "mock ready"),
             ),
         ):
@@ -94,7 +94,7 @@ class TestCheckConfigMissing:
     def test_check_config_missing(self) -> None:
         """Warning when config file does not exist."""
         with patch(
-            "openjarvis.cli.doctor_cmd.DEFAULT_CONFIG_PATH",
+            "openjarvis.core.health.DEFAULT_CONFIG_PATH",
             Path("/tmp/nonexistent/config.toml"),
         ):
             result = _check_config_exists()
@@ -105,7 +105,7 @@ class TestCheckConfigMissing:
 class TestCheckEngineProbing:
     def test_check_engine_probing(self) -> None:
         """Engine health check reports reachable/unreachable engines."""
-        from openjarvis.cli.doctor_cmd import CheckResult
+        from openjarvis.core.health import CheckResult
 
         mock_engine_healthy = MagicMock()
         mock_engine_healthy.health.return_value = True
@@ -146,7 +146,7 @@ class TestCheckDefaultModel:
         """Leaving default model empty should be treated as valid auto-routing."""
         mock_config = MagicMock()
         mock_config.intelligence.default_model = ""
-        with patch("openjarvis.cli.doctor_cmd.load_config", return_value=mock_config):
+        with patch("openjarvis.core.health.load_config", return_value=mock_config):
             result = _check_default_model()
         assert result.status == "ok"
         assert "auto" in result.message.lower()

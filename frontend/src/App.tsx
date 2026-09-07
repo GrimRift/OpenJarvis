@@ -4,6 +4,7 @@ import { Layout } from './components/Layout';
 import { ChatPage } from './pages/ChatPage';
 import { VoicePage } from './pages/VoicePage';
 import { DashboardPage } from './pages/DashboardPage';
+import { HealthPage } from './pages/HealthPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { GetStartedPage } from './pages/GetStartedPage';
 import { AgentsPage } from './pages/AgentsPage';
@@ -190,6 +191,7 @@ export default function App() {
           <Route index element={<ChatPage />} />
           <Route path="voice" element={<VoicePage />} />
           <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="health" element={<HealthPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="get-started" element={<GetStartedPage />} />
           <Route path="data-sources" element={<DataSourcesPage />} />
