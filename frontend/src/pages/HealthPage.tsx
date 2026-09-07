@@ -66,7 +66,10 @@ export function HealthPage() {
   const total = report?.sections.reduce((n, s) => n + s.checks.length, 0) ?? 0;
 
   return (
-    <div className="mx-auto w-full max-w-3xl p-6">
+    // main is `overflow-hidden h-full`, so a page that does not claim
+    // `flex-1 overflow-y-auto` simply cannot scroll past the fold.
+    <div className="flex-1 overflow-y-auto px-6 py-10">
+      <div className="mx-auto w-full max-w-3xl">
       <header className="mb-6">
         <h1 className="flex items-center gap-2 text-xl font-semibold">
           <Activity className="h-5 w-5" aria-hidden />
@@ -136,6 +139,7 @@ export function HealthPage() {
           ))}
         </>
       )}
+      </div>
     </div>
   );
 }

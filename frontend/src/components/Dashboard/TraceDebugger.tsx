@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { GitBranch, Clock, ChevronRight, ChevronDown } from 'lucide-react';
+import { apiFetch } from '../../lib/api';
 
 interface TraceStepData {
   model?: string;
@@ -124,14 +125,19 @@ export function TraceDebugger() {
 
   const fetchTraces = useCallback(async () => {
     try {
-      const base = import.meta.env.VITE_API_URL || '';
-      const res = await fetch(`${base}/v1/traces?limit=50`);
-      if (!res.ok) throw new Error();
+      // apiFetch, not fetch: a bare call sends no Authorization header and
+      // 401s whenever the server has a key set, which read as "no traces".
+      const res = await apiFetch('/v1/traces?limit=50');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setTraces(data.traces || []);
       setError(null);
-    } catch {
-      setError('Cannot load traces');
+    } catch (err) {
+      // Naming the cause matters: the generic message hid a 401 for as long
+      // as it existed.
+      setError(
+        `Cannot load traces (${err instanceof Error ? err.message : 'unknown'})`,
+      );
     }
   }, []);
 
