@@ -1188,6 +1188,30 @@ async def system_health(live: bool = False):
     return report.to_dict()
 
 
+@system_router.get("/fixes/{fix_id:path}")
+async def describe_system_fix(fix_id: str):
+    """Describe what a fix would do. Changes nothing."""
+    from openjarvis.core.fixes import describe_fix  # noqa: PLC0415
+
+    plan = describe_fix(fix_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail=f"No fix called '{fix_id}'")
+    return plan.to_dict()
+
+
+@system_router.post("/fixes/{fix_id:path}/apply")
+async def apply_system_fix(fix_id: str, confirmed: bool = False):
+    """Apply a fix, only with ``confirmed=true``.
+
+    The confirmation is a required argument rather than a default so that a
+    caller that forgets it gets a refusal, not a side effect.
+    """
+    from openjarvis.core.fixes import apply_fix  # noqa: PLC0415
+
+    outcome = apply_fix(fix_id, confirmed=confirmed)
+    return outcome.to_dict()
+
+
 feedback_router = APIRouter(prefix="/v1/feedback", tags=["feedback"])
 
 

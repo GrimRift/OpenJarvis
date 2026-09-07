@@ -45,6 +45,8 @@ EXPECTED_LOCAL_ACCESS_TOOLS = {
     # Reads local config, the scheduler database and credential files --
     # by shape and age only, never their values.
     "system_health",
+    # Runs scheduled jobs and reads credential state.
+    "apply_health_fix",
     "file_write",
     "apply_patch",
     "docker_shell_exec",

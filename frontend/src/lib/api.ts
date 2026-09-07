@@ -451,6 +451,43 @@ export async function fetchSystemHealth(live = false): Promise<HealthReport> {
   return res.json();
 }
 
+export interface FixPlan {
+  fix_id: string;
+  title: string;
+  description: string;
+  steps: string[];
+  automatic: boolean;
+  reversible: boolean;
+  url: string | null;
+}
+
+export interface FixOutcome {
+  fix_id: string;
+  applied: boolean;
+  message: string;
+  detail: string | null;
+}
+
+/** Describe a fix. Changes nothing. */
+export async function fetchFixPlan(fixId: string): Promise<FixPlan> {
+  const res = await apiFetch(`/v1/system/fixes/${encodeURIComponent(fixId)}`);
+  if (!res.ok) throw new Error(`Could not read that fix (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Apply a fix. `confirmed` is always sent explicitly: the server refuses
+ * without it, which is what stops a stray call having a side effect.
+ */
+export async function applyFix(fixId: string): Promise<FixOutcome> {
+  const res = await apiFetch(
+    `/v1/system/fixes/${encodeURIComponent(fixId)}/apply?confirmed=true`,
+    { method: 'POST' },
+  );
+  if (!res.ok) throw new Error(`Fix failed (${res.status})`);
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Agent Manager
 // ---------------------------------------------------------------------------

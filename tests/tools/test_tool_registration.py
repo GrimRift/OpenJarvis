@@ -81,6 +81,8 @@ EXPECTED_TOOLS = {
     "check_class_schedule",
     # system_health.py
     "system_health",
+    # apply_health_fix.py
+    "apply_health_fix",
 }
 
 

@@ -1,6 +1,13 @@
 import { useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle2, Loader2, XCircle } from 'lucide-react';
-import { fetchSystemHealth, type HealthCheck, type HealthReport } from '../lib/api';
+import {
+  applyFix,
+  fetchFixPlan,
+  fetchSystemHealth,
+  type FixPlan,
+  type HealthCheck,
+  type HealthReport,
+} from '../lib/api';
 
 /**
  * Health page — pull-only by explicit decision. Nothing runs until the user
@@ -18,6 +25,109 @@ function StatusIcon({ status }: { status: string }) {
   const style = STATUS_STYLES[status] ?? STATUS_STYLES.warn;
   const Icon = style.icon;
   return <Icon className={`h-4 w-4 shrink-0 ${style.className}`} aria-hidden />;
+}
+
+/**
+ * A fix is always two deliberate steps: read the plan, then confirm. There is
+ * no single click that changes anything, and the confirm button only appears
+ * for fixes the server says it can actually perform.
+ */
+function FixControl({ fixId }: { fixId: string }) {
+  const [plan, setPlan] = useState<FixPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  const load = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setPlan(await fetchFixPlan(fixId));
+      setFailed(false);
+    } catch (err) {
+      setFailed(true);
+      setResult(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      const outcome = await applyFix(fixId);
+      setFailed(!outcome.applied);
+      setResult(outcome.message + (outcome.detail ? ` ${outcome.detail}` : ''));
+      setPlan(null);
+    } catch (err) {
+      setFailed(true);
+      setResult(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-2">
+      {!plan && !result && (
+        <button
+          type="button"
+          onClick={load}
+          disabled={busy}
+          className="rounded border border-border px-2 py-1 text-xs disabled:opacity-60"
+        >
+          {busy ? 'Loading…' : 'Show fix'}
+        </button>
+      )}
+
+      {plan && (
+        <div className="rounded-md border border-border p-3 text-xs">
+          <p className="font-medium">{plan.title}</p>
+          <p className="mt-1 text-muted-foreground">{plan.description}</p>
+          {plan.steps.length > 0 && (
+            <ul className="mt-2 list-disc pl-4 text-muted-foreground">
+              {plan.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ul>
+          )}
+          {!plan.reversible && plan.automatic && (
+            <p className="mt-2 text-amber-500">This cannot be undone.</p>
+          )}
+          <div className="mt-3 flex gap-2">
+            {plan.automatic ? (
+              <button
+                type="button"
+                onClick={confirm}
+                disabled={busy}
+                className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-60"
+              >
+                {busy ? 'Applying…' : 'Confirm and apply'}
+              </button>
+            ) : (
+              <span className="text-muted-foreground">
+                This one has to be done by hand.
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setPlan(null)}
+              disabled={busy}
+              className="rounded border border-border px-2 py-1 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <p className={`text-xs ${failed ? 'text-red-500' : 'text-emerald-500'}`}>
+          {result}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function CheckRow({ check }: { check: HealthCheck }) {
@@ -39,6 +149,7 @@ function CheckRow({ check }: { check: HealthCheck }) {
             {check.details}
           </p>
         )}
+        {check.fix && <FixControl fixId={check.fix} />}
       </div>
     </li>
   );
