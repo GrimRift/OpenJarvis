@@ -78,10 +78,17 @@ class SystemHealthTool(BaseTool):
         for check in problems:
             if check.details:
                 lines.append(f"  {check.name}: {check.details}")
+            # The id has to appear in the text, not only the metadata: asked
+            # to fix something, the model answered "the health check did not
+            # provide a specific fix ID" and stopped, because it never sees
+            # metadata. Without this the confirmation flow cannot start.
+            if check.fix:
+                lines.append(f"  Fix id for {check.name}: {check.fix}")
         if fixes:
             lines.append(
-                "Fixes are available for some of these. Ask before applying "
-                "any of them; nothing has been changed."
+                "Fixes are available. Nothing has been changed. To apply one, "
+                "ask the user to approve that specific fix, then call "
+                "apply_health_fix with its id and confirmed=true."
             )
 
         return ToolResult(

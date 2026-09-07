@@ -158,3 +158,31 @@ class TestTheTool:
     def test_an_unknown_fix_id_is_refused(self) -> None:
         result = self._tool().execute(fix_id="made-up:thing", confirmed=True)
         assert result.success is False
+
+class TestFixIdsReachTheModel:
+    """The fix id must be in the tool's text, not only its metadata.
+
+    Asked to fix a failing job, Sage answered "the health check did not
+    provide a specific fix ID" and stopped. It was right: a tool result
+    reaches the model as content, and the ids lived only in metadata, so the
+    confirmation flow could never start.
+    """
+
+    def test_the_content_names_each_fix_id(self) -> None:
+        from openjarvis.core.health import CheckResult, HealthReport
+        from openjarvis.tools.system_health import SystemHealthTool
+
+        report = HealthReport(
+            checks=[
+                CheckResult("Good", "ok", "fine"),
+                CheckResult("Job: x", "fail", "Last run failed", fix="rerun-job:x"),
+            ]
+        )
+        with patch(
+            "openjarvis.tools.system_health.run_health_checks", return_value=report
+        ):
+            result = SystemHealthTool().execute()
+
+        assert "rerun-job:x" in result.content
+        assert "apply_health_fix" in result.content
+        assert result.metadata["available_fixes"] == ["rerun-job:x"]
