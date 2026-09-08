@@ -21,7 +21,11 @@ import {
 import { playGreeting, preloadGreetings } from '../../lib/greeting';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
-import { isDigestPrompt, shouldSynthesizeReplyAudio } from '../../lib/audio-policy';
+import {
+  isDigestPrompt,
+  shouldSynthesizeReplyAudio,
+  speakableText,
+} from '../../lib/audio-policy';
 import { shouldFlushStreamRender } from '../../lib/stream-render-policy';
 import { getVoiceProfile } from '../../lib/voice-profiles';
 import { useStreamingTts } from '../../hooks/useStreamingTts';
@@ -211,6 +215,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const fluxEnabled = useAppStore((s) => s.settings.fluxEnabled);
   const voiceRepliesEnabled = useAppStore((s) => s.settings.voiceRepliesEnabled);
+  const speakTypedReplies = useAppStore((s) => s.settings.speakTypedReplies);
   const ttsVoiceId = useAppStore((s) => s.settings.ttsVoiceId);
   const ttsVoice = getVoiceProfile(ttsVoiceId);
   const fluxEagerEnabled = useAppStore((s) => s.settings.fluxEagerEnabled);
@@ -1015,6 +1020,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           content,
           Boolean(audio),
           accumulatedContent,
+          speakTypedReplies,
         )
       ) {
         const playbackOwner = `reply-request-${generateId()}`;
@@ -1025,14 +1031,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // clip exists (1.55s for a line, 6.92s for a paragraph, all silence),
         // while the stream starts speaking at about 0.41s. Streamed replies
         // are deliberately ephemeral — no file, so no replay control.
-        speakStreaming(accumulatedContent, ttsVoice)
+        // Spoken text is prepared, displayed text is not: code blocks and
+        // link targets are unlistenable, and a very long answer traps the
+        // listener with no way to skim.
+        const spokenContent = speakableText(accumulatedContent);
+        speakStreaming(spokenContent, ttsVoice)
           .then((spoke) => {
             if (spoke) {
               releasePlayback();
               return;
             }
             // Nothing was heard, so falling back cannot repeat anything.
-            return synthesizeSpeech(accumulatedContent, {
+            return synthesizeSpeech(spokenContent, {
               voice_id: ttsVoice.id,
               speed: ttsVoice.speed,
               volume: ttsVoice.volume,
@@ -1083,6 +1093,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     beginStreamingSpeech,
     speakStreaming,
     voiceRepliesEnabled,
+    speakTypedReplies,
     ttsVoice,
   ]);
 
@@ -1190,6 +1201,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       updateLastAssistant,
           speakStreaming,
       voiceRepliesEnabled,
+    speakTypedReplies,
       ttsVoice,
     ],
   );

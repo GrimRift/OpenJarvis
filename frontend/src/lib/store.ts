@@ -215,6 +215,10 @@ interface Settings {
   // of talking to Sage -- but a streamed reply has no player, so this and the
   // stop control are the only ways to silence it.
   voiceRepliesEnabled: boolean;
+  // Speak replies to typed messages too, not just spoken ones. Off by
+  // default: someone typing in a quiet room has not asked to be talked at.
+  // voiceRepliesEnabled still wins, so muting silences this as well.
+  speakTypedReplies: boolean;
   ttsVoiceId: string;
   // Deepgram Flux streaming transcription. Off by default: local
   // faster-whisper stays the default and the fallback.
@@ -244,6 +248,7 @@ function loadSettings(): Settings {
     visionUseLocal: false,
     visionLocalModel: 'qwen3-vl:8b',
     voiceRepliesEnabled: true,
+    speakTypedReplies: false,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,
     fluxEagerEnabled: false,

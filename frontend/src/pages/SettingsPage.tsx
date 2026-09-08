@@ -897,6 +897,24 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
+                <SettingRow label="Speak Typed Replies" description={`Also read answers aloud when you typed the question, not just when you spoke it. Code blocks are skipped and very long answers are cut short, because neither is listenable.${settings.voiceRepliesEnabled ? '' : ' Currently silent: Speak Replies above is off, and it overrides this.'}`}>
+                  <button
+                    onClick={() => { updateSettings({ speakTypedReplies: !settings.speakTypedReplies }); showSaved(); }}
+                    className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
+                    style={{
+                      background: settings.speakTypedReplies ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                      opacity: settings.voiceRepliesEnabled ? 1 : 0.5,
+                    }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                      style={{
+                        transform: settings.speakTypedReplies ? 'translateX(20px)' : 'translateX(0)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    />
+                  </button>
+                </SettingRow>
                 <SettingRow label="Continuous Conversation" description="After Sage replies, automatically listen for your next turn instead of requiring the wake word again">
                   <button
                     onClick={() => { updateSettings({ continuousConversationEnabled: !settings.continuousConversationEnabled }); showSaved(); }}
