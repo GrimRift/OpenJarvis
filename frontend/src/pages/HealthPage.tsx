@@ -8,6 +8,7 @@ import {
   type HealthCheck,
   type HealthReport,
 } from '../lib/api';
+import { runBrowserChecks, type BrowserCheck } from '../lib/browser-health';
 
 /**
  * Health page — pull-only by explicit decision. Nothing runs until the user
@@ -157,6 +158,7 @@ function CheckRow({ check }: { check: HealthCheck }) {
 
 export function HealthPage() {
   const [report, setReport] = useState<HealthReport | null>(null);
+  const [browser, setBrowser] = useState<BrowserCheck[] | null>(null);
   const [loading, setLoading] = useState<false | 'local' | 'live'>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -164,7 +166,15 @@ export function HealthPage() {
     setLoading(live ? 'live' : 'local');
     setError(null);
     try {
-      setReport(await fetchSystemHealth(live));
+      // The browser half runs alongside the server's: a muted or denied
+      // microphone is invisible from the server, and it is the failure that
+      // started this milestone.
+      const [serverReport, browserChecks] = await Promise.all([
+        fetchSystemHealth(live),
+        runBrowserChecks(),
+      ]);
+      setReport(serverReport);
+      setBrowser(browserChecks);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -175,6 +185,17 @@ export function HealthPage() {
   const problems =
     report?.sections.flatMap((s) => s.checks.filter((c) => c.status !== 'ok')) ?? [];
   const total = report?.sections.reduce((n, s) => n + s.checks.length, 0) ?? 0;
+  // The headline must not read "1 of 61" with a browser failure sitting
+  // uncounted underneath it. Browser checks stay visually separate, because
+  // they are evidence about this browser rather than the server, but they
+  // still count towards the summary and the icon.
+  const browserProblems = browser?.filter((c) => c.status !== 'ok') ?? [];
+  const headlineStatus =
+    browserProblems.some((c) => c.status === 'fail') || report?.status === 'fail'
+      ? 'fail'
+      : browserProblems.length > 0 || report?.status === 'warn'
+        ? 'warn'
+        : 'ok';
 
   return (
     // main is `overflow-hidden h-full`, so a page that does not claim
@@ -228,13 +249,48 @@ export function HealthPage() {
       {report && (
         <>
           <div className="mb-6 flex items-center gap-2 rounded-md border border-border p-3">
-            <StatusIcon status={report.status} />
+            <StatusIcon status={headlineStatus} />
             <span className="text-sm">
               {problems.length === 0
                 ? `All ${total} checks passed.`
                 : `${problems.length} of ${total} checks need attention.`}
+              {browserProblems.length > 0 &&
+                ` Plus ${browserProblems.length} in this browser.`}
             </span>
           </div>
+
+          {browser && browser.length > 0 && (
+            <section className="mb-6">
+              <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                This browser
+              </h2>
+              <p className="mb-1 text-xs text-muted-foreground/80">
+                Read from this browser, not the server. Another browser or
+                device can differ.
+              </p>
+              <ul>
+                {browser.map((check) => (
+                  <li
+                    key={check.name}
+                    className="flex gap-3 py-2 border-b border-border/40 last:border-0"
+                  >
+                    <StatusIcon status={check.status} />
+                    <div className="min-w-0 flex-1">
+                      <span className="text-sm font-medium">{check.name}</span>
+                      <p className="text-sm text-muted-foreground break-words">
+                        {check.message}
+                      </p>
+                      {check.details && (
+                        <p className="mt-1 text-xs text-muted-foreground/80 break-words">
+                          {check.details}
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {report.sections.map((section) => (
             <section key={section.id} className="mb-6">

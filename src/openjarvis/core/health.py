@@ -403,6 +403,142 @@ def _check_tts_credentials() -> CheckResult:
     )
 
 
+def _check_flux_streaming() -> CheckResult:
+    """Whether streaming speech-to-text could run, and why not if it cannot.
+
+    Reuses the reason the Settings toggle already shows, so the Health page
+    and the toggle cannot disagree about why Flux is unavailable. The key
+    itself is never included, only whether one is present.
+    """
+    try:
+        from openjarvis.server.flux_routes import _unavailable_reason
+    except Exception:
+        return CheckResult(
+            "Streaming speech-to-text",
+            "warn",
+            "Flux support is not installed",
+            section=SECTION_VOICE,
+        )
+
+    config = _get_config()
+    speech_cfg = getattr(config, "speech", None)
+    # The key may live in credentials.toml and only reach the environment
+    # when the server injects it, so a plain shell sees nothing while the
+    # running server is fine.
+    has_key = bool(_provider_key("DEEPGRAM_API_KEY"))
+    enabled = bool(getattr(speech_cfg, "flux_enabled", True))
+    try:
+        import websockets  # noqa: F401
+
+        deps = True
+    except ImportError:
+        deps = False
+
+    # Deliberately not flux.is_available(): that reads os.environ only, so it
+    # reports a correctly configured key as missing whenever this runs outside
+    # the server process.
+    available = has_key and enabled and deps
+
+    if not available and has_key and enabled and not deps:
+        return CheckResult(
+            "Streaming speech-to-text",
+            "warn",
+            "Flux dependencies are not installed",
+            details="Speech falls back to the local backend.",
+            section=SECTION_VOICE,
+        )
+
+    if available:
+        return CheckResult(
+            "Streaming speech-to-text",
+            "ok",
+            "Flux can connect",
+            section=SECTION_VOICE,
+        )
+
+    reason = ""
+    try:
+        reason = _unavailable_reason(speech_cfg)
+    except Exception:
+        reason = "unavailable"
+    return CheckResult(
+        "Streaming speech-to-text",
+        "warn",
+        reason,
+        details="Speech falls back to the local backend.",
+        section=SECTION_VOICE,
+    )
+
+
+def _check_speech_device() -> CheckResult:
+    """The speech backend must have the device it was configured for.
+
+    ``device = "cuda"`` with no usable CUDA silently falls back to CPU:
+    transcription still works, several times slower, and nothing says so.
+
+    Which runtime to ask is not obvious and getting it wrong is worse than
+    not checking. faster-whisper runs on ctranslate2, not torch; this machine
+    has a CPU-only torch build alongside a ctranslate2 that sees the GPU
+    perfectly well, so asking ``torch.cuda`` reported a healthy voice
+    pipeline as broken.
+    """
+    config = _get_config()
+    speech_cfg = getattr(config, "speech", None)
+    configured = str(getattr(speech_cfg, "device", "") or "auto").lower()
+    backend = str(getattr(speech_cfg, "backend", "") or "auto").lower()
+
+    if configured in ("", "auto", "cpu"):
+        return CheckResult(
+            "Speech device",
+            "ok",
+            f"Configured as {configured or 'auto'}",
+            section=SECTION_VOICE,
+        )
+
+    runtime = "ctranslate2" if backend in ("auto", "faster-whisper") else "torch"
+    available: Optional[bool] = None
+    error = ""
+    if runtime == "ctranslate2":
+        try:
+            import ctranslate2
+
+            available = ctranslate2.get_cuda_device_count() > 0
+        except Exception as exc:
+            error = str(exc)
+    else:
+        try:
+            import torch
+
+            available = bool(torch.cuda.is_available())
+        except Exception as exc:
+            error = str(exc)
+
+    if available is None:
+        return CheckResult(
+            "Speech device",
+            "warn",
+            f"Configured for {configured}, cannot confirm via {runtime}: {error}",
+            section=SECTION_VOICE,
+        )
+    if available:
+        return CheckResult(
+            "Speech device",
+            "ok",
+            f"{configured} available to {runtime}",
+            section=SECTION_VOICE,
+        )
+    return CheckResult(
+        "Speech device",
+        "fail",
+        f"Configured for {configured}, which {runtime} cannot use",
+        details=(
+            "Transcription falls back to CPU and runs several times slower "
+            "without reporting anything."
+        ),
+        section=SECTION_VOICE,
+    )
+
+
 # -- Models and GPU ----------------------------------------------------------
 
 
@@ -1781,6 +1917,8 @@ def run_health_checks(
     checks.append(_check_speech_backend())
     checks.append(_check_wake_word())
     checks.append(_check_tts_credentials())
+    checks.append(_check_flux_streaming())
+    checks.append(_check_speech_device())
 
     checks.extend(_check_engines(live))
     checks.extend(_check_models(live))
