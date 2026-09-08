@@ -1170,7 +1170,7 @@ system_router = APIRouter(prefix="/v1/system", tags=["system"])
 
 
 @system_router.get("/health")
-async def system_health(live: bool = False):
+async def system_health(request: Request, live: bool = False):
     """Run Sage's own diagnostics.
 
     Shares :func:`run_health_checks` with the ``system_health`` tool and
@@ -1181,7 +1181,7 @@ async def system_health(live: bool = False):
     from openjarvis.core.health import run_health_checks  # noqa: PLC0415
 
     try:
-        report = run_health_checks(live=live)
+        report = run_health_checks(live=live, app_state=request.app.state)
     except Exception as exc:
         logger.exception("Health check failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

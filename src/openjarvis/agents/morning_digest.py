@@ -75,6 +75,26 @@ def _load_global_soul() -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+# Shared with the health check, which asks whether every enabled section
+# resolves to a real source. A second copy of this map would drift from the
+# one actually used, and then the check would pass while the briefing stayed
+# silent -- which is the exact failure it exists to catch.
+DEFAULT_SECTION_SOURCES = {
+    "messages": [
+        "gmail",
+        "slack",
+        "google_tasks",
+        "imessage",
+        "github_notifications",
+    ],
+    "calendar": ["gcalendar"],
+    "health": ["oura", "apple_health"],
+    "world": ["weather", "hackernews", "news_rss"],
+    "music": ["spotify", "apple_music"],
+    "notes": ["obsidian"],
+}
+
+
 @AgentRegistry.register("morning_digest")
 class MorningDigestAgent(ToolUsingAgent):
     """Pre-compute a daily digest from configured data sources."""
@@ -167,20 +187,7 @@ class MorningDigestAgent(ToolUsingAgent):
 
     def _resolve_sources(self) -> List[str]:
         """Get the list of connector IDs to query."""
-        default_source_map = {
-            "messages": [
-                "gmail",
-                "slack",
-                "google_tasks",
-                "imessage",
-                "github_notifications",
-            ],
-            "calendar": ["gcalendar"],
-            "health": ["oura", "apple_health"],
-            "world": ["weather", "hackernews", "news_rss"],
-            "music": ["spotify", "apple_music"],
-            "notes": ["obsidian"],
-        }
+        default_source_map = DEFAULT_SECTION_SOURCES
         sources = set()
         for section in self._sections:
             # An empty configured list means "not configured", not "collect

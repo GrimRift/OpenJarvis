@@ -37,6 +37,8 @@ SECTION_MODELS = "models"
 SECTION_JOBS = "jobs"
 SECTION_CREDENTIALS = "credentials"
 SECTION_CONNECTORS = "connectors"
+SECTION_FEATURES = "features"
+SECTION_PROVIDERS = "providers"
 
 SECTION_ORDER = (
     SECTION_SYSTEM,
@@ -45,6 +47,8 @@ SECTION_ORDER = (
     SECTION_JOBS,
     SECTION_CREDENTIALS,
     SECTION_CONNECTORS,
+    SECTION_FEATURES,
+    SECTION_PROVIDERS,
 )
 
 SECTION_LABELS = {
@@ -54,6 +58,8 @@ SECTION_LABELS = {
     SECTION_JOBS: "Scheduled jobs",
     SECTION_CREDENTIALS: "Credentials",
     SECTION_CONNECTORS: "Connectors",
+    SECTION_FEATURES: "Features",
+    SECTION_PROVIDERS: "Providers",
 }
 
 # A refresh token older than this is worth mentioning: Google's unpublished
@@ -373,7 +379,7 @@ def _check_tts_credentials() -> CheckResult:
     speech_cfg = getattr(config, "speech", None)
     provider = getattr(speech_cfg, "tts_provider", None) if speech_cfg else None
     env_present = bool(
-        os.environ.get("CARTESIA_API_KEY") or os.environ.get("OPENJARVIS_TTS_API_KEY")
+        _provider_key("CARTESIA_API_KEY") or _provider_key("OPENJARVIS_TTS_API_KEY")
     )
     if env_present:
         return CheckResult(
@@ -986,10 +992,556 @@ def _check_connectors() -> List[CheckResult]:
     return results
 
 
+# -- Features ----------------------------------------------------------------
+
+
+def _check_digest_sections() -> List[CheckResult]:
+    """Every enabled briefing section must resolve to at least one source.
+
+    The ``world`` section -- weather, Hacker News, RSS -- was enabled in config
+    and collected nothing for the entire life of the feature, because an empty
+    configured list was read as "collect nothing" rather than "not
+    configured". Nothing errored; the only trace was ``sources_used`` missing
+    one section. That resolution bug is fixed, but a section can still resolve
+    to nothing through a typo or a new section with no default, and it would
+    fail exactly as silently.
+    """
+    config = _get_config()
+    digest = getattr(config, "digest", None)
+    if digest is None or not getattr(digest, "enabled", False):
+        return [
+            CheckResult(
+                "Briefing sections",
+                "ok",
+                "The morning briefing is disabled",
+                section=SECTION_FEATURES,
+            )
+        ]
+
+    try:
+        from openjarvis.agents.morning_digest import (
+            _BROWSER_SOURCES,
+            DEFAULT_SECTION_SOURCES,
+        )
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Briefing sections",
+                "warn",
+                f"Could not read the briefing's sources: {exc}",
+                section=SECTION_FEATURES,
+            )
+        ]
+
+    # Outlook and Teams have no connector: they are scraped through the
+    # browser by _collect_browser_sources, so they legitimately resolve to no
+    # connector sources. Counting them as silent reported a working section as
+    # broken on the first run of this check.
+    browser_backed = {section for section, _tool, _label in _BROWSER_SOURCES}
+
+    sections = list(getattr(digest, "sections", []) or [])
+    silent: List[str] = []
+    for section in sections:
+        name = str(section).strip()
+        if not name or name in browser_backed:
+            continue
+        configured = getattr(getattr(digest, name, None), "sources", None)
+        if not list(configured or DEFAULT_SECTION_SOURCES.get(name, [])):
+            silent.append(name)
+
+    if silent:
+        return [
+            CheckResult(
+                "Briefing sections",
+                "fail",
+                f"Enabled but collect nothing: {', '.join(sorted(silent))}",
+                details=(
+                    "These sections are switched on and resolve to no "
+                    "sources, so the briefing asks for nothing and reports "
+                    "nothing. Give each one sources, or remove it from "
+                    "[digest] sections."
+                ),
+                section=SECTION_FEATURES,
+            )
+        ]
+    return [
+        CheckResult(
+            "Briefing sections",
+            "ok",
+            f"{len(sections)} sections all resolve to sources",
+            section=SECTION_FEATURES,
+        )
+    ]
+
+
+def _check_scheduler_running() -> CheckResult:
+    """The scheduler's poll loop must actually be alive.
+
+    The job checks report each task's last run, which says nothing about
+    whether anything is still due to fire. A dead poll thread leaves every job
+    looking healthy while none of them will ever run again.
+    """
+    try:
+        from openjarvis.scheduler.tools import ListScheduledTasksTool
+
+        scheduler = getattr(ListScheduledTasksTool, "_scheduler", None)
+    except Exception as exc:
+        return CheckResult(
+            "Scheduler",
+            "warn",
+            f"Could not reach the scheduler: {exc}",
+            section=SECTION_FEATURES,
+        )
+
+    if scheduler is None:
+        return CheckResult(
+            "Scheduler",
+            "warn",
+            "Not running in this process",
+            details=(
+                "Expected when the check runs from the CLI; the same line in "
+                "a report from the running server means the scheduler never "
+                "started."
+            ),
+            section=SECTION_FEATURES,
+        )
+
+    thread = getattr(scheduler, "_thread", None)
+    if thread is None or not thread.is_alive():
+        return CheckResult(
+            "Scheduler",
+            "fail",
+            "The scheduler is not polling",
+            details=(
+                "Scheduled jobs will not fire, however healthy their last "
+                "runs look. Restart Sage."
+            ),
+            section=SECTION_FEATURES,
+        )
+    return CheckResult(
+        "Scheduler", "ok", "Polling for due jobs", section=SECTION_FEATURES
+    )
+
+
+def _check_telemetry_recording(app_state: Any = None) -> List[CheckResult]:
+    """Every engine that can answer must be wrapped for telemetry.
+
+    The dashboard read zero for energy, tokens and requests through a whole
+    working day. Telemetry was enabled, the store subscribed and the database
+    held thousands of rows -- but only the primary engine was wrapped in
+    ``InstrumentedEngine`` while discovered and cloud engines went into
+    ``MultiEngine`` raw, and the chat default is a cloud model. No amount of
+    reading config shows this: every value is correct while nothing records.
+    """
+    if app_state is None:
+        return []
+
+    engine = getattr(app_state, "engine", None)
+    if engine is None:
+        return [
+            CheckResult(
+                "Telemetry instrumentation",
+                "warn",
+                "No engine on the server",
+                section=SECTION_FEATURES,
+            )
+        ]
+
+    try:
+        from openjarvis.telemetry.instrumented_engine import InstrumentedEngine
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Telemetry instrumentation",
+                "warn",
+                f"Telemetry support is unavailable: {exc}",
+                section=SECTION_FEATURES,
+            )
+        ]
+
+    entries = getattr(engine, "_engines", None)
+    pairs = list(entries) if entries else [("default", engine)]
+    unwrapped = [
+        str(name) for name, inner in pairs if not isinstance(inner, InstrumentedEngine)
+    ]
+
+    if unwrapped:
+        return [
+            CheckResult(
+                "Telemetry instrumentation",
+                "fail",
+                f"Not recording: {', '.join(sorted(unwrapped))}",
+                details=(
+                    "Calls routed to these engines are invisible to the "
+                    "dashboard, which will read low or zero while the machine "
+                    "is busy."
+                ),
+                section=SECTION_FEATURES,
+            )
+        ]
+    return [
+        CheckResult(
+            "Telemetry instrumentation",
+            "ok",
+            f"All {len(pairs)} engines recording",
+            section=SECTION_FEATURES,
+        )
+    ]
+
+
+# -- Providers ---------------------------------------------------------------
+
+# One minimal read per Google API. Presence of a credential file proves
+# nothing: Drive, Contacts and Tasks returned 403 for months with perfect
+# tokens because the APIs were disabled at the project level, and that was
+# misdiagnosed as a scope problem for just as long. Only a real call
+# distinguishes "not authorized" from "not enabled".
+_GOOGLE_PROBES = {
+    "gmail": "https://gmail.googleapis.com/gmail/v1/users/me/labels",
+    "gcalendar": "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1",
+    "google_tasks": "https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=1",
+    "gdrive": "https://www.googleapis.com/drive/v3/files?pageSize=1",
+    "gcontacts": "https://people.googleapis.com/v1/people/me/connections?pageSize=1&personFields=names",
+}
+
+_PROVIDER_TIMEOUT = 15.0
+
+
+def _provider_key(name: str) -> str:
+    """Read a provider key the way the server does.
+
+    The server injects ``credentials.toml`` into the environment at startup,
+    so a key can be correctly configured and still absent from a plain shell.
+    Reading only ``os.environ`` made this check report a working Deepgram key
+    as missing whenever it ran outside the server -- the same
+    configuration-versus-reality gap these checks exist to close, pointing the
+    wrong way.
+    """
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    try:
+        from openjarvis.core.credentials import load_credentials
+
+        for _tool, kvs in load_credentials().items():
+            if kvs.get(name):
+                return str(kvs[name])
+    except Exception:
+        return ""
+    return ""
+
+
+def _check_google_apis(live: bool) -> List[CheckResult]:
+    """Refresh each Google token and make one minimal call with it.
+
+    The refresh is half the value: an unpublished OAuth app expires refresh
+    tokens after seven days, and the only symptom was a briefing that
+    reported nothing having fetched nothing.
+    """
+    connector_dir = _config_dir() / "connectors"
+    present = [
+        name for name in _GOOGLE_PROBES if (connector_dir / f"{name}.json").exists()
+    ]
+    if not present:
+        return []
+
+    if not live:
+        return [
+            CheckResult(
+                "Google APIs",
+                "ok",
+                f"{len(present)} configured (not called)",
+                details="Run a live check to find a disabled API or a dead token.",
+                section=SECTION_PROVIDERS,
+            )
+        ]
+
+    try:
+        import httpx
+
+        from openjarvis.connectors.oauth import refresh_google_token
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Google APIs",
+                "warn",
+                f"Cannot probe: {exc}",
+                section=SECTION_PROVIDERS,
+            )
+        ]
+
+    results: List[CheckResult] = []
+    for name in sorted(present):
+        path = str(connector_dir / f"{name}.json")
+        try:
+            token = refresh_google_token(path)
+        except Exception as exc:
+            token = None
+            refresh_error: Optional[str] = str(exc)
+        else:
+            refresh_error = None
+
+        if not token:
+            results.append(
+                CheckResult(
+                    f"Google: {name}",
+                    "fail",
+                    "Token refresh failed",
+                    details=(
+                        (refresh_error or "")
+                        + " The refresh token is dead; re-authorize this "
+                        "connector."
+                    ).strip(),
+                    section=SECTION_PROVIDERS,
+                    live=True,
+                    fix=f"reauth:{name}",
+                )
+            )
+            continue
+
+        try:
+            response = httpx.get(
+                _GOOGLE_PROBES[name],
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=_PROVIDER_TIMEOUT,
+            )
+        except Exception as exc:
+            results.append(
+                CheckResult(
+                    f"Google: {name}",
+                    "warn",
+                    f"Could not reach the API: {exc}",
+                    section=SECTION_PROVIDERS,
+                    live=True,
+                )
+            )
+            continue
+
+        if response.status_code == 200:
+            results.append(
+                CheckResult(
+                    f"Google: {name}",
+                    "ok",
+                    "Token refreshed and the API answered",
+                    section=SECTION_PROVIDERS,
+                    live=True,
+                )
+            )
+        elif response.status_code == 403:
+            # The distinction that took months to diagnose: a 403 here is the
+            # API being switched off in the project, not a missing scope.
+            results.append(
+                CheckResult(
+                    f"Google: {name}",
+                    "fail",
+                    "Authorized, but the API refused (403)",
+                    details=(
+                        "Usually the API is disabled for the project rather "
+                        "than a scope problem. Re-consenting will not fix it; "
+                        "enabling the API in the Google console will."
+                    ),
+                    section=SECTION_PROVIDERS,
+                    live=True,
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    f"Google: {name}",
+                    "fail",
+                    f"The API answered {response.status_code}",
+                    section=SECTION_PROVIDERS,
+                    live=True,
+                )
+            )
+    return results
+
+
+def _check_deepgram(live: bool) -> List[CheckResult]:
+    """Validate the Deepgram key with one real call.
+
+    Flaky voice here has usually been DNS rather than code, so a check that
+    only reads the key would keep pointing at the wrong thing.
+    """
+    try:
+        from openjarvis.speech import flux
+    except Exception:
+        return []
+
+    try:
+        key = flux.api_key() or _provider_key("DEEPGRAM_API_KEY")
+    except Exception:
+        key = _provider_key("DEEPGRAM_API_KEY")
+
+    if not key:
+        return [
+            CheckResult(
+                "Deepgram",
+                "warn",
+                "No API key in the environment",
+                details="Streaming speech-to-text will not connect.",
+                section=SECTION_PROVIDERS,
+            )
+        ]
+
+    if not live:
+        return [
+            CheckResult(
+                "Deepgram",
+                "ok",
+                "Key present (not called)",
+                section=SECTION_PROVIDERS,
+            )
+        ]
+
+    try:
+        import httpx
+
+        response = httpx.get(
+            "https://api.deepgram.com/v1/projects",
+            headers={"Authorization": f"Token {key}"},
+            timeout=_PROVIDER_TIMEOUT,
+        )
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Deepgram",
+                "fail",
+                f"Unreachable: {exc}",
+                details="Check DNS before the code; that has been the cause before.",
+                section=SECTION_PROVIDERS,
+                live=True,
+            )
+        ]
+
+    if response.status_code == 200:
+        return [
+            CheckResult(
+                "Deepgram", "ok", "Key accepted", section=SECTION_PROVIDERS, live=True
+            )
+        ]
+    return [
+        CheckResult(
+            "Deepgram",
+            "fail",
+            f"Key rejected ({response.status_code})",
+            section=SECTION_PROVIDERS,
+            live=True,
+        )
+    ]
+
+
+def _check_cartesia(live: bool) -> List[CheckResult]:
+    """Validate the speech synthesis key against the provider."""
+    key = _provider_key("CARTESIA_API_KEY")
+    if not key:
+        return []
+
+    if not live:
+        return [
+            CheckResult(
+                "Cartesia",
+                "ok",
+                "Key present (not called)",
+                section=SECTION_PROVIDERS,
+            )
+        ]
+
+    try:
+        import httpx
+
+        # Listing voices is a real authenticated call without generating
+        # audio, so it proves the key without spending synthesis credit.
+        response = httpx.get(
+            "https://api.cartesia.ai/voices/",
+            headers={"X-API-Key": key, "Cartesia-Version": "2024-06-10"},
+            timeout=_PROVIDER_TIMEOUT,
+        )
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Cartesia",
+                "fail",
+                f"Unreachable: {exc}",
+                section=SECTION_PROVIDERS,
+                live=True,
+            )
+        ]
+
+    if response.status_code == 200:
+        return [
+            CheckResult(
+                "Cartesia", "ok", "Key accepted", section=SECTION_PROVIDERS, live=True
+            )
+        ]
+    return [
+        CheckResult(
+            "Cartesia",
+            "fail",
+            f"Key rejected ({response.status_code})",
+            details="Sage's own voice will fall back to a local one.",
+            section=SECTION_PROVIDERS,
+            live=True,
+        )
+    ]
+
+
+def _check_tavily(live: bool) -> List[CheckResult]:
+    """Validate the search key. There is no fallback search engine."""
+    key = _provider_key("TAVILY_API_KEY")
+    if not key:
+        return []
+
+    if not live:
+        return [
+            CheckResult(
+                "Tavily", "ok", "Key present (not called)", section=SECTION_PROVIDERS
+            )
+        ]
+
+    try:
+        import httpx
+
+        response = httpx.post(
+            "https://api.tavily.com/search",
+            json={"api_key": key, "query": "ping", "max_results": 1},
+            timeout=_PROVIDER_TIMEOUT,
+        )
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Tavily",
+                "fail",
+                f"Unreachable: {exc}",
+                section=SECTION_PROVIDERS,
+                live=True,
+            )
+        ]
+
+    if response.status_code == 200:
+        return [
+            CheckResult(
+                "Tavily", "ok", "Search returned", section=SECTION_PROVIDERS, live=True
+            )
+        ]
+    return [
+        CheckResult(
+            "Tavily",
+            "fail",
+            f"Search failed ({response.status_code})",
+            details="Web search has no fallback engine; it simply stops working.",
+            section=SECTION_PROVIDERS,
+            live=True,
+        )
+    ]
+
+
 # -- Entry point -------------------------------------------------------------
 
 
-def run_health_checks(*, live: bool = False) -> HealthReport:
+def run_health_checks(
+    *, live: bool = False, app_state: Any = None
+) -> HealthReport:
     """Run every diagnostic check and return them grouped by section.
 
     ``live`` permits outbound calls that may be billable or quota-limited.
@@ -1021,6 +1573,15 @@ def run_health_checks(*, live: bool = False) -> HealthReport:
     checks.extend(_check_scheduled_jobs())
     checks.extend(_check_credentials())
     checks.extend(_check_connectors())
+
+    checks.extend(_check_digest_sections())
+    checks.append(_check_scheduler_running())
+    checks.extend(_check_telemetry_recording(app_state))
+
+    checks.extend(_check_google_apis(live))
+    checks.extend(_check_deepgram(live))
+    checks.extend(_check_cartesia(live))
+    checks.extend(_check_tavily(live))
 
     return HealthReport(checks=checks, live=live)
 

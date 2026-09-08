@@ -62,14 +62,16 @@ class TestSystemHealthRoute:
             "openjarvis.core.health.run_health_checks", return_value=_FAKE
         ) as run:
             _client().get("/v1/system/health")
-        assert run.call_args.kwargs == {"live": False}
+        assert run.call_args.kwargs["live"] is False
+        # app_state is passed so the telemetry check can see the engines.
+        assert "app_state" in run.call_args.kwargs
 
     def test_live_is_opt_in_through_the_query_string(self) -> None:
         with patch(
             "openjarvis.core.health.run_health_checks", return_value=_FAKE
         ) as run:
             _client().get("/v1/system/health?live=true")
-        assert run.call_args.kwargs == {"live": True}
+        assert run.call_args.kwargs["live"] is True
 
     def test_a_failing_check_run_is_a_500_not_a_crash(self) -> None:
         with patch(
