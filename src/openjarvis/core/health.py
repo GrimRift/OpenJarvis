@@ -1496,6 +1496,189 @@ def _check_google_apis(live: bool) -> List[CheckResult]:
     return results
 
 
+# Google Maps probes are the only checks here that spend a scarce, shared
+# quota: Routes and Places are capped at 30 requests a day each, and a live
+# run is reachable from chat, so a few casual "check yourself" requests could
+# exhaust the allowance the car briefing depends on. One probe per API per day
+# is about three percent of the cap; beyond that the last known result is
+# reported with its age rather than a fresh call being made.
+_MAPS_PROBES_PER_DAY = 1
+
+# A route short enough to be trivial, and a query that matches everywhere.
+_ROUTE_PROBE_ORIGIN = {"latitude": 14.2100, "longitude": 121.1650}
+_ROUTE_PROBE_DESTINATION = {"latitude": 14.2110, "longitude": 121.1660}
+_PLACES_PROBE_QUERY = "coffee"
+
+
+def _probe_state_path() -> Path:
+    return _config_dir() / "health_probes.json"
+
+
+def _load_probe_state() -> Dict[str, Any]:
+    try:
+        return json.loads(_probe_state_path().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_probe_state(state: Dict[str, Any]) -> None:
+    try:
+        _probe_state_path().write_text(
+            json.dumps(state, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        # A health check must never fail because it could not write a note to
+        # itself.
+        pass
+
+
+def _probe_allowance(name: str) -> tuple[bool, Dict[str, Any]]:
+    """Whether *name* may be probed today, and what is remembered about it."""
+    state = _load_probe_state()
+    entry = state.get(name) or {}
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    used = int(entry.get("count") or 0) if entry.get("day") == today else 0
+    return used < _MAPS_PROBES_PER_DAY, entry
+
+
+def _record_probe(name: str, status: str, message: str) -> None:
+    state = _load_probe_state()
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    entry = state.get(name) or {}
+    used = int(entry.get("count") or 0) if entry.get("day") == today else 0
+    state[name] = {
+        "day": today,
+        "count": used + 1,
+        "status": status,
+        "message": message,
+        "at": time.time(),
+    }
+    _save_probe_state(state)
+
+
+def _remembered_result(name: str, entry: Dict[str, Any]) -> CheckResult:
+    """Report what the last probe found, with its age, instead of spending."""
+    status = str(entry.get("status") or "warn")
+    message = str(entry.get("message") or "no result recorded")
+    try:
+        hours = max(0, int((time.time() - float(entry.get("at") or 0)) / 3600))
+        age = f"{hours}h ago"
+    except Exception:
+        age = "earlier"
+    return CheckResult(
+        f"Google {name.title()}",
+        status,
+        f"{message} (checked {age})",
+        details=(
+            f"Not re-checked: {_MAPS_PROBES_PER_DAY} probe a day, because this "
+            "API is capped at 30 requests daily and the car briefing needs "
+            "them more than this page does."
+        ),
+        section=SECTION_PROVIDERS,
+    )
+
+
+def _check_google_maps(live: bool) -> List[CheckResult]:
+    """Probe Routes and Places, at most once a day each.
+
+    These are the APIs the drive briefing depends on, and the ones whose
+    quota is small enough to matter. The probe uses the same functions the
+    navigate tool calls, so a pass means the real path works rather than that
+    some other endpoint answered.
+    """
+    config = _get_config()
+    nav = getattr(config, "navigation", None)
+    if nav is None:
+        return []
+
+    key = _provider_key("GOOGLE_MAPS_API_KEY")
+    wanted = [
+        (name, enabled)
+        for name, enabled in (
+            ("routes", bool(getattr(nav, "routes_enabled", False))),
+            ("places", bool(getattr(nav, "places_enabled", False))),
+        )
+        if enabled
+    ]
+    if not wanted:
+        return []
+
+    if not key:
+        return [
+            CheckResult(
+                "Google Maps",
+                "fail",
+                "Enabled but no API key",
+                details="Navigation cannot resolve a destination or an ETA.",
+                section=SECTION_PROVIDERS,
+            )
+        ]
+
+    if not live:
+        return [
+            CheckResult(
+                "Google Maps",
+                "ok",
+                f"{len(wanted)} APIs configured (not called)",
+                details="A live check spends one request against each daily cap.",
+                section=SECTION_PROVIDERS,
+            )
+        ]
+
+    results: List[CheckResult] = []
+    for name, _enabled in wanted:
+        allowed, entry = _probe_allowance(name)
+        if not allowed:
+            results.append(_remembered_result(name, entry))
+            continue
+
+        try:
+            from openjarvis.tools.navigate import compute_route, search_places
+        except Exception as exc:
+            results.append(
+                CheckResult(
+                    f"Google {name.title()}",
+                    "warn",
+                    f"Cannot probe: {exc}",
+                    section=SECTION_PROVIDERS,
+                )
+            )
+            continue
+
+        try:
+            if name == "routes":
+                compute_route(
+                    _ROUTE_PROBE_ORIGIN, _ROUTE_PROBE_DESTINATION, key
+                )
+                message = "A route was computed"
+            else:
+                search_places(_PLACES_PROBE_QUERY, key, None)
+                message = "A place search returned"
+            status = "ok"
+        except Exception as exc:
+            status = "fail"
+            # Provider bodies can carry the key back; keep only the type.
+            message = f"Request failed ({type(exc).__name__})"
+
+        _record_probe(name, status, message)
+        results.append(
+            CheckResult(
+                f"Google {name.title()}",
+                status,
+                message,
+                details=(
+                    None
+                    if status == "ok"
+                    else "The drive briefing depends on this; check the API is "
+                    "enabled and within quota."
+                ),
+                section=SECTION_PROVIDERS,
+                live=True,
+            )
+        )
+    return results
+
+
 def _check_deepgram(live: bool) -> List[CheckResult]:
     """Validate the Deepgram key with one real call.
 
@@ -1938,6 +2121,7 @@ def run_health_checks(
     checks.extend(_check_tool_directories())
 
     checks.extend(_check_google_apis(live))
+    checks.extend(_check_google_maps(live))
     checks.extend(_check_deepgram(live))
     checks.extend(_check_cartesia(live))
     checks.extend(_check_tavily(live))

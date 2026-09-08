@@ -1,6 +1,6 @@
 # M34 v2 — health checks that check whether things work
 
-Scoped 2026-09-08. Not started.
+Scoped 2026-09-08. Implemented 2026-09-08.
 
 ## Why there is a v2
 
@@ -133,9 +133,23 @@ same kind of evidence.
   set. Source edits remain M33.
 - Proactive alerting. Pull-only stands.
 
-## Open questions
+## Resolved (2026-09-08)
 
-- Where the Deepgram key lives. `flux.py` reads `DEEPGRAM_API_KEY` from the
-  environment and it is not visible in a plain shell, so the check must not
-  assume the process environment matches the user's.
-- Whether a live run should be rate limited in code, given the caps it spends.
+- **Where the Deepgram key lives.** `credentials.toml`, injected into the
+  environment by the server at startup. `flux.py` reads `os.environ` only, so
+  a correctly configured key is invisible to a plain shell. Checks now resolve
+  provider keys the way the server does.
+- **Live runs are rate limited**, but only where the quota is scarce. Routes
+  and Places get **one probe per API per day**, persisted in
+  `OPENJARVIS_DATA/health_probes.json`; beyond that the last result is
+  reported with its age rather than a fresh call being made. The remaining
+  providers are uncapped because their probes are ordinary authenticated
+  reads. The cap exists because a live check is reachable from chat, and the
+  drive briefing needs those 30 daily requests more than this page does.
+
+## Status
+
+Phases 1-4 are implemented, along with the Routes and Places probes. All five
+motivating failures are now covered. What remains open is only what was
+declared out of scope: fixes beyond the operational set, and proactive
+alerting.
