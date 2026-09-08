@@ -39,6 +39,7 @@ SECTION_CREDENTIALS = "credentials"
 SECTION_CONNECTORS = "connectors"
 SECTION_FEATURES = "features"
 SECTION_PROVIDERS = "providers"
+SECTION_TOOLS = "tools"
 
 SECTION_ORDER = (
     SECTION_SYSTEM,
@@ -49,6 +50,7 @@ SECTION_ORDER = (
     SECTION_CONNECTORS,
     SECTION_FEATURES,
     SECTION_PROVIDERS,
+    SECTION_TOOLS,
 )
 
 SECTION_LABELS = {
@@ -60,6 +62,7 @@ SECTION_LABELS = {
     SECTION_CONNECTORS: "Connectors",
     SECTION_FEATURES: "Features",
     SECTION_PROVIDERS: "Providers",
+    SECTION_TOOLS: "Tools",
 }
 
 # A refresh token older than this is worth mentioning: Google's unpublished
@@ -1536,6 +1539,220 @@ def _check_tavily(live: bool) -> List[CheckResult]:
     ]
 
 
+# -- Tools -------------------------------------------------------------------
+
+# Tools whose allowlist is fail-closed: an unset variable means an empty list,
+# which means the tool is enabled and can touch nothing. find_file is
+# deliberately absent -- it falls back to sensible defaults when unset, so
+# treating it the same way would report a working tool as broken.
+_FAIL_CLOSED_TOOL_DIRS = {
+    "coding_command": "OPENJARVIS_CODING_DIRS",
+    "file_read": "OPENJARVIS_FILE_READ_DIRS",
+    "file_write": "OPENJARVIS_FILE_WRITE_DIRS",
+    "apply_patch": "OPENJARVIS_FILE_WRITE_DIRS",
+    "git_status": "OPENJARVIS_GIT_DIRS",
+    "git_diff": "OPENJARVIS_GIT_DIRS",
+    "git_log": "OPENJARVIS_GIT_DIRS",
+    "git_commit": "OPENJARVIS_GIT_DIRS",
+}
+
+
+def _configured_tools() -> List[str]:
+    config = _get_config()
+    raw = getattr(getattr(config, "agent", None), "tools", "") or ""
+    if isinstance(raw, (list, tuple)):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    return [t.strip() for t in str(raw).split(",") if t.strip()]
+
+
+def _check_configured_tools_registered() -> List[CheckResult]:
+    """Every tool named in config must exist in the registry.
+
+    A name in config that never registered is a capability the user believes
+    they have and does not. Nothing reports it today: the model simply never
+    calls a tool it was never offered.
+    """
+    configured = _configured_tools()
+    if not configured:
+        return [
+            CheckResult(
+                "Configured tools",
+                "warn",
+                "No tools are enabled",
+                section=SECTION_TOOLS,
+            )
+        ]
+
+    try:
+        import openjarvis.tools  # noqa: F401
+        from openjarvis.core.registry import ToolRegistry
+
+        registered = set(ToolRegistry.keys())
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Configured tools",
+                "warn",
+                f"Could not read the tool registry: {exc}",
+                section=SECTION_TOOLS,
+            )
+        ]
+
+    missing = sorted(t for t in configured if t not in registered)
+    if missing:
+        return [
+            CheckResult(
+                "Configured tools",
+                "fail",
+                f"Enabled but not registered: {', '.join(missing)}",
+                details=(
+                    "These are named in [agent] tools and do not exist, so "
+                    "Sage is never offered them and will never call them. "
+                    "Usually a typo or a module that failed to import."
+                ),
+                section=SECTION_TOOLS,
+            )
+        ]
+    return [
+        CheckResult(
+            "Configured tools",
+            "ok",
+            f"All {len(configured)} enabled tools are registered",
+            section=SECTION_TOOLS,
+        )
+    ]
+
+
+def _check_tool_modules_import() -> List[CheckResult]:
+    """Import every tool module and report the ones that fail.
+
+    ``openjarvis/tools/__init__.py`` wraps each import in ``except
+    ImportError: pass`` -- fifty-one of them. That is deliberate, so a missing
+    optional dependency does not take the whole package down, but it also
+    means a broken tool disappears in total silence. This is the only place
+    that difference becomes visible.
+    """
+    import importlib
+
+    try:
+        import openjarvis.tools as tools_pkg
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Tool modules",
+                "fail",
+                f"The tools package will not import: {exc}",
+                section=SECTION_TOOLS,
+            )
+        ]
+
+    package_dir = Path(tools_pkg.__file__).parent
+    broken: List[str] = []
+    checked = 0
+    for module_path in sorted(package_dir.glob("*.py")):
+        name = module_path.stem
+        if name.startswith("_"):
+            continue
+        checked += 1
+        try:
+            importlib.import_module(f"openjarvis.tools.{name}")
+        except Exception as exc:
+            broken.append(f"{name} ({type(exc).__name__})")
+
+    if broken:
+        return [
+            CheckResult(
+                "Tool modules",
+                "fail",
+                f"Will not import: {', '.join(broken)}",
+                details=(
+                    "The package swallows these failures, so the tools they "
+                    "define are silently absent from the registry."
+                ),
+                section=SECTION_TOOLS,
+            )
+        ]
+    return [
+        CheckResult(
+            "Tool modules",
+            "ok",
+            f"All {checked} tool modules import",
+            section=SECTION_TOOLS,
+        )
+    ]
+
+
+def _check_tool_directories() -> List[CheckResult]:
+    """Fail-closed tools must have a directory allowlist that exists.
+
+    These read their allowlist from an environment variable and fall back to
+    an empty list, not to a default. Enabled with the variable unset, the tool
+    is offered to the model, accepts the call and can reach nothing.
+    """
+    configured = set(_configured_tools())
+    wanted = {
+        tool: var for tool, var in _FAIL_CLOSED_TOOL_DIRS.items() if tool in configured
+    }
+    if not wanted:
+        return []
+
+    unset: Dict[str, List[str]] = {}
+    missing_paths: Dict[str, List[str]] = {}
+    for tool, var in sorted(wanted.items()):
+        raw = os.environ.get(var, "")
+        entries = [part.strip() for part in raw.split(os.pathsep) if part.strip()]
+        if not entries:
+            unset.setdefault(var, []).append(tool)
+            continue
+        absent = [entry for entry in entries if not Path(entry).is_dir()]
+        if absent:
+            missing_paths.setdefault(var, []).extend(absent)
+
+    results: List[CheckResult] = []
+    if unset:
+        detail = "; ".join(
+            f"{var} (needed by {', '.join(sorted(tools))})"
+            for var, tools in sorted(unset.items())
+        )
+        results.append(
+            CheckResult(
+                "Tool directories",
+                "fail",
+                "Enabled tools have no directory allowlist",
+                details=(
+                    f"{detail}. These tools are fail-closed: with the variable "
+                    "unset they accept a call and can reach nothing. Note that "
+                    "setx needs a new shell, and Sage needs a restart."
+                ),
+                section=SECTION_TOOLS,
+            )
+        )
+    if missing_paths:
+        detail = "; ".join(
+            f"{var}: {', '.join(sorted(set(paths)))}"
+            for var, paths in sorted(missing_paths.items())
+        )
+        results.append(
+            CheckResult(
+                "Tool directories",
+                "warn",
+                "Allowlisted directories do not exist",
+                details=detail,
+                section=SECTION_TOOLS,
+            )
+        )
+    if not results:
+        results.append(
+            CheckResult(
+                "Tool directories",
+                "ok",
+                f"{len(wanted)} fail-closed tools have usable allowlists",
+                section=SECTION_TOOLS,
+            )
+        )
+    return results
+
+
 # -- Entry point -------------------------------------------------------------
 
 
@@ -1577,6 +1794,10 @@ def run_health_checks(
     checks.extend(_check_digest_sections())
     checks.append(_check_scheduler_running())
     checks.extend(_check_telemetry_recording(app_state))
+
+    checks.extend(_check_configured_tools_registered())
+    checks.extend(_check_tool_modules_import())
+    checks.extend(_check_tool_directories())
 
     checks.extend(_check_google_apis(live))
     checks.extend(_check_deepgram(live))
