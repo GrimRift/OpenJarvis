@@ -1243,26 +1243,35 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       lastFluxTurnRef.current = turnIndex;
 
       const spoken = (transcript || '').trim();
-      if (!spoken) {
-        setFluxTurnActive(false);
-        return;
-      }
-      voiceOriginatedRef.current = true;
 
-      // The rest of a sentence that was cut off: the half-question and its
-      // half-answer were already withdrawn when this speech began; send the
-      // whole question as one turn.
+      // The rest of a sentence that was cut off. The half-answer was stopped
+      // when this speech began; withdraw it and the half-question now, and
+      // send the whole question as one turn. If the resumed speech turned
+      // out to be nothing (a breath, a false start), the half-question is
+      // re-asked on its own: its answer was cancelled on a false alarm, and
+      // leaving "(Generation stopped)" behind would punish the user for it.
       if (continuingRef.current) {
         continuingRef.current = false;
-        const text = mergeTurns(continuationRef.current.text, spoken);
+        const first = continuationRef.current.text;
+        const text = spoken ? mergeTurns(first, spoken) : first;
         clearContinuationWindow();
         setFluxTurnActive(false);
         // The abort's re-render must land before sending, or sendMessage
         // still sees the stream it just cancelled and drops the turn.
         await new Promise((resolve) => setTimeout(resolve, 0));
-        await sendMessageRef.current(text);
+        if (activeId) useAppStore.getState().retractLastExchange(activeId);
+        if (text) {
+          voiceOriginatedRef.current = true;
+          await sendMessageRef.current(text);
+        }
         return;
       }
+
+      if (!spoken) {
+        setFluxTurnActive(false);
+        return;
+      }
+      voiceOriginatedRef.current = true;
 
       const text = spoken;
       // A released answer arrives only on a confirmed final, already checked
@@ -1292,7 +1301,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     },
     // flux is stable across renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [releaseSpeculativeAnswer, sendMessage, clearContinuationWindow],
+    [releaseSpeculativeAnswer, sendMessage, clearContinuationWindow, activeId],
   );
 
   useEffect(() => clearContinuationWindow, [clearContinuationWindow]);
@@ -1365,15 +1374,20 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           Date.now(),
         )
       ) {
-        // The user was not finished. Stop the answer to the half-question
-        // and withdraw it, so the merged question is sent as one turn.
+        // The user was not finished. Stop the answer to the half-question:
+        // the stream, and the speech already being synthesised from it --
+        // aborting only the stream left the half-answer playing and its
+        // audio claim set, which is what kept the wake word from re-arming.
+        // The withdrawal itself waits for the resumed turn to end, after the
+        // aborted stream's own cleanup has run, so nothing writes into a
+        // message that is no longer there.
         continuingRef.current = true;
         if (continuationTimerRef.current) {
           clearTimeout(continuationTimerRef.current);
           continuationTimerRef.current = null;
         }
+        stopSpeaking();
         stopStreaming();
-        if (activeId) useAppStore.getState().retractLastExchange(activeId);
       }
     },
     onTurnResumed: () => {
