@@ -74,6 +74,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _to_utc_iso(value: str) -> str:
+    """Normalise an ISO timestamp to UTC so it compares as a string.
+
+    Due tasks are selected with ``next_run <= now`` as text. A "once" task
+    created at "2026-09-13T22:00:00+08:00" sorts after the UTC "now" of
+    "...T16:07:00+00:00" purely because "22" > "16", so a 10 PM reminder
+    was not considered due until 22:00 UTC -- six in the morning. Storing
+    everything in UTC makes the text order the time order. A naive value
+    keeps its long-standing meaning of UTC; an unparseable one is returned
+    untouched rather than lost.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
 def _stringify_result(result: Any) -> str:
     """Coerce a ``system.ask`` result into a value SQLite can bind.
 
@@ -127,10 +147,33 @@ class TaskScheduler:
         """
         self._system = system
 
+    def _normalise_pending(self) -> None:
+        """Rewrite stored next_run values that carry a non-UTC offset.
+
+        Tasks saved before the UTC normalisation still hold local-offset
+        strings and would keep misfiring, so they are corrected once here.
+        """
+        with self._lock:
+            for row in self._store.list_tasks(status="active"):
+                current = row.get("next_run")
+                if not current:
+                    continue
+                fixed = _to_utc_iso(current)
+                if fixed != current:
+                    row["next_run"] = fixed
+                    self._store.update_task(row)
+                    logger.info(
+                        "Scheduler: normalised next_run for task %s to UTC", row["id"]
+                    )
+
     def start(self) -> None:
         """Start the background polling daemon thread."""
         if self._thread is not None and self._thread.is_alive():
             return
+        try:
+            self._normalise_pending()
+        except Exception:
+            logger.exception("Scheduler: could not normalise pending tasks")
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._poll_loop, daemon=True, name="jarvis-scheduler"
@@ -343,7 +386,7 @@ class TaskScheduler:
             if task.last_run is not None:
                 return None
             # Otherwise the schedule_value is the target ISO datetime
-            return task.schedule_value
+            return _to_utc_iso(task.schedule_value)
 
         if task.schedule_type == "interval":
             seconds = float(task.schedule_value)

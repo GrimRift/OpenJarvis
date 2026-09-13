@@ -422,3 +422,78 @@ class TestResultCoercion:
         sched._execute_task(task)
 
         assert store.get_run_logs(task.id)[0]["result"] == "plain text"
+
+
+# -- Local-offset "once" tasks ------------------------------------------------
+
+
+class TestOnceTasksWithLocalOffsets:
+    """A 10 PM reminder created in local time must be due at 10 PM local.
+
+    Due tasks are selected with ``next_run <= now`` as text, and "now" is
+    UTC. A task stored as "...T22:00:00+08:00" sorts after a UTC now of
+    "...T16:07:00+00:00" because "22" > "16", so the user's reminder to
+    watch a film at 10 PM had no run log at midnight and would have fired at
+    six the next morning. Cron tasks never hit this because their next_run
+    is computed in UTC.
+    """
+
+    def test_a_local_offset_once_task_is_due_when_its_utc_moment_passes(
+        self, scheduler, store
+    ):
+        # 22:00 at +08:00 is 14:00 UTC. Pretend it is 16:07 UTC, two hours
+        # later: the reminder is overdue and must be selected.
+        task = scheduler.create_task(
+            prompt="Remind Sir to watch the film.",
+            schedule_type="once",
+            schedule_value="2026-09-13T22:00:00+08:00",
+        )
+        due = store.get_due_tasks("2026-09-13T16:07:00+00:00")
+        assert [t["id"] for t in due] == [task.id]
+
+    def test_next_run_is_stored_in_utc(self, scheduler):
+        task = scheduler.create_task(
+            prompt="x", schedule_type="once", schedule_value="2026-09-13T22:00:00+08:00"
+        )
+        assert task.next_run == "2026-09-13T14:00:00+00:00"
+
+    def test_a_naive_value_keeps_meaning_utc(self, scheduler):
+        task = scheduler.create_task(
+            prompt="x", schedule_type="once", schedule_value="2026-09-13T22:00:00"
+        )
+        assert task.next_run == "2026-09-13T22:00:00+00:00"
+
+    def test_an_unparseable_value_is_left_alone(self, scheduler):
+        task = scheduler.create_task(
+            prompt="x", schedule_type="once", schedule_value="tomorrow-ish"
+        )
+        assert task.next_run == "tomorrow-ish"
+
+    def test_rows_stored_before_the_fix_are_healed_on_start(self, store):
+        # The user's row shape, saved with the local offset and never run.
+        # Dated in the future so the poll loop does not run it the moment
+        # the scheduler starts, which is what it correctly does to an
+        # overdue task.
+        store.save_task(
+            {
+                "id": "stale1",
+                "prompt": "Remind Sir to watch the film.",
+                "schedule_type": "once",
+                "schedule_value": "2099-09-13T22:00:00+08:00",
+                "context_mode": "isolated",
+                "status": "active",
+                "next_run": "2099-09-13T22:00:00+08:00",
+                "last_run": None,
+                "agent": "orchestrator",
+                "tools": "",
+                "metadata": {},
+            }
+        )
+        sched = TaskScheduler(store, poll_interval=60)
+        try:
+            sched.start()
+        finally:
+            sched.stop()
+        assert store.get_task("stale1")["next_run"] == "2099-09-13T14:00:00+00:00"
+        assert store.get_due_tasks("2099-09-13T16:07:00+00:00")
+        assert not store.get_due_tasks("2099-09-13T13:00:00+00:00")
