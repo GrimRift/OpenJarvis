@@ -1390,11 +1390,24 @@ def _check_presence(app_state: Any = None) -> List[CheckResult]:
             )
         ]
     where = f", in front: {snap.foreground}" if snap.foreground else ""
+    history = None
+    started = snap.last_absence_started_at
+    ended = snap.last_absence_ended_at
+    if started and ended:
+        # Shown because the current state alone cannot answer "did it notice
+        # I left?": coming back to check is itself input, so the answer is
+        # always "present" by the time anyone looks.
+        minutes = max(1, int((ended - started) / 60))
+        history = (
+            f"Last away {time.strftime('%H:%M', time.localtime(started))}-"
+            f"{time.strftime('%H:%M', time.localtime(ended))} ({minutes} min)."
+        )
     return [
         CheckResult(
             "Presence",
             "ok",
             f"{snap.state} ({snap.reason}{where})",
+            details=history,
             section=SECTION_FEATURES,
         )
     ]

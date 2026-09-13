@@ -169,3 +169,34 @@ class TestMonitor:
         d = _Desk().monitor(tmp_path).poll().to_dict()
         assert d["state"] == STATE_PRESENT
         assert {"state", "idle_seconds", "since", "reason"} <= set(d)
+
+    def test_coming_back_keeps_the_absence_on_record(self, tmp_path: Path) -> None:
+        # The user was away eight minutes, came back, and ran a health check.
+        # That click was input, so the state read "present" -- correctly --
+        # but nothing said the absence had been seen. The completed absence
+        # must survive the return, because that is what "welcome back" and
+        # the Health line both need.
+        save_settings(
+            PresenceSettings(enabled=True, idle_threshold_seconds=300), tmp_path
+        )
+        desk = _Desk()
+        monitor = desk.monitor(tmp_path)
+        monitor.poll()
+
+        desk.now += 480
+        desk.idle = 480
+        away = monitor.poll()
+        assert away.state == STATE_AWAY
+        assert away.last_absence_started_at is None
+
+        desk.now += 15
+        desk.idle = 0
+        back = monitor.poll()
+        assert back.state == STATE_PRESENT
+        assert back.last_absence_started_at == away.since
+        assert back.last_absence_ended_at == desk.now
+
+        # And it stays on record through later polls while present.
+        desk.now += 60
+        desk.idle = 1
+        assert monitor.poll().last_absence_started_at == away.since

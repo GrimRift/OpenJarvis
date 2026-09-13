@@ -163,6 +163,12 @@ class PresenceSnapshot:
     checked_at: Optional[float]
     threshold_seconds: int
     reason: str = ""
+    # The most recent completed absence. `since` moves to the return time the
+    # moment someone comes back, so without this the length of the absence
+    # is lost -- and "welcome back" needs to know whether it was eight
+    # minutes or eight hours.
+    last_absence_started_at: Optional[float] = None
+    last_absence_ended_at: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -190,6 +196,7 @@ class PresenceMonitor:
     _foreground: Optional[str] = field(default=None, init=False)
     _checked_at: Optional[float] = field(default=None, init=False)
     _reason: str = field(default="", init=False)
+    _last_absence: Optional[tuple[float, float]] = field(default=None, init=False)
     _thread: Optional[threading.Thread] = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
@@ -225,6 +232,8 @@ class PresenceMonitor:
 
     def _transition(self, state: str, now: float, reason: str) -> None:
         if state != self._state:
+            if self._state == STATE_AWAY and state == STATE_PRESENT and self._since:
+                self._last_absence = (self._since, now)
             self._state = state
             self._since = now
         self._reason = reason
@@ -234,6 +243,7 @@ class PresenceMonitor:
             self._last_away_at = now
 
     def _snapshot(self, settings: PresenceSettings) -> PresenceSnapshot:
+        absence = self._last_absence
         return PresenceSnapshot(
             state=self._state,
             idle_seconds=self._idle,
@@ -244,6 +254,8 @@ class PresenceMonitor:
             checked_at=self._checked_at,
             threshold_seconds=settings.idle_threshold_seconds,
             reason=self._reason,
+            last_absence_started_at=absence[0] if absence else None,
+            last_absence_ended_at=absence[1] if absence else None,
         )
 
     def snapshot(self) -> PresenceSnapshot:
