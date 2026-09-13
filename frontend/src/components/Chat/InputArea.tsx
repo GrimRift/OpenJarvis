@@ -649,6 +649,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       timestamp: Date.now(),
       level: 'info',
       category: 'chat',
+      message: `You${wasVoice ? ' (voice)' : ''}: ${content.replace(/\s+/g, ' ').slice(0, 240)}`,
+    });
+    useAppStore.getState().addLogEntry({
+      timestamp: Date.now(),
+      level: 'info',
+      category: 'chat',
       message: deepResearch
         ? `Research: "${content.slice(0, 80)}${content.length > 80 ? '...' : ''}"`
         : `Request: "${content.slice(0, 80)}${content.length > 80 ? '...' : ''}" → ${selectedModel}`,
@@ -877,6 +883,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               activeToolCalls: [...toolCalls],
             });
             updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
+            const preview = String(data.result ?? '')
+              .replace(/\s+/g, ' ')
+              .slice(0, 160);
+            useAppStore.getState().addLogEntry({
+              timestamp: Date.now(),
+              level: data.success ? 'info' : 'warn',
+              category: 'tool',
+              message:
+                `${data.tool} → ${data.success ? 'ok' : 'failed'}` +
+                (typeof data.latency === 'number' ? ` in ${data.latency.toFixed(1)}s` : '') +
+                (preview ? `: ${preview}` : ''),
+            });
           } catch {}
         } else {
           try {
@@ -993,7 +1011,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       );
       useAppStore.getState().addLogEntry({
         timestamp: Date.now(), level: 'info', category: 'chat',
-        message: `Response: ${accumulatedContent.length} chars`,
+        message: `Sage: ${accumulatedContent.replace(/\s+/g, ' ').slice(0, 240)}${
+          accumulatedContent.length > 240 ? '…' : ''
+        } (${accumulatedContent.length} chars)`,
       });
 
       const incrementalSpeechResult = incrementalSpeech?.finish();
@@ -1648,9 +1668,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     effectiveSpeechState === 'idle' &&
     !audioPlaying &&
     wakeWordSettled;
+  const lastGateRef = useRef<boolean | null>(null);
   useEffect(() => {
-    voiceTrace('gate', {
-      wake: wakeGate,
+    // Only when the answer changes. Every input change used to log a full
+    // snapshot, which buried the events that matter under identical lines.
+    if (lastGateRef.current === wakeGate) return;
+    lastGateRef.current = wakeGate;
+    voiceTrace(wakeGate ? 'gate.open' : 'gate.closed', {
       wakeWordEnabled,
       suspended: wakeWordSuspended,
       micDisabled,
