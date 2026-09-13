@@ -358,6 +358,40 @@ class TestHealthChecksHaveOneOwner:
         )
 
 
+class TestSpokenNoticesAreGoneEverywhere:
+    """No "is in chat" notice survives anywhere, source or test.
+
+    The trailing notice after spoken replies was removed at the user's
+    request. Three test files pinned it, in three directories; two were
+    updated and the third failed in CI, on Linux, after the push -- and its
+    own comment recorded that it had been missed the previous time the
+    notice changed too. Twice is a pattern. This scans everything so a
+    fourth copy cannot hide.
+    """
+
+    PHRASES = ("is in chat.", "are in chat.")
+
+    def _hits(self) -> list[str]:
+        hits = []
+        roots = [Path("src/openjarvis"), Path("tests")]
+        for root in roots:
+            for path in root.rglob("*.py"):
+                if path.name == Path(__file__).name:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+                for phrase in self.PHRASES:
+                    if phrase in text:
+                        hits.append(f"{path.as_posix()}: {phrase!r}")
+        return hits
+
+    def test_no_source_or_test_still_carries_the_notice(self):
+        hits = self._hits()
+        assert not hits, (
+            f"the removed spoken notice is still referenced: {hits}. Either it "
+            "came back, or a test is pinning behaviour that no longer exists."
+        )
+
+
 class TestEveryOpenAISerializerHandlesImages:
     """There is more than one place that builds an OpenAI message payload.
 

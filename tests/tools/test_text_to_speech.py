@@ -100,10 +100,9 @@ def test_tts_tool_sanitizes_only_the_text_sent_to_the_backend(tmp_path):
     assert r"C:\AI\OpenJarvis-Lab\config.toml" not in spoken_text
     assert "a link" in spoken_text
     assert "a file path" in spoken_text
-    # The notice is now type-specific. The generic "The exact values are
-    # visible in chat." was deliberately dropped when spoken notices were
-    # narrowed; test_spoken_text.py and test_spoken_text_stream.py were updated
-    # then, and this third call site was missed — the same one-of-three shape
-    # the architecture invariants exist to catch.
-    assert "The link is in chat." in spoken_text
-    assert "The file path is in chat." in spoken_text
+    # No trailing notice at all. The announcement that a value was withheld
+    # was removed on 2026-09-13 at the user's request; "a link" / "a file path"
+    # already say something was withheld. This call site was missed when the
+    # notice changed the first time, and missed again when it was removed --
+    # tests/architecture now asserts the notice text exists nowhere.
+    assert "in chat" not in spoken_text

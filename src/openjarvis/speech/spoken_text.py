@@ -391,7 +391,7 @@ def to_spoken_text(markdown: str) -> str:
 
     text = _BLANK_RUN.sub("\n\n", text)
     text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
-    # No trailing "The link is in chat." style notice. The inline "a link",
+    # No trailing notice announcing what was withheld. The inline "a link",
     # "a file path" and "an identifier" already say that something was left
     # unspoken, and the value is on screen regardless; the extra sentence
     # after every such reply was the thing the user asked to have removed.
