@@ -62,7 +62,9 @@ def test_private_values_split_across_deltas_never_leak(
 
     joined = " ".join(spoken)
     assert secret not in joined
-    assert notice in joined
+    # The value is withheld silently: no trailing "is in chat" sentence.
+    assert "in chat" not in joined
+    del notice
 
 
 def test_unfinished_markdown_is_held_across_deltas() -> None:

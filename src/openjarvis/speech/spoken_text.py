@@ -391,31 +391,12 @@ def to_spoken_text(markdown: str) -> str:
 
     text = _BLANK_RUN.sub("\n\n", text)
     text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
-    notices: list[str] = []
-    link_count = hidden_counts["raw_link"] + hidden_counts["labeled_link"]
-    if hidden_counts["raw_link"] or hidden_counts["labeled_link"] >= 3:
-        notices.append(
-            "The link is in chat."
-            if link_count == 1
-            else "The source links are in chat."
-        )
-    path_count = hidden_counts["path"]
-    if path_count:
-        notices.append(
-            "The file path is in chat."
-            if path_count == 1
-            else "The file paths are in chat."
-        )
-    sensitive_count = hidden_counts["sensitive"]
-    if sensitive_count:
-        notices.append(
-            "The sensitive value is in chat."
-            if sensitive_count == 1
-            else "The sensitive values are in chat."
-        )
-    if notices:
-        notice = " ".join(notices)
-        text = f"{text}\n\n{notice}" if text else notice
+    # No trailing "The link is in chat." style notice. The inline "a link",
+    # "a file path" and "an identifier" already say that something was left
+    # unspoken, and the value is on screen regardless; the extra sentence
+    # after every such reply was the thing the user asked to have removed.
+    # hidden_counts is still kept by the substitutions above for callers that
+    # want to know what was withheld.
     return text
 
 
