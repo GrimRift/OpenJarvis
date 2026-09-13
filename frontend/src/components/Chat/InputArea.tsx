@@ -338,6 +338,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     } else {
       setWakeWordSuspended(false);
       if (fluxActive) {
+        clearContinuationWindow();
         setFluxTurnActive(true);
         flux.beginTurn();
         return;
@@ -1235,6 +1236,36 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     continuationRef.current = { submittedAt: null, text: '' };
   }, []);
 
+  // Keep listening for the rest of the sentence, starting NOW -- at
+  // submission, not after the reply. The first version opened this after
+  // `await sendMessage()`, which resolves only when the whole reply has
+  // streamed; the window then opened just as continuous conversation had
+  // re-armed the mic, and its timer ended that turn four seconds later.
+  // The mic went dead until a refresh. Audio, not the timer, is the real end
+  // of the window; the timer is a backstop for replies that make no sound,
+  // and it may only close the turn it opened: a later turn started by
+  // continuous conversation or the mic button owns the microphone by then.
+  const openContinuationWindow = useCallback(
+    (text: string) => {
+      const stamp = Date.now();
+      continuationRef.current = { submittedAt: stamp, text };
+      flux.beginTurn();
+      setFluxTurnActive(true);
+      if (continuationTimerRef.current) clearTimeout(continuationTimerRef.current);
+      continuationTimerRef.current = setTimeout(() => {
+        continuationTimerRef.current = null;
+        if (continuingRef.current) return;
+        if (continuationRef.current.submittedAt !== stamp) return;
+        continuationRef.current = { submittedAt: null, text: '' };
+        flux.endTurn();
+        setFluxTurnActive(false);
+      }, CONTINUATION_WINDOW_MS);
+    },
+    // flux is stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   const handleFluxEndOfTurn = useCallback(
     async (transcript: string, turnIndex: number, speculativeAnswer?: string) => {
       clearFluxSilenceTimer();
@@ -1262,7 +1293,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         if (activeId) useAppStore.getState().retractLastExchange(activeId);
         if (text) {
           voiceOriginatedRef.current = true;
-          await sendMessageRef.current(text);
+          // Not awaited: the window must open at submission (see
+          // openContinuationWindow), and the merged question can itself be
+          // cut off again.
+          void sendMessageRef.current(text).catch(() => {});
+          openContinuationWindow(text);
         }
         return;
       }
@@ -1282,26 +1317,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (speculativeAnswer && speculativeAnswer.trim()) {
         handled = await releaseSpeculativeAnswer(text, speculativeAnswer.trim());
       }
-      if (!handled) await sendMessage(text);
-
-      // Keep listening for the rest of the sentence. Audio, not this timer,
-      // is the real end of the window: the audioPlaying effect closes the
-      // turn the moment Sage is audibly speaking.
-      continuationRef.current = { submittedAt: Date.now(), text };
-      flux.beginTurn();
-      setFluxTurnActive(true);
-      if (continuationTimerRef.current) clearTimeout(continuationTimerRef.current);
-      continuationTimerRef.current = setTimeout(() => {
-        continuationTimerRef.current = null;
-        if (continuingRef.current) return;
-        continuationRef.current = { submittedAt: null, text: '' };
-        flux.endTurn();
-        setFluxTurnActive(false);
-      }, CONTINUATION_WINDOW_MS);
+      // Not awaited: sendMessage resolves when the whole reply has streamed,
+      // and the window has to be open long before that.
+      if (!handled) void sendMessage(text).catch(() => {});
+      openContinuationWindow(text);
     },
-    // flux is stable across renders.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [releaseSpeculativeAnswer, sendMessage, clearContinuationWindow, activeId],
+    [
+      releaseSpeculativeAnswer,
+      sendMessage,
+      clearContinuationWindow,
+      openContinuationWindow,
+      activeId,
+    ],
   );
 
   useEffect(() => clearContinuationWindow, [clearContinuationWindow]);
@@ -1425,7 +1452,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     autoTriggeredRef.current = true;
     if (fluxActive) {
       // Flux decides when the turn ends, so there is no 12s fallback timer
-      // and no local recording to stop.
+      // and no local recording to stop. This turn now owns the microphone;
+      // a continuation window left over from the last reply must not be
+      // able to end it.
+      clearContinuationWindow();
       setFluxTurnActive(true);
       flux.beginTurn();
       armFluxSilenceTimer();

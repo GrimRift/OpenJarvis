@@ -381,3 +381,65 @@ describe('search and preview images fail quietly', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('a voice turn opens its continuation window at submission', () => {
+  /**
+   * The continuation window -- keep listening for the rest of a cut-off
+   * sentence -- has to open the moment a turn is submitted. Its first version
+   * opened after `await sendMessage()`, which resolves only when the whole
+   * reply has streamed. The window then opened just as continuous
+   * conversation had re-armed the microphone, and its timer ended that turn
+   * four seconds later: the mic went dead until a page refresh, and the
+   * report was "after one voice chat it never listens again".
+   *
+   * So inside the Flux end-of-turn handler, sending is fire-and-forget.
+   * Awaiting the send there is the bug, whatever surrounds it.
+   */
+  const file = join(SRC, 'components', 'Chat', 'InputArea.tsx');
+
+  function endOfTurnHandler(sf: ts.SourceFile): ts.Node | null {
+    let found: ts.Node | null = null;
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === 'handleFluxEndOfTurn' &&
+        node.initializer
+      ) {
+        found = node.initializer;
+        return;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return found;
+  }
+
+  it('never awaits sendMessage inside handleFluxEndOfTurn', () => {
+    const handler = endOfTurnHandler(parse(file));
+    expect(handler, 'handleFluxEndOfTurn not found').not.toBeNull();
+    const awaited: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isAwaitExpression(node)) {
+        const text = node.expression.getText();
+        if (/\bsendMessage(Ref\.current)?\s*\(/.test(text)) {
+          awaited.push(text.slice(0, 60));
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(handler as ts.Node);
+    expect(
+      awaited,
+      'sendMessage is awaited in the end-of-turn handler; the continuation ' +
+        'window would open after the reply instead of at submission',
+    ).toEqual([]);
+  });
+
+  it('opens the window from the handler at all', () => {
+    // Guards against the invariant above passing because the window was
+    // removed rather than because it is placed correctly.
+    const handler = endOfTurnHandler(parse(file));
+    expect((handler as ts.Node).getText()).toContain('openContinuationWindow(');
+  });
+});
