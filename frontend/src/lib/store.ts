@@ -345,6 +345,13 @@ interface AppState {
   deleteConversation: (id: string) => void;
   loadMessages: (conversationId: string | null) => void;
   addMessage: (conversationId: string, message: ChatMessage) => void;
+  /**
+   * Drop the last user turn and any reply to it. Used when a voice turn was
+   * cut off mid-sentence and the rest arrived after Sage had already
+   * started answering: the half-question and its half-answer are withdrawn
+   * so the merged question can be sent as one turn.
+   */
+  retractLastExchange: (conversationId: string) => string | null;
   updateLastAssistant: (
     conversationId: string,
     content: string,
@@ -630,6 +637,29 @@ export const useAppStore = create<AppState>((set, get) => {
       } else {
         set({ conversations });
       }
+    },
+
+    retractLastExchange: (conversationId: string) => {
+      const store = loadConversations();
+      const conv = store.conversations[conversationId];
+      if (!conv || conv.messages.length === 0) return null;
+      // Walk back over any assistant replies to the last user turn.
+      let idx = conv.messages.length - 1;
+      while (idx >= 0 && conv.messages[idx].role !== 'user') idx -= 1;
+      if (idx < 0) return null;
+      const userText = conv.messages[idx].content;
+      conv.messages.splice(idx);
+      conv.updatedAt = Date.now();
+      saveConversations(store);
+      const conversations = Object.values(store.conversations).sort(
+        (a, b) => b.updatedAt - a.updatedAt,
+      );
+      if (get().activeId === conversationId) {
+        set({ messages: [...conv.messages], conversations });
+      } else {
+        set({ conversations });
+      }
+      return userText;
     },
 
     updateLastAssistant: (

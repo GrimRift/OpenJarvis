@@ -33,6 +33,11 @@ import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
 import { turnSurvivesStatus, useFluxSpeech } from '../../hooks/useFluxSpeech';
+import {
+  CONTINUATION_WINDOW_MS,
+  isContinuation,
+  mergeTurns,
+} from '../../lib/turn-continuation';
 import type {
   ChatMessage,
   MessageTelemetry,
@@ -206,6 +211,20 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   } = useStreamingTts();
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
+  // Turn continuation (see lib/turn-continuation.ts). After a Flux turn is
+  // submitted the microphone keeps transmitting until Sage's audio starts or
+  // the window lapses; speech in that window is the rest of the sentence.
+  const continuationRef = useRef<{ submittedAt: number | null; text: string }>({
+    submittedAt: null,
+    text: '',
+  });
+  const continuingRef = useRef(false);
+  const continuationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The executing end-of-turn handler holds a stale sendMessage after the
+  // abort re-renders; the ref always points at the current one.
+  const sendMessageRef = useRef<(overrideContent?: string) => Promise<void>>(
+    async () => {},
+  );
 
   const activeId = useAppStore((s) => s.activeId);
   const selectedModel = useAppStore((s) => s.selectedModel);
@@ -1206,30 +1225,77 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     ],
   );
 
+  sendMessageRef.current = sendMessage;
+
+  const clearContinuationWindow = useCallback(() => {
+    if (continuationTimerRef.current) {
+      clearTimeout(continuationTimerRef.current);
+      continuationTimerRef.current = null;
+    }
+    continuationRef.current = { submittedAt: null, text: '' };
+  }, []);
+
   const handleFluxEndOfTurn = useCallback(
     async (transcript: string, turnIndex: number, speculativeAnswer?: string) => {
       clearFluxSilenceTimer();
-      setFluxTurnActive(false);
       // Deepgram can repeat a final event; one confirmed turn sends once.
       if (lastFluxTurnRef.current === turnIndex) return;
       lastFluxTurnRef.current = turnIndex;
 
-      const text = (transcript || '').trim();
-      if (!text) return;
+      const spoken = (transcript || '').trim();
+      if (!spoken) {
+        setFluxTurnActive(false);
+        return;
+      }
       voiceOriginatedRef.current = true;
 
+      // The rest of a sentence that was cut off: the half-question and its
+      // half-answer were already withdrawn when this speech began; send the
+      // whole question as one turn.
+      if (continuingRef.current) {
+        continuingRef.current = false;
+        const text = mergeTurns(continuationRef.current.text, spoken);
+        clearContinuationWindow();
+        setFluxTurnActive(false);
+        // The abort's re-render must land before sending, or sendMessage
+        // still sees the stream it just cancelled and drops the turn.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await sendMessageRef.current(text);
+        return;
+      }
+
+      const text = spoken;
       // A released answer arrives only on a confirmed final, already checked
       // against this turn's identity and transcript server-side. If posting
       // it is declined for any reason, fall through and generate normally
       // rather than losing the turn.
+      let handled = false;
       if (speculativeAnswer && speculativeAnswer.trim()) {
-        const posted = await releaseSpeculativeAnswer(text, speculativeAnswer.trim());
-        if (posted) return;
+        handled = await releaseSpeculativeAnswer(text, speculativeAnswer.trim());
       }
-      await sendMessage(text);
+      if (!handled) await sendMessage(text);
+
+      // Keep listening for the rest of the sentence. Audio, not this timer,
+      // is the real end of the window: the audioPlaying effect closes the
+      // turn the moment Sage is audibly speaking.
+      continuationRef.current = { submittedAt: Date.now(), text };
+      flux.beginTurn();
+      setFluxTurnActive(true);
+      if (continuationTimerRef.current) clearTimeout(continuationTimerRef.current);
+      continuationTimerRef.current = setTimeout(() => {
+        continuationTimerRef.current = null;
+        if (continuingRef.current) return;
+        continuationRef.current = { submittedAt: null, text: '' };
+        flux.endTurn();
+        setFluxTurnActive(false);
+      }, CONTINUATION_WINDOW_MS);
     },
-    [releaseSpeculativeAnswer, sendMessage],
+    // flux is stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [releaseSpeculativeAnswer, sendMessage, clearContinuationWindow],
   );
+
+  useEffect(() => clearContinuationWindow, [clearContinuationWindow]);
 
   const handleFluxUnavailable = useCallback(
     async (reason: string, audio: Int16Array | null) => {
@@ -1287,6 +1353,28 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     onTurnStarted: () => {
       // Real speech: from here Deepgram owns the ending.
       clearFluxSilenceTimer();
+      const state = continuationRef.current;
+      if (
+        !continuingRef.current &&
+        isContinuation(
+          {
+            submittedAt: state.submittedAt,
+            submittedText: state.text,
+            sageSpeaking: useAppStore.getState().audioPlaying,
+          },
+          Date.now(),
+        )
+      ) {
+        // The user was not finished. Stop the answer to the half-question
+        // and withdraw it, so the merged question is sent as one turn.
+        continuingRef.current = true;
+        if (continuationTimerRef.current) {
+          clearTimeout(continuationTimerRef.current);
+          continuationTimerRef.current = null;
+        }
+        stopStreaming();
+        if (activeId) useAppStore.getState().retractLastExchange(activeId);
+      }
     },
     onTurnResumed: () => {
       // The speaker carried on; the server has already discarded its
@@ -1435,6 +1523,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       flux.endTurn();
       clearFluxSilenceTimer();
       setFluxTurnActive(false);
+    }
+    if (audioPlaying) {
+      // Sage is audibly speaking: anything said now is a new turn, not the
+      // rest of the last one.
+      clearContinuationWindow();
     }
     // flux.endTurn is stable; re-running on the flag alone is intended.
     // eslint-disable-next-line react-hooks/exhaustive-deps
