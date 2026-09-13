@@ -1,6 +1,6 @@
 # M36 — Presence: Sage knows when to speak
 
-Scoped 2026-09-13. Phase 1 implemented 2026-09-13.
+Scoped 2026-09-13. Phases 1 and 2 implemented 2026-09-13.
 
 ## Why
 
@@ -109,6 +109,21 @@ Memory today is 500 durable facts, re-injected into every prompt. Good for
   **recall, not context compression.** The 8,000-token window stays as it is.
 
 Nothing here speaks. It is the substance the moments in phase 3 draw on.
+
+**Status (2026-09-13):** implemented. `memory/episodes.py` reads the day's
+turns from the trace store -- only the chat agents, and excluding any query
+that matches a scheduled task's prompt, because a job on the orchestrator
+agent leaves a trace indistinguishable from a typed message.
+`agents/episode_writer.py` is a registered agent on a self-registering
+nightly cron (23:00 local, converted to UTC from `proactive.timezone`; the
+first registration fell back to UTC and landed at 07:00 because
+`[scheduler]` has no timezone field). Recent days ride the existing
+`inject_context` path beside facts, so there is one place a prompt gains
+memory. Settings sit under the presence master switch in `presence.json`.
+Verified live: the job wrote a real, specific entry for the day from 74
+turns, and Sage answered "what were we working on yesterday" from it
+through the chat path. The digest's "since we last spoke" line is deferred
+to phase 3, where it belongs with the good-morning moment.
 
 ## Phase 3 — Moments
 

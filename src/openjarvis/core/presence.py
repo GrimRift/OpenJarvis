@@ -61,6 +61,16 @@ class PresenceSettings:
     # short enough that "welcome back" is not said to someone who never left.
     idle_threshold_seconds: int = 300
     poll_interval_seconds: int = 15
+    # Episodes: the nightly diary entry (M36 phase 2). Under the master switch
+    # like everything else here; the model is pinned the way the digest pins
+    # its own, because a plain scheduled run would otherwise land on the local
+    # default, which has invented actions it never took.
+    episodes_enabled: bool = True
+    episodes_model: str = "gpt-5.6-luna"
+    episodes_engine: str = "cloud"
+    # Local hour the entry is written. Late enough to cover the evening,
+    # early enough that a midnight conversation lands in tomorrow's entry.
+    episodes_hour_local: int = 23
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -79,13 +89,20 @@ def load_settings(config_dir: Optional[Path] = None) -> PresenceSettings:
     if not isinstance(raw, dict):
         return PresenceSettings()
     settings = PresenceSettings()
-    for key in ("enabled",):
+    for key in ("enabled", "episodes_enabled"):
         if isinstance(raw.get(key), bool):
             setattr(settings, key, raw[key])
     for key in ("idle_threshold_seconds", "poll_interval_seconds"):
         value = raw.get(key)
         if isinstance(value, (int, float)) and value > 0:
             setattr(settings, key, int(value))
+    for key in ("episodes_model", "episodes_engine"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            setattr(settings, key, value.strip())
+    hour = raw.get("episodes_hour_local")
+    if isinstance(hour, int) and 0 <= hour <= 23:
+        settings.episodes_hour_local = hour
     return settings
 
 

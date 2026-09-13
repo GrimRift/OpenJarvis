@@ -782,6 +782,22 @@ def serve(
         except Exception as exc:
             logger.warning("Proactive cron registration failed: %s", exc)
 
+    # M36 episodes: the nightly diary entry. Registered whenever the scheduler
+    # runs; the agent itself checks the presence master switch on every run,
+    # so switching M36 off in Settings stops it without a restart.
+    if task_scheduler is not None:
+        try:
+            from openjarvis.agents.episode_writer import register_episode_cron
+
+            _episode_task = register_episode_cron(task_scheduler)
+            if _episode_task is not None:
+                console.print(
+                    f"  Episodes: [cyan]{_episode_task.schedule_value}[/cyan] UTC "
+                    f"(next {_episode_task.next_run})"
+                )
+        except Exception as exc:
+            logger.warning("Episode cron registration failed: %s", exc)
+
     # Pre-generate the briefing text on the same cron. Asking for it then
     # costs a database read instead of waiting on Teams and two mailboxes.
     if task_scheduler is not None and config.digest.enabled:

@@ -85,6 +85,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.agents.episode_writer  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.agents.class_notifier  # noqa: F401
 except ImportError:
     pass

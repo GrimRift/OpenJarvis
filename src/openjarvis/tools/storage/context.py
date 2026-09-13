@@ -83,8 +83,15 @@ def format_context(results: List[RetrievalResult]) -> str:
 def build_context_message(
     results: List[RetrievalResult],
     facts: Sequence[Fact] = (),
+    recent_days: str = "",
 ) -> Message:
-    """Create a system message with formatted context."""
+    """Create a system message with formatted context.
+
+    ``recent_days`` is the episode text from :mod:`openjarvis.memory.episodes`:
+    what happened on the last few days, as opposed to facts, which are what
+    stays true. It rides the same context message rather than a second
+    injection path, so there is exactly one place a prompt gains memory.
+    """
     # Defensive filtering here protects direct callers as well as the normal
     # inject_context() path. Quarantined facts must never become instructions
     # merely because a caller skipped the budget-selection helper.
@@ -103,6 +110,13 @@ def build_context_message(
             "The following context was retrieved from the knowledge"
             " base. Use it to inform your response, citing sources"
             " where applicable:\n\n" + format_context(results)
+        )
+    if recent_days.strip():
+        sections.append(
+            "What happened on recent days, from Sage's own record of past "
+            "conversations. Use it when the user refers to earlier work or "
+            "asks what was done; do not recite it unprompted:\n\n"
+            + recent_days.strip()
         )
     content = "\n\n".join(sections)
     return Message(
@@ -149,6 +163,7 @@ def inject_context(
     *,
     config: Optional[ContextConfig] = None,
     facts: Sequence[Fact] = (),
+    recent_days: str = "",
 ) -> List[Message]:
     """Retrieve relevant context and prepend it to *messages*.
 
@@ -220,7 +235,7 @@ def inject_context(
         truncated.append(r)
         total_tokens += tokens
 
-    if not selected_facts and not truncated:
+    if not selected_facts and not truncated and not recent_days.strip():
         return messages
 
     # Publish event
@@ -237,7 +252,7 @@ def inject_context(
     )
 
     # Build context message and prepend
-    ctx_msg = build_context_message(truncated, selected_facts)
+    ctx_msg = build_context_message(truncated, selected_facts, recent_days)
     return _merge_context_message(messages, ctx_msg)
 
 

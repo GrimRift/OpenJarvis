@@ -1266,6 +1266,16 @@ async def update_presence_settings(request: Request):
     return settings.to_dict()
 
 
+@presence_router.get("/episodes")
+async def presence_episodes(days: int = 7):
+    """Sage's diary: one entry per day with conversations, newest first."""
+    from openjarvis.memory.episodes import load_episodes  # noqa: PLC0415
+
+    episodes = load_episodes()
+    ordered = sorted(episodes.values(), key=lambda e: e.day, reverse=True)
+    return {"episodes": [e.to_dict() for e in ordered[: max(1, min(days, 30))]]}
+
+
 feedback_router = APIRouter(prefix="/v1/feedback", tags=["feedback"])
 
 

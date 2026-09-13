@@ -1413,6 +1413,67 @@ def _check_presence(app_state: Any = None) -> List[CheckResult]:
     ]
 
 
+def _check_episodes() -> List[CheckResult]:
+    """Whether Sage's diary is being written, and when it last was.
+
+    An episode that silently stops being written would be the world-section
+    failure again -- configured on, collecting nothing -- so the last written
+    day is reported rather than just the switch.
+    """
+    try:
+        from openjarvis.core.presence import load_settings
+        from openjarvis.memory.episodes import load_episodes
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Episodes", "warn", f"Unavailable: {exc}", section=SECTION_FEATURES
+            )
+        ]
+
+    settings = load_settings()
+    if not settings.enabled or not settings.episodes_enabled:
+        return [
+            CheckResult(
+                "Episodes",
+                "ok",
+                "Switched off",
+                details="Turned on with presence in Settings.",
+                section=SECTION_FEATURES,
+            )
+        ]
+
+    episodes = load_episodes()
+    if not episodes:
+        return [
+            CheckResult(
+                "Episodes",
+                "ok",
+                "None written yet",
+                details=(
+                    f"The first is written at {settings.episodes_hour_local:02d}:00 "
+                    "local on the next day with conversations."
+                ),
+                section=SECTION_FEATURES,
+            )
+        ]
+    latest = max(episodes)
+    age_days = (time.time() - episodes[latest].written_at) / 86400
+    status = "warn" if age_days > 2 else "ok"
+    return [
+        CheckResult(
+            "Episodes",
+            status,
+            f"{len(episodes)} on file, latest {latest}",
+            details=(
+                "Nothing written for over two days; check the scheduled job."
+                if status == "warn"
+                else None
+            ),
+            section=SECTION_FEATURES,
+        )
+    ]
+
+
 # -- Providers ---------------------------------------------------------------
 
 # One minimal read per Google API. Presence of a credential file proves
@@ -2201,6 +2262,7 @@ def run_health_checks(
     checks.append(_check_scheduler_running())
     checks.extend(_check_telemetry_recording(app_state))
     checks.extend(_check_presence(app_state))
+    checks.extend(_check_episodes())
 
     checks.extend(_check_configured_tools_registered())
     checks.extend(_check_tool_modules_import())

@@ -343,12 +343,28 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     min_score=config.memory.context_min_score,
                     max_context_tokens=config.memory.context_max_tokens,
                 )
+                # Recent days ride the same injection as facts. Read only
+                # when the M36 master switch is on: off means Sage behaves
+                # exactly as it did before the milestone.
+                recent_days = ""
+                try:
+                    from openjarvis.core.presence import load_settings
+                    from openjarvis.memory.episodes import (
+                        format_recent_days,
+                        recent_episodes,
+                    )
+
+                    if load_settings().enabled:
+                        recent_days = format_recent_days(recent_episodes(days=3))
+                except Exception:
+                    recent_days = ""
                 enriched = inject_context(
                     query_text,
                     messages,
                     memory_backend,
                     config=ctx_cfg,
                     facts=facts,
+                    recent_days=recent_days,
                 )
                 # Rebuild after identity/context merging so downstream engine
                 # adapters always receive exactly one system message.
