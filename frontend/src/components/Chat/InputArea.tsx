@@ -1483,7 +1483,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     autoStopTimerRef.current = setTimeout(() => {
       finishAutoRecording();
     }, 12000);
-  }, [micDisabled, speechState, startRecording, finishAutoRecording]);
+    // effectiveSpeechState folds in fluxTurnActive; leaving it out of the
+    // dependencies let this callback keep a stale 'recording' after the
+    // turn had ended, and continuous conversation skipped every re-arm
+    // from the third turn on. The trace showed the two values disagreeing
+    // in the same millisecond.
+  }, [micDisabled, speechState, effectiveSpeechState, startRecording, finishAutoRecording]);
 
   // Wake-word variant: acknowledge out loud, then listen. Only the wake word
   // does this — the continuous-conversation re-arm above stays silent, since
@@ -1538,7 +1543,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // ordinary guard above takes over from here.
       wakeWordBusyRef.current = false;
     }
-  }, [micDisabled, speechState, startRecording, finishAutoRecording, wakeWordGreetingEnabled]);
+  }, [
+    micDisabled,
+    speechState,
+    effectiveSpeechState,
+    startRecording,
+    finishAutoRecording,
+    wakeWordGreetingEnabled,
+  ]);
 
   useEffect(() => {
     if (speechState !== 'recording' && autoStopTimerRef.current) {

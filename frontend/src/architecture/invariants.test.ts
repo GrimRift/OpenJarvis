@@ -443,3 +443,47 @@ describe('a voice turn opens its continuation window at submission', () => {
     expect((handler as ts.Node).getText()).toContain('openContinuationWindow(');
   });
 });
+
+describe('no callback reads effectiveSpeechState without depending on it', () => {
+  /**
+   * effectiveSpeechState is `fluxTurnActive ? 'recording' : speechState`.
+   * Two useCallbacks read it and listed only speechState. Once each had
+   * captured 'recording' it was never rebuilt, so continuous conversation
+   * skipped every re-arm from the third turn on and the wake word fired
+   * seven times into a callback that returned at its first line. The trace
+   * showed the live value and the captured one disagreeing in the same
+   * millisecond. A stale closure is invisible to tsc and to every unit
+   * test; only the dependency list can be checked, so it is.
+   */
+  const file = join(SRC, 'components', 'Chat', 'InputArea.tsx');
+
+  it('every useCallback that reads effectiveSpeechState lists it', () => {
+    const sf = parse(file);
+    const offenders: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'useCallback' &&
+        node.arguments.length >= 2
+      ) {
+        const [fn, deps] = node.arguments;
+        const body = fn.getText();
+        if (/\beffectiveSpeechState\b/.test(body)) {
+          const depsText = deps.getText();
+          if (!/\beffectiveSpeechState\b|\bfluxTurnActive\b/.test(depsText)) {
+            const { line } = sf.getLineAndCharacterOfPosition(node.getStart());
+            offenders.push(`InputArea.tsx:${line + 1}`);
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect(
+      offenders,
+      'useCallback reads effectiveSpeechState but does not depend on it; ' +
+        'it will keep a stale value and the microphone will not re-arm',
+    ).toEqual([]);
+  });
+});
