@@ -1212,6 +1212,60 @@ async def apply_system_fix(fix_id: str, confirmed: bool = False):
     return outcome.to_dict()
 
 
+presence_router = APIRouter(prefix="/v1/presence", tags=["presence"])
+
+
+@presence_router.get("")
+async def presence_state(request: Request):
+    """Whether anyone is at the desk, and why Sage thinks so.
+
+    Exposed so the user can see what Sage believes before anything is ever
+    said on the strength of it.
+    """
+    monitor = getattr(request.app.state, "presence_monitor", None)
+    if monitor is None:
+        return {"state": "disabled", "reason": "presence monitor not running"}
+    return monitor.snapshot().to_dict()
+
+
+@presence_router.get("/settings")
+async def presence_settings():
+    from openjarvis.core.presence import load_settings  # noqa: PLC0415
+
+    return load_settings().to_dict()
+
+
+@presence_router.put("/settings")
+async def update_presence_settings(request: Request):
+    """The master switch, and the thresholds beneath it.
+
+    Written to a sidecar file the monitor re-reads on every poll, so a change
+    here is live at once and never touches config.toml.
+    """
+    from openjarvis.core.presence import load_settings, save_settings  # noqa: PLC0415
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    settings = load_settings()
+    if "enabled" in body:
+        if not isinstance(body["enabled"], bool):
+            raise HTTPException(status_code=400, detail="enabled must be a boolean")
+        settings.enabled = body["enabled"]
+    for key in ("idle_threshold_seconds", "poll_interval_seconds"):
+        if key in body:
+            value = body[key]
+            if not isinstance(value, (int, float)) or value <= 0:
+                raise HTTPException(status_code=400, detail=f"{key} must be positive")
+            setattr(settings, key, int(value))
+    save_settings(settings)
+    monitor = getattr(request.app.state, "presence_monitor", None)
+    if monitor is not None:
+        # Reflect the new switch immediately rather than at the next poll.
+        monitor.poll()
+    return settings.to_dict()
+
+
 feedback_router = APIRouter(prefix="/v1/feedback", tags=["feedback"])
 
 
@@ -1327,6 +1381,7 @@ def include_all_routes(app) -> None:
     app.include_router(learning_router)
     app.include_router(speech_router)
     app.include_router(system_router)
+    app.include_router(presence_router)
     app.include_router(feedback_router)
     app.include_router(optimize_router)
 

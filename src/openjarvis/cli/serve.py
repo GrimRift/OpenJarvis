@@ -897,6 +897,21 @@ def serve(
         cors_origins=config.server.cors_origins,
     )
 
+    # Presence monitor (M36). Wired here and not in SystemBuilder because
+    # serve.py hand-assembles the system and anything the builder injects is
+    # silently absent -- the standing trap. It is server-only anyway: nothing
+    # but a running server has a desk to watch. The master switch lives in
+    # OPENJARVIS_DATA/presence.json and is re-read on every poll, so the
+    # monitor runs regardless and reports "disabled" until switched on.
+    try:
+        from openjarvis.core.presence import PresenceMonitor
+
+        presence_monitor = PresenceMonitor()
+        presence_monitor.start()
+        app.state.presence_monitor = presence_monitor
+    except Exception as exc:
+        logger.debug("Presence monitor init failed: %s", exc)
+
     console.print(
         f"[green]Starting OpenJarvis API server[/green]\n"
         f"  Engine: [cyan]{engine_name}[/cyan]\n"

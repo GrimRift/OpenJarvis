@@ -33,7 +33,10 @@ import {
   saveToolCredentials,
   deleteToolCredential,
   isTauri,
+  fetchPresenceSettings,
+  updatePresenceSettings,
   type InferenceSource,
+  type PresenceSettings,
 } from '../lib/api';
 import { isAutoUpdateDisabled, setAutoUpdateDisabled } from '../components/Desktop/UpdateChecker';
 
@@ -249,6 +252,23 @@ export function SettingsPage() {
   const [fluxAvailable, setFluxAvailable] = useState<boolean | null>(null);
   const [fluxReason, setFluxReason] = useState<string>('');
   const [saved, setSaved] = useState(false);
+  const [presence, setPresence] = useState<PresenceSettings | null>(null);
+  const [presenceError, setPresenceError] = useState<string | null>(null);
+  useEffect(() => {
+    fetchPresenceSettings()
+      .then(setPresence)
+      .catch((err) => setPresenceError(err instanceof Error ? err.message : String(err)));
+  }, []);
+  const togglePresence = async () => {
+    if (!presence) return;
+    try {
+      setPresence(await updatePresenceSettings({ enabled: !presence.enabled }));
+      setPresenceError(null);
+      showSaved();
+    } catch (err) {
+      setPresenceError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(() => !isAutoUpdateDisabled());
   const [updateCheckState, setUpdateCheckState] = useState<'idle' | 'checking' | 'available' | 'latest'>('idle');
@@ -1007,6 +1027,28 @@ export function SettingsPage() {
                 See the <a href="https://open-jarvis.github.io/OpenJarvis/user-guide/tools/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)' }}>documentation</a> for details.
               </div>
             )}
+          </Section>
+
+          {/* Presence (M36) */}
+          <Section title="Presence">
+            <SettingRow label="Sage knows when you are here" description={`Lets Sage tell whether anyone is at the desk, from keyboard and mouse activity and the window in front. This is the master switch for everything Sage does on its own; off, it behaves exactly as before. What it currently believes is shown on the Health page.${presenceError ? ` (${presenceError})` : ''}`}>
+              <button
+                onClick={togglePresence}
+                disabled={!presence}
+                className="relative w-11 h-6 rounded-full transition-colors cursor-pointer disabled:opacity-50"
+                style={{
+                  background: presence?.enabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
+                }}
+              >
+                <span
+                  className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                  style={{
+                    transform: presence?.enabled ? 'translateX(20px)' : 'translateX(0)',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                  }}
+                />
+              </button>
+            </SettingRow>
           </Section>
 
           {/* Data */}

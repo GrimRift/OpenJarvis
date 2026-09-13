@@ -1,6 +1,6 @@
 # M36 — Presence: Sage knows when to speak
 
-Scoped 2026-09-13. Not started.
+Scoped 2026-09-13. Phase 1 implemented 2026-09-13.
 
 ## Why
 
@@ -50,10 +50,20 @@ untouched; it remains how replies are spoken. This is the one piece of
 genuinely new plumbing in the milestone.
 
 Because delivery is server-side, **the master switch and per-moment switches
-must live server-side too** -- a `[presence]` section in `config.toml`,
-edited from the Settings page through an API, not in the browser's
-localStorage where the other UI settings live. A switch the server cannot see
-would be a switch that does nothing.
+must live server-side too**, edited from the Settings page through an API,
+not in the browser's localStorage where the other UI settings live. A switch
+the server cannot see would be a switch that does nothing.
+
+**Revised while building phase 1:** the switches live in
+`OPENJARVIS_DATA/presence.json`, not a `[presence]` section in `config.toml`.
+The server has no safe way to rewrite the hand-commented TOML -- the only
+precedent is a line-by-line rewrite, and one malformed line there breaks
+every credential -- while a sidecar file is re-read on every poll, so the
+switch is live at once with no restart.
+
+**Also revised:** `ffplay` was installed on 2026-09-13 (`Gyan.FFmpeg` via
+winget) and verified to play a Sage clip with no window. The existing
+`_play_audio` already tries it first, so phase 3 needs no new player.
 
 ## Phase 1 — Presence sensing
 
@@ -73,6 +83,15 @@ consults.
 
 Verification is not a unit test. It is walking away from the desk and watching
 the state change, then coming back.
+
+**Status (2026-09-13):** implemented. `core/presence.py` holds the sensors,
+the pure decision, and a polling monitor with an injectable clock; it is
+wired in `serve.py` (not `SystemBuilder`, per the standing trap) and exposed
+as `GET /v1/presence`, `GET/PUT /v1/presence/settings`, a Presence section
+in Settings, and a line under Features on the Health page. Verified live:
+the switch flips the state within one poll in both directions, and the page
+reads "present (input 61s ago, in front: Sage - Opera)". The away
+transition needs five minutes without input, which only the user can supply.
 
 ## Phase 2 — Episodes: memory that spans days
 

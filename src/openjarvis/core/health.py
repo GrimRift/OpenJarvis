@@ -1328,6 +1328,78 @@ def _check_telemetry_recording(app_state: Any = None) -> List[CheckResult]:
     ]
 
 
+def _check_presence(app_state: Any = None) -> List[CheckResult]:
+    """What Sage believes about whether anyone is at the desk, and why.
+
+    Shown before any moment can fire on it: if this line is wrong, every
+    unprompted word built on it is wrong too, and the place to find that out
+    is here rather than by being greeted in an empty room.
+    """
+    if app_state is None:
+        return []
+    monitor = getattr(app_state, "presence_monitor", None)
+    if monitor is None:
+        return [
+            CheckResult(
+                "Presence",
+                "warn",
+                "Monitor not running",
+                section=SECTION_FEATURES,
+            )
+        ]
+    try:
+        snap = monitor.snapshot()
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Presence",
+                "warn",
+                f"Could not read: {exc}",
+                section=SECTION_FEATURES,
+            )
+        ]
+
+    if snap.state == "disabled":
+        return [
+            CheckResult(
+                "Presence",
+                "ok",
+                "Switched off",
+                details="Turn it on in Settings for Sage to know when you are here.",
+                section=SECTION_FEATURES,
+            )
+        ]
+    if snap.state == "unknown":
+        return [
+            CheckResult(
+                "Presence",
+                "warn",
+                "Cannot tell",
+                details=snap.reason or None,
+                section=SECTION_FEATURES,
+            )
+        ]
+    if not monitor.running():
+        return [
+            CheckResult(
+                "Presence",
+                "fail",
+                "Monitor thread has stopped",
+                details="Presence will be stale until Sage is restarted.",
+                section=SECTION_FEATURES,
+            )
+        ]
+    where = f", in front: {snap.foreground}" if snap.foreground else ""
+    return [
+        CheckResult(
+            "Presence",
+            "ok",
+            f"{snap.state} ({snap.reason}{where})",
+            section=SECTION_FEATURES,
+        )
+    ]
+
+
 # -- Providers ---------------------------------------------------------------
 
 # One minimal read per Google API. Presence of a credential file proves
@@ -2115,6 +2187,7 @@ def run_health_checks(
     checks.extend(_check_digest_sections())
     checks.append(_check_scheduler_running())
     checks.extend(_check_telemetry_recording(app_state))
+    checks.extend(_check_presence(app_state))
 
     checks.extend(_check_configured_tools_registered())
     checks.extend(_check_tool_modules_import())

@@ -489,6 +489,53 @@ export async function applyFix(fixId: string): Promise<FixOutcome> {
 }
 
 // ---------------------------------------------------------------------------
+// Presence (M36)
+// ---------------------------------------------------------------------------
+
+export interface PresenceSettings {
+  enabled: boolean;
+  idle_threshold_seconds: number;
+  poll_interval_seconds: number;
+}
+
+export interface PresenceSnapshot {
+  state: 'present' | 'away' | 'disabled' | 'unknown';
+  idle_seconds: number | null;
+  foreground: string | null;
+  since: number | null;
+  reason: string;
+}
+
+/**
+ * Server-side, not localStorage: presence drives speech that comes from the
+ * server, so a switch the server could not see would be a switch that does
+ * nothing.
+ */
+export async function fetchPresenceSettings(): Promise<PresenceSettings> {
+  const res = await apiFetch('/v1/presence/settings');
+  if (!res.ok) throw new Error(`Presence settings unavailable (${res.status})`);
+  return res.json();
+}
+
+export async function updatePresenceSettings(
+  patch: Partial<PresenceSettings>,
+): Promise<PresenceSettings> {
+  const res = await apiFetch('/v1/presence/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Could not save presence settings (${res.status})`);
+  return res.json();
+}
+
+export async function fetchPresence(): Promise<PresenceSnapshot> {
+  const res = await apiFetch('/v1/presence');
+  if (!res.ok) throw new Error(`Presence unavailable (${res.status})`);
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Agent Manager
 // ---------------------------------------------------------------------------
 
