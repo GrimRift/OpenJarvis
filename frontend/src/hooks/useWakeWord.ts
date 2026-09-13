@@ -1,3 +1,4 @@
+import { voiceTrace } from '../lib/voice-trace';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import { buildWsProtocols } from '../lib/useAgentEvents';
@@ -85,6 +86,11 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
 
   const onDetectedRef = useRef(onDetected);
   onDetectedRef.current = onDetected;
+  const lastEnabledRef = useRef<boolean | null>(null);
+  if (lastEnabledRef.current !== enabled) {
+    lastEnabledRef.current = enabled;
+    voiceTrace(enabled ? 'wakeword.armed' : 'wakeword.disarmed');
+  }
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -185,6 +191,7 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'detected') {
+          voiceTrace('wakeword.fired');
           onDetectedRef.current();
         }
       } catch {

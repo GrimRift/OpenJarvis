@@ -38,6 +38,7 @@ import {
   isContinuation,
   mergeTurns,
 } from '../../lib/turn-continuation';
+import { setVoiceTraceSink, voiceTrace } from '../../lib/voice-trace';
 import type {
   ChatMessage,
   MessageTelemetry,
@@ -1249,13 +1250,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     (text: string) => {
       const stamp = Date.now();
       continuationRef.current = { submittedAt: stamp, text };
+      voiceTrace('window.open', { chars: text.length });
       flux.beginTurn();
       setFluxTurnActive(true);
       if (continuationTimerRef.current) clearTimeout(continuationTimerRef.current);
       continuationTimerRef.current = setTimeout(() => {
         continuationTimerRef.current = null;
         if (continuingRef.current) return;
-        if (continuationRef.current.submittedAt !== stamp) return;
+        if (continuationRef.current.submittedAt !== stamp) {
+          voiceTrace('window.timer.stale');
+          return;
+        }
+        voiceTrace('window.timer.close');
         continuationRef.current = { submittedAt: null, text: '' };
         flux.endTurn();
         setFluxTurnActive(false);
@@ -1335,6 +1341,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
 
   const handleFluxUnavailable = useCallback(
     async (reason: string, audio: Int16Array | null) => {
+      voiceTrace('flux.unavailable', { reason, bufferedSamples: audio?.length ?? 0 });
       clearFluxSilenceTimer();
       setFluxTurnActive(false);
       toast.error(`Cloud transcription unavailable — using local. ${reason}`, {
@@ -1374,6 +1381,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     fluxSilenceTimerRef.current = setTimeout(() => {
       fluxSilenceTimerRef.current = null;
       // Silent by design: nothing was said, so there is nothing to report.
+      voiceTrace('silence.timer.close');
       flux.endTurn();
       clearFluxSilenceTimer();
       setFluxTurnActive(false);
@@ -1409,6 +1417,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // aborted stream's own cleanup has run, so nothing writes into a
         // message that is no longer there.
         continuingRef.current = true;
+        voiceTrace('window.continuation');
         if (continuationTimerRef.current) {
           clearTimeout(continuationTimerRef.current);
           continuationTimerRef.current = null;
@@ -1448,7 +1457,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // Previously the timer WAS the only mechanism, so every turn waited out
   // the same multi-second pause no matter how short the question was.
   const beginAutoRecording = useCallback(async () => {
-    if (micDisabled || effectiveSpeechState !== 'idle') return;
+    if (micDisabled || effectiveSpeechState !== 'idle') {
+      voiceTrace('cc.skipped', { micDisabled, speech: effectiveSpeechState });
+      return;
+    }
+    voiceTrace('cc.beginTurn');
     autoTriggeredRef.current = true;
     if (fluxActive) {
       // Flux decides when the turn ends, so there is no 12s fallback timer
@@ -1564,6 +1577,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // user's next turn — the same failure the wake-word gating exists for.
   useEffect(() => {
     if (audioPlaying && fluxTurnActive) {
+      voiceTrace('audio.closesTurn');
       flux.endTurn();
       clearFluxSilenceTimer();
       setFluxTurnActive(false);
@@ -1597,6 +1611,55 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }
     };
   }, [audioPlaying]);
+
+  useEffect(() => {
+    setVoiceTraceSink((event, detail, at) =>
+      useAppStore.getState().addLogEntry({
+        timestamp: at,
+        level: 'info',
+        category: 'voice',
+        message: `${event} ${detail}`.trim(),
+      }),
+    );
+    return () => setVoiceTraceSink(null);
+  }, []);
+
+  const wakeGate =
+    wakeWordEnabled &&
+    !wakeWordSuspended &&
+    !micDisabled &&
+    effectiveSpeechState === 'idle' &&
+    !audioPlaying &&
+    wakeWordSettled;
+  useEffect(() => {
+    voiceTrace('gate', {
+      wake: wakeGate,
+      wakeWordEnabled,
+      suspended: wakeWordSuspended,
+      micDisabled,
+      streaming: streamState.isStreaming,
+      speech: effectiveSpeechState,
+      fluxTurnActive,
+      audioPlaying,
+      settled: wakeWordSettled,
+      cc: continuousConversationEnabled,
+      flux: flux.status,
+    });
+    // Intentionally broad: this is the diagnostic, not the behaviour.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    wakeGate,
+    wakeWordEnabled,
+    wakeWordSuspended,
+    micDisabled,
+    streamState.isStreaming,
+    effectiveSpeechState,
+    fluxTurnActive,
+    audioPlaying,
+    wakeWordSettled,
+    continuousConversationEnabled,
+    flux.status,
+  ]);
 
   const { error: wakeWordError } = useWakeWord(
     beginWakeWordRecording,
@@ -1635,15 +1698,21 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   useEffect(() => {
     const wasPlaying = wasAudioPlayingRef.current;
     wasAudioPlayingRef.current = audioPlaying;
-    if (
-      wasPlaying &&
-      !audioPlaying &&
-      continuousConversationEnabled &&
-      lastReplyWasVoiceRef.current &&
-      !micDisabled &&
-      speechState === 'idle'
-    ) {
-      beginAutoRecording();
+    if (wasPlaying && !audioPlaying) {
+      const fire =
+        continuousConversationEnabled &&
+        lastReplyWasVoiceRef.current &&
+        !micDisabled &&
+        speechState === 'idle';
+      voiceTrace('cc.audioEnded', {
+        fire,
+        cc: continuousConversationEnabled,
+        lastReplyWasVoice: lastReplyWasVoiceRef.current,
+        micDisabled,
+        speech: speechState,
+        fluxTurnActive,
+      });
+      if (fire) beginAutoRecording();
     }
   }, [audioPlaying, continuousConversationEnabled, micDisabled, speechState, beginAutoRecording]);
 

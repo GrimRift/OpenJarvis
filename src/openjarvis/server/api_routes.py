@@ -1103,6 +1103,31 @@ async def get_synthesized_audio(token: str):
     return FileResponse(path, media_type="audio/mpeg")
 
 
+@speech_router.post("/trace")
+async def speech_trace(request: Request):
+    """Client-side voice diagnostics, written to the server log.
+
+    Two voice fixes in a row were made from theory and each broke the other
+    half of the loop. The browser state that decides whether the microphone
+    re-arms -- turn active, audio playing, socket status, timers -- is
+    invisible from the server, and a page refresh wipes it. The browser
+    batches its voice events here so a failed session can be read afterwards
+    instead of reconstructed. Values only, never audio or transcripts.
+    """
+    body = await request.json()
+    events = body.get("events") if isinstance(body, dict) else None
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="Expected {events: [...]}")
+    for event in events[:200]:
+        if not isinstance(event, dict):
+            continue
+        name = str(event.get("event") or "")[:80]
+        detail = str(event.get("detail") or "")[:300]
+        at = event.get("t")
+        logger.info("voice-trace t=%s %s %s", at, name, detail)
+    return {"received": min(len(events), 200)}
+
+
 @speech_router.get("/health")
 async def speech_health(request: Request):
     """Check if a speech backend is available."""

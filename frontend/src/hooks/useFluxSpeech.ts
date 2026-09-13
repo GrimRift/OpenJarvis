@@ -1,3 +1,4 @@
+import { voiceTrace } from '../lib/voice-trace';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import { buildWsProtocols } from '../lib/useAgentEvents';
@@ -327,11 +328,13 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           setReason('');
           // The socket reached the relay, so the next drop gets a fresh budget.
           reconnectsRef.current = 0;
+          voiceTrace('flux.ready');
           break;
         case 'unavailable':
           fail(action.reason, 'unavailable');
           break;
         case 'turnStarted':
+          voiceTrace('flux.startOfTurn', { turn: action.turnIndex });
           cb.onTurnStarted?.(action.turnIndex);
           break;
         case 'speculate':
@@ -341,6 +344,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           cb.onTurnResumed?.(action.turnIndex);
           break;
         case 'endTurn':
+          voiceTrace('flux.endOfTurn', {
+            turn: action.turnIndex,
+            chars: action.transcript.length,
+            speculative: Boolean(action.speculativeAnswer),
+          });
           lastFinalTurnRef.current = action.turnIndex;
           // Stop transmitting at once: anything after this is idle audio
           // or Sage's own reply.
@@ -399,8 +407,13 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // so the turn in flight still gets transcribed locally. Reconnecting
     // afterwards is what lets the *next* wake word reach Flux again.
     const dropped = (why: string) => {
-      fail(why, 'error');
       const delay = reconnectDelay(reconnectsRef.current);
+      voiceTrace('flux.dropped', {
+        why,
+        attempts: reconnectsRef.current,
+        reconnectIn: delay === null ? 'never' : delay,
+      });
+      fail(why, 'error');
       if (delay === null) return;
       reconnectsRef.current += 1;
       reconnectTimerRef.current = window.setTimeout(() => {
@@ -470,9 +483,15 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     pendingRef.current = [];
     fallbackRef.current = [];
     sendingRef.current = true;
+    voiceTrace('flux.beginTurn', {
+      socket: wsRef.current ? wsRef.current.readyState : 'none',
+    });
   }, []);
 
   const endTurn = useCallback(() => {
+    voiceTrace('flux.endTurn', {
+      socket: wsRef.current ? wsRef.current.readyState : 'none',
+    });
     sendingRef.current = false;
     pendingRef.current = [];
     // Tell the proxy to stop forwarding rather than closing the socket, so
