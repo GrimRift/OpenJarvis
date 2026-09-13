@@ -369,7 +369,14 @@ class TestEveryOpenAISerializerHandlesImages:
 
     A third serializer added later would fail the same way, so the rule is:
     anything that emits OpenAI ``image_url`` parts must be reachable from this
-    list, and anything on this list must actually read ``images``.
+    list, and anything on this list must actually read ``images`` -- or
+    delegate to a listed serializer that does.
+
+    The delegation clause exists because of the next bug: the router's copy
+    carried images but dropped ``tool_calls`` and ``tool_call_id``, so an
+    image in any conversation that had used a tool got a 400. This invariant
+    guarded one kind of drift between the two copies and not the other. The
+    cure was to stop having two copies; the check must not punish that.
     """
 
     SERIALIZERS = {
@@ -394,7 +401,10 @@ class TestEveryOpenAISerializerHandlesImages:
                 missing.append(f"{module}::{name} (not found)")
                 continue
             source = ast.dump(func)
-            if "'images'" not in source and '"images"' not in source:
+            reads_images = "'images'" in source or '"images"' in source
+            others = set(self.SERIALIZERS.values()) - {name}
+            delegates = any(_call_name(call) in others for call in _calls(func))
+            if not reads_images and not delegates:
                 missing.append(f"{module}::{name} (never reads images)")
         assert not missing, (
             f"these build OpenAI payloads without handling images: {missing}. "

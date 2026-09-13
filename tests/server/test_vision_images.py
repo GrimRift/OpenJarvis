@@ -116,3 +116,57 @@ class TestReasoningModelTokenParameter:
 
     def test_a_plain_chat_model_is_not(self):
         assert _is_reasoning_model("gpt-4o-mini") is False
+
+
+class TestCloudRouterKeepsToolHistory:
+    """An image in a conversation that has used a tool must still serialize.
+
+    Image turns bypass the agent by design and go through the cloud router.
+    Its serializer carried images but dropped ``tool_calls``, ``tool_call_id``
+    and ``name``, so OpenAI received a ``tool`` message with no
+    ``tool_call_id`` and answered 400. A picture at the start of a chat
+    worked; the same picture after any tool had run did not.
+    """
+
+    def _history_with_tool_then_image(self) -> list[Message]:
+        from openjarvis.core.types import ToolCall
+
+        return [
+            Message(role=Role.USER, content="search for x"),
+            Message(
+                role=Role.ASSISTANT,
+                content="",
+                tool_calls=[ToolCall(id="call_1", name="web_search", arguments="{}")],
+            ),
+            Message(
+                role=Role.TOOL,
+                content="result",
+                tool_call_id="call_1",
+                name="web_search",
+            ),
+            Message(role=Role.ASSISTANT, content="x is a thing."),
+            _image_message("and this?"),
+        ]
+
+    def test_tool_messages_keep_their_call_id(self):
+        out = _to_openai_msgs(self._history_with_tool_then_image())
+        tool_msg = next(m for m in out if m["role"] == "tool")
+        assert tool_msg["tool_call_id"] == "call_1"
+        assert tool_msg["name"] == "web_search"
+
+    def test_assistant_tool_calls_survive(self):
+        out = _to_openai_msgs(self._history_with_tool_then_image())
+        assistant = out[1]
+        assert assistant["tool_calls"][0]["id"] == "call_1"
+        assert assistant["tool_calls"][0]["function"]["name"] == "web_search"
+
+    def test_the_image_turn_is_still_parts(self):
+        out = _to_openai_msgs(self._history_with_tool_then_image())
+        assert any(p.get("type") == "image_url" for p in out[-1]["content"])
+
+    def test_the_router_matches_the_engine_serializer_exactly(self):
+        # One serializer, not two that drift: the whole bug was the drift.
+        history = self._history_with_tool_then_image()
+        assert _to_openai_msgs(history) == messages_to_dicts(
+            history, image_format=IMAGE_FORMAT_OPENAI
+        )

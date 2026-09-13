@@ -101,35 +101,20 @@ def _openrouter_model_id(model: str) -> str:
 
 
 def _to_openai_msgs(messages: Sequence[Message]) -> list[dict[str, Any]]:
-    """Serialize for OpenAI, carrying any attached images.
+    """Serialize for OpenAI, carrying images and tool history alike.
 
-    This is a *separate* serializer from ``engine._base.messages_to_dicts``:
-    cloud models take this direct route rather than going through an engine.
-    Adding vision to the engine one alone left this path silently dropping the
-    image, and the model answered "I can't see an image attached" — the same
-    one-of-several-call-sites shape the architecture invariants exist for.
+    This used to be a second serializer beside ``engine._base.messages_to_dicts``
+    -- and it carried images but dropped ``tool_calls``, ``tool_call_id`` and
+    ``name``. An image turn is routed here by design (vision answers in one
+    step, no agent loop), so a picture attached to any conversation that had
+    ever called a tool sent OpenAI a ``tool`` message with no ``tool_call_id``
+    and got a 400. A picture at the start of a chat worked, because no tool
+    had run yet; the same picture three turns later did not. The engine
+    serializer already handled every field, so this now simply uses it.
     """
-    from openjarvis.engine._base import _openai_image_url
+    from openjarvis.engine._base import IMAGE_FORMAT_OPENAI, messages_to_dicts
 
-    out = []
-    for m in messages:
-        role = m.role.value if hasattr(m.role, "value") else str(m.role)
-        images = getattr(m, "images", None)
-        if images:
-            parts: list[dict[str, Any]] = []
-            if m.content:
-                parts.append({"type": "text", "text": m.content})
-            parts.extend(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": _openai_image_url(str(image))},
-                }
-                for image in images
-            )
-            out.append({"role": role, "content": parts})
-        else:
-            out.append({"role": role, "content": m.content or ""})
-    return out
+    return messages_to_dicts(messages, image_format=IMAGE_FORMAT_OPENAI)
 
 
 def _to_anthropic_msgs(
