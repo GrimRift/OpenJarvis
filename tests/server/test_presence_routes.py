@@ -84,3 +84,47 @@ class TestSettings:
                 "/v1/presence/settings", json={"camera": True}
             ).json()
         assert "camera" not in body
+
+
+class TestRecentDaysMatchTheRoute:
+    """The route's three lines, run against the real signatures.
+
+    A renamed keyword between the episode store and the chat route raised a
+    TypeError that the surrounding except swallowed, so every prompt quietly
+    lost its recent days while every unit test passed. This runs exactly
+    what the route runs, so a signature change fails here rather than there.
+    """
+
+    def test_the_routes_lookup_works_against_real_signatures(self, tmp_path) -> None:
+        import ast
+        from datetime import date, timedelta
+        from pathlib import Path as _P
+
+        from openjarvis.core.presence import PresenceSettings, save_settings
+        from openjarvis.memory.episodes import Episode, save_episode
+
+        save_settings(PresenceSettings(enabled=True), tmp_path)
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        save_episode(Episode(yesterday, "we fixed the pack", 3, 1.0), tmp_path)
+
+        # The keyword the route actually uses, read from its source.
+        routes_src = _P("src/openjarvis/server/routes.py").read_text(encoding="utf-8")
+        calls = [
+            node
+            for node in ast.walk(ast.parse(routes_src))
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "recent_episodes"
+        ]
+        assert calls, "the route no longer calls recent_episodes"
+        kwargs = {kw.arg: kw.value.value for kw in calls[0].keywords}
+
+        with (
+            patch("openjarvis.core.presence.DEFAULT_CONFIG_DIR", tmp_path),
+            patch("openjarvis.memory.episodes.DEFAULT_CONFIG_DIR", tmp_path),
+        ):
+            from openjarvis.core.presence import load_settings
+            from openjarvis.memory.episodes import format_recent_days, recent_episodes
+
+            assert load_settings().enabled
+            recent = format_recent_days(recent_episodes(**kwargs))
+        assert "Yesterday: we fixed the pack" in recent

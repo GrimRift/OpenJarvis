@@ -116,44 +116,67 @@ def save_episode(episode: Episode, config_dir: Optional[Path] = None) -> None:
 
 
 def recent_episodes(
-    days: int = 3,
+    count: int = 3,
     *,
     today: Optional[date] = None,
     config_dir: Optional[Path] = None,
 ) -> List[Episode]:
-    """The last *days* episodes before today, oldest first.
+    """The last *count* episodes before today, oldest first.
+
+    Episodes on file, not calendar days: the user asked "what were we working
+    on yesterday" after four days without a conversation, and a
+    calendar-window lookup found nothing and said so. The useful answer is
+    "we did not talk yesterday; on Tuesday we...", which needs the last
+    conversations, whenever they were.
 
     Today is excluded: its episode is written at night, and until then the
     conversation itself is the record.
     """
     today = today or date.today()
+    cutoff = today.isoformat()
     episodes = load_episodes(config_dir)
-    window = [
-        (today - timedelta(days=offset)).isoformat() for offset in range(1, days + 1)
-    ]
-    return [episodes[d] for d in reversed(window) if d in episodes]
+    past = sorted(d for d in episodes if d < cutoff)
+    return [episodes[d] for d in past[-count:]]
+
+
+def _day_label(day: str, today: date) -> str:
+    try:
+        delta = (today - date.fromisoformat(day)).days
+    except Exception:
+        return day
+    if delta == 1:
+        return "Yesterday"
+    if 1 < delta <= 6:
+        return datetime.strptime(day, "%Y-%m-%d").strftime("%A")
+    return day
 
 
 def format_recent_days(
     episodes: Sequence[Episode], today: Optional[date] = None
 ) -> str:
-    """Render episodes for the prompt, naming each day relative to today."""
+    """Render episodes for the prompt, naming each day relative to today.
+
+    Says outright when the most recent conversation was not yesterday, so
+    the model can answer "we did not talk yesterday" instead of treating a
+    gap as a mystery.
+    """
     if not episodes:
         return ""
     today = today or date.today()
-    lines = []
-    for ep in episodes:
+    lines = [f"{_day_label(ep.day, today)}: {ep.summary}" for ep in episodes]
+    latest = episodes[-1].day
+    yesterday = (today - timedelta(days=1)).isoformat()
+    if latest < yesterday:
         try:
-            delta = (today - date.fromisoformat(ep.day)).days
+            gap = (today - date.fromisoformat(latest)).days
         except Exception:
-            delta = None
-        if delta == 1:
-            label = "Yesterday"
-        elif delta is not None and 1 < delta <= 6:
-            label = datetime.strptime(ep.day, "%Y-%m-%d").strftime("%A")
-        else:
-            label = ep.day
-        lines.append(f"{label}: {ep.summary}")
+            gap = None
+        when = _day_label(latest, today)
+        if gap:
+            lines.append(
+                f"There were no conversations between {when} and today "
+                f"({gap} days). The most recent conversation was {when}."
+            )
     return "\n".join(lines)
 
 

@@ -355,8 +355,14 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     )
 
                     if load_settings().enabled:
-                        recent_days = format_recent_days(recent_episodes(days=3))
+                        recent_days = format_recent_days(recent_episodes(count=3))
                 except Exception:
+                    # Logged, not swallowed: a renamed keyword here once made
+                    # every prompt silently lose its recent days while the
+                    # tests passed.
+                    logging.getLogger("openjarvis.server").warning(
+                        "Recent days unavailable", exc_info=True
+                    )
                     recent_days = ""
                 enriched = inject_context(
                     query_text,

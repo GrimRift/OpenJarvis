@@ -97,13 +97,31 @@ class TestStore:
         for offset, text in ((1, "yesterday's work"), (2, "two days ago"), (9, "old")):
             day = (today - timedelta(days=offset)).isoformat()
             save_episode(Episode(day, text, 5, time.time()), tmp_path)
-        recent = recent_episodes(days=3, today=today, config_dir=tmp_path)
-        assert [e.summary for e in recent] == ["two days ago", "yesterday's work"]
+        recent = recent_episodes(count=3, today=today, config_dir=tmp_path)
+        # The last three on file, however old, oldest first.
+        got = [e.summary for e in recent]
+        assert got == ["old", "two days ago", "yesterday's work"]
+        two = recent_episodes(count=2, today=today, config_dir=tmp_path)
+        assert [e.summary for e in two] == ["two days ago", "yesterday's work"]
+
+    def test_recent_means_last_conversations_not_last_calendar_days(
+        self, tmp_path: Path
+    ) -> None:
+        # Four days without a conversation, then "what were we working on
+        # yesterday": a calendar window found nothing. The last conversations
+        # are what is wanted, however long ago, and the gap is stated.
+        today = date(2026, 9, 13)
+        save_episode(Episode("2026-09-08", "tuesday work", 5, time.time()), tmp_path)
+        recent = recent_episodes(count=3, today=today, config_dir=tmp_path)
+        assert [e.day for e in recent] == ["2026-09-08"]
+        text = format_recent_days(recent, today=today)
+        assert text.startswith("Tuesday: tuesday work")
+        assert "no conversations between Tuesday and today (5 days)" in text
 
     def test_today_is_never_recent(self, tmp_path: Path) -> None:
         today = date.today()
         save_episode(Episode(today.isoformat(), "today", 3, time.time()), tmp_path)
-        assert recent_episodes(days=3, today=today, config_dir=tmp_path) == []
+        assert recent_episodes(count=3, today=today, config_dir=tmp_path) == []
 
     def test_old_episodes_are_pruned_on_save(self, tmp_path: Path) -> None:
         today = date.today()

@@ -13,6 +13,7 @@ default has invented actions it never took.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import date
 from typing import Any, Optional
@@ -33,6 +34,20 @@ from openjarvis.memory.episodes import (
 logger = logging.getLogger(__name__)
 
 EPISODE_CRON_PROMPT = "Write Sage's diary entry for today."
+
+# A prompt may name a day, so past days can be filled in through the same
+# agent rather than a second writer: "Write Sage's diary entry for 2026-09-08".
+_DAY_IN_PROMPT = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def day_from_prompt(prompt: str) -> date:
+    match = _DAY_IN_PROMPT.search(prompt or "")
+    if match:
+        try:
+            return date.fromisoformat(match.group(1))
+        except ValueError:
+            pass
+    return date.today()
 
 
 @AgentRegistry.register("episode_writer")
@@ -65,7 +80,7 @@ class EpisodeWriterAgent(BaseAgent):
             # switch off, Sage behaves exactly as it did before M36.
             return AgentResult(content="Episodes are switched off.", turns=0)
 
-        day = date.today()
+        day = day_from_prompt(input)
         turns = collect_turns(day)
         if not turns:
             # A quiet day is not an episode. Storing "no conversations" would
@@ -207,4 +222,9 @@ def _cancel_others(scheduler: Any, tasks: Any, keep: Optional[Any]) -> None:
             logger.debug("Could not cancel stale episode task %s: %s", task.id, exc)
 
 
-__all__ = ["EPISODE_CRON_PROMPT", "EpisodeWriterAgent", "register_episode_cron"]
+__all__ = [
+    "EPISODE_CRON_PROMPT",
+    "EpisodeWriterAgent",
+    "day_from_prompt",
+    "register_episode_cron",
+]
