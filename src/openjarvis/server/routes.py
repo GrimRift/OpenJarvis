@@ -343,9 +343,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     min_score=config.memory.context_min_score,
                     max_context_tokens=config.memory.context_max_tokens,
                 )
-                # Recent days ride the same injection as facts. Read only
-                # when the M36 master switch is on: off means Sage behaves
-                # exactly as it did before the milestone.
+                # Recent days ride the same injection as facts. Keyed off the
+                # presence monitor on app state, not the global data dir:
+                # only the real server has one, so a test app never reads
+                # the machine's own diary into "Be terse." -- and the master
+                # switch is honoured, so off means Sage behaves as before.
                 recent_days = ""
                 try:
                     from openjarvis.core.presence import load_settings
@@ -354,8 +356,13 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                         recent_episodes,
                     )
 
-                    if load_settings().enabled:
-                        recent_days = format_recent_days(recent_episodes(count=3))
+                    monitor = getattr(request.app.state, "presence_monitor", None)
+                    if monitor is not None and load_settings(
+                        monitor.config_dir
+                    ).enabled:
+                        recent_days = format_recent_days(
+                            recent_episodes(count=3, config_dir=monitor.config_dir)
+                        )
                 except Exception:
                     # Logged, not swallowed: a renamed keyword here once made
                     # every prompt silently lose its recent days while the
