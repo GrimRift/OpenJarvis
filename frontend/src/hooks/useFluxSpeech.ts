@@ -49,6 +49,11 @@ export interface UseFluxSpeechOptions {
   /** Ultra mode — ask the server for speculative EagerEndOfTurn events. */
   eager: boolean;
   /**
+   * A new Deepgram session is connected. Turn indices restart at 0, so any
+   * per-turn bookkeeping the caller keeps must restart too.
+   */
+  onSessionReady?: () => void;
+  /**
    * The model this chat is actually using, so the speculative draft is made
    * by the same one that will answer.
    *
@@ -329,6 +334,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           // The socket reached the relay, so the next drop gets a fresh budget.
           reconnectsRef.current = 0;
           voiceTrace('flux.ready');
+          cb.onSessionReady?.();
           break;
         case 'unavailable':
           fail(action.reason, 'unavailable');
@@ -371,6 +377,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     if (wsRef.current) return;
     const session = ++sessionIdRef.current;
     intentionalStopRef.current = false;
+    // Deepgram numbers turns per connection, from 0. The duplicate guard
+    // keeps the last final index and ignores anything at or below it; kept
+    // across a reconnect it swallowed every turn of the new session until
+    // the count caught up -- three swallowed turns, then the user refreshed.
+    lastFinalTurnRef.current = null;
     setStatus('connecting');
 
     let stream: MediaStream;

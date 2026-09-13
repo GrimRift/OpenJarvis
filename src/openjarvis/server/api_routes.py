@@ -1114,18 +1114,42 @@ async def speech_trace(request: Request):
     batches its voice events here so a failed session can be read afterwards
     instead of reconstructed. Values only, never audio or transcripts.
     """
+    import json as _json  # noqa: PLC0415
+    import time as _time  # noqa: PLC0415
+
+    from openjarvis.core.config import DEFAULT_CONFIG_DIR  # noqa: PLC0415
+
     body = await request.json()
     events = body.get("events") if isinstance(body, dict) else None
     if not isinstance(events, list):
         raise HTTPException(status_code=400, detail="Expected {events: [...]}")
+
+    # Its own file, not the module logger: the first version logged at INFO
+    # and the app's logging config dropped every line, so the first
+    # reproduction produced nothing readable. Append-only JSON lines survive
+    # restarts and a page refresh alike.
+    path = DEFAULT_CONFIG_DIR / "logs" / "voice-trace.log"
+    lines = []
     for event in events[:200]:
         if not isinstance(event, dict):
             continue
-        name = str(event.get("event") or "")[:80]
-        detail = str(event.get("detail") or "")[:300]
-        at = event.get("t")
-        logger.info("voice-trace t=%s %s %s", at, name, detail)
-    return {"received": min(len(events), 200)}
+        lines.append(
+            _json.dumps(
+                {
+                    "t": event.get("t"),
+                    "received": round(_time.time() * 1000),
+                    "event": str(event.get("event") or "")[:80],
+                    "detail": str(event.get("detail") or "")[:300],
+                }
+            )
+        )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except Exception:
+        logger.warning("voice-trace: could not write %s", path, exc_info=True)
+    return {"received": len(lines)}
 
 
 @speech_router.get("/health")

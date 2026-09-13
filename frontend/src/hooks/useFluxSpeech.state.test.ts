@@ -79,6 +79,21 @@ describe('Flux message interpretation', () => {
       expect(action.kind).toBe('endTurn');
     });
 
+    it('accepts turn 0 of a fresh session after a reconnect', () => {
+      // Deepgram numbers turns per connection. After three turns the guard
+      // held 2; the reconnected session's first final arrived as turn 0 and
+      // was swallowed as out-of-order -- and so were the next two. The user
+      // saw the mic go dead after the third exchange and refreshed. A new
+      // session must start the guard from nothing, which connect() now does;
+      // this pins the contract that null means "accept the next final".
+      const afterReconnect = null;
+      const action = interpretFluxMessage(
+        turnInfo('EndOfTurn', { turn_index: 0 }),
+        afterReconnect,
+      );
+      expect(action.kind).toBe('endTurn');
+    });
+
     it('does not suppress speculation for an already-final turn', () => {
       // Cancellation and speculation are not gated by the final-turn guard;
       // only sending is.

@@ -1394,6 +1394,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     eager: fluxEagerEnabled,
     model: selectedModel,
     onEndOfTurn: handleFluxEndOfTurn,
+    onSessionReady: () => {
+      // Turn indices restart with the session; a stale index here would
+      // drop the first turn after a reconnect as a repeat.
+      lastFluxTurnRef.current = null;
+    },
     onTurnStarted: () => {
       // Real speech: from here Deepgram owns the ending.
       clearFluxSilenceTimer();
