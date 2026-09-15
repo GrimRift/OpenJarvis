@@ -20,7 +20,7 @@ import {
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
-import { INTERRUPTED_MARK, isEchoTurn, shouldInterrupt } from '../../lib/barge-in';
+import { INTERRUPTED_MARK, isEchoTurn, isStopCommand, shouldInterrupt } from '../../lib/barge-in';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
@@ -1430,10 +1430,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         flux.beginTurn();
         return;
       }
+      const wasBargeIn = bargeTriggeredRef.current;
       bargeListeningRef.current = false;
       bargeTriggeredRef.current = false;
 
       if (!spoken) {
+        setFluxTurnActive(false);
+        return;
+      }
+      // Talked over Sage only to stop it: the cut already happened, and
+      // "stop" is not a question. Sent on, it once became "be quiet for
+      // thirty minutes".
+      if (wasBargeIn && isStopCommand(spoken)) {
+        voiceTrace('barge.stopOnly', { chars: spoken.length });
+        useAppStore.getState().addLogEntry({
+          timestamp: Date.now(), level: 'info', category: 'voice',
+          message: `You stopped Sage: "${spoken}"`,
+        });
         setFluxTurnActive(false);
         return;
       }

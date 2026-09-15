@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEchoTurn, shouldInterrupt, wordCount } from './barge-in';
+import { isEchoTurn, isStopCommand, shouldInterrupt, wordCount } from './barge-in';
 
 const live = { enabled: true, sageSpeaking: true, voiceReply: true, triggered: false };
 
@@ -33,5 +33,19 @@ describe('isEchoTurn', () => {
   it('is a real turn once it triggered, or once Sage has stopped', () => {
     expect(isEchoTurn({ ...live, triggered: true })).toBe(false);
     expect(isEchoTurn({ ...live, sageSpeaking: false })).toBe(false);
+  });
+});
+
+describe('isStopCommand', () => {
+  it('recognises a bare stop, however it is dressed', () => {
+    for (const said of ['stop', 'Okay. You can stop. No.', "that's enough, Sage", 'shut up', 'okay okay stop stop']) {
+      expect(isStopCommand(said), said).toBe(true);
+    }
+  });
+
+  it('is not a stop when there is a question in it', () => {
+    for (const said of ['stop and tell me the weather', 'wait, make it shorter', 'no, the other one', 'stop, what about tomorrow']) {
+      expect(isStopCommand(said), said).toBe(false);
+    }
   });
 });

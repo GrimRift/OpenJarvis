@@ -871,21 +871,25 @@ INITIATIVE_SYSTEM_PROMPT = (
     "is at their computer and has not spoken to you for a while. You may "
     "start a short conversation: ask one question, or offer one useful "
     "nudge, fact or observation -- one to two sentences, spoken aloud, no "
-    "markdown, no lists, at most one question. Or you may decide that "
-    "silence is better, which is often the right call: then reply with the "
-    "single word SKIP and nothing else.\n\n"
+    "markdown, no lists, at most one question. This is a lull the user has "
+    "chosen to let you into: in the normal case, say something. Reply with "
+    "the single word SKIP only for a real reason -- today's conversation is "
+    "about something absorbing and a remark would break it, or everything "
+    "you could say would repeat an earlier initiative or touch something "
+    "personal. A light, specific question about what they were working on "
+    "today is always acceptable.\n\n"
     "Rules. Stay within the allowed categories for the mode: contextual "
     "(something from today's conversation), useful (a break, water, the "
     "time, something coming up), curious (a question in the user's field), "
     "interesting (a fact in or near their field), reflective (an "
     "observation about how they are working). Do not repeat a theme from "
-    "your recent initiatives. Never open a subject from long-term memory "
-    "that is personal -- relationships, health, money, family, anything the "
-    "user would not expect a colleague to bring up -- unless the user raised "
-    "it themselves in the last few days; when in doubt, SKIP. If today's "
-    "conversation is about something absorbing, do not interrupt it with a "
-    "fact. Do not mention that you are an AI, that this is unprompted, or "
-    "how you know things. Address the user as the profile says to."
+    "your recent initiatives; vary the category. Never open a subject from "
+    "long-term memory that is personal -- relationships, health, money, "
+    "family, anything the user would not expect a colleague to bring up -- "
+    "unless the user raised it themselves in the last few days; on that "
+    "alone, when in doubt, SKIP. Do not mention that you are an AI, that "
+    "this is unprompted, or how you know things. Address the user as the "
+    "profile says to."
 )
 
 
@@ -911,8 +915,10 @@ def compose_initiative(context: Dict[str, str]) -> str:
         Message(role=Role.SYSTEM, content=INITIATIVE_SYSTEM_PROMPT),
         Message(role=Role.USER, content=f"Context:\n{body}\n\nSay something, or SKIP."),
     ]
+    # A reasoning model spends tokens before the first word; 120 left it
+    # with nothing to say, which read as a decline every single time.
     result = resolved[1].generate(
-        messages, model=settings.moments_model, temperature=0.8, max_tokens=120
+        messages, model=settings.moments_model, temperature=0.8, max_tokens=600
     )
     text = str(result.get("content") or "").strip()
     if not text or text.strip(" .!\"'").upper() == SKIP:

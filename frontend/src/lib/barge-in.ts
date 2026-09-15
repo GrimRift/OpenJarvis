@@ -49,3 +49,47 @@ export function isEchoTurn(state: BargeState): boolean {
 
 /** Text appended to a reply that was cut, so the transcript and the model both know. */
 export const INTERRUPTED_MARK = '\n\n_(interrupted)_';
+
+/**
+ * Whether an interruption was only "stop talking", not a new question.
+ * "Okay, you can stop. No." went to the model as a message and came back
+ * as a thirty-minute quiet; the user meant the sentence, not the day. A
+ * short utterance made of stop-words is consumed by the cut itself.
+ */
+const STOP_PHRASES = [
+  'stop',
+  'enough',
+  "that's enough",
+  'shut up',
+  'be quiet',
+  'quiet',
+  'okay',
+  'ok',
+  'alright',
+  'thanks',
+  'thank you',
+  'got it',
+  'no',
+  'yes',
+  'fine',
+  'sage',
+  'you can',
+  'can',
+  'now',
+  'please',
+];
+
+export function isStopCommand(transcript: string): boolean {
+  const words = transcript
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0 || words.length > 8) return false;
+  const text = words.join(' ');
+  if (!/\b(stop|enough|shut up|quiet)\b/.test(text)) return false;
+  // Every word must belong to the stop vocabulary: "stop and tell me the
+  // weather" is a question, not a stop.
+  const vocab = new Set(STOP_PHRASES.flatMap((p) => p.split(' ')));
+  return words.every((w) => vocab.has(w));
+}
