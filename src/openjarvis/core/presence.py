@@ -109,6 +109,25 @@ class PresenceSettings:
 
 
 INITIATIVE_MODES = ("off", "gentle", "curious", "social")
+# Picking a mode sets its cadence (lull, cooldown, per hour); the numbers
+# stay editable afterwards. Off keeps whatever was set.
+INITIATIVE_PRESETS = {
+    "gentle": (300, 600, 3),
+    "curious": (240, 420, 5),
+    "social": (180, 300, 8),
+}
+
+
+def apply_initiative_mode(settings: "PresenceSettings", mode: str) -> None:
+    settings.initiative_mode = mode
+    preset = INITIATIVE_PRESETS.get(mode)
+    if preset:
+        (
+            settings.initiative_idle_seconds,
+            settings.initiative_cooldown_seconds,
+            settings.initiative_per_hour,
+        ) = preset
+
 
 # Shared by the loader and the settings route so a new field is accepted in
 # both places or neither.
@@ -411,6 +430,8 @@ __all__ = [
     "BOOL_SETTINGS",
     "HOUR_SETTINGS",
     "INITIATIVE_MODES",
+    "INITIATIVE_PRESETS",
+    "apply_initiative_mode",
     "LIST_SETTINGS",
     "POSITIVE_SETTINGS",
     "TEXT_SETTINGS",

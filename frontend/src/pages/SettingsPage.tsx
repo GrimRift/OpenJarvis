@@ -1173,7 +1173,7 @@ export function SettingsPage() {
                 ))}
               </div>
             </SettingRow>
-            <SettingRow label="Sage may start conversations" description="Initiative: after a lull, Sage may ask about today's work or offer a useful nudge -- or decide silence is better. Gentle stays with today's work; Curious adds questions and facts from your field; Social adds observations and draws on more of what it remembers.">
+            <SettingRow label="Sage may start conversations" description="Initiative: after a lull, Sage may ask about today's work or offer a useful nudge -- or decide silence is better. Gentle stays with today's work; Curious adds questions and facts from civil engineering, AI and Sage, and whatever you've been talking about lately; Social adds observations about how you work and may bring up anything it remembers that isn't on the never-bring-up list.">
               <select
                 value={presence?.initiative_mode ?? 'off'}
                 disabled={!presence?.enabled || !presence?.moments_enabled}
@@ -1187,7 +1187,7 @@ export function SettingsPage() {
                 <option value="social">Social</option>
               </select>
             </SettingRow>
-            <SettingRow label="Lull, cooldown, per hour" description="Minutes of quiet on both sides before Sage considers speaking; minutes between two initiatives; the most in one hour. Declining counts as half a cooldown.">
+            <SettingRow label="Lull, cooldown, per hour" description="Minutes of quiet on both sides before Sage considers speaking; minutes between two initiatives; the most in one hour. Picking a mode sets these to its preset (Gentle 5/10/3, Curious 4/7/5, Social 3/5/8); edit freely after. Declining counts as half a cooldown.">
               <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
                 {numberInput('initiative_idle_seconds', 60, 1)} <span>min</span>
                 {numberInput('initiative_cooldown_seconds', 60, 1)} <span>min</span>
@@ -1221,7 +1221,7 @@ export function SettingsPage() {
                 {moments.history.slice(-5).reverse().map((h) => (
                   <div key={h.at} className="text-xs py-1" style={{ color: 'var(--color-text-secondary)' }}>
                     <span style={{ color: 'var(--color-text-tertiary)' }}>
-                      {stamp(h.at)}{h.spoken ? '' : ' (not spoken)'}:{' '}
+                      {stamp(h.at)}{h.spoken ? '' : ' (not spoken)'}{h.detail.includes('category=') ? ` · ${h.detail.split('category=')[1].split(';')[0]}` : ''}:{' '}
                     </span>
                     {h.text}
                   </div>

@@ -1302,6 +1302,7 @@ async def update_presence_settings(request: Request):
         INITIATIVE_MODES,
         LIST_SETTINGS,
         POSITIVE_SETTINGS,
+        apply_initiative_mode,
     )
 
     settings = load_settings()
@@ -1345,7 +1346,8 @@ async def update_presence_settings(request: Request):
                 status_code=400,
                 detail=f"initiative_mode must be one of {INITIATIVE_MODES}",
             )
-        settings.initiative_mode = mode
+        if mode != settings.initiative_mode:
+            apply_initiative_mode(settings, mode)
     save_settings(settings)
     monitor = getattr(request.app.state, "presence_monitor", None)
     if monitor is not None:

@@ -99,6 +99,7 @@ class NotNowTool(BaseTool):
         if initiative:
             from openjarvis.core.presence import (
                 INITIATIVE_MODES,
+                apply_initiative_mode,
                 load_settings,
                 save_settings,
             )
@@ -110,7 +111,7 @@ class NotNowTool(BaseTool):
                     success=False,
                 )
             settings = load_settings()
-            settings.initiative_mode = initiative
+            apply_initiative_mode(settings, initiative)
             save_settings(settings)
             notes.append(
                 "I won't start conversations; I'll speak when you call me."

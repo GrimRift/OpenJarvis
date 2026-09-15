@@ -789,3 +789,72 @@ class TestHeldLine:
         assert rig.spoken == []
         assert load_state(tmp_path).held_line == ""
         assert any(h.detail == "held too long; dropped" for h in rig.engine.history())
+
+
+class TestPhase3:
+    def test_the_reply_is_parsed_into_category_and_line(self) -> None:
+        from openjarvis.core.moments import parse_initiative_reply
+
+        assert parse_initiative_reply("[contextual] Did the design settle, sir?") == (
+            "contextual",
+            "Did the design settle, sir?",
+        )
+        assert parse_initiative_reply("Useful: a stretch, sir.") == (
+            "useful",
+            "a stretch, sir.",
+        )
+        assert parse_initiative_reply("Plain line, sir.") == ("", "Plain line, sir.")
+        assert parse_initiative_reply("SKIP") == ("", "")
+        assert parse_initiative_reply("") == ("", "")
+
+    def test_the_category_is_recorded_and_never_spoken(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.spoken.clear()
+        rig.initiative_line = (
+            "[curious] Ever wondered why concrete cures faster warm, sir?"
+        )
+        said = rig.tick(_at(13, 6))
+        assert rig.spoken == ["Ever wondered why concrete cures faster warm, sir?"]
+        assert said[0].detail == "category=curious"
+
+    def test_the_writer_sees_recent_categories_and_the_fields(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.initiative_line = "[useful] Water, sir."
+        rig.tick(_at(13, 6))
+        rig.activity = Activity(last_user_turn_at=_at(13, 7))
+        rig.tick(_at(13, 8))
+        rig.initiative_line = "[contextual] And the paper, sir?"
+        rig.tick(_at(13, 20))
+        context = rig.initiative_contexts[-1]
+        assert "[useful] Water, sir." in context["recent_initiatives"]
+        assert "civil engineering" in context["fields"]
+        assert context["memory_rule"].startswith("Never open a personal subject")
+
+    def test_social_loosens_the_memory_rule(self, tmp_path) -> None:
+        rig = _Rig(tmp_path, PresenceSettings(enabled=True, initiative_mode="social"))
+        rig.tick(_at(13), idle=1.0)
+        rig.initiative_line = "[reflective] You work best after lunch, sir."
+        rig.tick(_at(13, 6))
+        context = rig.initiative_contexts[-1]
+        assert context["memory_rule"].startswith("Social")
+        assert context["allowed_categories"].endswith("reflective")
+
+    def test_choosing_a_mode_sets_its_cadence(self) -> None:
+        from openjarvis.core.presence import apply_initiative_mode
+
+        settings = PresenceSettings(
+            initiative_idle_seconds=45, initiative_cooldown_seconds=60
+        )
+        apply_initiative_mode(settings, "curious")
+        assert (
+            settings.initiative_idle_seconds,
+            settings.initiative_cooldown_seconds,
+            settings.initiative_per_hour,
+        ) == (240, 420, 5)
+        apply_initiative_mode(settings, "off")
+        assert (
+            settings.initiative_mode == "off"
+            and settings.initiative_idle_seconds == 240
+        )

@@ -25,7 +25,17 @@ prompt without blame. The record carries when each moment's audio ended,
 and the browser (polling every 5 s now) opens the microphone for a reply
 after an initiative prompt, a greeting or a welcome back -- in Flux mode
 with the wake word or continuous conversation on -- so an answer needs no
-wake word. Curious and Social are phase 3.
+wake word. 
+**Status (2026-09-16), phase 3:** Curious and Social are live. Picking a
+mode sets its cadence preset (still editable). The writer opens each line
+with its category in brackets, which is recorded (`category=...` in the
+record, shown in Settings and the Logs) and stripped before speaking; it
+sees the last two days of initiatives with their categories, so a theme
+is not repeated across days and no category twice running. Curious and
+interesting draw on civil engineering, AI and Sage itself, and whatever
+the recent conversations were about. The memory rule is passed per mode:
+Social may open anything not on the excluded list; the others only what
+the user raised recently. M37 is complete.
 
 ## Decisions taken (2026-09-15)
 

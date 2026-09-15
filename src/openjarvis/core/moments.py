@@ -875,11 +875,63 @@ def initiative_context(
         at_desk = now - max(state.handled_absence_end, 0)
         if at_desk > 0:
             context["at_desk_for"] = describe_duration(at_desk)
+    # The last few days of initiatives, with their categories, so a theme
+    # is not repeated across days and the category mix varies.
+    two_days_ago = now - 2 * 86400
     recent = [
-        h.text for h in state.history if h.kind == MOMENT_INITIATIVE and h.spoken
-    ][-5:]
-    context["recent_initiatives"] = "\n".join(f"- {t}" for t in recent)
+        h
+        for h in state.history
+        if h.kind == MOMENT_INITIATIVE and h.spoken and h.at >= two_days_ago
+    ][-8:]
+    context["recent_initiatives"] = "\n".join(
+        f"- [{_category_of(h) or '?'}] {h.text}" for h in recent
+    )
+    context["fields"] = (
+        "civil engineering (the user's degree: concrete, structures, "
+        "construction methods, project management); AI and Sage itself "
+        "(voice pipelines, models, what the user builds here); and whatever "
+        "the recent conversations were about"
+    )
+    if settings.initiative_mode == "social":
+        context["memory_rule"] = (
+            "Social: you may open any subject from long-term memory that is "
+            "not on the excluded list, with tact."
+        )
+    else:
+        context["memory_rule"] = (
+            "Never open a personal subject from long-term memory unless the "
+            "user raised it themselves in the last few days."
+        )
     return {k: v for k, v in context.items() if v}
+
+
+def _category_of(record: MomentRecord) -> str:
+    for part in record.detail.split(";"):
+        part = part.strip()
+        if part.startswith("category="):
+            return part[len("category=") :]
+    return ""
+
+
+def parse_initiative_reply(raw: str) -> tuple[str, str]:
+    """(category, line) from the writer's reply; ("", "") for a SKIP.
+
+    The writer is asked to open with the category in brackets. A reply
+    without one is still a line -- untagged rather than dropped.
+    """
+    text = (raw or "").strip()
+    if not text or text.strip(" .!\"'").upper() == SKIP:
+        return "", ""
+    import re
+
+    match = re.match(
+        r"^\s*\[?\s*(contextual|useful|curious|interesting|reflective)\s*\]?\s*[:\-]?\s*(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return match.group(1).lower(), match.group(2).strip()
+    return "", text
 
 
 INITIATIVE_SYSTEM_PROMPT = (
@@ -893,19 +945,20 @@ INITIATIVE_SYSTEM_PROMPT = (
     "about something absorbing and a remark would break it, or everything "
     "you could say would repeat an earlier initiative or touch something "
     "personal. A light, specific question about what they were working on "
-    "today is always acceptable.\n\n"
+    "today is always acceptable. Begin your reply with the category in "
+    "square brackets, then the line: for example "
+    "[contextual] Did the control-group design settle, sir?\n\n"
     "Rules. Stay within the allowed categories for the mode: contextual "
     "(something from today's conversation), useful (a break, water, the "
     "time, something coming up), curious (a question in the user's field), "
     "interesting (a fact in or near their field), reflective (an "
-    "observation about how they are working). Do not repeat a theme from "
-    "your recent initiatives; vary the category. Never open a subject from "
-    "long-term memory that is personal -- relationships, health, money, "
-    "family, anything the user would not expect a colleague to bring up -- "
-    "unless the user raised it themselves in the last few days; on that "
-    "alone, when in doubt, SKIP. Do not mention that you are an AI, that "
-    "this is unprompted, or how you know things. Address the user as the "
-    "profile says to."
+    "observation about how they are working). Curious and interesting draw "
+    "on the fields given in the context. Do not repeat a theme from your "
+    "recent initiatives, and do not use the same category as the last one. "
+    "Follow the memory rule given in the context; on that alone, when in "
+    "doubt, SKIP. Do not mention that you are an AI, that this is "
+    "unprompted, or how you know things. Address the user as the profile "
+    "says to."
 )
 
 
@@ -936,10 +989,12 @@ def compose_initiative(context: Dict[str, str]) -> str:
     result = resolved[1].generate(
         messages, model=settings.moments_model, temperature=0.8, max_tokens=600
     )
-    text = str(result.get("content") or "").strip()
-    if not text or text.strip(" .!\"'").upper() == SKIP:
+    category, line = parse_initiative_reply(str(result.get("content") or ""))
+    if not line:
         return ""
-    return text
+    # The category rides in front of the line so the engine can record it;
+    # it is stripped before anything is spoken.
+    return f"[{category}] {line}" if category else line
 
 
 def fallback_text(
@@ -1331,7 +1386,9 @@ class MomentEngine:
                 detail = ""
                 try:
                     if kind == MOMENT_INITIATIVE and initiative_text:
-                        text = initiative_text
+                        category, text = parse_initiative_reply(initiative_text)
+                        if category:
+                            detail = f"category={category}"
                     else:
                         text = self._composer(kind, context)
                 except Exception as exc:
@@ -1433,7 +1490,7 @@ class MomentEngine:
         if recent and now - recent < HELD_LINE_LULL_SECONDS:
             self._last_reason = "a line is waiting for a lull"
             return None
-        line = state.held_line
+        category, line = parse_initiative_reply(state.held_line)
         state.held_line, state.held_at = "", None
         try:
             self._chimer()
@@ -1453,7 +1510,8 @@ class MomentEngine:
             MOMENT_INITIATIVE,
             line,
             spoken=played,
-            detail="said after the exchange",
+            detail="said after the exchange"
+            + (f"; category={category}" if category else ""),
             now=now,
         )
         record.ended_at = time.time()
@@ -1666,6 +1724,7 @@ __all__ = [
     "in_quiet_hours",
     "initiative_context",
     "initiative_holdback",
+    "parse_initiative_reply",
     "load_state",
     "local_to_timestamp",
     "save_state",
