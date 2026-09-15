@@ -7,6 +7,27 @@
 
 import type { MomentRecord } from './api';
 
+/** Kinds that invite an answer: a question, or a greeting one might return. */
+export const REPLY_KINDS: ReadonlySet<string> = new Set(['initiative', 'greeting', 'welcome_back']);
+/** How recently the audio must have ended for the mic to open for it. */
+export const REPLY_WINDOW_FRESH_MS = 15_000;
+
+/**
+ * Whether one of the fresh records is worth opening the microphone for:
+ * spoken, of a kind that invites an answer, ended within the last few
+ * seconds (a poll's worth, not a while ago), and not a follow-up line.
+ */
+export function replyWindowFor(fresh: MomentRecord[], nowMs: number): number | null {
+  for (const record of [...fresh].reverse()) {
+    if (!record.spoken || !REPLY_KINDS.has(record.kind)) continue;
+    if (record.detail === 'follow-up') continue;
+    if (!record.ended_at) continue;
+    const endedMs = record.ended_at * 1000;
+    if (nowMs - endedMs <= REPLY_WINDOW_FRESH_MS) return endedMs;
+  }
+  return null;
+}
+
 /** Pure: which records are new, and the watermark after them. */
 export function newMoments(
   history: MomentRecord[],

@@ -10,10 +10,12 @@
 
 import { useEffect } from 'react';
 import { fetchMoments, fetchPresence, type MomentRecord } from '../lib/api';
-import { newMoments } from '../lib/moments-feed';
+import { newMoments, replyWindowFor } from '../lib/moments-feed';
 import { useAppStore } from '../lib/store';
 
-const POLL_MS = 20_000;
+// Five seconds: after Sage asks something aloud, the microphone should
+// open for the answer before the user has given up waiting for it.
+const POLL_MS = 5_000;
 // The orb dims for an empty desk and brightens on return; five seconds so
 // the brighten-up is seen as the user sits down, not a while after.
 const PRESENCE_POLL_MS = 5_000;
@@ -90,6 +92,8 @@ export function useMomentsFeed(): void {
         });
       }
       writeSeen(next);
+      const replyAt = replyWindowFor(fresh, Date.now());
+      if (replyAt !== null) store.requestReplyWindow(replyAt);
     };
     void poll();
     const timer = setInterval(() => void poll(), POLL_MS);

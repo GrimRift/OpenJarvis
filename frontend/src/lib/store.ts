@@ -329,6 +329,8 @@ interface AppState {
   audioPlaying: boolean;
   /** What the server believes about the desk (M36): 'present', 'away', 'disabled', 'unknown'. */
   presenceState: string;
+  /** ms timestamp: a spoken moment just ended and a reply may be listened for. */
+  replyWindowAt: number | null;
   // Each playback path owns a separate claim. A boolean alone allowed an old
   // stream or player cleanup to mark newer audio idle while it was audible.
   audioPlaybackOwners: Record<string, true>;
@@ -381,6 +383,7 @@ interface AppState {
   setCloudModelAvailable: (available: boolean) => void;
   setServerInfo: (info: ServerInfo | null) => void;
   setPresenceState: (state: string) => void;
+  requestReplyWindow: (at: number) => void;
   setSavings: (data: SavingsData | null) => void;
   incrementSavings: (usage: TokenUsage) => void;
 
@@ -477,6 +480,7 @@ export const useAppStore = create<AppState>((set, get) => {
     voiceState: 'idle',
     audioPlaying: false,
     presenceState: 'unknown',
+    replyWindowAt: null,
     audioPlaybackOwners: {},
 
     optInEnabled: localStorage.getItem(OPTIN_KEY) === 'true',
@@ -773,6 +777,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }),
     setServerInfo: (info: ServerInfo | null) => set({ serverInfo: info }),
     setPresenceState: (state: string) => set({ presenceState: state }),
+    requestReplyWindow: (at: number) => set({ replyWindowAt: at }),
     setSavings: (data: SavingsData | null) => set({ savings: data }),
     incrementSavings: (usage: TokenUsage) => {
       const cur = get().savings;

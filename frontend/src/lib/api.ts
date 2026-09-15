@@ -529,6 +529,8 @@ export interface MomentRecord {
   text: string;
   spoken: boolean;
   detail: string;
+  /** Epoch seconds when the audio finished, for the reply window. */
+  ended_at?: number | null;
 }
 
 export interface MomentsSnapshot {

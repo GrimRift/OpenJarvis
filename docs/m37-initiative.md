@@ -15,7 +15,17 @@ at one in the morning and spoke once in three on a synthetic afternoon of
 capstone work -- conservative, as Gentle should be. `not_now` grew timed
 quiet, resume, and the initiative mode; Settings gained the mode, cadence,
 "never bring up" and call-title lists, and quiet-for-a-while buttons.
-Follow-up, answer detection and the reply-listening window are phase 2.
+
+**Status (2026-09-16), phase 2:** a spoken prompt waits for an answer -- any
+chat turn, typed or spoken, within 60 s. None: one fixed follow-up line
+("No rush, sir." and three others, rotating), then after another 60 s the
+prompt is let go and counted; two in a row double the cooldown for an
+hour; an answer resets it. Leaving the desk, or a quiet command, drops the
+prompt without blame. The record carries when each moment's audio ended,
+and the browser (polling every 5 s now) opens the microphone for a reply
+after an initiative prompt, a greeting or a welcome back -- in Flux mode
+with the wake word or continuous conversation on -- so an answer needs no
+wake word. Curious and Social are phase 3.
 
 ## Decisions taken (2026-09-15)
 

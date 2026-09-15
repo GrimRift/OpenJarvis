@@ -19,6 +19,7 @@ from openjarvis.core.activity import Activity
 from openjarvis.core.moments import (
     DAILY_CAPS,
     FALLBACK_LINES,
+    FOLLOW_UP_LINES,
     MOMENT_GREETING,
     MOMENT_INITIATIVE,
     MOMENT_TOLD,
@@ -640,7 +641,7 @@ class TestInitiative:
         for _ in range(6):
             rig.tick(_at(13, minute))
             minute += 2
-        assert len(rig.spoken) == 3
+        assert rig.spoken.count("Sir?") == 3
 
     def test_off_mode_never_asks_the_writer(self, tmp_path) -> None:
         rig = self._settled(tmp_path, initiative_mode="off")
@@ -671,3 +672,69 @@ class TestInitiative:
         context = rig.initiative_contexts[0]
         assert context["mode"] == "gentle"
         assert context["allowed_categories"] == "contextual, useful"
+
+
+class TestFollowUp:
+    def _prompted(self, tmp_path):
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.spoken.clear()
+        rig.initiative_line = "How is the paper going, sir?"
+        assert [r.kind for r in rig.tick(_at(13, 6))] == [MOMENT_INITIATIVE]
+        return rig
+
+    def test_an_answer_within_the_window_closes_the_prompt(self, tmp_path) -> None:
+        rig = self._prompted(tmp_path)
+        rig.activity = Activity(last_user_turn_at=_at(13, 6) + 30)
+        rig.tick(_at(13, 7))
+        assert rig.spoken == ["How is the paper going, sir?"]  # no follow-up
+        assert rig.engine.history()[-1].detail == "answered"
+        assert load_state(tmp_path).unanswered_streak == 0
+
+    def test_one_follow_up_then_let_go(self, tmp_path) -> None:
+        rig = self._prompted(tmp_path)
+        assert rig.tick(_at(13, 6) + 30) == []
+        rig.tick(_at(13, 7))  # 60 s: the follow-up
+        assert len(rig.spoken) == 2 and rig.spoken[1] in FOLLOW_UP_LINES
+        rig.tick(_at(13, 7) + 30)
+        assert len(rig.spoken) == 2
+        rig.tick(_at(13, 8))  # 120 s: given up
+        state = load_state(tmp_path)
+        assert state.pending_prompt_at is None and state.unanswered_streak == 1
+        assert rig.engine.snapshot()["last_reason"] != "waiting on an answer"
+
+    def test_ignored_twice_doubles_the_cooldown(self, tmp_path) -> None:
+        rig = self._prompted(tmp_path)
+        rig.tick(_at(13, 7))
+        rig.tick(_at(13, 8))
+        assert [r.kind for r in rig.tick(_at(13, 18))] == [MOMENT_INITIATIVE]
+        rig.tick(_at(13, 19))
+        rig.tick(_at(13, 20))
+        assert load_state(tmp_path).unanswered_streak == 2
+        assert rig.tick(_at(13, 30)) == []  # would have been due; cooldown doubled
+        assert rig.engine.snapshot()["last_reason"] == "backing off"
+        assert [r.kind for r in rig.tick(_at(13, 39))] == [MOMENT_INITIATIVE]
+        # An answer resets it.
+        rig.activity = Activity(last_user_turn_at=_at(13, 39) + 10)
+        rig.tick(_at(13, 40))
+        assert load_state(tmp_path).unanswered_streak == 0
+
+    def test_leaving_the_desk_drops_the_prompt_without_blame(self, tmp_path) -> None:
+        rig = self._prompted(tmp_path)
+        rig.tick(_at(13, 6) + 20, idle=1.0)
+        rig.tick(_at(13, 12), idle=400.0)  # away
+        assert load_state(tmp_path).pending_prompt_at is None
+        assert load_state(tmp_path).unanswered_streak == 0
+        assert len(rig.spoken) == 1
+
+    def test_quiet_means_no_follow_up_either(self, tmp_path) -> None:
+        rig = self._prompted(tmp_path)
+        rig.engine.snooze_for(1800)
+        rig.tick(_at(13, 7))
+        rig.tick(_at(13, 8))
+        assert len(rig.spoken) == 1
+        assert load_state(tmp_path).unanswered_streak == 0
+
+    def test_the_record_carries_when_the_audio_ended(self, tmp_path) -> None:
+        rig = self._prompted(tmp_path)
+        assert rig.engine.history()[-1].ended_at is not None

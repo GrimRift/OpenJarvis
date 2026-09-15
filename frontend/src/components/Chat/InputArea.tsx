@@ -1720,6 +1720,22 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
 
   const wakeWordEnabled = useAppStore((s) => s.settings.wakeWordEnabled);
 
+  // A spoken moment that invites an answer (M37): open the microphone for
+  // it, so "yes, actually" needs no wake word. Only in Flux mode with the
+  // wake word or continuous conversation on -- the modes in which the user
+  // has already said the mic may open by itself -- and only while the
+  // moment is fresh; the same silence rule as after a reply closes it.
+  const replyWindowAt = useAppStore((s) => s.replyWindowAt);
+  useEffect(() => {
+    if (replyWindowAt === null) return;
+    if (!fluxActive || !(wakeWordEnabled || continuousConversationEnabled)) return;
+    if (Date.now() - replyWindowAt > 15_000) return;
+    voiceTrace('moment.replyWindow');
+    void beginAutoRecording();
+    // Only the arrival of a new window should open the mic.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyWindowAt]);
+
   // Fetch and decode the clips while the wake word is merely armed, so the
   // first trigger doesn't pay for the download at the moment it matters.
   useEffect(() => {

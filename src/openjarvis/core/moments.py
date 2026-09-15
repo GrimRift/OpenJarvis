@@ -73,6 +73,19 @@ INITIATIVE_CATEGORIES = {
 }
 # The writer's way of saying that silence is better.
 SKIP = "SKIP"
+
+# Follow-up: one short line if a prompt goes unanswered this long, then let
+# it go. Fixed and rotating -- instant, free, never wrong.
+FOLLOW_UP_AFTER_SECONDS = 60
+FOLLOW_UP_LINES = (
+    "No rush, sir.",
+    "Only if you feel like it, sir.",
+    "I'll leave it there, sir.",
+    "Whenever suits you, sir.",
+)
+# Two unanswered in a row: the cooldown doubles for this long. Being
+# ignored is a signal.
+BACKOFF_SECONDS = 3600
 # A watch that could not be delivered for this long (asleep, away, snoozed)
 # is stale: "your class started yesterday" helps nobody.
 WATCH_STALE_SECONDS = 12 * 3600
@@ -104,6 +117,9 @@ class MomentRecord:
     text: str
     spoken: bool
     detail: str = ""
+    # Wall-clock moment the audio finished, so the browser can open the
+    # microphone for a reply right after, not a poll later.
+    ended_at: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -122,6 +138,13 @@ class MomentsState:
     last_unprompted_at: Optional[float] = None
     # When initiative last spoke or, at half weight, declined.
     last_initiative_at: Optional[float] = None
+    # An initiative prompt awaiting an answer: when it was spoken, and
+    # whether the single follow-up has been said.
+    pending_prompt_at: Optional[float] = None
+    pending_followed_up: bool = False
+    # Prompts in a row that went unanswered, and the back-off it earned.
+    unanswered_streak: int = 0
+    backoff_until: Optional[float] = None
     # Last time a poll saw the user present. Persisted so the gap that means
     # "slept" survives a server restart.
     last_present_at: Optional[float] = None
@@ -139,6 +162,10 @@ class MomentsState:
             "snoozed_until": self.snoozed_until,
             "last_unprompted_at": self.last_unprompted_at,
             "last_initiative_at": self.last_initiative_at,
+            "pending_prompt_at": self.pending_prompt_at,
+            "pending_followed_up": self.pending_followed_up,
+            "unanswered_streak": self.unanswered_streak,
+            "backoff_until": self.backoff_until,
             "last_present_at": self.last_present_at,
             "handled_absence_end": self.handled_absence_end,
             "fired": self.fired,
@@ -167,10 +194,16 @@ def load_state(config_dir: Optional[Path] = None) -> MomentsState:
         "snoozed_until",
         "last_unprompted_at",
         "last_initiative_at",
+        "pending_prompt_at",
+        "backoff_until",
     ):
         value = raw.get(key)
         if isinstance(value, (int, float)):
             setattr(state, key, float(value))
+    if isinstance(raw.get("pending_followed_up"), bool):
+        state.pending_followed_up = raw["pending_followed_up"]
+    if isinstance(raw.get("unanswered_streak"), int):
+        state.unanswered_streak = raw["unanswered_streak"]
     fired = raw.get("fired")
     if isinstance(fired, dict):
         state.fired = {
@@ -200,6 +233,7 @@ def load_state(config_dir: Optional[Path] = None) -> MomentsState:
                     text=str(item["text"]),
                     spoken=bool(item.get("spoken")),
                     detail=str(item.get("detail") or ""),
+                    ended_at=item.get("ended_at"),
                 )
             )
         except Exception:
@@ -428,6 +462,22 @@ def decide(
     return decision
 
 
+def follow_up_due(state: MomentsState, activity: Optional[Any], now: float) -> str:
+    """Pure: what to do about a prompt awaiting an answer.
+
+    Returns "answered", "follow-up", "give-up" or "" (keep waiting).
+    """
+    if state.pending_prompt_at is None:
+        return ""
+    last_user = getattr(activity, "last_user_turn_at", None) if activity else None
+    if last_user is not None and last_user > state.pending_prompt_at:
+        return "answered"
+    waited = now - state.pending_prompt_at
+    if not state.pending_followed_up:
+        return "follow-up" if waited >= FOLLOW_UP_AFTER_SECONDS else ""
+    return "give-up" if waited >= 2 * FOLLOW_UP_AFTER_SECONDS else ""
+
+
 def initiative_holdback(
     settings: PresenceSettings,
     state: MomentsState,
@@ -442,6 +492,8 @@ def initiative_holdback(
     decline once asked."""
     if settings.initiative_mode == "off":
         return "initiative is off"
+    if state.pending_prompt_at is not None:
+        return "waiting on an answer"
     if busy:
         return "busy: " + "; ".join(busy)
     if fired_today(state, MOMENT_INITIATIVE, local) >= DAILY_CAPS[MOMENT_INITIATIVE]:
@@ -453,11 +505,18 @@ def initiative_holdback(
     )
     if quiet_since and now - quiet_since < settings.initiative_idle_seconds:
         return "conversation is recent"
+    cooldown = settings.initiative_cooldown_seconds
+    if state.backoff_until is not None and state.backoff_until > now:
+        cooldown *= 2
     if (
         state.last_initiative_at is not None
-        and now - state.last_initiative_at < settings.initiative_cooldown_seconds
+        and now - state.last_initiative_at < cooldown
     ):
-        return "cooling down"
+        return (
+            "backing off"
+            if cooldown > settings.initiative_cooldown_seconds
+            else "cooling down"
+        )
     hour_ago = now - 3600
     spoken_this_hour = sum(
         1 for t in state.fired.get(MOMENT_INITIATIVE, []) if t > hour_ago
@@ -1155,6 +1214,7 @@ class MomentEngine:
                 logger.debug("Busy sensor failed", exc_info=True)
         with self._lock:
             state = self._state
+            settled = self._settle_pending(state, activity, snapshot, now)
             decision = decide(
                 snapshot,
                 settings,
@@ -1261,9 +1321,12 @@ class MomentEngine:
                 state.last_unprompted_at = now
                 if kind == MOMENT_INITIATIVE:
                     state.last_initiative_at = now
-                spoken.append(
-                    self._record(kind, text, spoken=played, detail=detail, now=now)
-                )
+                    # Now wait for an answer (see follow_up_due).
+                    state.pending_prompt_at = now
+                    state.pending_followed_up = False
+                record = self._record(kind, text, spoken=played, detail=detail, now=now)
+                record.ended_at = time.time()
+                spoken.append(record)
 
             # An absence too short for a greeting is still answered, so it
             # is not greeted later when a longer one ends.
@@ -1276,7 +1339,7 @@ class MomentEngine:
 
             if snapshot.state == STATE_PRESENT:
                 state.last_present_at = now
-            changed = bool(spoken or decision.stale_watches)
+            changed = bool(spoken or decision.stale_watches or settled)
             last = self._last_persisted_present
             if changed or (
                 state.last_present_at is not None
@@ -1285,6 +1348,81 @@ class MomentEngine:
                 self._last_persisted_present = state.last_present_at
                 self._save()
             return spoken
+
+    def _settle_pending(
+        self, state: MomentsState, activity: Any, snapshot: PresenceSnapshot, now: float
+    ) -> bool:
+        """Answer, follow up, or let go of a prompt awaiting an answer.
+        Returns whether the state changed."""
+        if state.pending_prompt_at is None:
+            return False
+        if snapshot.state != STATE_PRESENT:
+            # They left; nobody ignored anything.
+            state.pending_prompt_at = None
+            self._last_reason = "prompt dropped: user left"
+            return True
+        local = to_local(now, self.timezone_name)
+        settings = self._monitor.settings()
+        if (
+            state.snoozed_day == local.date().isoformat()
+            or (state.snoozed_until is not None and state.snoozed_until > now)
+            or in_quiet_hours(
+                local.hour,
+                settings.quiet_hours_start_local,
+                settings.quiet_hours_end_local,
+            )
+        ):
+            # Told to be quiet: no follow-up, and no mark against them.
+            state.pending_prompt_at = None
+            return True
+        outcome = follow_up_due(state, activity, now)
+        if outcome == "answered":
+            state.pending_prompt_at = None
+            state.unanswered_streak = 0
+            state.backoff_until = None
+            self._record(
+                MOMENT_INITIATIVE,
+                "(answered)",
+                spoken=False,
+                detail="answered",
+                now=now,
+            )
+            return True
+        if outcome == "follow-up":
+            state.pending_followed_up = True
+            last = next(
+                (h.text for h in reversed(state.history) if h.detail == "follow-up"),
+                None,
+            )
+            import random
+
+            choices = [line for line in FOLLOW_UP_LINES if line != last] or list(
+                FOLLOW_UP_LINES
+            )
+            line = random.choice(choices)
+            try:
+                played = bool(self._speaker(line))
+            except Exception as exc:
+                logger.warning("Follow-up could not be spoken: %s", exc)
+                played = False
+            state.last_unprompted_at = now
+            record = self._record(
+                MOMENT_INITIATIVE, line, spoken=played, detail="follow-up", now=now
+            )
+            record.ended_at = time.time()
+            return True
+        if outcome == "give-up":
+            state.pending_prompt_at = None
+            state.unanswered_streak += 1
+            detail = "unanswered"
+            if state.unanswered_streak >= 2:
+                state.backoff_until = now + BACKOFF_SECONDS
+                detail = "unanswered twice; backing off"
+            self._record(
+                MOMENT_INITIATIVE, "(no answer)", spoken=False, detail=detail, now=now
+            )
+            return True
+        return False
 
     def _record(
         self, kind: str, text: str, *, spoken: bool, detail: str, now: float
@@ -1392,6 +1530,8 @@ __all__ = [
     "MOMENT_INITIATIVE",
     "INITIATIVE_CATEGORIES",
     "SKIP",
+    "FOLLOW_UP_AFTER_SECONDS",
+    "FOLLOW_UP_LINES",
     "MOMENT_TOLD",
     "MOMENT_WELCOME_BACK",
     "Decision",
@@ -1408,6 +1548,7 @@ __all__ = [
     "describe_duration",
     "FALLBACK_LINES",
     "fallback_text",
+    "follow_up_due",
     "last_fallback",
     "recent_openings",
     "in_quiet_hours",
