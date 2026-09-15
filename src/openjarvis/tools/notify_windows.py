@@ -1,4 +1,4 @@
-"""Notification tool — desktop toast, and any configured channel."""
+"""Notification tool — desktop toast, spoken aloud, and any configured channel."""
 
 from __future__ import annotations
 
@@ -70,6 +70,17 @@ def deliver(title: str, message: str, *, duration: str = "short") -> List[str]:
             delivered.append("desktop")
         except Exception as exc:
             failures.append(("desktop", exc))
+        # Said aloud as well, whatever the hour and whether or not the desk
+        # looks idle: a reminder was set on purpose. Windows turns Do Not
+        # Disturb on by itself for a full-screen app, which parks the toast
+        # in the notification centre unseen -- a movie was exactly when one
+        # went unnoticed -- and the voice is the only part of a reminder that
+        # rule cannot silence. Only the manual DND toggle does.
+        try:
+            if speak(f"{title}. {message}"):
+                delivered.append("spoken")
+        except Exception:
+            logger.warning("Reminder could not be spoken", exc_info=True)
 
     try:
         if _send_to_channel(title, message):

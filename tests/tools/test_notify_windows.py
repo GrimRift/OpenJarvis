@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from openjarvis.core.registry import ToolRegistry
 
 
@@ -50,9 +52,12 @@ def test_notify_windows_backend_exception_does_not_raise():
 
     tool = NotifyWindowsTool()
 
-    with patch(
-        "openjarvis.tools.notify_windows._send_toast",
-        side_effect=RuntimeError("no toast backend"),
+    with (
+        patch(
+            "openjarvis.tools.notify_windows._send_toast",
+            side_effect=RuntimeError("no toast backend"),
+        ),
+        patch("openjarvis.tools.notify_windows.speak", return_value=False),
     ):
         result = tool.execute(title="Title", message="Message")
 
@@ -68,6 +73,16 @@ class TestDeliver:
     a proactive notification matters — so a channel is an addition, not a
     replacement, and either destination arriving counts as delivered."""
 
+    @pytest.fixture(autouse=True)
+    def _quiet_voice(self, request):
+        # The voice is its own concern (tested below); the fan-out tests
+        # must not reach Cartesia or the speakers.
+        if "spoken" in request.node.name or "voice" in request.node.name:
+            yield
+            return
+        with patch("openjarvis.tools.notify_windows.speak", return_value=False):
+            yield
+
     @staticmethod
     def _config(channel: str = "", desktop: bool = True):
         from unittest.mock import MagicMock
@@ -81,9 +96,42 @@ class TestDeliver:
         from openjarvis.tools.notify_windows import deliver
 
         with self._config(channel=""):
-            with patch("openjarvis.tools.notify_windows._send_toast") as toast:
+            with (
+                patch("openjarvis.tools.notify_windows._send_toast") as toast,
+                patch("openjarvis.tools.notify_windows.speak", return_value=False),
+            ):
                 assert deliver("t", "m") == ["desktop"]
         toast.assert_called_once()
+
+    def test_a_reminder_is_spoken_whatever_the_hour(self):
+        # A scheduled reminder went unheard during a full-screen movie:
+        # Windows parks the toast under its automatic Do Not Disturb, and
+        # nothing was ever said. Now every desktop reminder is spoken too,
+        # with no presence or quiet-hours gate -- the user set it on purpose.
+        from openjarvis.tools.notify_windows import deliver
+
+        with self._config(channel=""):
+            with (
+                patch("openjarvis.tools.notify_windows._send_toast"),
+                patch(
+                    "openjarvis.tools.notify_windows.speak", return_value=True
+                ) as spoken,
+            ):
+                assert deliver("Netflix", "The episode is out") == ["desktop", "spoken"]
+        spoken.assert_called_once_with("Netflix. The episode is out")
+
+    def test_a_failed_voice_does_not_fail_the_reminder(self):
+        from openjarvis.tools.notify_windows import deliver
+
+        with self._config(channel=""):
+            with (
+                patch("openjarvis.tools.notify_windows._send_toast"),
+                patch(
+                    "openjarvis.tools.notify_windows.speak",
+                    side_effect=RuntimeError("no audio"),
+                ),
+            ):
+                assert deliver("t", "m") == ["desktop"]
 
     def test_both_when_a_channel_is_configured(self):
         from openjarvis.tools.notify_windows import deliver

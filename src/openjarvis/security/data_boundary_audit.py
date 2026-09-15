@@ -245,6 +245,16 @@ CLOUD_API_SURFACES = CLOUD_MEDIA_TOOLS | WEB_SEARCH_TOOLS
 OUTBOUND_TOOL_SURFACES = EXTERNAL_TOOL_SURFACES
 LOCAL_ACCESS_TOOLS = {
     "apply_patch",
+    # Reads local config, the scheduler database and credential files -- by
+    # shape and age only, never their values -- and, on confirmation, re-runs
+    # scheduled jobs. The live probes reach providers already audited above.
+    "system_health",
+    "apply_health_fix",
+    # Write the moments state file (today's quiet, pending watches). The
+    # engine that later speaks a watch goes through Cartesia, which is the
+    # text_to_speech surface, not these tools.
+    "not_now",
+    "tell_me_when",
     # Reads the user's class schedule from a local file; no egress of its own.
     "check_class_schedule",
     # Reads file *names* across every fixed drive — no contents, but the paths
