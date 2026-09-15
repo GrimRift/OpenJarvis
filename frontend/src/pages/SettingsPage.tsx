@@ -983,6 +983,9 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
+                <SettingRow label="Interrupt by speaking" description="Talk over a spoken reply and Sage stops to listen, after your second word. Voice questions in Flux mode only; typed replies are not cut.">
+                  <Switch on={settings.bargeInEnabled} onClick={() => { updateSettings({ bargeInEnabled: !settings.bargeInEnabled }); showSaved(); }} />
+                </SettingRow>
                 <SettingRow label="Speak Typed Replies" description={`Also read answers aloud when you typed the question, not just when you spoke it. Code blocks are skipped and very long answers are cut short, because neither is listenable.${settings.voiceRepliesEnabled ? '' : ' Currently silent: Speak Replies above is off, and it overrides this.'}`}>
                   <button
                     onClick={() => { updateSettings({ speakTypedReplies: !settings.speakTypedReplies }); showSaved(); }}

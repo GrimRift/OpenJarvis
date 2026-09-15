@@ -219,6 +219,8 @@ interface Settings {
   // default: someone typing in a quiet room has not asked to be talked at.
   // voiceRepliesEnabled still wins, so muting silences this as well.
   speakTypedReplies: boolean;
+  /** Talking over a spoken reply cuts it (Flux voice mode). */
+  bargeInEnabled: boolean;
   ttsVoiceId: string;
   // Deepgram Flux streaming transcription. Off by default: local
   // faster-whisper stays the default and the fallback.
@@ -249,6 +251,7 @@ function loadSettings(): Settings {
     visionLocalModel: 'qwen3-vl:8b',
     voiceRepliesEnabled: true,
     speakTypedReplies: false,
+    bargeInEnabled: true,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,
     fluxEagerEnabled: false,

@@ -79,6 +79,8 @@ export interface UseFluxSpeechOptions {
    * release the microphone.
    */
   onTurnStarted?: (turnIndex: number) => void;
+  /** Partial transcript while a turn is in progress (never displayed). */
+  onUpdate?: (transcript: string, turnIndex: number) => void;
   onTurnResumed?: (turnIndex: number) => void;
   /**
    * Flux cannot be used, or failed mid-session. `audio` carries whatever of
@@ -94,6 +96,11 @@ export type FluxAction =
   | { kind: 'ready' }
   | { kind: 'unavailable'; reason: string }
   | { kind: 'turnStarted'; turnIndex: number }
+  /**
+   * A partial transcript of the turn in progress. Nothing in the UI shows
+   * it; it exists so barge-in can count words while Sage is speaking.
+   */
+  | { kind: 'update'; turnIndex: number; transcript: string }
   | { kind: 'speculate'; turnIndex: number; transcript: string }
   | { kind: 'cancelSpeculation'; turnIndex: number }
   | {
@@ -152,6 +159,8 @@ export function interpretFluxMessage(
   switch (data.event) {
     case 'StartOfTurn':
       return { kind: 'turnStarted', turnIndex };
+    case 'Update':
+      return { kind: 'update', turnIndex, transcript };
     case 'EagerEndOfTurn':
       return { kind: 'speculate', turnIndex, transcript };
     case 'TurnResumed':
@@ -172,7 +181,6 @@ export function interpretFluxMessage(
       };
     }
     default:
-      // Update carries no decision; partial transcripts stay internal.
       return { kind: 'ignore' };
   }
 }
@@ -342,6 +350,9 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         case 'turnStarted':
           voiceTrace('flux.startOfTurn', { turn: action.turnIndex });
           cb.onTurnStarted?.(action.turnIndex);
+          break;
+        case 'update':
+          cb.onUpdate?.(action.transcript, action.turnIndex);
           break;
         case 'speculate':
           cb.onEagerEndOfTurn?.(action.transcript, action.turnIndex);

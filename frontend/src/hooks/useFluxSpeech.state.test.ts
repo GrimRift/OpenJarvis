@@ -32,8 +32,8 @@ describe('Flux message interpretation', () => {
       expect(action).toEqual({ kind: 'cancelSpeculation', turnIndex: 1 });
     });
 
-    it('ignores Update so partial transcripts never reach the UI', () => {
-      expect(interpretFluxMessage(turnInfo('Update'), null).kind).toBe('ignore');
+    it('surfaces Update as a partial transcript for barge-in only', () => {
+      expect(interpretFluxMessage(turnInfo('Update'), null).kind).toBe('update');
     });
 
     it('reports StartOfTurn without any side effect', () => {

@@ -20,6 +20,7 @@ import {
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
+import { INTERRUPTED_MARK, isEchoTurn, shouldInterrupt } from '../../lib/barge-in';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
@@ -189,6 +190,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // finishes, well after send) can still tell whether that exchange was
   // voice-initiated.
   const lastReplyWasVoiceRef = useRef(false);
+  // Barge-in (lib/barge-in.ts). While a voice reply plays the Flux turn is
+  // kept open so the user can talk over it; `bargeTriggeredRef` records
+  // that this turn cut the reply, which is what separates the user's
+  // end-of-turn from an echo's.
+  const bargeListeningRef = useRef(false);
+  const bargeTriggeredRef = useRef(false);
+  const interruptedRef = useRef(false);
   // Distinguishes a hands-free (wake-word / continuous-mode) recording from
   // a manual mic-button click, so only the hands-free path auto-stops on a
   // timeout and auto-sends — a manual stop always leaves the transcribed
@@ -1001,6 +1009,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // User cancelled or model switch — keep whatever was accumulated
         userStopped = true;
         if (!accumulatedContent) accumulatedContent = '(Generation stopped)';
+        else if (interruptedRef.current) {
+          // Cut by the user talking over it. The mark stays in the text the
+          // model sees next turn, so "go on" continues from here.
+          accumulatedContent += INTERRUPTED_MARK;
+        }
+        interruptedRef.current = false;
       } else {
         const errMsg = err?.message || String(err);
         accumulatedContent =
@@ -1400,6 +1414,25 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         return;
       }
 
+      // A turn that ended while Sage was still speaking and never reached
+      // the interruption threshold is Sage's own voice leaking past echo
+      // cancellation, not the user. Keep listening for a real one.
+      if (
+        bargeListeningRef.current &&
+        isEchoTurn({
+          enabled: true,
+          sageSpeaking: useAppStore.getState().audioPlaying,
+          voiceReply: true,
+          triggered: bargeTriggeredRef.current,
+        })
+      ) {
+        voiceTrace('barge.echoDropped', { chars: spoken.length });
+        flux.beginTurn();
+        return;
+      }
+      bargeListeningRef.current = false;
+      bargeTriggeredRef.current = false;
+
       if (!spoken) {
         setFluxTurnActive(false);
         return;
@@ -1521,6 +1554,40 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         }
         stopSpeaking();
         stopStreaming();
+      }
+    },
+    onUpdate: (transcript) => {
+      if (!bargeListeningRef.current) return;
+      const state = {
+        enabled: useAppStore.getState().settings.bargeInEnabled,
+        sageSpeaking: useAppStore.getState().audioPlaying,
+        voiceReply: lastReplyWasVoiceRef.current,
+        triggered: bargeTriggeredRef.current,
+      };
+      if (!shouldInterrupt(state, transcript)) return;
+      // The user is talking over the reply: stop the voice and the model,
+      // keep the microphone where it is. Deepgram's end-of-turn for what
+      // they are saying arrives through the normal path.
+      bargeTriggeredRef.current = true;
+      interruptedRef.current = true;
+      voiceTrace('barge.interrupt', { chars: transcript.length });
+      useAppStore.getState().addLogEntry({
+        timestamp: Date.now(), level: 'info', category: 'voice',
+        message: 'You interrupted Sage',
+      });
+      stopSpeaking();
+      const store = useAppStore.getState();
+      if (store.streamState.isStreaming) {
+        // The abort handler in sendMessage appends the mark.
+        stopStreaming();
+      } else if (store.activeId) {
+        // The text had already finished; only the voice was cut. Mark it
+        // here so the transcript and the next turn still know.
+        const last = store.messages[store.messages.length - 1];
+        if (last?.role === 'assistant' && !last.content.endsWith(INTERRUPTED_MARK)) {
+          updateLastAssistant(store.activeId, last.content + INTERRUPTED_MARK);
+        }
+        interruptedRef.current = false;
       }
     },
     onTurnResumed: () => {
@@ -1681,22 +1748,52 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // silently outlive the switch that is supposed to control it.
   const [wakeWordSuspended, setWakeWordSuspended] = useState(false);
 
-  // Never transmit while Sage is speaking. Echo cancellation is imperfect,
+  // While Sage speaks, the microphone either closes or listens for an
+  // interruption. Closed is the old rule: echo cancellation is imperfect,
   // and Sage's own reply reaching Deepgram would be transcribed as the
-  // user's next turn — the same failure the wake-word gating exists for.
+  // user's next turn. With barge-in on, for a voice reply in Flux mode, the
+  // turn is kept open instead and the policy in lib/barge-in.ts tells the
+  // user from the echo.
   useEffect(() => {
-    if (audioPlaying && fluxTurnActive) {
-      voiceTrace('audio.closesTurn');
-      flux.endTurn();
-      clearFluxSilenceTimer();
-      setFluxTurnActive(false);
-    }
     if (audioPlaying) {
       // Sage is audibly speaking: anything said now is a new turn, not the
       // rest of the last one.
       clearContinuationWindow();
+      const bargeIn =
+        fluxActive &&
+        useAppStore.getState().settings.bargeInEnabled &&
+        lastReplyWasVoiceRef.current;
+      if (bargeIn) {
+        if (!fluxTurnActive) {
+          flux.beginTurn();
+          setFluxTurnActive(true);
+        }
+        clearFluxSilenceTimer();
+        bargeListeningRef.current = true;
+        bargeTriggeredRef.current = false;
+        voiceTrace('barge.listening');
+      } else if (fluxTurnActive) {
+        voiceTrace('audio.closesTurn');
+        flux.endTurn();
+        clearFluxSilenceTimer();
+        setFluxTurnActive(false);
+      }
+    } else if (bargeListeningRef.current && !bargeTriggeredRef.current) {
+      // The reply finished uninterrupted. With continuous conversation the
+      // open turn simply becomes the next question's turn; otherwise it
+      // closes now, as it would have at playback start under the old rule.
+      bargeListeningRef.current = false;
+      if (continuousConversationEnabled && lastReplyWasVoiceRef.current) {
+        voiceTrace('barge.handoff');
+        armFluxSilenceTimer();
+      } else if (fluxTurnActive) {
+        voiceTrace('barge.closed');
+        flux.endTurn();
+        clearFluxSilenceTimer();
+        setFluxTurnActive(false);
+      }
     }
-    // flux.endTurn is stable; re-running on the flag alone is intended.
+    // flux.beginTurn/endTurn are stable; re-running on the flags alone is intended.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioPlaying, fluxTurnActive]);
 
