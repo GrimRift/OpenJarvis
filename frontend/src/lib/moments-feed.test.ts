@@ -24,7 +24,7 @@ describe('newMoments', () => {
   });
 
   it('leaves out what was never said but still moves past it', () => {
-    const { fresh, seen } = newMoments([rec(20, '(not said) your class starts')], 15, 100);
+    const { fresh, seen } = newMoments([{ ...rec(20, '(answered)'), spoken: false }], 15, 100);
     expect(fresh).toEqual([]);
     expect(seen).toBe(20);
   });

@@ -59,41 +59,61 @@ export function usePresenceState(): void {
   }, []);
 }
 
+// One poll at a time, across every mount: the dev server mounts effects
+// twice, and two polls in flight before the watermark was written appended
+// the same moment to the chat twice.
+let inFlight = false;
+
+async function pollOnce(isCancelled: () => boolean): Promise<void> {
+  const seen = readSeen();
+  const now = Date.now() / 1000;
+  if (seen === null) {
+    writeSeen(now);
+    return;
+  }
+  let history: MomentRecord[];
+  try {
+    history = (await fetchMoments(seen)).history;
+  } catch {
+    return;
+  }
+  if (isCancelled()) return;
+  const { fresh, seen: next } = newMoments(history, seen, now);
+  // The watermark moves before anything is added, so a second look at the
+  // same records -- another tab, a retry -- finds nothing new.
+  writeSeen(next);
+  if (fresh.length === 0) return;
+  const store = useAppStore.getState();
+  const conversationId = store.activeId ?? store.createConversation();
+  const already = new Set(store.messages.map((m) => m.id));
+  for (const record of fresh) {
+    const id = `moment-${record.at}`;
+    if (already.has(id)) continue;
+    store.addMessage(conversationId, {
+      id,
+      role: 'assistant',
+      content: record.text,
+      timestamp: Math.round(record.at * 1000),
+      moment: record.kind,
+    });
+  }
+  const replyAt = replyWindowFor(fresh, Date.now());
+  if (replyAt !== null) store.requestReplyWindow(replyAt);
+}
+
 export function useMomentsFeed(): void {
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
+      if (inFlight) return;
       // Never interleave with a reply that is still arriving.
       if (useAppStore.getState().streamState.isStreaming) return;
-      const seen = readSeen();
-      const now = Date.now() / 1000;
-      if (seen === null) {
-        writeSeen(now);
-        return;
-      }
-      let history: MomentRecord[];
+      inFlight = true;
       try {
-        history = (await fetchMoments(seen)).history;
-      } catch {
-        return;
+        await pollOnce(() => cancelled);
+      } finally {
+        inFlight = false;
       }
-      if (cancelled) return;
-      const { fresh, seen: next } = newMoments(history, seen, now);
-      if (fresh.length === 0) return;
-      const store = useAppStore.getState();
-      const conversationId = store.activeId ?? store.createConversation();
-      for (const record of fresh) {
-        store.addMessage(conversationId, {
-          id: `moment-${record.at}`,
-          role: 'assistant',
-          content: record.text,
-          timestamp: Math.round(record.at * 1000),
-          moment: record.kind,
-        });
-      }
-      writeSeen(next);
-      const replyAt = replyWindowFor(fresh, Date.now());
-      if (replyAt !== null) store.requestReplyWindow(replyAt);
     };
     void poll();
     const timer = setInterval(() => void poll(), POLL_MS);

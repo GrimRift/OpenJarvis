@@ -86,6 +86,10 @@ FOLLOW_UP_LINES = (
 # Two unanswered in a row: the cooldown doubles for this long. Being
 # ignored is a signal.
 BACKOFF_SECONDS = 3600
+# A line held because the user started talking is said once both sides
+# have been quiet this long, and dropped if it waits longer than this.
+HELD_LINE_LULL_SECONDS = 20
+HELD_LINE_STALE_SECONDS = 600
 # A watch that could not be delivered for this long (asleep, away, snoozed)
 # is stale: "your class started yesterday" helps nobody.
 WATCH_STALE_SECONDS = 12 * 3600
@@ -145,6 +149,11 @@ class MomentsState:
     # Prompts in a row that went unanswered, and the back-off it earned.
     unanswered_streak: int = 0
     backoff_until: Optional[float] = None
+    # A line written while the user started talking: said after their
+    # exchange, once both sides have been quiet a short while, unless it
+    # has gone stale.
+    held_line: str = ""
+    held_at: Optional[float] = None
     # Last time a poll saw the user present. Persisted so the gap that means
     # "slept" survives a server restart.
     last_present_at: Optional[float] = None
@@ -166,6 +175,8 @@ class MomentsState:
             "pending_followed_up": self.pending_followed_up,
             "unanswered_streak": self.unanswered_streak,
             "backoff_until": self.backoff_until,
+            "held_line": self.held_line,
+            "held_at": self.held_at,
             "last_present_at": self.last_present_at,
             "handled_absence_end": self.handled_absence_end,
             "fired": self.fired,
@@ -196,10 +207,13 @@ def load_state(config_dir: Optional[Path] = None) -> MomentsState:
         "last_initiative_at",
         "pending_prompt_at",
         "backoff_until",
+        "held_at",
     ):
         value = raw.get(key)
         if isinstance(value, (int, float)):
             setattr(state, key, float(value))
+    if isinstance(raw.get("held_line"), str):
+        state.held_line = raw["held_line"]
     if isinstance(raw.get("pending_followed_up"), bool):
         state.pending_followed_up = raw["pending_followed_up"]
     if isinstance(raw.get("unanswered_streak"), int):
@@ -494,6 +508,8 @@ def initiative_holdback(
         return "initiative is off"
     if state.pending_prompt_at is not None:
         return "waiting on an answer"
+    if state.held_line:
+        return "a line is waiting for a lull"
     if busy:
         return "busy: " + "; ".join(busy)
     if fired_today(state, MOMENT_INITIATIVE, local) >= DAILY_CAPS[MOMENT_INITIATIVE]:
@@ -1221,6 +1237,9 @@ class MomentEngine:
         with self._lock:
             state = self._state
             settled = self._settle_pending(state, activity, snapshot, now)
+            released = self._release_held(state, activity, busy, snapshot, now)
+            if released is not None:
+                return released
             decision = decide(
                 snapshot,
                 settings,
@@ -1261,7 +1280,23 @@ class MomentEngine:
                 except Exception as exc:
                     logger.warning("Initiative writer unavailable: %s", exc)
                     initiative_text = ""
-                if not initiative_text:
+                if initiative_text and self._user_engaged_since(now):
+                    # They started talking while the line was being written.
+                    # Not dropped: said after the exchange, if still fresh.
+                    decision.kinds.remove(MOMENT_INITIATIVE)
+                    state.held_line = initiative_text
+                    state.held_at = now
+                    self._last_reason = "held: the user started talking"
+                    self._record(
+                        MOMENT_INITIATIVE,
+                        initiative_text,
+                        spoken=False,
+                        detail="held: the user started talking",
+                        now=now,
+                    )
+                    self._save()
+                    initiative_text = None
+                elif not initiative_text:
                     # Declined, or unavailable: silence, at half a cooldown,
                     # so a run of declines does not become a run of attempts.
                     decision.kinds.remove(MOMENT_INITIATIVE)
@@ -1354,6 +1389,77 @@ class MomentEngine:
                 self._last_persisted_present = state.last_present_at
                 self._save()
             return spoken
+
+    def _user_engaged_since(self, since: float) -> bool:
+        """Whether the user began a turn, or Sage is mid-turn, since *since*.
+        Read fresh: the writer took seconds, and the desk may have changed."""
+        try:
+            activity = self._activity_source()
+        except Exception:
+            return False
+        last_user = getattr(activity, "last_user_turn_at", None)
+        if last_user is not None and last_user >= since:
+            return True
+        return bool(getattr(activity, "sage_mid_turn", False))
+
+    def _release_held(
+        self,
+        state: MomentsState,
+        activity: Any,
+        busy: Sequence[str],
+        snapshot: PresenceSnapshot,
+        now: float,
+    ) -> Optional[List[MomentRecord]]:
+        """Say a held line once the exchange is over, or let it go stale.
+        Returns the records spoken, or None when nothing was done."""
+        if not state.held_line:
+            return None
+        if state.held_at is not None and now - state.held_at > HELD_LINE_STALE_SECONDS:
+            self._record(
+                MOMENT_INITIATIVE,
+                state.held_line,
+                spoken=False,
+                detail="held too long; dropped",
+                now=now,
+            )
+            state.held_line, state.held_at = "", None
+            self._save()
+            return None
+        if snapshot.state != STATE_PRESENT or busy:
+            return None
+        last_user = getattr(activity, "last_user_turn_at", None) if activity else None
+        last_reply = getattr(activity, "last_reply_end_at", None) if activity else None
+        recent = max([t for t in (last_user, last_reply) if t] or [0.0])
+        if recent and now - recent < HELD_LINE_LULL_SECONDS:
+            self._last_reason = "a line is waiting for a lull"
+            return None
+        line = state.held_line
+        state.held_line, state.held_at = "", None
+        try:
+            self._chimer()
+        except Exception as exc:
+            logger.debug("Chime skipped: %s", exc)
+        try:
+            played = bool(self._speaker(line))
+        except Exception as exc:
+            logger.warning("Held line could not be spoken: %s", exc)
+            played = False
+        state.fired.setdefault(MOMENT_INITIATIVE, []).append(now)
+        state.last_unprompted_at = now
+        state.last_initiative_at = now
+        state.pending_prompt_at = now
+        state.pending_followed_up = False
+        record = self._record(
+            MOMENT_INITIATIVE,
+            line,
+            spoken=played,
+            detail="said after the exchange",
+            now=now,
+        )
+        record.ended_at = time.time()
+        self._last_reason = "initiative (held line)"
+        self._save()
+        return [record]
 
     def _settle_pending(
         self, state: MomentsState, activity: Any, snapshot: PresenceSnapshot, now: float

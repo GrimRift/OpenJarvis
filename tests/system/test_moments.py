@@ -738,3 +738,54 @@ class TestFollowUp:
     def test_the_record_carries_when_the_audio_ended(self, tmp_path) -> None:
         rig = self._prompted(tmp_path)
         assert rig.engine.history()[-1].ended_at is not None
+
+
+class TestHeldLine:
+    """The user starts talking while the line is being written: it is said
+    after the exchange, not over it, and not dropped."""
+
+    def _rig(self, tmp_path):
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.spoken.clear()
+        return rig
+
+    def test_a_line_written_over_the_users_turn_is_held(self, tmp_path) -> None:
+        rig = self._rig(tmp_path)
+
+        def compose(context: dict) -> str:
+            # While the writer works, the user starts talking.
+            rig.activity = Activity(last_user_turn_at=rig.now + 3)
+            return "How is the paper, sir?"
+
+        rig.engine._initiative_composer = compose
+        assert rig.tick(_at(13, 6)) == []
+        assert rig.spoken == []
+        assert load_state(tmp_path).held_line == "How is the paper, sir?"
+        assert rig.engine.snapshot()["last_reason"] == "held: the user started talking"
+
+    def test_said_once_both_sides_have_been_quiet(self, tmp_path) -> None:
+        rig = self._rig(tmp_path)
+        rig.engine._state.held_line = "How is the paper, sir?"
+        rig.engine._state.held_at = _at(13, 6)
+        rig.activity = Activity(
+            last_user_turn_at=_at(13, 6) + 5, last_reply_end_at=_at(13, 6) + 12
+        )
+        assert rig.tick(_at(13, 6) + 20) == []  # reply ended 8 s ago
+        said = rig.tick(_at(13, 6) + 35)
+        assert [r.text for r in said] == ["How is the paper, sir?"]
+        assert rig.spoken == ["How is the paper, sir?"]
+        assert load_state(tmp_path).held_line == ""
+        assert load_state(tmp_path).pending_prompt_at is not None  # awaits an answer
+
+    def test_not_while_busy_and_dropped_when_stale(self, tmp_path) -> None:
+        rig = self._rig(tmp_path)
+        rig.engine._state.held_line = "Sir?"
+        rig.engine._state.held_at = _at(13, 6)
+        rig.busy = ["full-screen: Netflix"]
+        assert rig.tick(_at(13, 8)) == []
+        rig.busy = []
+        assert rig.tick(_at(13, 17)) == []  # 11 min: stale
+        assert rig.spoken == []
+        assert load_state(tmp_path).held_line == ""
+        assert any(h.detail == "held too long; dropped" for h in rig.engine.history())

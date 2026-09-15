@@ -39,8 +39,10 @@ export function newMoments(
   const floor = seen ?? now;
   // A watch dropped as stale is on the server's record with why, but it was
   // never said, so it has no place in a transcript of what was.
+  // Only what was actually said belongs in a transcript: the record also
+  // carries bookkeeping -- declines, answers, held lines -- for the Logs.
   const fresh = history
-    .filter((h) => h.at > floor && !h.text.startsWith('(not said)'))
+    .filter((h) => h.at > floor && h.spoken)
     .sort((a, b) => a.at - b.at);
   const last = history.reduce((m, h) => Math.max(m, h.at), floor);
   return { fresh, seen: last };
