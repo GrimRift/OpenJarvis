@@ -150,6 +150,27 @@ function loadConversations(): ConversationStore {
           }
         }
       }
+      // A moment (something Sage said aloud) belongs to exactly one chat.
+      // The feed once re-added the same moments into every chat that was
+      // opened while a stale hook instance held an old watermark, so each
+      // conversation opened with the same four lines at the top. Keep the
+      // first chat's copy, in creation order; drop the rest.
+      const seenMoments = new Set<string>();
+      const ordered = (Object.values(parsed.conversations ?? {}) as Conversation[]).sort(
+        (a, b) => a.createdAt - b.createdAt,
+      );
+      for (const conversation of ordered) {
+        const kept = (conversation.messages ?? []).filter((message) => {
+          if (!message.moment) return true;
+          if (seenMoments.has(message.id)) return false;
+          seenMoments.add(message.id);
+          return true;
+        });
+        if (kept.length !== (conversation.messages ?? []).length) {
+          conversation.messages = kept;
+          repaired = true;
+        }
+      }
       if (repaired) {
         try {
           localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(parsed));
