@@ -2,6 +2,25 @@
 
 Scoped 2026-09-15. Not started.
 
+## Decisions taken (2026-09-15)
+
+- **Timed quiet silences everything unprompted except reminders the user
+  set.** Initiative, greetings, welcome back and tell-me-when go quiet; a
+  scheduled reminder still speaks. "Be quiet" means be quiet; an alarm is
+  an alarm.
+- **Busy, first cut: a full-screen app in front, or a meeting/call app in
+  front or playing audio.** Recent keyboard or mouse input does *not* count
+  -- the user chose to let Sage speak into a working lull, with the idle
+  period (no chat turn for five minutes) as the only conversational gate.
+  Music does not count either.
+- **Long-term facts are allowed in every mode**, with the writer told to
+  leave personal matters alone unless the user raised them recently. A
+  per-fact "not for initiative" mark comes later, when a fact turns out to
+  need it; the user prefers to add exclusions as they arise over a blanket
+  rule.
+- **Gentle is mostly questions about today's work, with an occasional
+  useful nudge.** Nothing from outside the conversation in Gentle.
+
 ## Why
 
 M36 gave Sage a sense of *now*: it knows when someone is at the desk and
@@ -41,7 +60,7 @@ switch. Off means Sage behaves exactly as it does after M36.
 | Cooldown between prompts | -- | 10 min | 7 min | 5 min |
 | Cap per hour | -- | 3 | 5 | 8 |
 | Categories | -- | contextual, useful | + curious, interesting | + reflective |
-| Long-term memories | -- | none | none | yes |
+| Long-term memories | -- | yes, guarded | yes, guarded | yes |
 | Follow-up if unanswered | -- | once, after 60 s | once | once |
 
 Every number is a setting; the table is the defaults. **Gentle is the
@@ -61,8 +80,6 @@ the model is even asked:
      reply being spoken or streamed. (Server-visible: the request, the
      Flux proxy, the TTS stream.)
    - The user is talking to Sage: a chat turn in the last *idle period*.
-   - The user is typing or clicking right now: input in the last 20 s.
-     Initiative is for the lull, not the middle of a sentence.
    - A meeting or call: foreground window or an active audio session
      belonging to Teams, Zoom, Discord, Meet, Messenger (configurable list).
    - A full-screen app: foreground window covering its monitor (a film, a
@@ -83,7 +100,7 @@ gpt-5.6-luna, as the other moments, one call. Given:
   recent first, capped);
 - the recent episodes ("recent days");
 - the profile (`USER.md`);
-- **long-term facts only in Social** -- see the memory rule;
+- long-term facts, minus the excluded ones -- see the memory rule;
 - what Sage has said on its own initiative recently (the record), so it
   does not repeat a theme;
 - the time of day, and how long the user has been at the desk without a
@@ -96,8 +113,8 @@ the "silence is better" option, and it is a first-class outcome.
 
 Categories, as the user drafted them, with the rule for each:
 
-- **Contextual** -- about something *in the conversation today*. Never
-  from long-term memory outside Social.
+- **Contextual** -- about something *in the conversation today*. Memory may
+  colour the phrasing, never supply the subject.
 - **Useful** -- a break, water, the time, a class in an hour. Drawn from
   presence (time at desk) and the schedule.
 - **Curious** -- a question in the user's field (the profile says civil
@@ -113,15 +130,21 @@ it with a fact."
 
 ## The memory rule
 
-Long-term facts (`memory_facts.jsonl`) have no sensitivity tag today, and
-adding one to 500 existing facts is a project of its own. So the v1 rule
-is structural rather than judged: **Gentle and Curious never see long-term
-facts at all** -- only today's conversation, the episodes, and the
-profile. Social does. The example the user gave ("that person you liked
-four years ago") therefore cannot happen outside Social, and in Social the
-prompt still says to avoid anything the user has not raised themselves in
-the last few days. A later version can add a `sensitive` tag to facts and
-let Curious use the rest.
+Long-term facts (`memory_facts.jsonl`) have no sensitivity tag today. The
+user's decision is to allow them in every mode and add exclusions as they
+arise rather than fence everything off. So:
+
+- The writer sees the facts, with the instruction: *never open a subject
+  from long-term memory that is personal -- relationships, health, money,
+  family, anything the user would not expect a colleague to bring up --
+  unless the user raised it themselves in the last few days. When in doubt,
+  SKIP.*
+- `presence.json` gains `initiative_excluded_facts`: substrings; any fact
+  matching one is withheld from the writer. Empty to start. A fact that
+  produces an unwelcome prompt goes on the list with one Settings entry,
+  and the record of what was said makes it easy to see which fact it was.
+- Gentle's *categories* still keep it to today's work: memory informs how
+  a question is phrased, not what it is about.
 
 ## Follow-up and answering
 
@@ -152,9 +175,8 @@ cut expects the wake word or typing.
 | "Continue" / "you can talk again" | lifts the quiet |
 | "Only speak when I call you" | initiative mode Off (stays off until Settings or "you can start conversations again") |
 
-Whether timed quiet silences *only* initiative or every unprompted moment
-(greeting, welcome back, tell-me-when) is a decision to take; the
-recommendation is everything, because "be quiet" means be quiet.
+Timed quiet silences every unprompted moment -- initiative, greeting,
+welcome back, tell-me-when -- but not a reminder the user scheduled.
 
 ## Settings
 
@@ -166,8 +188,8 @@ initiative. The Logs page shows each prompt, skip, answer and follow-up.
 
 ## Phases
 
-1. **Controller + Gentle.** Busy model (Sage mid-turn, recent input,
-   full-screen, meeting apps), cadence, the writer with SKIP, contextual +
+1. **Controller + Gentle.** Busy model (Sage mid-turn, full-screen,
+   meeting apps), cadence, the writer with SKIP, contextual +
    useful categories, timed quiet and mode commands, Settings, tests with
    the fake clock like M36's. Verified by living with it for a day.
 2. **Follow-up and answers.** Answer detection, the single follow-up, the
