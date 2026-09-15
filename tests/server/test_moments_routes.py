@@ -31,6 +31,7 @@ def engine(tmp_path):
         clock=lambda: 1_800_000_000.0,
         composer=lambda kind, ctx: kind,
         speaker=lambda text: True,
+        chimer=lambda: True,
         scheduler_lookup=lambda: None,
         timezone_name="Asia/Singapore",
     )

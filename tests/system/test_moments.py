@@ -75,6 +75,7 @@ class _Rig:
             clock=lambda: self.now,
             composer=self._compose,
             speaker=self._speak,
+            chimer=lambda: True,
             scheduler_lookup=lambda: None,
             timezone_name=TZ,
         )
