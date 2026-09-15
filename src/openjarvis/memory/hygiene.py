@@ -212,7 +212,10 @@ def run_hygiene(
                 ],
                 model=model,
                 temperature=0.0,
-                max_tokens=4000,
+                # A reasoning model thinks before it writes; 4,000 tokens
+                # were spent entirely on thinking over 400 facts and the
+                # reply came back empty, which read as "nothing to do".
+                max_tokens=24000,
             )
             plan = parse_plan(str(result.get("content") or ""))
             changes = apply_plan(store, plan, facts)
