@@ -222,6 +222,17 @@ Cheap, high felt impact, no intelligence involved:
 - Greetings that vary and name the time of day.
 - The orb's idle state reflecting `presence`.
 
+**Status (2026-09-15):** all four pieces implemented. The "one moment"
+filler plays after five seconds with nothing said back, generating or
+waiting on a tool alike, holds the answer's speech until the clip ends, and
+repeats every twenty seconds of silence; clips are pre-rendered by
+`scripts/generate_greetings.py` and never claim `audioPlaying` (an
+invariant pins that). The orb has an `away` state -- standing by at 60%
+brightness and 85% size. Fallback lines rotate and the model is told how it
+opened its last three moments. A soft two-note chime (`speech/chime.py`,
+synthesised, not shipped) precedes every unprompted moment inside the same
+ducking window as the voice.
+
 ## Out of scope
 
 - Camera-based presence. Deferred to a later milestone by explicit decision.

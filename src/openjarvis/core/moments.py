@@ -37,7 +37,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
 from openjarvis.core.presence import (
@@ -515,6 +515,7 @@ def build_context(
         "now": local.strftime("%A %d %B %Y, %H:%M"),
         "time_of_day": time_of_day(local.hour),
         "profile": _profile_excerpt(config_dir),
+        "recent_openings": recent_openings(state.history, kind),
     }
     if decision.absence_seconds:
         context["away_for"] = describe_duration(decision.absence_seconds)
@@ -560,17 +561,71 @@ def build_context(
     return {k: v for k, v in context.items() if v}
 
 
-def fallback_text(kind: str, context: Dict[str, str]) -> str:
-    """Spoken when the model is unavailable; a moment must never go silent."""
-    if kind == MOMENT_GREETING:
-        return f"Good {context.get('time_of_day') or 'day'}, sir."
-    if kind == MOMENT_WELCOME_BACK:
-        away = context.get("away_for")
-        return (
-            f"Welcome back, sir. You were away {away}."
-            if away
-            else "Welcome back, sir."
-        )
+# A few ways to say each thing, so the fallback does not sound like a
+# recording. {tod} is the time of day, {away} the absence. The line used
+# last time is skipped, the way the wake-word clips rotate.
+FALLBACK_LINES = {
+    MOMENT_GREETING: [
+        "Good {tod}, sir.",
+        "Good {tod}, sir. I'm here when you need me.",
+        "{Tod} greetings, sir.",
+        "Good {tod}. Ready when you are, sir.",
+    ],
+    MOMENT_WELCOME_BACK: [
+        "Welcome back, sir. You were away {away}.",
+        "Good to have you back, sir. It's been {away}.",
+        "You're back, sir. {Away} away.",
+        "Welcome back, sir. That was {away}.",
+    ],
+}
+_NO_AWAY = {
+    MOMENT_WELCOME_BACK: ["Welcome back, sir.", "Good to have you back, sir."],
+}
+
+
+def recent_openings(history: Sequence[MomentRecord], kind: str, count: int = 3) -> str:
+    """The first few words of the last *count* spoken moments of *kind*."""
+    spoken = [h for h in history if h.kind == kind and h.spoken]
+    lines = []
+    for record in spoken[-count:]:
+        words = record.text.split()
+        lines.append("- " + " ".join(words[:8]) + ("..." if len(words) > 8 else ""))
+    return "\n".join(lines)
+
+
+def last_fallback(history: Sequence[MomentRecord], kind: str) -> Optional[str]:
+    """The fallback line said last for *kind*, if the last one was a fallback."""
+    for record in reversed(history):
+        if record.kind == kind:
+            return (
+                record.text if record.detail.startswith("model unavailable") else None
+            )
+    return None
+
+
+def fallback_text(
+    kind: str, context: Dict[str, str], *, avoid: Optional[str] = None
+) -> str:
+    """Spoken when the model is unavailable; a moment must never go silent.
+
+    *avoid* is the line spoken last time, so two fallbacks in a row differ.
+    """
+    import random
+
+    if kind in FALLBACK_LINES:
+        away = context.get("away_for", "")
+        tod = context.get("time_of_day") or "day"
+        pool = FALLBACK_LINES[kind]
+        if kind == MOMENT_WELCOME_BACK and not away:
+            pool = _NO_AWAY[kind]
+        lines = [
+            line.format(
+                tod=tod, Tod=tod.capitalize(), away=away, Away=away.capitalize()
+            )
+            for line in pool
+        ]
+        choices = [line for line in lines if line != avoid] or lines
+        return random.choice(choices)
     told = context.get("told", "")
     whats = [
         line.split("when: ", 1)[1].split(". It ", 1)[0]
@@ -609,11 +664,23 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
             "Told on request: something the user asked to be told about has happened."
         ),
     }
-    body = "\n".join(f"{key}: {value}" for key, value in context.items())
+    body = "\n".join(
+        f"{key}: {value}" for key, value in context.items() if key != "recent_openings"
+    )
+    # Without this the model opens every greeting the same way; it has no
+    # memory of yesterday's. The record is the memory.
+    variety = ""
+    if context.get("recent_openings"):
+        variety = (
+            "\n\nYou opened your last few unprompted remarks with:\n"
+            f"{context['recent_openings']}\n"
+            "Do not open the same way, and vary the rhythm of the sentence."
+        )
     messages = [
         Message(role=Role.SYSTEM, content=SYSTEM_PROMPT),
         Message(
-            role=Role.USER, content=f"Occasion: {labels[kind]}\n\nContext:\n{body}"
+            role=Role.USER,
+            content=f"Occasion: {labels[kind]}\n\nContext:\n{body}{variety}",
         ),
     ]
     result = engine.generate(
@@ -632,6 +699,8 @@ def speak_aloud(text: str) -> bool:
     """Synthesise with the configured voice and play through the speakers."""
     from openjarvis.core.config import load_config
     from openjarvis.speech.cartesia_tts import CartesiaTTSBackend
+    from openjarvis.speech.chime import GAP_SECONDS, chime_path
+    from openjarvis.speech.ducking import ducked
     from openjarvis.speech.player import play_file
     from openjarvis.speech.spoken_text import to_spoken_text
 
@@ -650,7 +719,15 @@ def speak_aloud(text: str) -> bool:
         handle.write(result.audio)
         path = handle.name
     try:
-        return play_file(path)
+        # The chime and the voice share one ducking window, so the film is
+        # already down when the chime sounds and stays down for the words.
+        with ducked():
+            try:
+                play_file(str(chime_path()), duck=False)
+                time.sleep(GAP_SECONDS)
+            except Exception as exc:
+                logger.debug("Chime skipped: %s", exc)
+            return play_file(path, duck=False)
     finally:
         try:
             Path(path).unlink()
@@ -819,7 +896,9 @@ class MomentEngine:
                     logger.warning(
                         "Moment %s: model unavailable (%s); using fallback", kind, exc
                     )
-                    text = fallback_text(kind, context)
+                    text = fallback_text(
+                        kind, context, avoid=last_fallback(state.history, kind)
+                    )
                     detail = f"model unavailable: {exc}"
                 try:
                     played = bool(self._speaker(text))
@@ -949,7 +1028,10 @@ __all__ = [
     "current_engine",
     "decide",
     "describe_duration",
+    "FALLBACK_LINES",
     "fallback_text",
+    "last_fallback",
+    "recent_openings",
     "in_quiet_hours",
     "load_state",
     "local_to_timestamp",

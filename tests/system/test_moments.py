@@ -16,14 +16,17 @@ from zoneinfo import ZoneInfo
 
 from openjarvis.core.moments import (
     DAILY_CAPS,
+    FALLBACK_LINES,
     MOMENT_GREETING,
     MOMENT_TOLD,
     MOMENT_WELCOME_BACK,
     MomentEngine,
     fallback_text,
     in_quiet_hours,
+    last_fallback,
     load_state,
     local_to_timestamp,
+    recent_openings,
     time_of_day,
 )
 from openjarvis.core.presence import (
@@ -123,11 +126,8 @@ class TestPureHelpers:
         assert local_to_timestamp("not a time", TZ) is None
 
     def test_fallback_lines_exist_for_every_kind(self) -> None:
-        assert (
-            fallback_text(MOMENT_GREETING, {"time_of_day": "evening"})
-            == "Good evening, sir."
-        )
-        assert "day" in fallback_text(MOMENT_GREETING, {})
+        assert "evening" in fallback_text(MOMENT_GREETING, {"time_of_day": "evening"})
+        assert "day" in fallback_text(MOMENT_GREETING, {}).lower()
         assert "back" in fallback_text(MOMENT_WELCOME_BACK, {"away_for": "2 hours"})
         told = fallback_text(
             MOMENT_TOLD,
@@ -290,12 +290,12 @@ class TestGuards:
 
         rig.engine._composer = broken
         said = rig.tick(_at(8), idle=1.0)
-        assert said[0].text == "Good morning, sir."
+        assert "morning" in said[0].text.lower() and "sir" in said[0].text
         assert "cloud down" in said[0].detail
-        assert rig.spoken == ["Good morning, sir."]
+        assert rig.spoken == [said[0].text]
         rig.engine._composer = broken
         rig.leave_and_return(_at(9), _at(11))
-        assert rig.spoken[-1] == "Welcome back, sir. You were away 1 hour 55 min."
+        assert "1 hour 55 min" in rig.spoken[-1]
 
     def test_a_voice_failure_still_counts(self, tmp_path) -> None:
         # Otherwise a dead speaker would retry every fifteen seconds.
@@ -394,3 +394,57 @@ class TestRecord:
         assert history[0].kind == MOMENT_GREETING
         assert history[0].spoken is True
         assert rig.monitor.snapshot().state == STATE_PRESENT
+
+
+class TestVariedLines:
+    def test_the_fallback_never_repeats_the_last_line(self) -> None:
+        context = {"time_of_day": "morning"}
+        first = fallback_text(MOMENT_GREETING, context)
+        for _ in range(20):
+            assert fallback_text(MOMENT_GREETING, context, avoid=first) != first
+
+    def test_every_fallback_line_fills_its_slots(self) -> None:
+        for kind, lines in FALLBACK_LINES.items():
+            for _ in range(10):
+                text = fallback_text(
+                    kind, {"time_of_day": "evening", "away_for": "2 hours"}
+                )
+                assert "{" not in text and "}" not in text
+            assert len(lines) >= 3
+
+    def test_last_fallback_is_only_a_fallback(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        rig.engine._record(
+            MOMENT_GREETING,
+            "Good morning, sir.",
+            spoken=True,
+            detail="model unavailable: down",
+            now=1.0,
+        )
+        assert (
+            last_fallback(rig.engine.history(), MOMENT_GREETING) == "Good morning, sir."
+        )
+        rig.engine._record(
+            MOMENT_GREETING,
+            "Morning. Two things today.",
+            spoken=True,
+            detail="",
+            now=2.0,
+        )
+        assert last_fallback(rig.engine.history(), MOMENT_GREETING) is None
+
+    def test_recent_openings_reach_the_model(self, tmp_path) -> None:
+        # The model has no memory of yesterday's greeting; the record is it.
+        rig = _Rig(tmp_path)
+        rig.engine._record(
+            MOMENT_GREETING,
+            "Good morning, sir. Yesterday you fixed the orb.",
+            spoken=True,
+            detail="",
+            now=1.0,
+        )
+        rig.tick(_at(8), idle=1.0)
+        assert rig.last_context["recent_openings"].startswith(
+            "- Good morning, sir. Yesterday you fixed the"
+        )
+        assert recent_openings([], MOMENT_GREETING) == ""
