@@ -26,6 +26,49 @@ export function shouldSynthesizeReplyAudio(
 }
 
 /**
+ * Whether a reply's speech should start while the reply is still being
+ * generated. Voice questions always stream; a typed question streams when
+ * Speak Typed Replies is on. Before this, typed replies went through the
+ * batch path and waited for the whole answer, which read as "the voice got
+ * slower" the first time a long answer was asked for by keyboard.
+ */
+export function shouldStreamReplySpeech(
+  wasVoice: boolean,
+  prompt: string,
+  speakTyped: boolean,
+): boolean {
+  if (isDigestPrompt(prompt)) return false;
+  return wasVoice || speakTyped;
+}
+
+/**
+ * Feed model deltas to the speech stream, stopping at the spoken limit for
+ * typed replies. Pure over a small state so the cut-off is testable: returns
+ * the chars spoken so far and whether the stream was finished by the cap.
+ */
+export function pushSpokenDelta(
+  spokenChars: number,
+  delta: string,
+  capped: boolean,
+  stream: { push: (delta: string) => unknown; finish: () => unknown },
+  limit: number = SPOKEN_REPLY_LIMIT,
+): number {
+  if (!capped) {
+    stream.push(delta);
+    return spokenChars + delta.length;
+  }
+  if (spokenChars >= limit) return spokenChars;
+  const room = limit - spokenChars;
+  const piece = delta.length > room ? delta.slice(0, room) : delta;
+  stream.push(piece);
+  const total = spokenChars + piece.length;
+  // The cut is silent, as in speakableText: the listener hears a complete
+  // sentence end (the server only releases stable boundaries), not a notice.
+  if (total >= limit) stream.finish();
+  return total;
+}
+
+/**
  * How much of a reply is worth reading out before it stops being useful.
  * Long enough for a real answer, short enough not to trap the listener.
  */

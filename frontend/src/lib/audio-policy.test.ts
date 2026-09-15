@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   isDigestPrompt,
+  pushSpokenDelta,
+  shouldStreamReplySpeech,
   shouldSynthesizeReplyAudio,
   speakableText,
   SPOKEN_REPLY_LIMIT,
@@ -106,5 +108,48 @@ describe('speakableText', () => {
     expect(speakableText('The weather is fine today.')).toBe(
       'The weather is fine today.',
     );
+  });
+});
+
+describe('shouldStreamReplySpeech', () => {
+  it('streams voice replies, and typed ones only with the setting on', () => {
+    expect(shouldStreamReplySpeech(true, 'hello', false)).toBe(true);
+    expect(shouldStreamReplySpeech(false, 'hello', false)).toBe(false);
+    expect(shouldStreamReplySpeech(false, 'hello', true)).toBe(true);
+  });
+
+  it('never streams a digest, which may bring its own audio', () => {
+    expect(shouldStreamReplySpeech(true, 'morning digest', true)).toBe(false);
+  });
+});
+
+describe('pushSpokenDelta', () => {
+  const stream = () => {
+    const pushed: string[] = [];
+    let finished = 0;
+    return {
+      pushed,
+      finishedTimes: () => finished,
+      push: (d: string) => void pushed.push(d),
+      finish: () => void (finished += 1),
+    };
+  };
+
+  it('passes everything through for a voice reply', () => {
+    const s = stream();
+    const n = pushSpokenDelta(0, 'a'.repeat(50), false, s, 10);
+    expect(n).toBe(50);
+    expect(s.pushed).toEqual(['a'.repeat(50)]);
+    expect(s.finishedTimes()).toBe(0);
+  });
+
+  it('cuts a typed reply at the limit and finishes the stream once', () => {
+    const s = stream();
+    let n = pushSpokenDelta(0, 'abcdef', true, s, 10);
+    n = pushSpokenDelta(n, 'ghijkl', true, s, 10);
+    n = pushSpokenDelta(n, 'mnop', true, s, 10);
+    expect(s.pushed).toEqual(['abcdef', 'ghij']);
+    expect(n).toBe(10);
+    expect(s.finishedTimes()).toBe(1);
   });
 });

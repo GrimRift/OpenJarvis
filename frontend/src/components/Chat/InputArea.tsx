@@ -23,6 +23,8 @@ import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
   isDigestPrompt,
+  pushSpokenDelta,
+  shouldStreamReplySpeech,
   shouldSynthesizeReplyAudio,
   speakableText,
 } from '../../lib/audio-policy';
@@ -629,13 +631,21 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       Array.from(researchSourcesByRef.values()).sort((a, b) => a.ref - b.ref);
     let lastFlush = 0;
     let ttftMs: number | undefined;
-    // Ordinary voice replies stream raw model deltas to the server while the
-    // exact same deltas continue into chat/history below. Digest prompts are
-    // excluded because that agent may return its own ready-made audio.
+    // Voice replies -- and typed ones when Speak Typed Replies is on --
+    // stream raw model deltas to the server while the exact same deltas
+    // continue into chat/history below. Digest prompts are excluded because
+    // that agent may return its own ready-made audio. A typed reply stops
+    // being spoken at the spoken limit; a voice reply is read in full.
     const incrementalSpeech =
-      voiceRepliesEnabled && wasVoice && !isDigestPrompt(content)
+      voiceRepliesEnabled &&
+      shouldStreamReplySpeech(wasVoice, content, speakTypedReplies)
         ? beginStreamingSpeech(ttsVoice)
         : null;
+    let spokenChars = 0;
+    const speakDelta = (delta: string) => {
+      if (!incrementalSpeech) return;
+      spokenChars = pushSpokenDelta(spokenChars, delta, !wasVoice, incrementalSpeech);
+    };
 
     setStreamState({
       conversationId: convId,
@@ -754,7 +764,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           } else if (ev.type === 'synthesis') {
             if (!ttftMs) ttftMs = Date.now() - startTime;
             accumulatedContent += ev.text;
-            incrementalSpeech?.push(ev.text);
+            speakDelta(ev.text);
             const now = Date.now();
             if (
               shouldFlushStreamRender(now, lastFlush, accumulatedContent.length)
@@ -907,7 +917,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             if (delta?.content) {
               if (!ttftMs) ttftMs = Date.now() - startTime;
               accumulatedContent += delta.content;
-              incrementalSpeech?.push(delta.content);
+              speakDelta(delta.content);
 
               const now = Date.now();
               if (
