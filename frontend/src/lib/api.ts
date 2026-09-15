@@ -1427,3 +1427,125 @@ export async function ingestDocument(file: File): Promise<{ chunks: number }> {
   const data = await response.json();
   return { chunks: data.chunks_created ?? 0 };
 }
+
+// ---------------------------------------------------------------------------
+// Memory page (M38): facts, episodes, documents, profile
+// ---------------------------------------------------------------------------
+
+export interface MemoryFact {
+  id: string;
+  text: string;
+  source: string;
+  trust: string;
+  created_at: number;
+  day: string;
+  pinned: boolean;
+  private: boolean;
+  pending: boolean;
+  removed_at: number | null;
+  removed_reason: string;
+  score?: number;
+}
+
+export interface MemoryEpisode {
+  day: string;
+  summary: string;
+  turns: number;
+  written_at: number;
+  model: string;
+}
+
+export interface MemoryDocument {
+  source: string;
+  chunks: number;
+  created_julian: number;
+  preview: string;
+}
+
+export interface MemoryPageSettings {
+  extraction_mode: 'cloud' | 'local';
+  cloud_model: string;
+  hygiene_enabled: boolean;
+  hygiene_hour_local: number;
+  restore_window_days: number;
+}
+
+export interface HygieneRun {
+  at: number;
+  facts_before: number;
+  facts_after: number;
+  model: string;
+  error: string;
+  changes: Array<{
+    kind: string;
+    kept_id: string;
+    kept_text: string;
+    removed: Array<{ id: string; text: string }>;
+  }>;
+}
+
+async function memoryJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
+  if (!res.ok) throw new Error(await memoryErrorDetail(res, `Memory request failed (${res.status})`));
+  return res.json();
+}
+
+const json = (body: unknown, method = 'POST'): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+export const listMemoryFacts = (q = '', removed = false) =>
+  memoryJson<{ facts: MemoryFact[] }>(
+    `/v1/memory/facts?q=${encodeURIComponent(q)}&removed=${removed}`,
+  ).then((r) => r.facts);
+export const addMemoryFact = (text: string, pinned = false, priv = false) =>
+  memoryJson<{ fact: MemoryFact }>('/v1/memory/facts', json({ text, pinned, private: priv }));
+export const updateMemoryFact = (
+  id: string,
+  patch: Partial<Pick<MemoryFact, 'text' | 'pinned' | 'private'>>,
+) => memoryJson<{ fact: MemoryFact }>(`/v1/memory/facts/${id}`, json(patch, 'PUT'));
+export const deleteMemoryFact = (id: string) =>
+  memoryJson<{ removed: string }>(`/v1/memory/facts/${id}`, { method: 'DELETE' });
+export const restoreMemoryFact = (id: string) =>
+  memoryJson<{ restored: string }>(`/v1/memory/facts/${id}/restore`, { method: 'POST' });
+
+export const listMemoryEpisodes = () =>
+  memoryJson<{ episodes: MemoryEpisode[] }>('/v1/memory/episodes').then((r) => r.episodes);
+export const updateMemoryEpisode = (day: string, summary: string) =>
+  memoryJson<{ episode: MemoryEpisode }>(`/v1/memory/episodes/${day}`, json({ summary }, 'PUT'));
+export const deleteMemoryEpisode = (day: string) =>
+  memoryJson<{ removed: string }>(`/v1/memory/episodes/${day}`, { method: 'DELETE' });
+export const rewriteMemoryEpisode = (day: string) =>
+  memoryJson<{ episode: MemoryEpisode | null; result: string }>(
+    `/v1/memory/episodes/${day}/rewrite`,
+    { method: 'POST' },
+  );
+
+export const getMemoryProfile = () => memoryJson<{ text: string }>('/v1/memory/profile');
+export const putMemoryProfile = (text: string) =>
+  memoryJson<{ saved: boolean }>('/v1/memory/profile', json({ text }, 'PUT'));
+
+export const getMemoryPageSettings = () => memoryJson<MemoryPageSettings>('/v1/memory/settings');
+export const putMemoryPageSettings = (patch: Partial<MemoryPageSettings>) =>
+  memoryJson<MemoryPageSettings>('/v1/memory/settings', json(patch, 'PUT'));
+
+export const listHygieneRuns = () =>
+  memoryJson<{ runs: HygieneRun[] }>('/v1/memory/hygiene').then((r) => r.runs);
+export const runHygieneNow = () =>
+  memoryJson<{ result: string }>('/v1/memory/hygiene/run', { method: 'POST' });
+
+export const listMemoryDocuments = () =>
+  memoryJson<{ documents: MemoryDocument[] }>('/v1/memory/documents').then((r) => r.documents);
+export const deleteMemoryDocument = (source: string) =>
+  memoryJson<{ removed: number }>(`/v1/memory/documents?source=${encodeURIComponent(source)}`, {
+    method: 'DELETE',
+  });
+export async function uploadMemoryDocument(file: File): Promise<{ source: string; chunks: number; note: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await apiFetch('/v1/memory/documents/upload', { method: 'POST', body: form });
+  if (!res.ok) throw new Error(await memoryErrorDetail(res, 'Upload failed'));
+  return res.json();
+}

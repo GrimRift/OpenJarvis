@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import socket
 import sys
@@ -798,6 +797,16 @@ def serve(
                 )
         except Exception as exc:
             logger.warning("Episode cron registration failed: %s", exc)
+        try:
+            from openjarvis.agents.memory_hygiene import register_hygiene_cron
+
+            _hygiene_task = register_hygiene_cron(task_scheduler)
+            if _hygiene_task is not None:
+                console.print(
+                    f"  Memory hygiene: [cyan]{_hygiene_task.schedule_value}[/cyan] UTC"
+                )
+        except Exception as exc:
+            logger.warning("Memory hygiene cron registration failed: %s", exc)
 
     # Pre-generate the briefing text on the same cron. Asking for it then
     # costs a database read instead of waiting on Teams and two mailboxes.
@@ -914,6 +923,22 @@ def serve(
         cors_origins=config.server.cors_origins,
     )
 
+    # M38: MEMORY.md folds into pinned facts once, and curated facts from
+    # before pins existed are pinned so relevance recall keeps the core.
+    try:
+        _facts_store = getattr(memory_service, "_store", None)
+        if _facts_store is not None:
+            from openjarvis.memory.migrate import fold_memory_md, pin_curated
+
+            fold_memory_md(_facts_store)
+            pin_curated(_facts_store)
+    except Exception as exc:
+        logger.debug("Memory fold skipped: %s", exc)
+
+    # The scheduled-run system, for the Memory page's "rewrite this episode"
+    # and "clean up now" (M38): the same agents the crons use.
+    app.state.scheduler_system = scheduler_system
+
     # Presence monitor (M36). Wired here and not in SystemBuilder because
     # serve.py hand-assembles the system and anything the builder injects is
     # silently absent -- the standing trap. It is server-only anyway: nothing
@@ -940,8 +965,13 @@ def serve(
             _catch_up = None
             if scheduler_system is not None:
                 from openjarvis.agents.episode_writer import write_missing_episodes
+                from openjarvis.agents.memory_hygiene import catch_up_hygiene
 
-                _catch_up = functools.partial(write_missing_episodes, scheduler_system)
+                def _catch_up(system=scheduler_system):
+                    # Episodes first: the day's diary is written from the
+                    # facts as they were; the clean-up then sees today's.
+                    write_missing_episodes(system)
+                    catch_up_hygiene(system)
             moment_engine = MomentEngine(presence_monitor, startup_hook=_catch_up)
             moment_engine.start()
             app.state.moment_engine = moment_engine

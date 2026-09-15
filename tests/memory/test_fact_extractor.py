@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from openjarvis.memory.extractor import FactExtractor
 
 
@@ -111,9 +113,29 @@ class TestExtractionFollowsTheAnsweringModel:
     A cloud-answered turn has already reached the provider, so extracting it
     there costs no new exposure — and it keeps a multi-GB local model off a
     GPU the user may be decoding video on.
+
+    These are the rules when the user's memory settings say "local" (or are
+    unreadable); with the M38 default of "cloud", the cloud model is used
+    for every turn — see TestExtractionModeSetting.
     """
 
-    def test_cloud_answered_turn_extracts_in_the_cloud(self):
+    @pytest.fixture(autouse=True)
+    def _local_mode(self, monkeypatch):
+        from openjarvis.memory.settings import MemorySettings
+
+        monkeypatch.setattr(
+            "openjarvis.memory.settings.load_memory_settings",
+            lambda config_dir=None: MemorySettings(extraction_mode="local"),
+        )
+
+    def test_cloud_answered_turn_extracts_in_the_cloud(self, monkeypatch):
+        # Only when the settings cannot be read: with them, the mode decides.
+        def unreadable(config_dir=None):
+            raise OSError("no settings")
+
+        monkeypatch.setattr(
+            "openjarvis.memory.settings.load_memory_settings", unreadable
+        )
         engine = FakeEngine('["User likes jazz"]')
         extractor = FactExtractor(engine, "qwen3.5:4b")
 
@@ -136,4 +158,30 @@ class TestExtractionFollowsTheAnsweringModel:
 
         extractor.extract("hi", "hello")
 
+        assert engine.calls[0][1] == "qwen3.5:4b"
+
+
+class TestExtractionModeSetting:
+    def test_cloud_mode_extracts_every_turn_in_the_cloud(self, monkeypatch):
+        from openjarvis.memory.settings import MemorySettings
+
+        monkeypatch.setattr(
+            "openjarvis.memory.settings.load_memory_settings",
+            lambda config_dir=None: MemorySettings(
+                extraction_mode="cloud", cloud_model="gpt-5.6-luna"
+            ),
+        )
+        engine = FakeEngine("[]")
+        FactExtractor(engine, "qwen3.5:4b").extract("hi", "hello", "llama3.2")
+        assert engine.calls[0][1] == "gpt-5.6-luna"
+
+    def test_local_mode_stays_local_even_for_a_cloud_turn(self, monkeypatch):
+        from openjarvis.memory.settings import MemorySettings
+
+        monkeypatch.setattr(
+            "openjarvis.memory.settings.load_memory_settings",
+            lambda config_dir=None: MemorySettings(extraction_mode="local"),
+        )
+        engine = FakeEngine("[]")
+        FactExtractor(engine, "qwen3.5:4b").extract("hi", "hello", "gpt-5.6-luna")
         assert engine.calls[0][1] == "qwen3.5:4b"

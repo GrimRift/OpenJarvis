@@ -255,6 +255,12 @@ LOCAL_ACCESS_TOOLS = {
     # text_to_speech surface, not these tools.
     "not_now",
     "tell_me_when",
+    # Read and write the local fact store, the diary and the document index.
+    # recall's document search is the same local backend as retrieval.
+    "remember",
+    "forget",
+    "recall",
+    "restore_memory",
     # Reads the user's class schedule from a local file; no egress of its own.
     "check_class_schedule",
     # Reads file *names* across every fixed drive — no contents, but the paths

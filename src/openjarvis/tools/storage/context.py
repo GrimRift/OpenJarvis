@@ -204,18 +204,18 @@ def inject_context(
 
     # When both sources have data, cap facts at half the total budget so they
     # cannot starve query-specific document retrieval. Unused fact budget is
-    # still available to documents. Newest facts win within the fact budget.
+    # still available to documents. Within the fact budget, selection is by
+    # relevance to the message with a pinned core that always goes (M38);
+    # it used to be newest-first, which crowded out everything older.
     fact_budget = cfg.max_context_tokens
     if results:
         fact_budget //= 2
-    selected_facts: List[Fact] = []
-    total_tokens = 0
-    for fact in reversed(_trusted_facts(facts)):
-        tokens = _count_tokens(fact.text)
-        if total_tokens + tokens > fact_budget:
-            continue
-        selected_facts.append(fact)
-        total_tokens += tokens
+    from openjarvis.memory.recall import select_facts
+
+    selected_facts: List[Fact] = select_facts(
+        _trusted_facts(facts), query, fact_budget, _count_tokens
+    )
+    total_tokens = sum(_count_tokens(f.text) for f in selected_facts)
 
     # Fill the remaining context budget with retrieved documents.
     truncated: List[RetrievalResult] = []

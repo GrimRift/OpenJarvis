@@ -5,6 +5,7 @@ import { ChatPage } from './pages/ChatPage';
 import { VoicePage } from './pages/VoicePage';
 import { DashboardPage } from './pages/DashboardPage';
 import { HealthPage } from './pages/HealthPage';
+import { MemoryPage } from './pages/MemoryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { GetStartedPage } from './pages/GetStartedPage';
 import { AgentsPage } from './pages/AgentsPage';
@@ -197,6 +198,7 @@ export default function App() {
           <Route path="voice" element={<VoicePage />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="system-health" element={<HealthPage />} />
+          <Route path="memory" element={<MemoryPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="get-started" element={<GetStartedPage />} />
           <Route path="data-sources" element={<DataSourcesPage />} />

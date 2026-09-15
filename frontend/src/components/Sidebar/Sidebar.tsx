@@ -19,6 +19,7 @@ import {
   ScrollText,
   Database,
   Activity,
+  Brain,
 } from 'lucide-react';
 import { ConversationList } from './ConversationList';
 import { useAppStore } from '../../lib/store';
@@ -59,6 +60,7 @@ export function Sidebar() {
     { path: '/voice', icon: AudioLines, label: 'Voice' },
     { path: '/dashboard', icon: BarChart3, label: 'Dashboard' },
     { path: '/data-sources', icon: Database, label: 'Data Sources' },
+    { path: '/memory', icon: Brain, label: 'Memory' },
     { path: '/agents', icon: Bot, label: 'Agents' },
     { path: '/system-health', icon: Activity, label: 'Health' },
     { path: '/logs', icon: ScrollText, label: 'Logs' },

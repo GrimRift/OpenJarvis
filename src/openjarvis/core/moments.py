@@ -839,6 +839,9 @@ def _facts_for_initiative(excluded: Sequence[str], limit: int = 60) -> str:
         return ""
     keep = []
     for fact in facts:
+        if getattr(fact, "private", False):
+            # Marked on the Memory page: never in anything Sage says first.
+            continue
         text = fact.text.strip()
         if any(word and word.lower() in text.lower() for word in excluded):
             continue

@@ -86,6 +86,7 @@ except ImportError:
 
 try:
     import openjarvis.agents.episode_writer  # noqa: F401
+    import openjarvis.agents.memory_hygiene  # noqa: F401
 except ImportError:
     pass
 

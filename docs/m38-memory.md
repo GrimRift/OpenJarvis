@@ -1,6 +1,35 @@
 # M38 — Memory: what Sage keeps, and how it gets it back
 
-Scoped 2026-09-16. Not started.
+Scoped 2026-09-16. All three phases implemented 2026-09-16.
+
+**Status (2026-09-16):** built in one pass, as asked.
+
+- *Recall.* `memory/recall.py`: a small BM25 over the facts, pinned core
+  first, recency only as tie-break, newest-first fallback when the message
+  shares no term with anything. Wired into `inject_context`, the one place
+  facts reach a prompt. The budget stays 2,048 tokens.
+- *Store.* Facts gained `id`, `pinned`, `private`, `day`, and a soft delete
+  (`removed_at`, `removed_reason`) restorable for seven days; the JSONL
+  format is unchanged and rows without ids get stable ones on load. Pinned
+  facts are never evicted by the cap.
+- *Memory page.* Own sidebar entry: Facts (search as recall ranks, add,
+  edit in place, pin, private, forget/restore, "new" for the last day's
+  auto facts), Episodes (edit, delete, rewrite), Documents (upload
+  .md/.txt/.csv/.pdf/.docx, index a folder, paste, per-source delete),
+  Profile (USER.md, backup on save). `server/memory_routes.py`.
+- *Extraction.* `memory_settings.json`: cloud (gpt-5.6-luna) by default,
+  local one switch away on the page; the answering-model rule remains the
+  fallback when settings cannot be read.
+- *Hygiene.* `memory/hygiene.py` + the `memory_hygiene` agent: nightly at
+  23:30 local and caught up on boot after the episodes; the cloud model
+  proposes merges, contradictions (newest wins) and stale lines; applied at
+  once, pinned never removed, each removal restorable, the run logged and
+  shown on the page with "Run now".
+- *Talking to it.* `remember` (verbatim, pinned), `forget` (immediate,
+  reports what went), `restore_memory`, `recall` (facts, diary, documents,
+  with provenance). `MEMORY.md` is folded into pinned curated facts once at
+  startup and renamed; curated facts from before pins are pinned. A fact
+  marked private is withheld from initiative (M37).
 
 ## What memory is today, measured
 

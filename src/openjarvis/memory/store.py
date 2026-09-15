@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, List
+from typing import Any, Iterable, Iterator, List, Optional
 
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.registry import FactStoreRegistry
@@ -197,6 +197,15 @@ def _is_duplicate(new_text: str, existing_text: str) -> bool:
     return True
 
 
+def fact_id_for(text: str, created_at: float) -> str:
+    """A stable id for a fact: rows written before ids existed get the same
+    one on every load, so the Memory page can address them."""
+    import hashlib
+
+    digest = hashlib.sha1(f"{text}|{created_at:.3f}".encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
 @dataclass(slots=True)
 class Fact:
     """A single durable memory entry."""
@@ -206,6 +215,19 @@ class Fact:
     created_at: float = 0.0
     # Provenance tier: one of the TRUST_* constants above ("" for legacy rows).
     trust: str = ""
+    # M38. Stable id; always in context; never used by initiative or in
+    # anything Sage says first; the local day it was learned; and a soft
+    # delete with its reason, restorable for a week.
+    id: str = ""
+    pinned: bool = False
+    private: bool = False
+    day: str = ""
+    removed_at: Optional[float] = None
+    removed_reason: str = ""
+
+    @property
+    def live(self) -> bool:
+        return self.removed_at is None
 
     @property
     def trusted_for_recall(self) -> bool:
@@ -333,12 +355,22 @@ class LocalFactStore(FactStore):
             fact_text = str(obj.get("text", "")).strip()
             if not fact_text:
                 continue
+            created_at = float(obj.get("created_at", 0.0) or 0.0)
+            removed_at = obj.get("removed_at")
             facts.append(
                 Fact(
                     text=fact_text,
                     source=str(obj.get("source", "")),
-                    created_at=float(obj.get("created_at", 0.0) or 0.0),
+                    created_at=created_at,
                     trust=str(obj.get("trust", "")),
+                    id=str(obj.get("id") or fact_id_for(fact_text, created_at)),
+                    pinned=bool(obj.get("pinned", False)),
+                    private=bool(obj.get("private", False)),
+                    day=str(obj.get("day", "") or ""),
+                    removed_at=float(removed_at)
+                    if isinstance(removed_at, (int, float))
+                    else None,
+                    removed_reason=str(obj.get("removed_reason", "") or ""),
                 )
             )
         return facts
@@ -377,7 +409,15 @@ class LocalFactStore(FactStore):
 
     # -- FactStore API ------------------------------------------------------
 
-    def add(self, text: str, source: str = "", trust: str = "") -> bool:
+    def add(
+        self,
+        text: str,
+        source: str = "",
+        trust: str = "",
+        *,
+        pinned: bool = False,
+        private: bool = False,
+    ) -> bool:
         text = (text or "").strip()
         if not text:
             return False
@@ -389,7 +429,11 @@ class LocalFactStore(FactStore):
             # near-duplicates this store actually accumulates. Upstream's
             # quarantine-the-older-copy behaviour below is preserved.
             duplicate = next(
-                (fact for fact in self._facts if _is_duplicate(text, fact.text)),
+                (
+                    fact
+                    for fact in self._facts
+                    if fact.live and _is_duplicate(text, fact.text)
+                ),
                 None,
             )
             if duplicate is not None:
@@ -400,17 +444,104 @@ class LocalFactStore(FactStore):
                     duplicate.trust = trust or TRUST_UNTRUSTED
                     self._flush()
                 return False  # dedupe
+            now = time.time()
             self._facts.append(
-                Fact(text=text, source=source, created_at=time.time(), trust=trust)
+                Fact(
+                    text=text,
+                    source=source,
+                    created_at=now,
+                    trust=trust,
+                    id=fact_id_for(text, now),
+                    pinned=pinned,
+                    private=private,
+                    day=time.strftime("%Y-%m-%d", time.localtime(now)),
+                )
             )
-            # Enforce the cap by evicting the oldest entries. max_facts is
-            # always positive (validated in __init__), so this slice can't
-            # hit Python's `list[-0:]` footgun, which returns the whole
-            # list instead of emptying it.
-            if len(self._facts) > self._max_facts:
-                self._facts = self._facts[-self._max_facts :]
+            # Enforce the cap by evicting the oldest unpinned entries. Pinned
+            # facts and the removed-but-restorable ones are not counted.
+            live = [f for f in self._facts if f.live and not f.pinned]
+            if len(live) > self._max_facts:
+                evict = {f.id for f in live[: len(live) - self._max_facts]}
+                self._facts = [f for f in self._facts if f.id not in evict]
             self._flush()
         return True
+
+    # -- M38: addressing facts by id ---------------------------------------
+
+    def get(self, fact_id: str) -> Optional[Fact]:
+        with self._lock:
+            self._sync_from_disk_locked()
+            return next((f for f in self._facts if f.id == fact_id), None)
+
+    def update(
+        self,
+        fact_id: str,
+        *,
+        text: Optional[str] = None,
+        pinned: Optional[bool] = None,
+        private: Optional[bool] = None,
+        source: Optional[str] = None,
+    ) -> Optional[Fact]:
+        with self._lock, _cross_process_lock(self._lock_path()):
+            self._sync_from_disk_locked()
+            fact = next((f for f in self._facts if f.id == fact_id), None)
+            if fact is None:
+                return None
+            if text is not None and text.strip():
+                fact.text = text.strip()
+            if pinned is not None:
+                fact.pinned = pinned
+            if private is not None:
+                fact.private = private
+            if source is not None:
+                fact.source = source
+            self._flush()
+            return fact
+
+    def remove(self, fact_id: str, reason: str = "") -> bool:
+        """Soft-delete: the fact leaves recall at once and can be restored
+        for as long as :meth:`purge_removed` has not run past it."""
+        with self._lock, _cross_process_lock(self._lock_path()):
+            self._sync_from_disk_locked()
+            fact = next((f for f in self._facts if f.id == fact_id and f.live), None)
+            if fact is None:
+                return False
+            fact.removed_at = time.time()
+            fact.removed_reason = reason
+            self._flush()
+            return True
+
+    def restore(self, fact_id: str) -> bool:
+        with self._lock, _cross_process_lock(self._lock_path()):
+            self._sync_from_disk_locked()
+            fact = next(
+                (f for f in self._facts if f.id == fact_id and not f.live), None
+            )
+            if fact is None:
+                return False
+            fact.removed_at = None
+            fact.removed_reason = ""
+            self._flush()
+            return True
+
+    def list_removed(self) -> List[Fact]:
+        with self._lock:
+            self._sync_from_disk_locked()
+            return [f for f in self._facts if not f.live]
+
+    def purge_removed(self, older_than_seconds: float = 7 * 86400) -> int:
+        cutoff = time.time() - older_than_seconds
+        with self._lock, _cross_process_lock(self._lock_path()):
+            self._sync_from_disk_locked()
+            before = len(self._facts)
+            self._facts = [
+                f
+                for f in self._facts
+                if f.live or (f.removed_at is not None and f.removed_at > cutoff)
+            ]
+            if len(self._facts) != before:
+                self._flush()
+            return before - len(self._facts)
 
     def add_with_trust(self, text: str, source: str = "", trust: str = "") -> bool:
         return self.add(text, source=source, trust=trust)
@@ -421,9 +552,10 @@ class LocalFactStore(FactStore):
             raise ValueError(f"Unknown fact trust tier: {trust!r}")
         with self._lock, _cross_process_lock(self._lock_path()):
             self._sync_from_disk_locked()
-            if not 0 <= index < len(self._facts):
+            live = [f for f in self._facts if f.live]
+            if not 0 <= index < len(live):
                 return False
-            self._facts[index].trust = trust
+            live[index].trust = trust
             self._flush()
         return True
 
@@ -431,9 +563,10 @@ class LocalFactStore(FactStore):
         """Atomically promote exactly the fact a user reviewed."""
         with self._lock, _cross_process_lock(self._lock_path()):
             self._sync_from_disk_locked()
-            if not 0 <= index < len(self._facts):
+            live = [f for f in self._facts if f.live]
+            if not 0 <= index < len(live):
                 return False
-            fact = self._facts[index]
+            fact = live[index]
             if fact.text != expected_text or fact.trusted_for_recall:
                 return False
             fact.trust = TRUST_TRUSTED
@@ -441,9 +574,11 @@ class LocalFactStore(FactStore):
         return True
 
     def list(self) -> List[Fact]:
+        """Live facts, oldest first. Removed-but-restorable ones are not
+        returned here: every caller of this is recall or display."""
         with self._lock:
             self._sync_from_disk_locked()
-            return list(self._facts)
+            return [f for f in self._facts if f.live]
 
     def clear(self) -> int:
         with self._lock, _cross_process_lock(self._lock_path()):
@@ -460,7 +595,7 @@ class LocalFactStore(FactStore):
     def count(self) -> int:
         with self._lock:
             self._sync_from_disk_locked()
-            return len(self._facts)
+            return sum(1 for f in self._facts if f.live)
 
     @property
     def path(self) -> Path:

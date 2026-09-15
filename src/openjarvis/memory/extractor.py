@@ -124,12 +124,23 @@ class FactExtractor:
     def _resolve_model(self, answered_by: str) -> str:
         """Pick the extraction model for a turn answered by *answered_by*.
 
-        The configured ``extraction_model`` is the *local* choice. It is
-        deliberately overridden when the turn was answered in the cloud: the
-        toggle that put chat there means the user wants the GPU left alone,
-        and honouring a local override would reintroduce the exact stall it
-        was set to avoid.
+        The user's memory settings decide first (M38): "cloud" always uses
+        the cloud model -- the local 4b one is where the stale and duplicate
+        facts came from -- and "local" always uses the configured
+        ``extraction_model``. Only if the settings cannot be read does the
+        older rule apply: follow the model that answered, so a cloud turn
+        never drags the GPU awake for extraction.
         """
+        try:
+            from openjarvis.memory.settings import load_memory_settings
+
+            settings = load_memory_settings()
+            if settings.extraction_mode == "cloud" and settings.cloud_model:
+                return settings.cloud_model
+            if settings.extraction_mode == "local":
+                return self._model
+        except Exception:  # noqa: BLE001 — settings must never lose a fact
+            logger.debug("Memory settings unavailable", exc_info=True)
         if not answered_by:
             return self._model
         try:

@@ -1538,6 +1538,12 @@ def include_all_routes(app) -> None:
     app.include_router(speech_router)
     app.include_router(system_router)
     app.include_router(presence_router)
+    try:
+        from openjarvis.server.memory_routes import router as memory_page_router
+
+        app.include_router(memory_page_router)
+    except ImportError:
+        pass
     app.include_router(feedback_router)
     app.include_router(optimize_router)
 
