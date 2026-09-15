@@ -275,6 +275,46 @@ component works:
   Check it before concluding a feature needs source changes. An unquoted space
   in a TOML table header (`[Deepgram Flux]`) invalidates the whole file and
   breaks every unrelated credential in it.
+- **A reasoning model thinks before it writes, and the thinking counts
+  against `max_tokens`.** `gpt-5.6-luna` given 120 tokens returned an *empty*
+  reply -- not an error -- which the caller read as "nothing to say"; given
+  4,000 for a 400-fact clean-up it did the same and read as "nothing to
+  clean". Three separate features shipped silently inert this way in two
+  days. Any direct `generate()` on the cloud model needs real headroom (600
+  minimum; 24,000 for the hygiene pass), and an empty reply must be logged as
+  what it is. `tests/architecture/test_invariants_lessons.py` pins the
+  minimum for the modules that pin the model.
+- **A test rig that fakes one output and not the others reaches the real
+  one.** The moment-engine rig faked the voice but not the chime, and a test
+  run played the chime through the speakers thirty times. Every side channel
+  an engine has (speaker, chime, initiative writer, busy sensor, activity)
+  is injectable; a rig must inject all of them. Pinned by the same file.
+- **`ruff format src/` reformats files you did not touch**, and a commit
+  made from `git add -u` then carries thirty unrelated files. Format the
+  files you changed by name; if a sweep happens, `git checkout --` the rest
+  before committing. It happened twice on 16 September.
+- **The web UI at `localhost:5173` is the Vite dev server**, started by the
+  Sage launcher; it hot-reloads source as it changes on disk, so the user
+  sees half-applied edits and, worse, hot reload can leave a stale module
+  instance alive (a zustand store duplicated, a polling hook running twice).
+  Two bugs on 16 September were only that. The built app at
+  `localhost:8000` is what a restart serves; test there, or full-reload the
+  dev page after a batch of edits.
+- **Bash heredocs on this machine turn `\n` inside Python string literals
+  into real newlines** (and choke on `it's` in some quoting). Write scripts
+  with the Write tool and run them, or use the Edit tool; do not pipe Python
+  containing escape sequences through `python - <<'EOF'`.
+- **Deepgram Flux has no idle timeout and no `KeepAlive` message.** Measured
+  15 September: a socket with no audio at all stayed open 130 s, a real turn
+  then 45 s idle stayed open, and `{"type":"KeepAlive"}` is rejected with
+  `UNPARSABLE_CLIENT_MESSAGE` and closes the socket. Every `flux.dropped` in
+  the trace that day lined up with a server restart. Look at the server, not
+  Deepgram, when a Flux socket closes.
+- **Windows turns Do Not Disturb on by itself for a full-screen app**, which
+  parks a toast in the notification centre unseen; Sage's DND check reads
+  only the manual toggle. Anything that must reach the user during a film
+  has to be spoken (`notify_windows` now speaks every desktop reminder), and
+  only the manual toggle silences that.
 
 ## Web parity
 

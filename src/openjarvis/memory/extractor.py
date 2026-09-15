@@ -50,7 +50,11 @@ class FactExtractor:
         model: str,
         *,
         temperature: float = 0.0,
-        max_tokens: int = 512,
+        # Room for a reasoning model to think before the JSON: 512 was
+        # enough for the local model and for a short exchange in the cloud,
+        # but a long one would have come back empty and been read as "no
+        # facts" -- the same failure the initiative writer had.
+        max_tokens: int = 2000,
         max_facts_per_turn: int = 10,
         max_fact_chars: int = 200,
         system_prompt: Optional[str] = None,

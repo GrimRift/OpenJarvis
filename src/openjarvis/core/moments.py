@@ -1083,7 +1083,7 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
         ),
     ]
     result = engine.generate(
-        messages, model=settings.moments_model, temperature=0.7, max_tokens=200
+        messages, model=settings.moments_model, temperature=0.7, max_tokens=600
     )
     text = str(result.get("content") or "").strip()
     if not text:

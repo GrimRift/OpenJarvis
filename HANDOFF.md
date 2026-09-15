@@ -1376,3 +1376,75 @@ Next candidates, in order:
    Ultra mode will be used regularly.
 4. Do not begin Microsoft Calendar, OneDrive, or Teams work until the existing
    Microsoft admin-consent blocker is cleared.
+
+
+## M36, M37, M38 and the voice loop, all in two days (2026-09-15 to 2026-09-16)
+
+Everything below is on `origin/feature/sage-customization`; the scope docs
+carry the decisions and status per phase: `docs/m36-presence.md`,
+`docs/m37-initiative.md`, `docs/m38-memory.md`. Read those first.
+
+### M36 — Presence: Sage knows when to speak (complete)
+
+Presence monitor (idle time, 5 s poll, listener on change), nightly
+episodes with boot catch-up, and *moments* -- a daily greeting named for the
+time of day, welcome back after an hour away (Sage being off counts), and
+tell-me-when -- spoken server-side (Cartesia → `speech/player.py`, ffplay)
+with a chime first and every other app ducked to 35 %. `not_now` and
+`tell_me_when` tools; every moment appended to the open chat as "Sage said
+this aloud". Phase 4 texture: a "one moment" clip after 5 s of nothing said
+back (held behind, never over, the reply; repeats every 20 s), the orb dims
+for an empty desk, varied fallback lines.
+
+### M37 — Initiative: Sage starts a conversation (complete)
+
+A fourth moment kind. `core/activity.py` (what the server sees: chat
+requests, TTS streams, Flux transmitting), `core/busy.py` (full-screen app,
+call title in front, Teams holding the mic; typing does *not* count, by
+decision), a pure cadence policy (lull on both sides, cooldown, hourly cap,
+back-off after two unanswered), a writer that may SKIP, one fixed follow-up
+line after 60 s, a line the user talked over is held and said after the
+exchange, the browser opens the mic for a reply after a prompt or greeting.
+Modes Gentle / Curious / Social with cadence presets; categories tagged on
+the record. **The test cadence (45 s lull / 60 s cooldown) was still set in
+`presence.json` at handoff** -- picking any mode in Settings restores a
+preset.
+
+### M38 — Memory (complete)
+
+The defect: 388 facts (~8,600 tokens) injected newest-first into a
+2,048-token budget, so the oldest three hundred -- the curated identity
+core -- never reached the model. Now `memory/recall.py` selects by BM25
+relevance with a pinned core. Facts have ids, pins, a private flag, the day
+learned, and a soft delete restorable for 7 days. A Memory page (own
+sidebar entry, `server/memory_routes.py`) for facts / episodes / documents
+(upload) / profile. Extraction on gpt-5.6-luna, local one switch away
+(`memory_settings.json`). Nightly hygiene (23:30 local + boot catch-up)
+merges duplicates, resolves contradictions, expires stale lines -- the
+first run took 406 → 270 facts, every removal restorable. `remember`,
+`forget`, `restore_memory`, `recall` tools. `MEMORY.md` folded into pinned
+facts and renamed.
+
+### Voice loop
+
+Turn continuation (a pause mid-sentence no longer yields two answers),
+barge-in (talk over Sage: cut on the second real word, echo turns dropped,
+"stop" alone consumed), typed replies streamed through the same incremental
+TTS with a 3,000-char sentence-end cap, the speaker button stops in one
+press, every desktop reminder spoken aloud.
+
+### Verification pass (2026-09-16)
+
+Full local suite green before this pass at 2,389 tests; the pass added
+`tests/architecture/test_invariants_lessons.py` (rigs must fake every
+output; reasoning models need headroom) and six traps to `AGENTS.md`.
+The extractor's default `max_tokens` was raised 512 → 2,000 and the
+greeting composer's 200 → 600 on the strength of the reasoning-headroom
+lesson, before either could fail in the wild.
+
+### Open
+
+- Live with M37 for a day: does Gentle feel like company or interruption;
+  does anything Social says belong on the "never bring up" list.
+- Skim Memory → Removed after the first hygiene run.
+- M33 (self-improvement) is next by recommendation; M29 (mobile) after.

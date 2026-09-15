@@ -377,7 +377,8 @@ async def upload_document(request: Request, file: UploadFile):
     data = await file.read()
     if len(data) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (20 MB limit)")
-    text, note, _reread = read_document(data, ext)
+    # Minutes for a mangled PDF; never on the event loop (see the invariant).
+    text, note, _reread = await asyncio.to_thread(read_document, data, ext)
     if not text.strip():
         raise HTTPException(status_code=400, detail="No readable text in that file")
     chunks = _chunk_text(text)
