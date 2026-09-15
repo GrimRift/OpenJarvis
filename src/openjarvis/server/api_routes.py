@@ -1299,6 +1299,8 @@ async def update_presence_settings(request: Request):
     from openjarvis.core.presence import (  # noqa: PLC0415
         BOOL_SETTINGS,
         HOUR_SETTINGS,
+        INITIATIVE_MODES,
+        LIST_SETTINGS,
         POSITIVE_SETTINGS,
     )
 
@@ -1326,6 +1328,24 @@ async def update_presence_settings(request: Request):
                     status_code=400, detail=f"{key} must be an hour 0-23"
                 )
             setattr(settings, key, value)
+    for key in LIST_SETTINGS:
+        if key in body:
+            value = body[key]
+            if not isinstance(value, list) or not all(
+                isinstance(v, str) for v in value
+            ):
+                raise HTTPException(
+                    status_code=400, detail=f"{key} must be a list of strings"
+                )
+            setattr(settings, key, [v.strip() for v in value if v.strip()])
+    if "initiative_mode" in body:
+        mode = body["initiative_mode"]
+        if mode not in INITIATIVE_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"initiative_mode must be one of {INITIATIVE_MODES}",
+            )
+        settings.initiative_mode = mode
     save_settings(settings)
     monitor = getattr(request.app.state, "presence_monitor", None)
     if monitor is not None:
@@ -1362,15 +1382,31 @@ async def presence_moments(request: Request, since: float = 0):
 
 @presence_router.put("/moments/snooze")
 async def presence_moments_snooze(request: Request):
-    """The Settings form of "not now": quiet for the rest of today."""
+    """The Settings form of "not now": quiet for the rest of today, or for
+    a number of minutes; ``snoozed: false`` lifts either."""
     engine = getattr(request.app.state, "moment_engine", None)
     if engine is None:
         raise HTTPException(status_code=503, detail="Moments are not running")
     body = await request.json()
-    snoozed = body.get("snoozed") if isinstance(body, dict) else None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    minutes = body.get("minutes")
+    if minutes is not None:
+        if (
+            isinstance(minutes, bool)
+            or not isinstance(minutes, (int, float))
+            or minutes <= 0
+        ):
+            raise HTTPException(status_code=400, detail="minutes must be positive")
+        until = engine.snooze_for(float(minutes) * 60)
+        return {"snoozed_today": engine.snoozed_today(), "snoozed_until": until}
+    snoozed = body.get("snoozed")
     if not isinstance(snoozed, bool):
         raise HTTPException(status_code=400, detail="snoozed must be a boolean")
-    engine.snooze_today(snoozed)
+    if snoozed:
+        engine.snooze_today(True)
+    else:
+        engine.resume()
     return {"snoozed_today": snoozed}
 
 

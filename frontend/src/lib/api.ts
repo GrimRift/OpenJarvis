@@ -505,6 +505,14 @@ export interface PresenceSettings {
   welcome_back_after_seconds: number;
   quiet_hours_start_local: number;
   quiet_hours_end_local: number;
+  // Initiative (M37): Sage starting a conversation.
+  initiative_mode: 'off' | 'gentle' | 'curious' | 'social';
+  initiative_idle_seconds: number;
+  initiative_cooldown_seconds: number;
+  initiative_per_hour: number;
+  initiative_excluded_facts: string[];
+  initiative_call_titles: string[];
+  initiative_call_mic_apps: string[];
 }
 
 export interface MomentWatch {
@@ -517,7 +525,7 @@ export interface MomentWatch {
 
 export interface MomentRecord {
   at: number;
-  kind: 'greeting' | 'welcome_back' | 'told';
+  kind: 'greeting' | 'welcome_back' | 'told' | 'initiative';
   text: string;
   spoken: boolean;
   detail: string;
@@ -526,6 +534,9 @@ export interface MomentRecord {
 export interface MomentsSnapshot {
   running: boolean;
   snoozed_today: boolean;
+  /** Epoch seconds until which a timed quiet holds, or null. */
+  snoozed_until?: number | null;
+  initiative_mode?: string;
   last_reason?: string;
   watches: MomentWatch[];
   history: MomentRecord[];
@@ -574,11 +585,11 @@ export async function fetchMoments(since = 0): Promise<MomentsSnapshot> {
   return res.json();
 }
 
-export async function setMomentsSnoozed(snoozed: boolean): Promise<boolean> {
+export async function setMomentsSnoozed(snoozed: boolean, minutes?: number): Promise<boolean> {
   const res = await apiFetch('/v1/presence/moments/snooze', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ snoozed }),
+    body: JSON.stringify(minutes ? { minutes } : { snoozed }),
   });
   if (!res.ok) throw new Error(`Could not change today's quiet (${res.status})`);
   return (await res.json()).snoozed_today;

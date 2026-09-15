@@ -335,6 +335,47 @@ export function SettingsPage() {
   );
   const stamp = (at: number) =>
     new Date(at * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const numberInput = (
+    key: 'initiative_idle_seconds' | 'initiative_cooldown_seconds' | 'initiative_per_hour',
+    scale: number,
+    min: number,
+  ) => (
+    <input
+      type="number"
+      min={min}
+      value={presence ? Math.round(presence[key] / scale) : 0}
+      disabled={!presence}
+      onChange={(e) => {
+        const value = Number(e.target.value);
+        if (Number.isInteger(value) && value >= min) void patchPresence({ [key]: value * scale });
+      }}
+      className="w-16 px-2 py-1 rounded-lg text-sm text-center"
+      style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+    />
+  );
+  const listInput = (key: 'initiative_excluded_facts' | 'initiative_call_titles', placeholder: string) => (
+    <input
+      type="text"
+      defaultValue={(presence?.[key] ?? []).join(', ')}
+      placeholder={placeholder}
+      disabled={!presence}
+      onBlur={(e) => {
+        const value = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+        if (JSON.stringify(value) !== JSON.stringify(presence?.[key] ?? [])) void patchPresence({ [key]: value });
+      }}
+      className="w-64 px-2 py-1 rounded-lg text-sm"
+      style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+    />
+  );
+  const quietFor = async (minutes: number) => {
+    try {
+      await setMomentsSnoozed(true, minutes);
+      await refreshMoments();
+      showSaved();
+    } catch (err) {
+      setPresenceError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(() => !isAutoUpdateDisabled());
   const [updateCheckState, setUpdateCheckState] = useState<'idle' | 'checking' | 'available' | 'latest'>('idle');
@@ -1122,6 +1163,42 @@ export function SettingsPage() {
             </SettingRow>
             <SettingRow label="Not now" description={moments?.snoozed_today ? 'Quiet for the rest of today. Telling Sage "not now" does the same.' : 'Silence every unprompted moment until tomorrow. Telling Sage "not now" does the same.'}>
               <Switch on={Boolean(moments?.snoozed_today)} onClick={toggleQuietToday} disabled={!moments} />
+            </SettingRow>
+            <SettingRow label="Quiet for a while" description={moments?.snoozed_until ? `Quiet until ${stamp(moments.snoozed_until)}. "Continue" lifts it.` : 'Nothing unprompted for a set time. "Be quiet for 30 minutes" does the same; reminders you scheduled still speak.'}>
+              <div className="flex gap-1">
+                {[30, 60, 120].map((m) => (
+                  <button key={m} onClick={() => quietFor(m)} disabled={!moments} className="px-2 py-1 rounded-lg text-xs cursor-pointer disabled:opacity-40" style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text-secondary)', border: '1px solid var(--color-border)' }}>
+                    {m < 60 ? `${m} min` : `${m / 60} h`}
+                  </button>
+                ))}
+              </div>
+            </SettingRow>
+            <SettingRow label="Sage may start conversations" description="Initiative: after a lull, Sage may ask about today's work or offer a useful nudge -- or decide silence is better. Gentle stays with today's work; Curious adds questions and facts from your field; Social adds observations and draws on more of what it remembers.">
+              <select
+                value={presence?.initiative_mode ?? 'off'}
+                disabled={!presence?.enabled || !presence?.moments_enabled}
+                onChange={(e) => void patchPresence({ initiative_mode: e.target.value as PresenceSettings['initiative_mode'] })}
+                className="px-2 py-1 rounded-lg text-sm"
+                style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+              >
+                <option value="off">Off</option>
+                <option value="gentle">Gentle</option>
+                <option value="curious">Curious</option>
+                <option value="social">Social</option>
+              </select>
+            </SettingRow>
+            <SettingRow label="Lull, cooldown, per hour" description="Minutes of quiet on both sides before Sage considers speaking; minutes between two initiatives; the most in one hour. Declining counts as half a cooldown.">
+              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+                {numberInput('initiative_idle_seconds', 60, 1)} <span>min</span>
+                {numberInput('initiative_cooldown_seconds', 60, 1)} <span>min</span>
+                {numberInput('initiative_per_hour', 1, 1)} <span>/h</span>
+              </div>
+            </SettingRow>
+            <SettingRow label="Never bring up" description="Comma-separated words. A remembered fact containing any of them is never shown to the initiative writer. Add one when a prompt touched something it shouldn't have.">
+              {listInput('initiative_excluded_facts', 'e.g. ex, clinic')}
+            </SettingRow>
+            <SettingRow label="Busy when the window in front says" description="Comma-separated words in a window title that mean you're in a call. A full-screen app, and Teams holding the microphone, count as busy too.">
+              {listInput('initiative_call_titles', 'Meet, Messenger call')}
             </SettingRow>
             {moments && moments.watches.length > 0 && (
               <div className="py-3" style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>

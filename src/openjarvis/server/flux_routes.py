@@ -21,6 +21,7 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from openjarvis.core import activity
 from openjarvis.speech import flux
 from openjarvis.speech.speculative import SpeculativeManager, generate_speculative
 
@@ -225,13 +226,16 @@ async def flux_stream(websocket: WebSocket) -> None:
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
+                activity.flux_transmitting(False)
                 return
             data = message.get("bytes")
             if data:
+                activity.flux_transmitting(True)
                 await session.send_audio(data)
                 continue
             text = message.get("text")
             if text == "stop":
+                activity.flux_transmitting(False)
                 # The client ends transmission between turns rather than
                 # streaming idle microphone audio. Keep reading: returning
                 # here completed this task, which cancelled the event pump and
@@ -339,6 +343,7 @@ async def flux_stream(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        activity.flux_transmitting(False)
         for task in (audio_task, events_task):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

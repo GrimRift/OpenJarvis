@@ -1,6 +1,21 @@
 # M37 — Initiative: Sage starts a conversation
 
-Scoped 2026-09-15. Not started.
+Scoped 2026-09-15. Phase 1 implemented 2026-09-16.
+
+**Status (2026-09-16), phase 1:** `core/activity.py` records what the
+server sees (chat requests, TTS streams, Flux transmitting); `core/busy.py`
+holds the busy model (Sage mid-turn, full-screen foreground, a call title
+in front, Teams holding the microphone -- each sensor injectable);
+`initiative_holdback()` in `core/moments.py` is the pure cadence policy
+(mode, busy, lull on both sides, cooldown, hourly and daily caps), and the
+engine asks the writer only when it returns nothing. The writer
+(`compose_initiative`) may reply SKIP, which is recorded and costs half a
+cooldown; a dry run against the real day declined three times out of three
+at one in the morning and spoke once in three on a synthetic afternoon of
+capstone work -- conservative, as Gentle should be. `not_now` grew timed
+quiet, resume, and the initiative mode; Settings gained the mode, cadence,
+"never bring up" and call-title lists, and quiet-for-a-while buttons.
+Follow-up, answer detection and the reply-listening window are phase 2.
 
 ## Decisions taken (2026-09-15)
 

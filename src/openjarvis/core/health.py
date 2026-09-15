@@ -809,7 +809,8 @@ def _check_gpu() -> CheckResult:
             status,
             f"{name}, {used_mb}/{total_mb} MiB used ({pct}%)",
             details=(
-                "Memory is nearly full; a model load may fail." if status == "warn"
+                "Memory is nearly full; a model load may fail."
+                if status == "warn"
                 else None
             ),
             section=SECTION_MODELS,
@@ -867,8 +868,7 @@ def _check_scheduled_jobs() -> List[CheckResult]:
                 prompt = str(task.get("prompt") or task_id).strip()
                 label = prompt[:60] + ("..." if len(prompt) > 60 else "")
                 schedule = (
-                    f"{task.get('schedule_type', '')} "
-                    f"{task.get('schedule_value', '')}"
+                    f"{task.get('schedule_type', '')} {task.get('schedule_value', '')}"
                 ).strip()
 
                 try:
@@ -961,9 +961,7 @@ def _token_file_report(path: Path) -> CheckResult:
 
     age_days = int((time.time() - path.stat().st_mtime) / 86400)
     is_oauth = bool(
-        data.get("refresh_token")
-        or data.get("access_token")
-        or data.get("token")
+        data.get("refresh_token") or data.get("access_token") or data.get("token")
     )
 
     if is_oauth:
@@ -1462,8 +1460,12 @@ def _check_moments(app_state: Any = None) -> List[CheckResult]:
     history = snap.get("history") or []
     last = history[-1] if history else None
     summary = f"{', '.join(on) or 'none'} on"
+    mode = snap.get("initiative_mode") or "off"
+    summary += f"; initiative {mode}"
     if snap.get("snoozed_today"):
         summary += "; quiet for the rest of today"
+    if snap.get("snoozed_until"):
+        summary += "; quiet for a while"
     details = (
         f"Quiet {settings.quiet_hours_start_local:02d}:00-"
         f"{settings.quiet_hours_end_local:02d}:00; "
@@ -1739,9 +1741,7 @@ def _load_probe_state() -> Dict[str, Any]:
 
 def _save_probe_state(state: Dict[str, Any]) -> None:
     try:
-        _probe_state_path().write_text(
-            json.dumps(state, indent=2), encoding="utf-8"
-        )
+        _probe_state_path().write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception:
         # A health check must never fail because it could not write a note to
         # itself.
@@ -1863,9 +1863,7 @@ def _check_google_maps(live: bool) -> List[CheckResult]:
 
         try:
             if name == "routes":
-                compute_route(
-                    _ROUTE_PROBE_ORIGIN, _ROUTE_PROBE_DESTINATION, key
-                )
+                compute_route(_ROUTE_PROBE_ORIGIN, _ROUTE_PROBE_DESTINATION, key)
                 message = "A route was computed"
             else:
                 search_places(_PLACES_PROBE_QUERY, key, None)
@@ -2291,9 +2289,7 @@ def _check_tool_directories() -> List[CheckResult]:
 # -- Entry point -------------------------------------------------------------
 
 
-def run_health_checks(
-    *, live: bool = False, app_state: Any = None
-) -> HealthReport:
+def run_health_checks(*, live: bool = False, app_state: Any = None) -> HealthReport:
     """Run every diagnostic check and return them grouped by section.
 
     ``live`` permits outbound calls that may be billable or quota-limited.

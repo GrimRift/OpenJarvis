@@ -86,10 +86,29 @@ class PresenceSettings:
     quiet_hours_end_local: int = 7
     moments_model: str = "gpt-5.6-luna"
     moments_engine: str = "cloud"
+    # Initiative (M37): Sage starting a conversation. "off", "gentle",
+    # "curious" or "social". Gentle from the first restart, by decision.
+    initiative_mode: str = "gentle"
+    # A lull: this long since the user's last turn and since Sage last spoke.
+    initiative_idle_seconds: int = 300
+    initiative_cooldown_seconds: int = 600
+    initiative_per_hour: int = 3
+    # Facts containing any of these are withheld from the writer. Empty to
+    # start; grows as a fact turns out to need it.
+    initiative_excluded_facts: List[str] = field(default_factory=list)
+    # Busy: a foreground title naming a call, or an app with the microphone.
+    initiative_call_titles: List[str] = field(
+        default_factory=lambda: ["Meet", "Messenger call"]
+    )
+    initiative_call_mic_apps: List[str] = field(
+        default_factory=lambda: ["MSTeams", "Teams"]
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+
+INITIATIVE_MODES = ("off", "gentle", "curious", "social")
 
 # Shared by the loader and the settings route so a new field is accepted in
 # both places or neither.
@@ -105,8 +124,22 @@ POSITIVE_SETTINGS = (
     "idle_threshold_seconds",
     "poll_interval_seconds",
     "welcome_back_after_seconds",
+    "initiative_idle_seconds",
+    "initiative_cooldown_seconds",
+    "initiative_per_hour",
 )
-TEXT_SETTINGS = ("episodes_model", "episodes_engine", "moments_model", "moments_engine")
+TEXT_SETTINGS = (
+    "episodes_model",
+    "episodes_engine",
+    "moments_model",
+    "moments_engine",
+    "initiative_mode",
+)
+LIST_SETTINGS = (
+    "initiative_excluded_facts",
+    "initiative_call_titles",
+    "initiative_call_mic_apps",
+)
 HOUR_SETTINGS = (
     "episodes_hour_local",
     "quiet_hours_start_local",
@@ -142,6 +175,16 @@ def load_settings(config_dir: Optional[Path] = None) -> PresenceSettings:
         hour = raw.get(key)
         if isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23:
             setattr(settings, key, hour)
+    for key in LIST_SETTINGS:
+        value = raw.get(key)
+        if isinstance(value, list):
+            setattr(
+                settings,
+                key,
+                [str(v).strip() for v in value if isinstance(v, str) and v.strip()],
+            )
+    if settings.initiative_mode not in INITIATIVE_MODES:
+        settings.initiative_mode = "off"
     return settings
 
 
@@ -367,6 +410,8 @@ class PresenceMonitor:
 __all__ = [
     "BOOL_SETTINGS",
     "HOUR_SETTINGS",
+    "INITIATIVE_MODES",
+    "LIST_SETTINGS",
     "POSITIVE_SETTINGS",
     "TEXT_SETTINGS",
     "PresenceMonitor",

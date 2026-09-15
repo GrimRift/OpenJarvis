@@ -13,6 +13,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from openjarvis.core import activity
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.types import Message, Role, ToolCall
 from openjarvis.server.model_capabilities import is_embed_only_model
@@ -294,6 +295,8 @@ def _run_spotify_transport(action: str) -> str:
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
     """Handle chat completion requests (streaming and non-streaming)."""
+    # The user is talking to Sage: initiative (M37) waits for a lull.
+    activity.note_user_turn()
     # Bind this turn before anything touches the messages: a tool that needs
     # confirmation is answered on the *next* turn, and the identity of this one
     # is what proves a real user reply happened in between. Computed from the
@@ -357,9 +360,10 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     )
 
                     monitor = getattr(request.app.state, "presence_monitor", None)
-                    if monitor is not None and load_settings(
-                        monitor.config_dir
-                    ).enabled:
+                    if (
+                        monitor is not None
+                        and load_settings(monitor.config_dir).enabled
+                    ):
                         recent_days = format_recent_days(
                             recent_episodes(count=3, config_dir=monitor.config_dir)
                         )

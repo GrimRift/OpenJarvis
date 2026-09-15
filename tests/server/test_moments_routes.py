@@ -32,6 +32,8 @@ def engine(tmp_path):
         composer=lambda kind, ctx: kind,
         speaker=lambda text: True,
         chimer=lambda: True,
+        initiative_composer=lambda ctx: "",
+        busy_sensor=lambda a, s: [],
         scheduler_lookup=lambda: None,
         timezone_name="Asia/Singapore",
     )
@@ -120,10 +122,31 @@ class TestTools:
         from openjarvis.tools.moments import NotNowTool
 
         result = NotNowTool().execute()
-        assert result.success and result.metadata["snoozed_today"] is True
+        assert result.success and "rest of today" in result.content
         assert engine.snoozed_today() is True
-        assert NotNowTool().execute(resume=True).metadata["snoozed_today"] is False
+        assert NotNowTool().execute(resume=True).success
         assert engine.snoozed_today() is False
+
+    def test_timed_quiet_and_initiative_commands(self, engine, tmp_path, monkeypatch):
+        from openjarvis.tools.moments import NotNowTool
+
+        monkeypatch.setattr(
+            "openjarvis.core.presence.DEFAULT_CONFIG_DIR", tmp_path, raising=False
+        )
+        result = NotNowTool().execute(minutes=30)
+        assert result.success and "30 minutes" in result.content
+        assert engine.snapshot()["snoozed_until"] == 1_800_000_000.0 + 1800
+        assert NotNowTool().execute(resume=True).success
+        assert engine.snapshot()["snoozed_until"] is None
+
+        from openjarvis.core.presence import load_settings
+
+        result = NotNowTool().execute(initiative="off")
+        assert result.success and "when you call" in result.content
+        assert load_settings(tmp_path).initiative_mode == "off"
+        assert NotNowTool().execute(initiative="gentle").success
+        assert load_settings(tmp_path).initiative_mode == "gentle"
+        assert not NotNowTool().execute(initiative="loud").success
 
     def test_tell_me_when_registers_a_time_watch(self, engine) -> None:
         from openjarvis.tools.moments import TellMeWhenTool

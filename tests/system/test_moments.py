@@ -15,10 +15,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from openjarvis.core.activity import Activity
 from openjarvis.core.moments import (
     DAILY_CAPS,
     FALLBACK_LINES,
     MOMENT_GREETING,
+    MOMENT_INITIATIVE,
     MOMENT_TOLD,
     MOMENT_WELCOME_BACK,
     MomentEngine,
@@ -62,6 +64,12 @@ class _Rig:
         self.spoken: List[Tuple[str, str]] = []
         self.compose_calls: List[str] = []
         self.last_context: dict = {}
+        # Initiative: what the fake writer will say ("" declines), what the
+        # desk looks like, and what the server has seen the user do.
+        self.initiative_line = ""
+        self.initiative_contexts: List[dict] = []
+        self.busy: List[str] = []
+        self.activity = Activity()
         save_settings(settings or PresenceSettings(enabled=True), tmp_path)
         self.monitor = PresenceMonitor(
             config_dir=tmp_path,
@@ -76,6 +84,9 @@ class _Rig:
             composer=self._compose,
             speaker=self._speak,
             chimer=lambda: True,
+            initiative_composer=self._compose_initiative,
+            busy_sensor=lambda activity, settings: list(self.busy),
+            activity_source=lambda: self.activity,
             scheduler_lookup=lambda: None,
             timezone_name=TZ,
         )
@@ -84,6 +95,10 @@ class _Rig:
         self.compose_calls.append(kind)
         self.last_context = context
         return f"[{kind}] {context.get('away_for', '')}".strip()
+
+    def _compose_initiative(self, context: dict) -> str:
+        self.initiative_contexts.append(context)
+        return self.initiative_line
 
     def _speak(self, text: str) -> bool:
         self.spoken.append(text)
@@ -128,7 +143,10 @@ class TestPureHelpers:
         assert local_to_timestamp("not a time", TZ) is None
 
     def test_fallback_lines_exist_for_every_kind(self) -> None:
-        assert "evening" in fallback_text(MOMENT_GREETING, {"time_of_day": "evening"})
+        assert (
+            "evening"
+            in fallback_text(MOMENT_GREETING, {"time_of_day": "evening"}).lower()
+        )
         assert "day" in fallback_text(MOMENT_GREETING, {}).lower()
         assert "back" in fallback_text(MOMENT_WELCOME_BACK, {"away_for": "2 hours"})
         told = fallback_text(
@@ -562,3 +580,94 @@ class TestAwayNews:
         assert any("Structural Analysis" in line for line in lines)
         assert any("Reminder sent" in line for line in lines)
         assert not any("Nothing upcoming" in line for line in lines)
+
+
+class TestInitiative:
+    """Sage starting a conversation (M37 phase 1, Gentle)."""
+
+    def _settled(self, tmp_path, **settings):
+        rig = _Rig(tmp_path, PresenceSettings(enabled=True, **settings))
+        rig.tick(_at(13), idle=1.0)  # the day's greeting
+        rig.spoken.clear()
+        return rig
+
+    def test_speaks_after_a_lull_and_then_cools_down(self, tmp_path) -> None:
+        rig = self._settled(tmp_path)
+        rig.initiative_line = "How is the paper going, sir?"
+        assert rig.tick(_at(13, 4)) == []  # greeting was 4 min ago: not a lull
+        said = rig.tick(_at(13, 6))
+        assert [r.kind for r in said] == [MOMENT_INITIATIVE]
+        assert rig.spoken == ["How is the paper going, sir?"]
+        for minute in range(7, 16):
+            assert rig.tick(_at(13, minute)) == []  # cooling down
+        assert [r.kind for r in rig.tick(_at(13, 17))] == [MOMENT_INITIATIVE]
+
+    def test_the_writer_may_decline_and_that_costs_half_a_cooldown(
+        self, tmp_path
+    ) -> None:
+        rig = self._settled(tmp_path)
+        rig.initiative_line = ""
+        assert rig.tick(_at(13, 6)) == []
+        assert len(rig.initiative_contexts) == 1
+        assert rig.engine.snapshot()["last_reason"] == "initiative declined"
+        assert rig.tick(_at(13, 10)) == []
+        assert len(rig.initiative_contexts) == 1
+        rig.initiative_line = "Water break, sir?"
+        assert [r.kind for r in rig.tick(_at(13, 12))] == [MOMENT_INITIATIVE]
+
+    def test_a_recent_chat_turn_is_not_a_lull(self, tmp_path) -> None:
+        rig = self._settled(tmp_path)
+        rig.initiative_line = "Anything I can do, sir?"
+        rig.activity = Activity(last_user_turn_at=_at(13, 5))
+        assert rig.tick(_at(13, 8)) == []
+        assert [r.kind for r in rig.tick(_at(13, 11))] == [MOMENT_INITIATIVE]
+
+    def test_busy_means_silence(self, tmp_path) -> None:
+        rig = self._settled(tmp_path)
+        rig.initiative_line = "A thought, sir."
+        rig.busy = ["full-screen: Netflix"]
+        assert rig.tick(_at(13, 10)) == []
+        assert rig.engine.snapshot()["last_reason"].startswith("busy")
+        rig.busy = []
+        assert [r.kind for r in rig.tick(_at(13, 11))] == [MOMENT_INITIATIVE]
+
+    def test_hourly_cap(self, tmp_path) -> None:
+        rig = self._settled(
+            tmp_path, initiative_cooldown_seconds=60, initiative_idle_seconds=60
+        )
+        rig.initiative_line = "Sir?"
+        minute = 6
+        for _ in range(6):
+            rig.tick(_at(13, minute))
+            minute += 2
+        assert len(rig.spoken) == 3
+
+    def test_off_mode_never_asks_the_writer(self, tmp_path) -> None:
+        rig = self._settled(tmp_path, initiative_mode="off")
+        rig.initiative_line = "Sir?"
+        rig.tick(_at(13, 20))
+        assert rig.spoken == [] and rig.initiative_contexts == []
+
+    def test_timed_quiet_silences_every_moment_until_it_lapses(self, tmp_path) -> None:
+        rig = self._settled(tmp_path)
+        rig.initiative_line = "Sir?"
+        rig.engine.snooze_for(30 * 60)  # until 13:30
+        for minute in (10, 20, 29):
+            assert rig.tick(_at(13, minute)) == []
+        assert "quiet for" in rig.engine.snapshot()["last_reason"]
+        assert rig.engine.snapshot()["snoozed_until"] is not None
+        # It lapses on its own...
+        assert [r.kind for r in rig.tick(_at(13, 31))] == [MOMENT_INITIATIVE]
+        # ...and "continue" lifts it early.
+        rig.engine.snooze_for(30 * 60)
+        assert rig.tick(_at(13, 45)) == []
+        rig.engine.resume()
+        assert [r.kind for r in rig.tick(_at(13, 46))] == [MOMENT_INITIATIVE]
+
+    def test_the_writer_sees_the_mode_and_its_categories(self, tmp_path) -> None:
+        rig = self._settled(tmp_path)
+        rig.initiative_line = "Sir?"
+        rig.tick(_at(13, 6))
+        context = rig.initiative_contexts[0]
+        assert context["mode"] == "gentle"
+        assert context["allowed_categories"] == "contextual, useful"

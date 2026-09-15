@@ -52,20 +52,38 @@ class NotNowTool(BaseTool):
         return ToolSpec(
             name="not_now",
             description=(
-                "Call this whenever the user says 'not now', 'quiet today', "
-                "'stop greeting me', or otherwise asks you to stop speaking "
-                "unprompted for the day. It silences every unprompted moment "
-                "(good morning, welcome back, tell-me-when) until tomorrow, "
-                "and only those: normal replies are unaffected. Call it with "
-                "resume=true when the user says to resume today."
+                "The user's control over Sage speaking unprompted (greetings, "
+                "welcome back, tell-me-when, and Sage starting conversations). "
+                "Normal replies and reminders the user scheduled are never "
+                "affected. Call it when the user says any of: 'not now' / "
+                "'quiet today' (silent until tomorrow); 'be quiet for 30 "
+                "minutes' / 'stop talking for now' (pass minutes; default 30 "
+                "when unstated); 'continue' / 'you can talk again' "
+                "(resume=true); 'only speak when I call you' / 'stop starting "
+                "conversations' (initiative='off'); 'you can start "
+                "conversations again' (initiative='gentle')."
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    "minutes": {
+                        "type": "number",
+                        "description": (
+                            "Quiet for this many minutes, not the rest of the day."
+                        ),
+                    },
                     "resume": {
                         "type": "boolean",
-                        "description": "True to lift today's silence instead.",
-                    }
+                        "description": "True to lift any quiet now.",
+                    },
+                    "initiative": {
+                        "type": "string",
+                        "enum": ["off", "gentle", "curious", "social"],
+                        "description": (
+                            "Set whether Sage may start conversations: 'off' for "
+                            "'only speak when I call you'; a mode to allow it again."
+                        ),
+                    },
                 },
                 "required": [],
             },
@@ -73,23 +91,79 @@ class NotNowTool(BaseTool):
 
     def execute(self, **params: Any) -> ToolResult:
         resume = bool(params.get("resume", False))
+        minutes = params.get("minutes")
+        initiative = str(params.get("initiative") or "").strip().lower()
         engine = _engine()
-        if engine is not None:
-            engine.snooze_today(not resume)
-        else:
-            state = load_state()
-            today = to_local(time.time(), configured_timezone()).date().isoformat()
-            state.snoozed_day = "" if resume else today
-            save_state(state)
+        notes = []
+
+        if initiative:
+            from openjarvis.core.presence import (
+                INITIATIVE_MODES,
+                load_settings,
+                save_settings,
+            )
+
+            if initiative not in INITIATIVE_MODES:
+                return ToolResult(
+                    tool_name=self.tool_id,
+                    content=f"initiative must be one of {', '.join(INITIATIVE_MODES)}.",
+                    success=False,
+                )
+            settings = load_settings()
+            settings.initiative_mode = initiative
+            save_settings(settings)
+            notes.append(
+                "I won't start conversations; I'll speak when you call me."
+                if initiative == "off"
+                else f"I may start conversations again ({initiative})."
+            )
+
+        if resume:
+            if engine is not None:
+                engine.resume()
+            else:
+                state = load_state()
+                state.snoozed_day = ""
+                state.snoozed_until = None
+                save_state(state)
+            notes.append("Unprompted moments are back on.")
+        elif minutes is not None:
+            try:
+                span = float(minutes)
+            except (TypeError, ValueError):
+                span = 0.0
+            if span <= 0:
+                return ToolResult(
+                    tool_name=self.tool_id,
+                    content="minutes must be a positive number.",
+                    success=False,
+                )
+            if engine is not None:
+                engine.snooze_for(span * 60)
+            else:
+                state = load_state()
+                state.snoozed_until = time.time() + span * 60
+                save_state(state)
+            notes.append(f"Understood. Nothing unprompted for {int(span)} minutes.")
+        elif not initiative:
+            if engine is not None:
+                engine.snooze_today(True)
+            else:
+                state = load_state()
+                today = to_local(time.time(), configured_timezone()).date().isoformat()
+                state.snoozed_day = today
+                save_state(state)
+            notes.append("Understood. No unprompted moments for the rest of today.")
+
         return ToolResult(
             tool_name=self.tool_id,
-            content=(
-                "Unprompted moments are back on for today."
-                if resume
-                else "Understood. No unprompted moments for the rest of today."
-            ),
+            content=" ".join(notes),
             success=True,
-            metadata={"snoozed_today": not resume},
+            metadata={
+                "resume": resume,
+                "minutes": minutes,
+                "initiative": initiative or None,
+            },
         )
 
 

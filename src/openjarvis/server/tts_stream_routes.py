@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from openjarvis.core import activity
 from openjarvis.speech.cartesia_tts import (
     STREAM_ENCODING,
     STREAM_SAMPLE_RATE,
@@ -102,7 +103,13 @@ async def tts_stream(websocket: WebSocket) -> None:
     try:
         request = await websocket.receive_json()
         if request.get("type") == "begin":
-            await _stream_incremental_turn(websocket, config, api_key, request)
+            # Initiative (M37) must not start a conversation over a reply
+            # being spoken; this is the one place the server sees one.
+            activity.tts_begin()
+            try:
+                await _stream_incremental_turn(websocket, config, api_key, request)
+            finally:
+                activity.tts_end()
             return
 
         # Backward-compatible whole-transcript request for older clients and
@@ -121,7 +128,11 @@ async def tts_stream(websocket: WebSocket) -> None:
                 request = await websocket.receive_json()
                 continue
 
-            await _speak(websocket, config, api_key, text, request)
+            activity.tts_begin()
+            try:
+                await _speak(websocket, config, api_key, text, request)
+            finally:
+                activity.tts_end()
             request = await websocket.receive_json()
     except WebSocketDisconnect:
         return

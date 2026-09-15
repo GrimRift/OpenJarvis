@@ -52,11 +52,27 @@ logger = logging.getLogger(__name__)
 MOMENT_GREETING = "greeting"
 MOMENT_WELCOME_BACK = "welcome_back"
 MOMENT_TOLD = "told"
-KINDS = (MOMENT_GREETING, MOMENT_WELCOME_BACK, MOMENT_TOLD)
+# Initiative (M37): Sage starting a conversation of its own accord.
+MOMENT_INITIATIVE = "initiative"
+KINDS = (MOMENT_GREETING, MOMENT_WELCOME_BACK, MOMENT_TOLD, MOMENT_INITIATIVE)
 
 # One greeting a day; welcome back a few times, because a day can hold
 # several real absences; told-on-request as often as it was asked for.
-DAILY_CAPS = {MOMENT_GREETING: 1, MOMENT_WELCOME_BACK: 3, MOMENT_TOLD: 20}
+DAILY_CAPS = {
+    MOMENT_GREETING: 1,
+    MOMENT_WELCOME_BACK: 3,
+    MOMENT_TOLD: 20,
+    MOMENT_INITIATIVE: 40,
+}
+
+# What each initiative mode may talk about. Gentle stays with today's work.
+INITIATIVE_CATEGORIES = {
+    "gentle": ("contextual", "useful"),
+    "curious": ("contextual", "useful", "curious", "interesting"),
+    "social": ("contextual", "useful", "curious", "interesting", "reflective"),
+}
+# The writer's way of saying that silence is better.
+SKIP = "SKIP"
 # A watch that could not be delivered for this long (asleep, away, snoozed)
 # is stale: "your class started yesterday" helps nobody.
 WATCH_STALE_SECONDS = 12 * 3600
@@ -97,6 +113,15 @@ class MomentRecord:
 class MomentsState:
     # The local day "not now" applies to; empty when not snoozed.
     snoozed_day: str = ""
+    # Timed quiet ("be quiet for 30 minutes"): epoch until which nothing
+    # unprompted is said. Reminders the user scheduled are not moments and
+    # are unaffected.
+    snoozed_until: Optional[float] = None
+    # When Sage last said anything unprompted, of any kind: a greeting resets
+    # the initiative cooldown too, so two things are not said minutes apart.
+    last_unprompted_at: Optional[float] = None
+    # When initiative last spoke or, at half weight, declined.
+    last_initiative_at: Optional[float] = None
     # Last time a poll saw the user present. Persisted so the gap that means
     # "slept" survives a server restart.
     last_present_at: Optional[float] = None
@@ -111,6 +136,9 @@ class MomentsState:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "snoozed_day": self.snoozed_day,
+            "snoozed_until": self.snoozed_until,
+            "last_unprompted_at": self.last_unprompted_at,
+            "last_initiative_at": self.last_initiative_at,
             "last_present_at": self.last_present_at,
             "handled_absence_end": self.handled_absence_end,
             "fired": self.fired,
@@ -133,7 +161,13 @@ def load_state(config_dir: Optional[Path] = None) -> MomentsState:
     state = MomentsState()
     if isinstance(raw.get("snoozed_day"), str):
         state.snoozed_day = raw["snoozed_day"]
-    for key in ("last_present_at", "handled_absence_end"):
+    for key in (
+        "last_present_at",
+        "handled_absence_end",
+        "snoozed_until",
+        "last_unprompted_at",
+        "last_initiative_at",
+    ):
         value = raw.get(key)
         if isinstance(value, (int, float)):
             setattr(state, key, float(value))
@@ -262,6 +296,8 @@ class Decision:
     absence_end: Optional[float] = None
     absence_seconds: Optional[float] = None
     reason: str = ""
+    # Why initiative held back this tick, for the record and the Health page.
+    initiative_reason: str = ""
 
 
 def fired_today(state: MomentsState, kind: str, local: datetime) -> int:
@@ -285,11 +321,16 @@ def decide(
     now: float,
     local: datetime,
     job_finished: Callable[[Watch], Optional[str]],
+    *,
+    activity: Optional[Any] = None,
+    busy: Sequence[str] = (),
 ) -> Decision:
     """Pure: what, if anything, should be said right now.
 
     *job_finished* answers whether a job watch's task has completed since the
     watch was set; it is injected so the policy needs no scheduler.
+    *activity* and *busy* (see ``core/activity`` and ``core/busy``) gate
+    initiative only; the fixed moments never depended on them.
     """
     decision = Decision()
     if not settings.enabled or not settings.moments_enabled:
@@ -301,6 +342,9 @@ def decide(
     today = local.date().isoformat()
     if state.snoozed_day == today:
         decision.reason = "not now, until tomorrow"
+        return decision
+    if state.snoozed_until is not None and state.snoozed_until > now:
+        decision.reason = f"quiet for {describe_duration(state.snoozed_until - now)}"
         return decision
     if in_quiet_hours(
         local.hour, settings.quiet_hours_start_local, settings.quiet_hours_end_local
@@ -371,9 +415,56 @@ def decide(
                 decision.watches.append(watch)
     if decision.watches:
         decision.kinds.append(MOMENT_TOLD)
+
+    # Initiative: only when nothing else is being said this tick.
     if not decision.kinds:
-        decision.reason = "nothing to say"
+        decision.initiative_reason = initiative_holdback(
+            settings, state, now, local, activity=activity, busy=busy
+        )
+        if not decision.initiative_reason:
+            decision.kinds.append(MOMENT_INITIATIVE)
+    if not decision.kinds:
+        decision.reason = decision.initiative_reason or "nothing to say"
     return decision
+
+
+def initiative_holdback(
+    settings: PresenceSettings,
+    state: MomentsState,
+    now: float,
+    local: datetime,
+    *,
+    activity: Optional[Any] = None,
+    busy: Sequence[str] = (),
+) -> str:
+    """Pure: why initiative should hold back now, or "" if it may consider
+    speaking. The timer means "consider", not "speak": the writer may still
+    decline once asked."""
+    if settings.initiative_mode == "off":
+        return "initiative is off"
+    if busy:
+        return "busy: " + "; ".join(busy)
+    if fired_today(state, MOMENT_INITIATIVE, local) >= DAILY_CAPS[MOMENT_INITIATIVE]:
+        return "daily cap"
+    last_user = getattr(activity, "last_user_turn_at", None) if activity else None
+    last_reply = getattr(activity, "last_reply_end_at", None) if activity else None
+    quiet_since = max(
+        [t for t in (last_user, last_reply, state.last_unprompted_at) if t] or [0.0]
+    )
+    if quiet_since and now - quiet_since < settings.initiative_idle_seconds:
+        return "conversation is recent"
+    if (
+        state.last_initiative_at is not None
+        and now - state.last_initiative_at < settings.initiative_cooldown_seconds
+    ):
+        return "cooling down"
+    hour_ago = now - 3600
+    spoken_this_hour = sum(
+        1 for t in state.fired.get(MOMENT_INITIATIVE, []) if t > hour_ago
+    )
+    if spoken_this_hour >= settings.initiative_per_hour:
+        return "hourly cap"
+    return ""
 
 
 # -- Context and wording -----------------------------------------------------
@@ -581,6 +672,8 @@ def build_context(
             since = state.last_present_at
         if since is not None:
             context["finished_while_away"] = "\n".join(_finished_jobs(scheduler, since))
+    if kind == MOMENT_INITIATIVE:
+        context.update(initiative_context(now, timezone_name, config_dir, state))
     if kind == MOMENT_TOLD:
         lines = []
         for watch in decision.watches:
@@ -645,6 +738,129 @@ def last_fallback(history: Sequence[MomentRecord], kind: str) -> Optional[str]:
     return None
 
 
+def _todays_turns(local_now: datetime, limit: int = 12) -> str:
+    """The day's conversation so far, most recent last, for the writer."""
+    try:
+        from openjarvis.memory.episodes import collect_turns
+
+        turns = collect_turns(local_now.date())[-limit:]
+        lines = []
+        for turn in turns:
+            when = to_local(turn.at, str(local_now.tzinfo)).strftime("%H:%M")
+            lines.append(f"[{when}] User: {turn.query[:200]}")
+            lines.append(f"[{when}] Sage: {turn.result[:200]}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _facts_for_initiative(excluded: Sequence[str], limit: int = 60) -> str:
+    """Long-term facts the writer may see, minus the excluded ones."""
+    try:
+        from openjarvis.memory.store import LocalFactStore
+
+        facts = [f for f in LocalFactStore().list() if f.trusted_for_recall]
+    except Exception:
+        return ""
+    keep = []
+    for fact in facts:
+        text = fact.text.strip()
+        if any(word and word.lower() in text.lower() for word in excluded):
+            continue
+        keep.append(text)
+    return "\n".join(f"- {t}" for t in keep[-limit:])
+
+
+def initiative_context(
+    now: float,
+    timezone_name: str,
+    config_dir: Optional[Path],
+    state: MomentsState,
+) -> Dict[str, str]:
+    settings = load_settings(config_dir)
+    local = to_local(now, timezone_name)
+    context: Dict[str, str] = {
+        "mode": settings.initiative_mode,
+        "allowed_categories": ", ".join(
+            INITIATIVE_CATEGORIES.get(settings.initiative_mode, ())
+        ),
+        "conversation_today": _todays_turns(local),
+        "long_term_facts": _facts_for_initiative(settings.initiative_excluded_facts),
+    }
+    try:
+        from openjarvis.memory.episodes import format_recent_days, recent_episodes
+
+        context["recent_days"] = format_recent_days(
+            recent_episodes(2, today=local.date(), config_dir=config_dir),
+            today=local.date(),
+        )
+    except Exception:
+        context["recent_days"] = ""
+    if state.last_present_at and state.handled_absence_end:
+        at_desk = now - max(state.handled_absence_end, 0)
+        if at_desk > 0:
+            context["at_desk_for"] = describe_duration(at_desk)
+    recent = [
+        h.text for h in state.history if h.kind == MOMENT_INITIATIVE and h.spoken
+    ][-5:]
+    context["recent_initiatives"] = "\n".join(f"- {t}" for t in recent)
+    return {k: v for k, v in context.items() if v}
+
+
+INITIATIVE_SYSTEM_PROMPT = (
+    "You are Sage, a personal AI assistant sharing a room with the user, who "
+    "is at their computer and has not spoken to you for a while. You may "
+    "start a short conversation: ask one question, or offer one useful "
+    "nudge, fact or observation -- one to two sentences, spoken aloud, no "
+    "markdown, no lists, at most one question. Or you may decide that "
+    "silence is better, which is often the right call: then reply with the "
+    "single word SKIP and nothing else.\n\n"
+    "Rules. Stay within the allowed categories for the mode: contextual "
+    "(something from today's conversation), useful (a break, water, the "
+    "time, something coming up), curious (a question in the user's field), "
+    "interesting (a fact in or near their field), reflective (an "
+    "observation about how they are working). Do not repeat a theme from "
+    "your recent initiatives. Never open a subject from long-term memory "
+    "that is personal -- relationships, health, money, family, anything the "
+    "user would not expect a colleague to bring up -- unless the user raised "
+    "it themselves in the last few days; when in doubt, SKIP. If today's "
+    "conversation is about something absorbing, do not interrupt it with a "
+    "fact. Do not mention that you are an AI, that this is unprompted, or "
+    "how you know things. Address the user as the profile says to."
+)
+
+
+def compose_initiative(context: Dict[str, str]) -> str:
+    """Ask the cloud model whether to say something, and what. Raises on
+    failure; returns "" when the model declines (SKIP)."""
+    from openjarvis.core.config import load_config
+    from openjarvis.core.types import Message, Role
+    from openjarvis.engine._discovery import get_engine
+
+    settings = load_settings()
+    config = load_config()
+    resolved = get_engine(
+        config, engine_key=settings.moments_engine, model=settings.moments_model
+    )
+    if resolved is None:
+        raise RuntimeError(
+            f"engine {settings.moments_engine!r} cannot serve "
+            f"{settings.moments_model!r}"
+        )
+    body = "\n".join(f"{key}: {value}" for key, value in context.items())
+    messages = [
+        Message(role=Role.SYSTEM, content=INITIATIVE_SYSTEM_PROMPT),
+        Message(role=Role.USER, content=f"Context:\n{body}\n\nSay something, or SKIP."),
+    ]
+    result = resolved[1].generate(
+        messages, model=settings.moments_model, temperature=0.8, max_tokens=120
+    )
+    text = str(result.get("content") or "").strip()
+    if not text or text.strip(" .!\"'").upper() == SKIP:
+        return ""
+    return text
+
+
 def fallback_text(
     kind: str, context: Dict[str, str], *, avoid: Optional[str] = None
 ) -> str:
@@ -668,6 +884,8 @@ def fallback_text(
         ]
         choices = [line for line in lines if line != avoid] or lines
         return random.choice(choices)
+    if kind == MOMENT_INITIATIVE:
+        return "Sir, how is the work going?"
     told = context.get("told", "")
     whats = [
         line.split("when: ", 1)[1].split(". It ", 1)[0]
@@ -798,6 +1016,9 @@ class MomentEngine:
         composer: Callable[[str, Dict[str, str]], str] = compose_with_model,
         speaker: Callable[[str], bool] = speak_aloud,
         chimer: Callable[[], bool] = chime_now,
+        initiative_composer: Callable[[Dict[str, str]], str] = compose_initiative,
+        busy_sensor: Optional[Callable[[Any, PresenceSettings], List[str]]] = None,
+        activity_source: Optional[Callable[[], Any]] = None,
         scheduler_lookup: Optional[Callable[[], Any]] = None,
         timezone_name: Optional[str] = None,
         startup_hook: Optional[Callable[[], Any]] = None,
@@ -808,6 +1029,9 @@ class MomentEngine:
         self._composer = composer
         self._speaker = speaker
         self._chimer = chimer
+        self._initiative_composer = initiative_composer
+        self._busy_sensor = busy_sensor or _default_busy
+        self._activity_source = activity_source or _default_activity
         self._scheduler_lookup = scheduler_lookup or _default_scheduler
         self._timezone = timezone_name
         # Runs once before the first tick: the greeting draws on yesterday's
@@ -837,8 +1061,12 @@ class MomentEngine:
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             local_day = to_local(self._clock(), self.timezone_name).date().isoformat()
+            now = self._clock()
+            until = self._state.snoozed_until
             return {
                 "snoozed_today": self._state.snoozed_day == local_day,
+                "snoozed_until": until if until and until > now else None,
+                "initiative_mode": self._monitor.settings().initiative_mode,
                 "last_reason": self._last_reason,
                 "watches": [w.to_dict() for w in self._state.watches],
                 "history": [h.to_dict() for h in self._state.history[-HISTORY_LIMIT:]],
@@ -854,6 +1082,20 @@ class MomentEngine:
 
     def snoozed_today(self) -> bool:
         return self.snapshot()["snoozed_today"]
+
+    def snooze_for(self, seconds: float) -> float:
+        """Timed quiet: nothing unprompted until *seconds* from now."""
+        with self._lock:
+            self._state.snoozed_until = self._clock() + max(0.0, seconds)
+            self._save()
+            return self._state.snoozed_until
+
+    def resume(self) -> None:
+        """Lift any quiet, timed or for the day."""
+        with self._lock:
+            self._state.snoozed_until = None
+            self._state.snoozed_day = ""
+            self._save()
 
     def add_watch(
         self,
@@ -903,6 +1145,14 @@ class MomentEngine:
         scheduler = self._scheduler_lookup()
         local = to_local(now, self.timezone_name)
 
+        activity = None
+        busy: List[str] = []
+        if settings.initiative_mode != "off":
+            try:
+                activity = self._activity_source()
+                busy = list(self._busy_sensor(activity, settings))
+            except Exception:
+                logger.debug("Busy sensor failed", exc_info=True)
         with self._lock:
             state = self._state
             decision = decide(
@@ -912,6 +1162,8 @@ class MomentEngine:
                 now,
                 local,
                 lambda watch: _job_result(scheduler, watch),
+                activity=activity,
+                busy=busy,
             )
             self._last_reason = decision.reason or ", ".join(decision.kinds)
             for watch in decision.stale_watches:
@@ -925,6 +1177,40 @@ class MomentEngine:
                 )
 
             spoken: List[MomentRecord] = []
+            # Initiative is decided before the chime: the writer may decline,
+            # and a chime followed by nothing would be its own small alarm.
+            initiative_text: Optional[str] = None
+            if MOMENT_INITIATIVE in decision.kinds:
+                context = build_context(
+                    MOMENT_INITIATIVE,
+                    decision,
+                    now=now,
+                    timezone_name=self.timezone_name,
+                    config_dir=self._config_dir,
+                    scheduler=scheduler,
+                    state=state,
+                )
+                try:
+                    initiative_text = self._initiative_composer(context)
+                except Exception as exc:
+                    logger.warning("Initiative writer unavailable: %s", exc)
+                    initiative_text = ""
+                if not initiative_text:
+                    # Declined, or unavailable: silence, at half a cooldown,
+                    # so a run of declines does not become a run of attempts.
+                    decision.kinds.remove(MOMENT_INITIATIVE)
+                    state.last_initiative_at = (
+                        now - settings.initiative_cooldown_seconds / 2
+                    )
+                    self._last_reason = "initiative declined"
+                    self._record(
+                        MOMENT_INITIATIVE,
+                        "(nothing worth saying)",
+                        spoken=False,
+                        detail="skip",
+                        now=now,
+                    )
+                    self._save()
             if decision.kinds:
                 # Acknowledge at once; the words follow when written.
                 try:
@@ -943,7 +1229,10 @@ class MomentEngine:
                 )
                 detail = ""
                 try:
-                    text = self._composer(kind, context)
+                    if kind == MOMENT_INITIATIVE and initiative_text:
+                        text = initiative_text
+                    else:
+                        text = self._composer(kind, context)
                 except Exception as exc:
                     logger.warning(
                         "Moment %s: model unavailable (%s); using fallback", kind, exc
@@ -969,6 +1258,9 @@ class MomentEngine:
                     state.watches = [w for w in state.watches if w.id not in done]
                 if decision.absence_end is not None:
                     state.handled_absence_end = decision.absence_end
+                state.last_unprompted_at = now
+                if kind == MOMENT_INITIATIVE:
+                    state.last_initiative_at = now
                 spoken.append(
                     self._record(kind, text, spoken=played, detail=detail, now=now)
                 )
@@ -1068,6 +1360,22 @@ def current_engine() -> Optional[MomentEngine]:
     return _current
 
 
+def _default_activity() -> Any:
+    from openjarvis.core.activity import snapshot as activity_snapshot
+
+    return activity_snapshot()
+
+
+def _default_busy(activity: Any, settings: PresenceSettings) -> List[str]:
+    from openjarvis.core.busy import busy_reasons
+
+    return busy_reasons(
+        activity,
+        call_titles=settings.initiative_call_titles,
+        call_mic_apps=settings.initiative_call_mic_apps,
+    )
+
+
 def _default_scheduler() -> Any:
     try:
         from openjarvis.scheduler.tools import ListScheduledTasksTool
@@ -1081,6 +1389,9 @@ __all__ = [
     "DAILY_CAPS",
     "KINDS",
     "MOMENT_GREETING",
+    "MOMENT_INITIATIVE",
+    "INITIATIVE_CATEGORIES",
+    "SKIP",
     "MOMENT_TOLD",
     "MOMENT_WELCOME_BACK",
     "Decision",
@@ -1090,6 +1401,7 @@ __all__ = [
     "Watch",
     "build_context",
     "chime_now",
+    "compose_initiative",
     "compose_with_model",
     "current_engine",
     "decide",
@@ -1099,6 +1411,8 @@ __all__ = [
     "last_fallback",
     "recent_openings",
     "in_quiet_hours",
+    "initiative_context",
+    "initiative_holdback",
     "load_state",
     "local_to_timestamp",
     "save_state",
