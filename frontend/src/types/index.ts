@@ -152,6 +152,8 @@ export interface ChatMessage {
    *  a paper is attached in order to be discussed, and dropping it after one
    *  turn meant "what are its references?" got "please reattach the file". */
   documents?: Array<{ name: string; text: string }>;
+  /** Set when Sage said this aloud, unprompted (M36): which kind of moment. */
+  moment?: 'good_morning' | 'welcome_back' | 'told';
 }
 
 export interface Conversation {

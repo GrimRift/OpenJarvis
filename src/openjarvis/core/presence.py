@@ -71,9 +71,46 @@ class PresenceSettings:
     # Local hour the entry is written. Late enough to cover the evening,
     # early enough that a midnight conversation lands in tomorrow's entry.
     episodes_hour_local: int = 23
+    # Moments: the occasions Sage speaks first (M36 phase 3). Each has its own
+    # switch beneath the master, as decided; the guards are not switchable.
+    moments_enabled: bool = True
+    good_morning_enabled: bool = True
+    welcome_back_enabled: bool = True
+    told_enabled: bool = True
+    # An absence has to be this long before coming back earns a greeting.
+    # One hour, the user's choice: a class or a meal counts, coffee does not.
+    welcome_back_after_seconds: int = 3600
+    # Local hours during which nothing is said, however good the reason.
+    quiet_hours_start_local: int = 23
+    quiet_hours_end_local: int = 7
+    moments_model: str = "gpt-5.6-luna"
+    moments_engine: str = "cloud"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+# Shared by the loader and the settings route so a new field is accepted in
+# both places or neither.
+BOOL_SETTINGS = (
+    "enabled",
+    "episodes_enabled",
+    "moments_enabled",
+    "good_morning_enabled",
+    "welcome_back_enabled",
+    "told_enabled",
+)
+POSITIVE_SETTINGS = (
+    "idle_threshold_seconds",
+    "poll_interval_seconds",
+    "welcome_back_after_seconds",
+)
+TEXT_SETTINGS = ("episodes_model", "episodes_engine", "moments_model", "moments_engine")
+HOUR_SETTINGS = (
+    "episodes_hour_local",
+    "quiet_hours_start_local",
+    "quiet_hours_end_local",
+)
 
 
 def settings_path(config_dir: Optional[Path] = None) -> Path:
@@ -89,20 +126,21 @@ def load_settings(config_dir: Optional[Path] = None) -> PresenceSettings:
     if not isinstance(raw, dict):
         return PresenceSettings()
     settings = PresenceSettings()
-    for key in ("enabled", "episodes_enabled"):
+    for key in BOOL_SETTINGS:
         if isinstance(raw.get(key), bool):
             setattr(settings, key, raw[key])
-    for key in ("idle_threshold_seconds", "poll_interval_seconds"):
+    for key in POSITIVE_SETTINGS:
         value = raw.get(key)
         if isinstance(value, (int, float)) and value > 0:
             setattr(settings, key, int(value))
-    for key in ("episodes_model", "episodes_engine"):
+    for key in TEXT_SETTINGS:
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             setattr(settings, key, value.strip())
-    hour = raw.get("episodes_hour_local")
-    if isinstance(hour, int) and 0 <= hour <= 23:
-        settings.episodes_hour_local = hour
+    for key in HOUR_SETTINGS:
+        hour = raw.get(key)
+        if isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23:
+            setattr(settings, key, hour)
     return settings
 
 
@@ -309,6 +347,10 @@ class PresenceMonitor:
 
 
 __all__ = [
+    "BOOL_SETTINGS",
+    "HOUR_SETTINGS",
+    "POSITIVE_SETTINGS",
+    "TEXT_SETTINGS",
     "PresenceMonitor",
     "PresenceSettings",
     "PresenceSnapshot",

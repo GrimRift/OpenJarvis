@@ -1296,17 +1296,36 @@ async def update_presence_settings(request: Request):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected a JSON object")
+    from openjarvis.core.presence import (  # noqa: PLC0415
+        BOOL_SETTINGS,
+        HOUR_SETTINGS,
+        POSITIVE_SETTINGS,
+    )
+
     settings = load_settings()
-    if "enabled" in body:
-        if not isinstance(body["enabled"], bool):
-            raise HTTPException(status_code=400, detail="enabled must be a boolean")
-        settings.enabled = body["enabled"]
-    for key in ("idle_threshold_seconds", "poll_interval_seconds"):
+    for key in BOOL_SETTINGS:
+        if key in body:
+            if not isinstance(body[key], bool):
+                raise HTTPException(status_code=400, detail=f"{key} must be a boolean")
+            setattr(settings, key, body[key])
+    for key in POSITIVE_SETTINGS:
         if key in body:
             value = body[key]
             if not isinstance(value, (int, float)) or value <= 0:
                 raise HTTPException(status_code=400, detail=f"{key} must be positive")
             setattr(settings, key, int(value))
+    for key in HOUR_SETTINGS:
+        if key in body:
+            value = body[key]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= 23
+            ):
+                raise HTTPException(
+                    status_code=400, detail=f"{key} must be an hour 0-23"
+                )
+            setattr(settings, key, value)
     save_settings(settings)
     monitor = getattr(request.app.state, "presence_monitor", None)
     if monitor is not None:
@@ -1323,6 +1342,46 @@ async def presence_episodes(days: int = 7):
     episodes = load_episodes()
     ordered = sorted(episodes.values(), key=lambda e: e.day, reverse=True)
     return {"episodes": [e.to_dict() for e in ordered[: max(1, min(days, 30))]]}
+
+
+@presence_router.get("/moments")
+async def presence_moments(request: Request, since: float = 0):
+    """What Sage has said unprompted, pending watches, and today's snooze.
+
+    ``since`` (epoch seconds) narrows the history to newer entries, so the
+    web UI can add only what it has not shown yet.
+    """
+    engine = getattr(request.app.state, "moment_engine", None)
+    if engine is None:
+        return {"running": False, "snoozed_today": False, "watches": [], "history": []}
+    data = engine.snapshot()
+    if since:
+        data["history"] = [h for h in data["history"] if h["at"] > since]
+    return data
+
+
+@presence_router.put("/moments/snooze")
+async def presence_moments_snooze(request: Request):
+    """The Settings form of "not now": quiet for the rest of today."""
+    engine = getattr(request.app.state, "moment_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Moments are not running")
+    body = await request.json()
+    snoozed = body.get("snoozed") if isinstance(body, dict) else None
+    if not isinstance(snoozed, bool):
+        raise HTTPException(status_code=400, detail="snoozed must be a boolean")
+    engine.snooze_today(snoozed)
+    return {"snoozed_today": snoozed}
+
+
+@presence_router.delete("/moments/watches/{watch_id}")
+async def presence_cancel_watch(watch_id: str, request: Request):
+    engine = getattr(request.app.state, "moment_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Moments are not running")
+    if not engine.cancel_watch(watch_id):
+        raise HTTPException(status_code=404, detail="No such watch")
+    return {"cancelled": watch_id}
 
 
 feedback_router = APIRouter(prefix="/v1/feedback", tags=["feedback"])

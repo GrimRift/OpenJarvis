@@ -927,6 +927,21 @@ def serve(
         app.state.presence_monitor = presence_monitor
     except Exception as exc:
         logger.debug("Presence monitor init failed: %s", exc)
+        presence_monitor = None
+
+    # Moments (M36 phase 3): the loop that speaks first. Same reasoning as
+    # the monitor; it reads the same switches, so it too runs regardless and
+    # says nothing until the master switch is on.
+    if presence_monitor is not None:
+        try:
+            from openjarvis.core.moments import MomentEngine, set_current_engine
+
+            moment_engine = MomentEngine(presence_monitor)
+            moment_engine.start()
+            app.state.moment_engine = moment_engine
+            set_current_engine(moment_engine)
+        except Exception as exc:
+            logger.debug("Moment engine init failed: %s", exc)
 
     console.print(
         f"[green]Starting OpenJarvis API server[/green]\n"

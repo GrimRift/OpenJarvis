@@ -1413,6 +1413,76 @@ def _check_presence(app_state: Any = None) -> List[CheckResult]:
     ]
 
 
+def _check_moments(app_state: Any = None) -> List[CheckResult]:
+    """Whether the loop that speaks first is running, and what it last said.
+
+    Pull-only, like everything here: the check reports that Sage *can* speak
+    unprompted and when it last did; it never speaks itself.
+    """
+    try:
+        from openjarvis.core.presence import load_settings
+    except Exception as exc:
+        return [
+            CheckResult(
+                "Moments", "warn", f"Unavailable: {exc}", section=SECTION_FEATURES
+            )
+        ]
+    settings = load_settings()
+    if not settings.enabled or not settings.moments_enabled:
+        return [
+            CheckResult(
+                "Moments",
+                "ok",
+                "Switched off",
+                details="Turned on with presence in Settings.",
+                section=SECTION_FEATURES,
+            )
+        ]
+    engine = getattr(app_state, "moment_engine", None) if app_state else None
+    if engine is None:
+        return [
+            CheckResult(
+                "Moments",
+                "warn",
+                "Not running",
+                details="Only a running server can speak; start Sage and check again.",
+                section=SECTION_FEATURES,
+            )
+        ]
+    snap = engine.snapshot()
+    on = [
+        name
+        for name, enabled in (
+            ("good morning", settings.good_morning_enabled),
+            ("welcome back", settings.welcome_back_enabled),
+            ("tell-me-when", settings.told_enabled),
+        )
+        if enabled
+    ]
+    history = snap.get("history") or []
+    last = history[-1] if history else None
+    summary = f"{', '.join(on) or 'none'} on"
+    if snap.get("snoozed_today"):
+        summary += "; quiet for the rest of today"
+    details = (
+        f"Quiet {settings.quiet_hours_start_local:02d}:00-"
+        f"{settings.quiet_hours_end_local:02d}:00; "
+        f"{len(snap.get('watches') or [])} pending watch(es); "
+        f"last: {last['kind']} ({'spoken' if last['spoken'] else 'not spoken'})"
+        if last
+        else "Nothing said yet."
+    )
+    return [
+        CheckResult(
+            "Moments",
+            "ok" if snap.get("running") else "warn",
+            summary if snap.get("running") else "Loop stopped",
+            details=details,
+            section=SECTION_FEATURES,
+        )
+    ]
+
+
 def _check_episodes() -> List[CheckResult]:
     """Whether Sage's diary is being written, and when it last was.
 
@@ -2263,6 +2333,7 @@ def run_health_checks(
     checks.extend(_check_telemetry_recording(app_state))
     checks.extend(_check_presence(app_state))
     checks.extend(_check_episodes())
+    checks.extend(_check_moments(app_state))
 
     checks.extend(_check_configured_tools_registered())
     checks.extend(_check_tool_modules_import())

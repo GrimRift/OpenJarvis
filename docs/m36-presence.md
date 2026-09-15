@@ -1,6 +1,7 @@
 # M36 — Presence: Sage knows when to speak
 
-Scoped 2026-09-13. Phases 1 and 2 implemented 2026-09-13.
+Scoped 2026-09-13. Phases 1 and 2 implemented 2026-09-13; phase 3 on
+2026-09-15.
 
 ## Why
 
@@ -149,6 +150,45 @@ Guards on every moment, none of them optional:
 Speech goes through the server-side player from the constraint above. Every
 moment is written to the conversation transcript as well, so what Sage said
 unprompted is visible afterwards, not only heard once.
+
+**Decisions taken before building (2026-09-15):** all three moments in this
+phase; the words are model-written by gpt-5.6-luna from real context, with a
+fixed line as the fallback so a cloud failure never silences a moment; the
+welcome-back threshold is **one hour**; "not now" is both a tool the model
+calls (`not_now`, deterministic -- no judgement about whether the user meant
+it) and a switch in Settings.
+
+**Status (2026-09-15):** implemented. `core/moments.py` holds the state
+(`OPENJARVIS_DATA/moments.json`: today's snooze, the last presence reading,
+the last absence answered, per-kind daily counts, pending watches, and the
+record of what was said), a pure `decide()` over the presence snapshot, the
+context builders, the model call, the server-side voice (Cartesia synthesis
+into the shared `speech/player.py`, which `jarvis digest` now uses too), and
+the polling `MomentEngine`, wired in `serve.py` beside the monitor.
+
+How the two greetings tell a real return from noise: **welcome back** needs
+an absence the monitor itself watched begin and end (so a server restart,
+during which nothing was watched, is never a "return"); **good morning**
+also accepts a gap in the engine's own readings, because the night is
+exactly such a gap. One return earns one greeting; the absence is marked
+answered either way, so a coffee break is not greeted later when a longer
+absence would have been. The absence length reported includes the idle
+threshold, since the monitor notices an empty desk five minutes late.
+
+**Told on request** is `tell_me_when`: the model resolves a local time (it
+has the class schedule and the clock) or names a scheduled task id, and the
+engine speaks when it is due -- held while away or in quiet hours, dropped
+with a note after twelve hours undelivered, because "your class started
+yesterday" helps nobody.
+
+Every moment is appended to the open web conversation as an assistant turn
+labelled "Sage said this aloud" (`hooks/useMomentsFeed.ts` polls
+`GET /v1/presence/moments` with a watermark), so the next reply knows it was
+said and the transcript reads as what happened. Settings gained the
+per-moment switches, quiet hours, today's "not now", pending watches and the
+last things said; the Health page gained a Moments line.
+
+Verified live: see the commit that closes this section.
 
 ## Phase 4 — Texture
 

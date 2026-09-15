@@ -496,6 +496,39 @@ export interface PresenceSettings {
   enabled: boolean;
   idle_threshold_seconds: number;
   poll_interval_seconds: number;
+  episodes_enabled: boolean;
+  // Moments (M36 phase 3): the occasions Sage speaks first.
+  moments_enabled: boolean;
+  good_morning_enabled: boolean;
+  welcome_back_enabled: boolean;
+  told_enabled: boolean;
+  welcome_back_after_seconds: number;
+  quiet_hours_start_local: number;
+  quiet_hours_end_local: number;
+}
+
+export interface MomentWatch {
+  id: string;
+  what: string;
+  created_at: number;
+  due_at: number | null;
+  task_id: string | null;
+}
+
+export interface MomentRecord {
+  at: number;
+  kind: 'good_morning' | 'welcome_back' | 'told';
+  text: string;
+  spoken: boolean;
+  detail: string;
+}
+
+export interface MomentsSnapshot {
+  running: boolean;
+  snoozed_today: boolean;
+  last_reason?: string;
+  watches: MomentWatch[];
+  history: MomentRecord[];
 }
 
 export interface PresenceSnapshot {
@@ -533,6 +566,29 @@ export async function fetchPresence(): Promise<PresenceSnapshot> {
   const res = await apiFetch('/v1/presence');
   if (!res.ok) throw new Error(`Presence unavailable (${res.status})`);
   return res.json();
+}
+
+export async function fetchMoments(since = 0): Promise<MomentsSnapshot> {
+  const res = await apiFetch(`/v1/presence/moments?since=${encodeURIComponent(since)}`);
+  if (!res.ok) throw new Error(`Moments unavailable (${res.status})`);
+  return res.json();
+}
+
+export async function setMomentsSnoozed(snoozed: boolean): Promise<boolean> {
+  const res = await apiFetch('/v1/presence/moments/snooze', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snoozed }),
+  });
+  if (!res.ok) throw new Error(`Could not change today's quiet (${res.status})`);
+  return (await res.json()).snoozed_today;
+}
+
+export async function cancelMomentWatch(watchId: string): Promise<void> {
+  const res = await apiFetch(`/v1/presence/moments/watches/${encodeURIComponent(watchId)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Could not cancel the watch (${res.status})`);
 }
 
 // ---------------------------------------------------------------------------

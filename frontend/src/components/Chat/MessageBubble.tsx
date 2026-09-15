@@ -235,6 +235,14 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
         />
       )}
 
+      {/* Said aloud on Sage's own initiative; on the record so it can be
+          read afterwards, not only heard once. */}
+      {message.moment && (
+        <div className="text-xs mb-1" style={{ color: 'var(--color-text-tertiary)' }}>
+          Sage said this aloud
+        </div>
+      )}
+
       {/* Assistant message */}
       {cleanContent && (
         <div className="prose max-w-none">

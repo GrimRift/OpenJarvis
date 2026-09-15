@@ -35,6 +35,10 @@ import {
   isTauri,
   fetchPresenceSettings,
   updatePresenceSettings,
+  fetchMoments,
+  setMomentsSnoozed,
+  cancelMomentWatch,
+  type MomentsSnapshot,
   type InferenceSource,
   type PresenceSettings,
 } from '../lib/api';
@@ -232,6 +236,22 @@ function SettingRow({ label, description, children }: { label: string; descripti
   );
 }
 
+function Switch({ on, onClick, disabled }: { on: boolean; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="relative w-11 h-6 rounded-full transition-colors cursor-pointer disabled:opacity-50"
+      style={{ background: on ? 'var(--color-accent)' : 'var(--color-bg-tertiary)' }}
+    >
+      <span
+        className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+        style={{ transform: on ? 'translateX(20px)' : 'translateX(0)', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }}
+      />
+    </button>
+  );
+}
+
 const themeOptions: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: 'light', label: 'Light', icon: Sun },
   { value: 'dark', label: 'Dark', icon: Moon },
@@ -259,16 +279,62 @@ export function SettingsPage() {
       .then(setPresence)
       .catch((err) => setPresenceError(err instanceof Error ? err.message : String(err)));
   }, []);
-  const togglePresence = async () => {
+  const patchPresence = async (patch: Partial<PresenceSettings>) => {
     if (!presence) return;
     try {
-      setPresence(await updatePresenceSettings({ enabled: !presence.enabled }));
+      setPresence(await updatePresenceSettings(patch));
       setPresenceError(null);
       showSaved();
     } catch (err) {
       setPresenceError(err instanceof Error ? err.message : String(err));
     }
   };
+  const togglePresence = () => presence && patchPresence({ enabled: !presence.enabled });
+  const flip = (key: keyof PresenceSettings) => () =>
+    presence && patchPresence({ [key]: !presence[key] } as Partial<PresenceSettings>);
+
+  // Moments: the server's record of what Sage said first, pending watches,
+  // and today's quiet. Server-side state, so it is read rather than stored.
+  const [moments, setMoments] = useState<MomentsSnapshot | null>(null);
+  const refreshMoments = () => fetchMoments().then(setMoments).catch(() => setMoments(null));
+  useEffect(() => {
+    void refreshMoments();
+  }, []);
+  const toggleQuietToday = async () => {
+    if (!moments) return;
+    try {
+      await setMomentsSnoozed(!moments.snoozed_today);
+      await refreshMoments();
+      showSaved();
+    } catch (err) {
+      setPresenceError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const dropWatch = async (id: string) => {
+    try {
+      await cancelMomentWatch(id);
+      await refreshMoments();
+    } catch (err) {
+      setPresenceError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const hourInput = (key: 'quiet_hours_start_local' | 'quiet_hours_end_local') => (
+    <input
+      type="number"
+      min={0}
+      max={23}
+      value={presence?.[key] ?? 0}
+      disabled={!presence}
+      onChange={(e) => {
+        const value = Number(e.target.value);
+        if (Number.isInteger(value) && value >= 0 && value <= 23) void patchPresence({ [key]: value });
+      }}
+      className="w-16 px-2 py-1 rounded-lg text-sm text-center"
+      style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+    />
+  );
+  const stamp = (at: number) =>
+    new Date(at * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(() => !isAutoUpdateDisabled());
   const [updateCheckState, setUpdateCheckState] = useState<'idle' | 'checking' | 'available' | 'latest'>('idle');
@@ -1032,23 +1098,56 @@ export function SettingsPage() {
           {/* Presence (M36) */}
           <Section title="Presence">
             <SettingRow label="Sage knows when you are here" description={`Lets Sage tell whether anyone is at the desk, from keyboard and mouse activity and the window in front. This is the master switch for everything Sage does on its own; off, it behaves exactly as before. What it currently believes is shown on the Health page.${presenceError ? ` (${presenceError})` : ''}`}>
-              <button
-                onClick={togglePresence}
-                disabled={!presence}
-                className="relative w-11 h-6 rounded-full transition-colors cursor-pointer disabled:opacity-50"
-                style={{
-                  background: presence?.enabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
-                }}
-              >
-                <span
-                  className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
-                  style={{
-                    transform: presence?.enabled ? 'translateX(20px)' : 'translateX(0)',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-                  }}
-                />
-              </button>
+              <Switch on={Boolean(presence?.enabled)} onClick={togglePresence} disabled={!presence} />
             </SettingRow>
+            <SettingRow label="Sage may speak first" description="Out loud through the speakers, only while you are at the desk and never during quiet hours. Each occasion below has its own switch.">
+              <Switch on={Boolean(presence?.moments_enabled)} onClick={flip('moments_enabled')} disabled={!presence?.enabled} />
+            </SettingRow>
+            <SettingRow label="Good morning" description="Once a day, the first time you are at the desk in the morning: what you were on yesterday and what today holds.">
+              <Switch on={Boolean(presence?.good_morning_enabled)} onClick={flip('good_morning_enabled')} disabled={!presence?.enabled || !presence?.moments_enabled} />
+            </SettingRow>
+            <SettingRow label="Welcome back" description={`When you return after at least ${Math.round((presence?.welcome_back_after_seconds ?? 3600) / 60)} minutes away, with anything that finished while you were gone.`}>
+              <Switch on={Boolean(presence?.welcome_back_enabled)} onClick={flip('welcome_back_enabled')} disabled={!presence?.enabled || !presence?.moments_enabled} />
+            </SettingRow>
+            <SettingRow label="Tell me when" description="Things you asked to be told about, spoken when they happen. Ask in chat or by voice: tell me when my class starts.">
+              <Switch on={Boolean(presence?.told_enabled)} onClick={flip('told_enabled')} disabled={!presence?.enabled || !presence?.moments_enabled} />
+            </SettingRow>
+            <SettingRow label="Quiet hours" description="Local time. Nothing is said first between these hours, however good the reason.">
+              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+                {hourInput('quiet_hours_start_local')} <span>to</span> {hourInput('quiet_hours_end_local')}
+              </div>
+            </SettingRow>
+            <SettingRow label="Not now" description={moments?.snoozed_today ? 'Quiet for the rest of today. Telling Sage "not now" does the same.' : 'Silence every unprompted moment until tomorrow. Telling Sage "not now" does the same.'}>
+              <Switch on={Boolean(moments?.snoozed_today)} onClick={toggleQuietToday} disabled={!moments} />
+            </SettingRow>
+            {moments && moments.watches.length > 0 && (
+              <div className="py-3" style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
+                <div className="text-sm mb-1" style={{ color: 'var(--color-text)' }}>Pending</div>
+                {moments.watches.map((w) => (
+                  <div key={w.id} className="flex items-center justify-between text-xs py-1" style={{ color: 'var(--color-text-secondary)' }}>
+                    <span>
+                      {w.what}: {w.due_at ? stamp(w.due_at) : `when task ${w.task_id} finishes`}
+                    </span>
+                    <button onClick={() => dropWatch(w.id)} className="cursor-pointer" style={{ color: 'var(--color-text-tertiary)' }}>
+                      Cancel
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {moments && moments.history.length > 0 && (
+              <div className="py-3">
+                <div className="text-sm mb-1" style={{ color: 'var(--color-text)' }}>Recently said</div>
+                {moments.history.slice(-5).reverse().map((h) => (
+                  <div key={h.at} className="text-xs py-1" style={{ color: 'var(--color-text-secondary)' }}>
+                    <span style={{ color: 'var(--color-text-tertiary)' }}>
+                      {stamp(h.at)}{h.spoken ? '' : ' (not spoken)'}:{' '}
+                    </span>
+                    {h.text}
+                  </div>
+                ))}
+              </div>
+            )}
           </Section>
 
           {/* Data */}

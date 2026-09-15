@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import threading
 from typing import Optional
 
@@ -13,37 +11,12 @@ from rich.markdown import Markdown
 
 from openjarvis.agents.digest_store import DigestStore
 from openjarvis.core.config import DEFAULT_CONFIG_PATH, load_config
+from openjarvis.speech.player import play_file
 
 
 def _play_audio(audio_path: str) -> None:
     """Play audio file in background using available system player."""
-    # ffplay (ffmpeg) plays silently in the background if installed, on any
-    # OS — try it first everywhere so Windows doesn't have to pop a media
-    # player window when it doesn't need to.
-    players = ["ffplay -nodisp -autoexit", "aplay", "afplay", "paplay"]
-    for player in players:
-        cmd_parts = player.split() + [audio_path]
-        try:
-            subprocess.run(
-                cmd_parts,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
-            return
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            continue
-
-    # None of the above exist on a bare Windows install (they're all
-    # Linux/macOS tools) — fall back to the OS's own default file
-    # association, which always works but opens a visible player.
-    if sys.platform == "win32":
-        try:
-            import os
-
-            os.startfile(audio_path)  # noqa: S606
-        except OSError:
-            pass
+    play_file(audio_path)
 
 
 def _save_digest_schedule(enabled: bool, cron: str) -> None:
