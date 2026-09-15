@@ -39,6 +39,13 @@ FILLERS = [
     ("working-on-it", "Working on it."),
 ]
 
+# For a wait that goes on after the first filler; said every twenty seconds
+# of continued silence.
+FILLERS_AGAIN = [
+    ("still-working", "Still working on it, sir."),
+    ("almost-there", "Almost there."),
+]
+
 DELIVERY = {
     "jarvis": {"emotion": "content", "version": "sonic36-content"},
     "frieren": {"emotion": "content", "version": "sonic36-content"},
@@ -69,6 +76,7 @@ def main() -> int:
         }
     voices = manifest["voices"]
     fillers = manifest.setdefault("fillers", {})
+    fillers_again = manifest.setdefault("fillers_again", {})
     assert isinstance(voices, dict) and isinstance(fillers, dict)
     for profile in VOICE_PROFILES:
         profile_key = profile.name.casefold()
@@ -78,7 +86,11 @@ def main() -> int:
         voice_dir = OUT_DIR / profile_key
         voice_dir.mkdir(parents=True, exist_ok=True)
         rendered: dict[str, list[str]] = {}
-        for kind, lines in (("greetings", GREETINGS), ("fillers", FILLERS)):
+        for kind, lines in (
+            ("greetings", GREETINGS),
+            ("fillers", FILLERS),
+            ("fillers_again", FILLERS_AGAIN),
+        ):
             clips = []
             for slug, text in lines:
                 result = tool.execute(
@@ -100,6 +112,7 @@ def main() -> int:
             rendered[kind] = clips
         voices[profile.voice_id] = rendered["greetings"]
         fillers[profile.voice_id] = rendered["fillers"]
+        fillers_again[profile.voice_id] = rendered["fillers_again"]
 
     # The frontend reads this rather than hardcoding filenames, so adding a
     # variant here is the only change needed to put it in rotation.

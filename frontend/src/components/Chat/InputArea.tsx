@@ -19,7 +19,7 @@ import {
   ingestDocument,
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
-import { FILLER_AFTER_MS, fillerDue, initialFillerState } from '../../lib/filler';
+import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
@@ -642,29 +642,48 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       shouldStreamReplySpeech(wasVoice, content, speakTypedReplies)
         ? beginStreamingSpeech(ttsVoice)
         : null;
+    // "One moment, sir." when nothing has been said back for a while,
+    // generating or waiting on a tool alike, then "still working on it"
+    // every twenty seconds of continued silence. The clip is plain audio,
+    // never `audioPlaying` (see playFiller). While a clip is playing the
+    // answer's speech is held -- the text still streams on screen -- so the
+    // clip is heard whole rather than talked over by its own reply.
+    const filler = initialFillerState(incrementalSpeech !== null, Date.now());
+    let fillerTimer: ReturnType<typeof setTimeout> | null = null;
+    let fillerPlaying: Promise<void> | null = null;
     let spokenChars = 0;
-    const speakDelta = (delta: string) => {
+    const heldDeltas: string[] = [];
+    const speakNow = (delta: string) => {
       if (!incrementalSpeech) return;
       spokenChars = pushSpokenDelta(spokenChars, delta, !wasVoice, incrementalSpeech);
     };
-    // "One moment, sir." when a tool call runs on with nothing said back
-    // yet. The clip is plain audio, never `audioPlaying` (see playFiller).
-    const filler = initialFillerState(incrementalSpeech !== null);
-    let fillerTimer: ReturnType<typeof setTimeout> | null = null;
-    const noteToolStarted = () => {
-      if (filler.toolStartedAt !== null) return;
-      filler.toolStartedAt = Date.now();
+    const speakDelta = (delta: string) => {
+      if (fillerPlaying) heldDeltas.push(delta);
+      else speakNow(delta);
+    };
+    const releaseHeld = () => {
+      fillerPlaying = null;
+      for (const delta of heldDeltas.splice(0)) speakNow(delta);
+    };
+    const scheduleFiller = () => {
+      if (!filler.spoken) return;
       fillerTimer = setTimeout(() => {
         fillerTimer = null;
-        if (!fillerDue(filler, Date.now())) return;
-        filler.played = true;
+        const due = fillerDue(filler, Date.now());
+        if (!due) return;
+        filler.lastFillerAt = Date.now();
         useAppStore.getState().addLogEntry({
           timestamp: Date.now(), level: 'info', category: 'voice',
-          message: 'Sage (aloud): one moment',
+          message: due === 'again' ? 'Sage (aloud): still working on it' : 'Sage (aloud): one moment',
         });
-        void playFiller({ voiceId: ttsVoice.id });
-      }, FILLER_AFTER_MS);
+        fillerPlaying = playFiller({ voiceId: ttsVoice.id, again: due === 'again' }).then(
+          releaseHeld,
+          releaseHeld,
+        );
+        scheduleFiller();
+      }, nextFillerCheckMs(filler, Date.now()));
     };
+    scheduleFiller();
     const noteContentStarted = () => {
       filler.contentStarted = true;
     };
@@ -674,6 +693,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         clearTimeout(fillerTimer);
         fillerTimer = null;
       }
+    };
+    // The answer's speech, finished only after a clip still playing has
+    // ended and the words held behind it have gone out.
+    const finishSpeech = () => {
+      if (!incrementalSpeech) return undefined;
+      if (!fillerPlaying) return incrementalSpeech.finish();
+      return fillerPlaying.then(() => {
+        releaseHeld();
+        return incrementalSpeech.finish();
+      });
     };
 
     setStreamState({
@@ -894,7 +923,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               status: 'running',
             };
             toolCalls.push(tc);
-            noteToolStarted();
             setStreamState({
               phase: `Calling ${data.tool}...`,
               activeToolCalls: [...toolCalls],
@@ -1060,7 +1088,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         } (${accumulatedContent.length} chars)`,
       });
 
-      const incrementalSpeechResult = incrementalSpeech?.finish();
+      const incrementalSpeechResult = finishSpeech();
 
       // Voice replies and interactive morning digests use browser-side TTS
       // after the text is already visible. Fire-and-forget: this keeps the

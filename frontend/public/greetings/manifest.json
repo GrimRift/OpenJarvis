@@ -25,5 +25,15 @@
       "greetings/frieren/let-me-look-sonic36-content.mp3",
       "greetings/frieren/working-on-it-sonic36-content.mp3"
     ]
+  },
+  "fillers_again": {
+    "78a05d7d-268b-4a18-aad7-7a96902a95ee": [
+      "greetings/jarvis/still-working-sonic36-content.mp3",
+      "greetings/jarvis/almost-there-sonic36-content.mp3"
+    ],
+    "e23c9ecf-e002-4f7a-8e39-13d18d09923f": [
+      "greetings/frieren/still-working-sonic36-content.mp3",
+      "greetings/frieren/almost-there-sonic36-content.mp3"
+    ]
   }
 }

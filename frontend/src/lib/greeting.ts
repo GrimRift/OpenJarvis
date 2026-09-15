@@ -10,14 +10,20 @@ const FALLBACK_CLIPS = ['greetings/jarvis/hello-sir-sonic36.mp3'];
 interface GreetingManifest {
   default_voice_id: string;
   voices: Record<string, string[]>;
-  /** "One moment" lines for a tool call that is taking a while (M36). */
+  /** "One moment" lines for a wait that has gone on (M36). */
   fillers?: Record<string, string[]>;
+  /** "Still working on it" lines for a wait that goes on after that. */
+  fillers_again?: Record<string, string[]>;
 }
 
-export type ClipKind = 'greetings' | 'fillers';
+export type ClipKind = 'greetings' | 'fillers' | 'fillers_again';
 
 let manifestPromise: Promise<GreetingManifest | null> | null = null;
-const lastPlayed: Record<ClipKind, string | null> = { greetings: null, fillers: null };
+const lastPlayed: Record<ClipKind, string | null> = {
+  greetings: null,
+  fillers: null,
+  fillers_again: null,
+};
 
 function loadManifest(): Promise<GreetingManifest | null> {
   if (!manifestPromise) {
@@ -40,7 +46,12 @@ export function clipsForVoice(
   kind: ClipKind = 'greetings',
 ): string[] {
   if (!manifest) return kind === 'greetings' ? FALLBACK_CLIPS : [];
-  const table = kind === 'greetings' ? manifest.voices : (manifest.fillers ?? {});
+  const table =
+    kind === 'greetings'
+      ? manifest.voices
+      : kind === 'fillers'
+        ? (manifest.fillers ?? {})
+        : (manifest.fillers_again ?? {});
   const selected = table[voiceId];
   if (Array.isArray(selected) && selected.length > 0) return selected;
   const fallback = table[manifest.default_voice_id];
@@ -58,6 +69,7 @@ export function preloadGreetings(): void {
           new Set([
             ...Object.values(manifest.voices).flat(),
             ...Object.values(manifest.fillers ?? {}).flat(),
+            ...Object.values(manifest.fillers_again ?? {}).flat(),
           ]),
         )
       : FALLBACK_CLIPS;
@@ -98,8 +110,10 @@ export function playGreeting(options: GreetingOptions): Promise<void> {
  * microphone for continuous conversation, and a filler ending mid-turn
  * must not open the mic while the answer is still being generated.
  */
-export function playFiller(options: GreetingOptions): Promise<void> {
-  return playClip('fillers', options);
+export function playFiller(
+  options: GreetingOptions & { again?: boolean },
+): Promise<void> {
+  return playClip(options.again ? 'fillers_again' : 'fillers', options);
 }
 
 function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
