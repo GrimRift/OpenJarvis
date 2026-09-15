@@ -32,7 +32,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
 
@@ -60,7 +60,8 @@ class PresenceSettings:
     # minutes: long enough to read something without touching the mouse,
     # short enough that "welcome back" is not said to someone who never left.
     idle_threshold_seconds: int = 300
-    poll_interval_seconds: int = 15
+    # Five seconds: a return is greeted while the user is still sitting down.
+    poll_interval_seconds: int = 5
     # Episodes: the nightly diary entry (M36 phase 2). Under the master switch
     # like everything else here; the model is pinned the way the digest pins
     # its own, because a plain scheduled run would otherwise land on the local
@@ -255,6 +256,14 @@ class PresenceMonitor:
     _thread: Optional[threading.Thread] = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _listeners: List[Callable[[str, str], None]] = field(
+        default_factory=list, init=False
+    )
+
+    def add_listener(self, listener: Callable[[str, str], None]) -> None:
+        """Called with (previous, current) after every state change, outside
+        the lock, so a listener may read the snapshot."""
+        self._listeners.append(listener)
 
     def settings(self) -> PresenceSettings:
         return load_settings(self.config_dir)
@@ -264,26 +273,35 @@ class PresenceMonitor:
         settings = self.settings()
         now = self.clock()
         with self._lock:
+            previous = self._state
             if not settings.enabled:
                 self._transition(STATE_DISABLED, now, "presence is switched off")
                 self._idle = None
                 self._foreground = None
                 self._checked_at = now
-                return self._snapshot(settings)
-
-            idle = self.idle_sensor()
-            state = decide_state(idle, settings.idle_threshold_seconds)
-            if state == STATE_UNKNOWN:
-                reason = "idle time could not be read"
-            elif state == STATE_AWAY:
-                reason = f"no input for {int(idle or 0)}s"
+                snapshot = self._snapshot(settings)
             else:
-                reason = f"input {int(idle or 0)}s ago"
-            self._idle = idle
-            self._foreground = self.foreground_sensor()
-            self._checked_at = now
-            self._transition(state, now, reason)
-            return self._snapshot(settings)
+                idle = self.idle_sensor()
+                state = decide_state(idle, settings.idle_threshold_seconds)
+                if state == STATE_UNKNOWN:
+                    reason = "idle time could not be read"
+                elif state == STATE_AWAY:
+                    reason = f"no input for {int(idle or 0)}s"
+                else:
+                    reason = f"input {int(idle or 0)}s ago"
+                self._idle = idle
+                self._foreground = self.foreground_sensor()
+                self._checked_at = now
+                self._transition(state, now, reason)
+                snapshot = self._snapshot(settings)
+        if snapshot.state != previous:
+            for listener in list(self._listeners):
+                try:
+                    listener(previous, snapshot.state)
+                except Exception:
+                    # A listener's failure is its own; the monitor keeps going.
+                    pass
+        return snapshot
 
     def _transition(self, state: str, now: float, reason: str) -> None:
         if state != self._state:

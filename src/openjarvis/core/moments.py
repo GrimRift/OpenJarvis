@@ -443,25 +443,67 @@ def _today_calendar(timezone_name: str, now: float) -> str:
         return ""
 
 
+# Sage's own recurring jobs. Their runs are news only when they actually
+# told the user something: thirty "nothing upcoming" class checks handed to
+# the model came back as "I checked your class schedule" on a return at
+# ten at night.
+HOUSEKEEPING_AGENTS = frozenset(
+    {"class_notifier", "episode_writer", "proactive", "morning_digest"}
+)
+NOTIFYING_TOOLS = frozenset({"notify_windows", "notify_class_schedule", "channel_send"})
+
+
+def _is_housekeeping(task: Any) -> bool:
+    meta = task.metadata or {}
+    return (
+        task.agent in HOUSEKEEPING_AGENTS
+        or bool(meta.get("managed_by"))
+        or bool(meta.get("openjarvis_task_key"))
+    )
+
+
+def _run_summary(run: Dict[str, Any]) -> tuple[str, bool]:
+    """(what the run said, whether it notified the user)."""
+    raw = str(run.get("result") or run.get("error") or "").strip()
+    notified = False
+    text = raw
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        text = str(parsed.get("content") or raw)
+        for tool in parsed.get("tool_results") or []:
+            if (
+                isinstance(tool, dict)
+                and tool.get("tool_name") in NOTIFYING_TOOLS
+                and tool.get("success", True)
+            ):
+                notified = True
+    return text.replace("\n", " ")[:200], notified
+
+
 def _finished_jobs(scheduler: Any, since: float, limit: int = 5) -> List[str]:
-    """Scheduled runs that finished after *since*, newest first."""
+    """Scheduled runs that finished after *since* and are news to the user.
+
+    The user's own tasks always are. Housekeeping runs only when they sent a
+    notification, so a class alert counts and a "nothing upcoming" does not.
+    """
     if scheduler is None or since is None:
         return []
     lines: List[str] = []
     try:
         store = getattr(scheduler, "_store", None)
         for task in scheduler.list_tasks():
-            if task.metadata.get("managed_by"):
-                # Sage's own housekeeping (episodes, class notifier) is not
-                # news to the user.
-                continue
+            housekeeping = _is_housekeeping(task)
             for run in store.get_run_logs(task.id, limit=3) if store else []:
                 finished = _iso_to_ts(run.get("finished_at"))
                 if finished is None or finished <= since:
                     continue
+                result, notified = _run_summary(run)
+                if housekeeping and not notified:
+                    continue
                 outcome = "finished" if run.get("success") else "failed"
-                result = str(run.get("result") or run.get("error") or "").strip()
-                result = result.replace("\n", " ")[:200]
                 lines.append(f"{outcome}: {task.prompt[:80]} -> {result}")
                 if len(lines) >= limit:
                     return lines
@@ -695,11 +737,20 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
 # -- Delivery ----------------------------------------------------------------
 
 
+def chime_now() -> bool:
+    """The chime on its own: played the moment there is something to say,
+    before the model has written it, so the acknowledgement is instant even
+    when the wording takes a few seconds."""
+    from openjarvis.speech.chime import chime_path
+    from openjarvis.speech.player import play_file
+
+    return play_file(str(chime_path()))
+
+
 def speak_aloud(text: str) -> bool:
     """Synthesise with the configured voice and play through the speakers."""
     from openjarvis.core.config import load_config
     from openjarvis.speech.cartesia_tts import CartesiaTTSBackend
-    from openjarvis.speech.chime import GAP_SECONDS, chime_path
     from openjarvis.speech.ducking import ducked
     from openjarvis.speech.player import play_file
     from openjarvis.speech.spoken_text import to_spoken_text
@@ -719,14 +770,7 @@ def speak_aloud(text: str) -> bool:
         handle.write(result.audio)
         path = handle.name
     try:
-        # The chime and the voice share one ducking window, so the film is
-        # already down when the chime sounds and stays down for the words.
         with ducked():
-            try:
-                play_file(str(chime_path()), duck=False)
-                time.sleep(GAP_SECONDS)
-            except Exception as exc:
-                logger.debug("Chime skipped: %s", exc)
             return play_file(path, duck=False)
     finally:
         try:
@@ -753,6 +797,7 @@ class MomentEngine:
         clock: Callable[[], float] = time.time,
         composer: Callable[[str, Dict[str, str]], str] = compose_with_model,
         speaker: Callable[[str], bool] = speak_aloud,
+        chimer: Callable[[], bool] = chime_now,
         scheduler_lookup: Optional[Callable[[], Any]] = None,
         timezone_name: Optional[str] = None,
         startup_hook: Optional[Callable[[], Any]] = None,
@@ -762,6 +807,7 @@ class MomentEngine:
         self._clock = clock
         self._composer = composer
         self._speaker = speaker
+        self._chimer = chimer
         self._scheduler_lookup = scheduler_lookup or _default_scheduler
         self._timezone = timezone_name
         # Runs once before the first tick: the greeting draws on yesterday's
@@ -879,6 +925,12 @@ class MomentEngine:
                 )
 
             spoken: List[MomentRecord] = []
+            if decision.kinds:
+                # Acknowledge at once; the words follow when written.
+                try:
+                    self._chimer()
+                except Exception as exc:
+                    logger.debug("Chime skipped: %s", exc)
             for kind in decision.kinds:
                 context = build_context(
                     kind,
@@ -958,9 +1010,22 @@ class MomentEngine:
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        # The monitor's own poll is the moment a return is known; waiting for
+        # this loop's next poll on top of it made a greeting arrive half a
+        # minute after the user sat down.
+        add = getattr(self._monitor, "add_listener", None)
+        if callable(add):
+            add(self._on_presence_change)
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="moments", daemon=True)
         self._thread.start()
+
+    def _on_presence_change(self, previous: str, current: str) -> None:
+        if current == STATE_PRESENT and not self._stop.is_set():
+            try:
+                self.tick()
+            except Exception:
+                logger.debug("Moments tick on presence change failed", exc_info=True)
 
     def stop(self) -> None:
         self._stop.set()
@@ -1024,6 +1089,7 @@ __all__ = [
     "MomentsState",
     "Watch",
     "build_context",
+    "chime_now",
     "compose_with_model",
     "current_engine",
     "decide",

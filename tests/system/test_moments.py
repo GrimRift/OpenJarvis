@@ -9,6 +9,7 @@ rather than a desk and a pair of speakers.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -448,3 +449,115 @@ class TestVariedLines:
             "- Good morning, sir. Yesterday you fixed the"
         )
         assert recent_openings([], MOMENT_GREETING) == ""
+
+
+class TestReturnLatency:
+    def test_the_monitor_hands_a_return_to_the_engine_at_once(self, tmp_path) -> None:
+        # No second poll on the engine's own clock: the monitor's transition
+        # is the moment, and the greeting is spoken from it.
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.spoken.clear()
+        rig.monitor.add_listener(rig.engine._on_presence_change)
+        rig.now = _at(13, 5)
+        rig.monitor.poll()
+        rig.now = _at(13, 15)
+        rig.desk.idle = 600.0
+        rig.monitor.poll()
+        rig.now = _at(15)
+        rig.desk.idle = 1.0
+        rig.monitor.poll()  # engine.tick() never called by the test
+        assert [t for t in rig.spoken] == ["[welcome_back] 1 hour 50 min"]
+
+    def test_the_chime_sounds_before_the_words_are_written(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        order: List[str] = []
+        rig.engine._chimer = lambda: order.append("chime") or True
+
+        def compose(kind: str, context: dict) -> str:
+            order.append("compose")
+            return "words"
+
+        rig.engine._composer = compose
+        rig.tick(_at(8), idle=1.0)
+        assert order == ["chime", "compose"]
+
+    def test_nothing_chimes_when_nothing_is_said(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        chimes: List[int] = []
+        rig.engine._chimer = lambda: chimes.append(1) or True
+        rig.tick(_at(8), idle=1.0)
+        rig.tick(_at(8, 1))
+        rig.tick(_at(8, 2))
+        assert chimes == [1]
+
+
+class TestAwayNews:
+    class _Store:
+        def __init__(self, runs):
+            self.runs = runs
+
+        def get_run_logs(self, task_id, limit=10):
+            return list(self.runs.get(task_id, []))
+
+    class _Task:
+        def __init__(self, id, agent, prompt, metadata=None):
+            self.id, self.agent, self.prompt = id, agent, prompt
+            self.metadata = metadata or {}
+
+    def _scheduler(self, tasks, runs):
+        store = self._Store(runs)
+
+        class _S:
+            _store = store
+
+            def list_tasks(self_inner):
+                return tasks
+
+        return _S()
+
+    def test_housekeeping_counts_only_when_it_notified(self) -> None:
+        from openjarvis.core.moments import _finished_jobs
+
+        quiet = {
+            "content": "Nothing upcoming — no notification sent.",
+            "tool_results": [{"tool_name": "check_class_schedule", "success": True}],
+        }
+        alert = {
+            "content": "Structural Analysis in 10 minutes.",
+            "tool_results": [{"tool_name": "notify_windows", "success": True}],
+        }
+        tasks = [
+            self._Task(
+                "cls",
+                "class_notifier",
+                "Check the class schedule",
+                {"openjarvis_task_key": "class-schedule-notify"},
+            ),
+            self._Task("mine", "orchestrator", "Remind me to stretch"),
+        ]
+        runs = {
+            "cls": [
+                {
+                    "finished_at": "2026-09-15T13:00:00+00:00",
+                    "success": 1,
+                    "result": json.dumps(quiet),
+                },
+                {
+                    "finished_at": "2026-09-15T13:05:00+00:00",
+                    "success": 1,
+                    "result": json.dumps(alert),
+                },
+            ],
+            "mine": [
+                {
+                    "finished_at": "2026-09-15T13:02:00+00:00",
+                    "success": 1,
+                    "result": json.dumps({"content": "Reminder sent."}),
+                },
+            ],
+        }
+        lines = _finished_jobs(self._scheduler(tasks, runs), since=_at(12))
+        assert any("Structural Analysis" in line for line in lines)
+        assert any("Reminder sent" in line for line in lines)
+        assert not any("Nothing upcoming" in line for line in lines)
