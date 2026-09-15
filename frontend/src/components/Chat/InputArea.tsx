@@ -1879,19 +1879,19 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           reason={micReason}
         />
 
-        {/* Silences Sage. While a reply is being spoken it also cuts that
-            reply short, so one control covers both "stop this" and "stop
-            doing this". */}
+        {/* One press stops what Sage is saying, and nothing else. It used
+            to mute as well, so stopping a reply took a second press to hear
+            the next one; muting lives in Settings. */}
         {iconButton(
-          !voiceRepliesEnabled,
-          () => {
-            if (audioPlaying) stopSpeaking();
-            useAppStore
-              .getState()
-              .updateSettings({ voiceRepliesEnabled: !voiceRepliesEnabled });
-          },
-          voiceRepliesEnabled ? 'Mute replies' : 'Replies muted',
-          voiceRepliesEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />,
+          audioPlaying,
+          stopSpeaking,
+          !voiceRepliesEnabled
+            ? 'Replies muted in Settings'
+            : audioPlaying
+              ? 'Stop speaking'
+              : 'Nothing is being spoken',
+          audioPlaying || !voiceRepliesEnabled ? <VolumeX size={16} /> : <Volume2 size={16} />,
+          !audioPlaying,
         )}
       </div>
     );
