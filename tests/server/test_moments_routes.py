@@ -102,9 +102,9 @@ class TestRoutes:
         client = _client()
         body = client.put(
             "/v1/presence/settings",
-            json={"good_morning_enabled": False, "quiet_hours_end_local": 8},
+            json={"greeting_enabled": False, "quiet_hours_end_local": 8},
         ).json()
-        assert body["good_morning_enabled"] is False
+        assert body["greeting_enabled"] is False
         assert body["quiet_hours_end_local"] == 8
         assert (
             client.put(

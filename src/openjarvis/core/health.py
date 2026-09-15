@@ -1453,7 +1453,7 @@ def _check_moments(app_state: Any = None) -> List[CheckResult]:
     on = [
         name
         for name, enabled in (
-            ("good morning", settings.good_morning_enabled),
+            ("greeting", settings.greeting_enabled),
             ("welcome back", settings.welcome_back_enabled),
             ("tell-me-when", settings.told_enabled),
         )

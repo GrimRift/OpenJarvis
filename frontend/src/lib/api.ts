@@ -499,7 +499,7 @@ export interface PresenceSettings {
   episodes_enabled: boolean;
   // Moments (M36 phase 3): the occasions Sage speaks first.
   moments_enabled: boolean;
-  good_morning_enabled: boolean;
+  greeting_enabled: boolean;
   welcome_back_enabled: boolean;
   told_enabled: boolean;
   welcome_back_after_seconds: number;
@@ -517,7 +517,7 @@ export interface MomentWatch {
 
 export interface MomentRecord {
   at: number;
-  kind: 'good_morning' | 'welcome_back' | 'told';
+  kind: 'greeting' | 'welcome_back' | 'told';
   text: string;
   spoken: boolean;
   detail: string;

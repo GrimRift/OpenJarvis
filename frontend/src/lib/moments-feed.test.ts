@@ -4,7 +4,7 @@ import type { MomentRecord } from '../lib/api';
 
 const rec = (at: number, text = 'Good morning, sir.'): MomentRecord => ({
   at,
-  kind: 'good_morning',
+  kind: 'greeting',
   text,
   spoken: true,
   detail: '',

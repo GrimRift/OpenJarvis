@@ -16,15 +16,15 @@ from zoneinfo import ZoneInfo
 
 from openjarvis.core.moments import (
     DAILY_CAPS,
-    MOMENT_GOOD_MORNING,
+    MOMENT_GREETING,
     MOMENT_TOLD,
     MOMENT_WELCOME_BACK,
     MomentEngine,
     fallback_text,
-    in_morning_window,
     in_quiet_hours,
     load_state,
     local_to_timestamp,
+    time_of_day,
 )
 from openjarvis.core.presence import (
     STATE_AWAY,
@@ -57,6 +57,7 @@ class _Rig:
         self.desk = _Desk()
         self.spoken: List[Tuple[str, str]] = []
         self.compose_calls: List[str] = []
+        self.last_context: dict = {}
         save_settings(settings or PresenceSettings(enabled=True), tmp_path)
         self.monitor = PresenceMonitor(
             config_dir=tmp_path,
@@ -76,6 +77,7 @@ class _Rig:
 
     def _compose(self, kind: str, context: dict) -> str:
         self.compose_calls.append(kind)
+        self.last_context = context
         return f"[{kind}] {context.get('away_for', '')}".strip()
 
     def _speak(self, text: str) -> bool:
@@ -111,18 +113,21 @@ class TestPureHelpers:
     def test_equal_bounds_mean_no_quiet_hours(self) -> None:
         assert not in_quiet_hours(3, 7, 7)
 
-    def test_morning_opens_when_quiet_hours_end(self) -> None:
-        assert not in_morning_window(6, 7)
-        assert in_morning_window(7, 7)
-        assert in_morning_window(11, 7)
-        assert not in_morning_window(12, 7)
+    def test_time_of_day_names(self) -> None:
+        assert time_of_day(7) == "morning"
+        assert time_of_day(13) == "afternoon"
+        assert time_of_day(19) == "evening"
 
     def test_local_datetime_is_read_in_the_users_zone(self) -> None:
         assert local_to_timestamp("2026-09-15T15:00", TZ) == _at(15)
         assert local_to_timestamp("not a time", TZ) is None
 
     def test_fallback_lines_exist_for_every_kind(self) -> None:
-        assert "morning" in fallback_text(MOMENT_GOOD_MORNING, {}).lower()
+        assert (
+            fallback_text(MOMENT_GREETING, {"time_of_day": "evening"})
+            == "Good evening, sir."
+        )
+        assert "day" in fallback_text(MOMENT_GREETING, {})
         assert "back" in fallback_text(MOMENT_WELCOME_BACK, {"away_for": "2 hours"})
         told = fallback_text(
             MOMENT_TOLD,
@@ -131,33 +136,39 @@ class TestPureHelpers:
         assert "class starts" in told
 
 
-class TestGoodMorning:
+class TestGreeting:
     def test_first_appearance_in_the_morning_is_greeted_once(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
         said = rig.tick(_at(8), idle=1.0)
-        assert [r.kind for r in said] == [MOMENT_GOOD_MORNING]
-        assert rig.spoken == ["[good_morning]"]
+        assert [r.kind for r in said] == [MOMENT_GREETING]
+        assert rig.spoken == ["[greeting]"]
         # However many polls follow, and however the state flickers.
         for minute in range(1, 30):
             assert rig.tick(_at(8, minute)) == []
         rig.leave_and_return(_at(9), _at(11))
-        assert [r.kind for r in rig.engine.history()].count(MOMENT_GOOD_MORNING) == 1
+        assert [r.kind for r in rig.engine.history()].count(MOMENT_GREETING) == 1
 
-    def test_an_afternoon_first_appearance_is_not_a_good_morning(
+    def test_an_afternoon_first_boot_is_greeted_for_the_afternoon(
         self, tmp_path
     ) -> None:
+        # Sage is not on all day: switched on at 14:00, the first thing it
+        # sees is the user, and that is the day's greeting.
         rig = _Rig(tmp_path)
-        assert rig.tick(_at(14), idle=1.0) == []
+        rig.contexts = []
+        said = rig.tick(_at(14), idle=1.0)
+        assert [r.kind for r in said] == [MOMENT_GREETING]
+        assert rig.last_context["time_of_day"] == "afternoon"
 
     def test_a_midnight_coder_still_gets_a_good_morning_after_sleeping(
         self, tmp_path
     ) -> None:
         rig = _Rig(tmp_path)
-        rig.tick(_at(22, 30, day=14), idle=1.0)  # evening: too late for morning
+        rig.tick(_at(22, 30, day=14), idle=1.0)  # yesterday's greeting
         rig.tick(_at(0, 30), idle=1.0)  # past midnight: quiet hours
-        assert rig.spoken == []
+        assert rig.spoken == ["[greeting]"]
         rig.leave_and_return(_at(1), _at(9))
-        assert rig.spoken == ["[good_morning] 7 hours"]
+        # A new calendar day, not 24 hours since the last one.
+        assert rig.spoken == ["[greeting]", "[greeting] 7 hours"]
 
     def test_survives_a_restart(self, tmp_path) -> None:
         # A server restart in the morning must not repeat the greeting: the
@@ -170,23 +181,34 @@ class TestGoodMorning:
         assert again.tick(_at(8, 5), idle=1.0) == []
 
     def test_switch_off_just_this_moment(self, tmp_path) -> None:
-        rig = _Rig(tmp_path, PresenceSettings(enabled=True, good_morning_enabled=False))
+        rig = _Rig(tmp_path, PresenceSettings(enabled=True, greeting_enabled=False))
         assert rig.tick(_at(8), idle=1.0) == []
+
+    def test_shut_down_at_night_booted_in_the_morning(self, tmp_path) -> None:
+        # The case the user actually lives: Stop Sage at 23:30, laptop on at
+        # 08:15. The gap in readings is the night.
+        rig = _Rig(tmp_path)
+        rig.tick(_at(22, 40, day=14), idle=1.0)
+        again = _Rig(tmp_path)
+        said = again.tick(_at(8, 15), idle=1.0)
+        assert [r.kind for r in said] == [MOMENT_GREETING]
+        assert again.spoken == ["[greeting] 9 hours"]
+        assert again.last_context["time_of_day"] == "morning"
 
 
 class TestWelcomeBack:
     def test_returning_after_an_hour_is_greeted(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
-        rig.tick(_at(13), idle=1.0)
+        rig.tick(_at(13), idle=1.0)  # the day's greeting
         rig.leave_and_return(_at(13, 5), _at(15))
         # Away from 13:05 (last input), noticed at 13:15, back at 15:00.
-        assert rig.spoken == ["[welcome_back] 1 hour 50 min"]
+        assert rig.spoken == ["[greeting]", "[welcome_back] 1 hour 50 min"]
 
     def test_a_coffee_break_is_not(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
         rig.tick(_at(13), idle=1.0)
         rig.leave_and_return(_at(13, 5), _at(13, 40))
-        assert rig.spoken == []
+        assert rig.spoken == ["[greeting]"]
         # And that short absence is not greeted later either, when a longer
         # one would have been.
         assert rig.tick(_at(13, 41)) == []
@@ -197,7 +219,7 @@ class TestWelcomeBack:
         rig.leave_and_return(_at(13, 5), _at(15))
         for minute in range(1, 10):
             rig.tick(_at(15, minute))
-        assert len(rig.spoken) == 1
+        assert len(rig.spoken) == 2
 
     def test_capped_per_day(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
@@ -206,15 +228,24 @@ class TestWelcomeBack:
         for _ in range(DAILY_CAPS[MOMENT_WELCOME_BACK] + 2):
             rig.leave_and_return(_at(hour, 5), _at(hour + 1, 30))
             hour += 2
-        assert len(rig.spoken) == DAILY_CAPS[MOMENT_WELCOME_BACK]
+        assert len(rig.spoken) == 1 + DAILY_CAPS[MOMENT_WELCOME_BACK]
 
-    def test_a_server_outage_is_not_a_return(self, tmp_path) -> None:
-        # The engine's own readings stop while the server is down. With the
-        # user at the desk the whole time, nothing was returned from.
+    def test_sage_off_in_between_counts_as_away(self, tmp_path) -> None:
+        # Shut down at 13:00, back on at 16:00: the user's choice is that
+        # the gap counts, since Sage is off whenever they go out.
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)  # today's greeting
+        assert len(rig.spoken) == 1
+        again = _Rig(tmp_path)
+        said = again.tick(_at(16), idle=1.0)
+        assert [r.kind for r in said] == [MOMENT_WELCOME_BACK]
+        assert again.spoken == ["[welcome_back] 3 hours"]
+
+    def test_a_short_restart_is_not(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
         rig.tick(_at(13), idle=1.0)
         again = _Rig(tmp_path)
-        assert again.tick(_at(16), idle=1.0) == []
+        assert again.tick(_at(13, 20), idle=1.0) == []
 
     def test_never_while_away(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
@@ -222,7 +253,7 @@ class TestWelcomeBack:
         rig.tick(_at(13, 5), idle=1.0)
         rig.tick(_at(15), idle=7000.0)
         assert rig.monitor.snapshot().state == STATE_AWAY
-        assert rig.spoken == []
+        assert rig.spoken == ["[greeting]"]
 
 
 class TestGuards:
@@ -230,20 +261,21 @@ class TestGuards:
         rig = _Rig(tmp_path)
         rig.engine.add_watch("the download finished", due_at=_at(23, 30))
         rig.tick(_at(22), idle=1.0)
+        assert rig.spoken == ["[greeting]"]
         rig.leave_and_return(_at(22, 5), _at(23, 30))
-        assert rig.spoken == []
+        assert rig.spoken == ["[greeting]"]
         assert rig.engine.snapshot()["last_reason"] == "quiet hours"
 
     def test_not_now_silences_the_rest_of_the_day_only(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
-        rig.tick(_at(13), idle=1.0)
         rig.engine.snooze_today()
+        rig.tick(_at(13), idle=1.0)
         rig.leave_and_return(_at(13, 5), _at(15))
         assert rig.spoken == []
         assert rig.engine.snapshot()["snoozed_today"] is True
         # Tomorrow it is over on its own.
         rig.tick(_at(8, day=16), idle=1.0)
-        assert rig.spoken == ["[good_morning] 17 hours"]
+        assert rig.spoken == ["[greeting] 17 hours"]
 
     def test_master_switch_off_means_silence(self, tmp_path) -> None:
         rig = _Rig(tmp_path, PresenceSettings(enabled=False))
@@ -261,6 +293,9 @@ class TestGuards:
         assert said[0].text == "Good morning, sir."
         assert "cloud down" in said[0].detail
         assert rig.spoken == ["Good morning, sir."]
+        rig.engine._composer = broken
+        rig.leave_and_return(_at(9), _at(11))
+        assert rig.spoken[-1] == "Welcome back, sir. You were away 1 hour 55 min."
 
     def test_a_voice_failure_still_counts(self, tmp_path) -> None:
         # Otherwise a dead speaker would retry every fifteen seconds.
@@ -277,13 +312,13 @@ class TestTellMeWhen:
     def test_a_time_watch_fires_when_due_and_present(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
         rig.tick(_at(13), idle=1.0)
-        watch = rig.engine.add_watch("your class starts", due_at=_at(15))
-        assert rig.tick(_at(14, 59)) == []
-        said = rig.tick(_at(15))
+        watch = rig.engine.add_watch("your class starts", due_at=_at(13, 30))
+        assert rig.tick(_at(13, 29)) == []
+        said = rig.tick(_at(13, 30))
         assert [r.kind for r in said] == [MOMENT_TOLD]
         assert rig.compose_calls[-1] == MOMENT_TOLD
         assert rig.engine.list_watches() == []
-        assert rig.tick(_at(15, 1)) == []
+        assert rig.tick(_at(13, 31)) == []
         assert watch.id not in {w.id for w in rig.engine.list_watches()}
 
     def test_held_while_away_and_said_on_return(self, tmp_path) -> None:
@@ -292,7 +327,7 @@ class TestTellMeWhen:
         rig.engine.add_watch("the render finished", due_at=_at(13, 30))
         rig.tick(_at(13, 5), idle=1.0)
         rig.tick(_at(13, 30), idle=1500.0)
-        assert rig.spoken == []
+        assert rig.spoken == ["[greeting]"]
         said = rig.tick(_at(13, 45), idle=1.0)
         assert [r.kind for r in said] == [MOMENT_TOLD]
 
@@ -304,7 +339,7 @@ class TestTellMeWhen:
         rig.tick(_at(13, 10), idle=300.0)
         # A day later: a good morning, but not "your class started yesterday".
         said = rig.tick(_at(9, day=16), idle=1.0)
-        assert [r.kind for r in said] == [MOMENT_GOOD_MORNING]
+        assert [r.kind for r in said] == [MOMENT_GREETING]
         records = [r for r in rig.engine.history() if r.kind == MOMENT_TOLD]
         assert records and records[0].spoken is False
         assert "too late" in records[0].detail
@@ -356,6 +391,6 @@ class TestRecord:
         rig.tick(_at(8), idle=1.0)
         history = load_state(tmp_path).history
         assert len(history) == 1
-        assert history[0].kind == MOMENT_GOOD_MORNING
+        assert history[0].kind == MOMENT_GREETING
         assert history[0].spoken is True
         assert rig.monitor.snapshot().state == STATE_PRESENT

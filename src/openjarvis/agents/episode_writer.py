@@ -16,7 +16,7 @@ import logging
 import re
 import time
 from datetime import date
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from openjarvis.agents._model_override import apply_configured_model
 from openjarvis.agents._stubs import AgentContext, AgentResult, BaseAgent
@@ -122,6 +122,53 @@ class EpisodeWriterAgent(BaseAgent):
         return AgentResult(content=summary, turns=1)
 
 
+# -- Catch-up ------------------------------------------------------------------
+
+
+def missing_episode_days(
+    days_back: int = 7, *, today: Optional[date] = None
+) -> List[date]:
+    """Past days with conversations but no episode, oldest first.
+
+    Sage is not on around the clock: the 23:00 cron only runs if it is up at
+    23:00, and most nights it is not. Without this the diary would have
+    entries only for the nights the machine was left on.
+    """
+    from datetime import timedelta
+
+    from openjarvis.memory.episodes import collect_turns, load_episodes
+
+    settings = load_settings()
+    if not settings.enabled or not settings.episodes_enabled:
+        return []
+    today = today or date.today()
+    have = load_episodes()
+    missing = []
+    for back in range(days_back, 0, -1):
+        day = today - timedelta(days=back)
+        if day.isoformat() in have:
+            continue
+        if collect_turns(day):
+            missing.append(day)
+    return missing
+
+
+def write_missing_episodes(system: Any, days_back: int = 7) -> List[str]:
+    """Write every missed episode through the same agent the cron uses."""
+    written = []
+    for day in missing_episode_days(days_back):
+        try:
+            system.ask(
+                f"Write Sage's diary entry for {day.isoformat()}",
+                agent="episode_writer",
+                tools=None,
+            )
+            written.append(day.isoformat())
+        except Exception as exc:
+            logger.warning("Catch-up episode for %s failed: %s", day, exc)
+    if written:
+        logger.info("Wrote missed episodes for %s", ", ".join(written))
+    return written
 
 
 # -- Scheduling ----------------------------------------------------------------
@@ -226,5 +273,7 @@ __all__ = [
     "EPISODE_CRON_PROMPT",
     "EpisodeWriterAgent",
     "day_from_prompt",
+    "missing_episode_days",
     "register_episode_cron",
+    "write_missing_episodes",
 ]

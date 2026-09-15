@@ -2,9 +2,12 @@
 
 Three kinds, each its own switch beneath the presence master switch:
 
-- **Good morning** -- the first time the user is at the desk in the morning,
-  after a real absence (sleep, in practice).
-- **Welcome back** -- the user returns after an absence of at least an hour.
+- **Greeting** -- the first time the user is at the desk today, named for
+  the time of day: good morning after sleep, good afternoon when Sage is
+  first switched on at one. Sage is not on around the clock, so "first
+  appearance" has to mean the first Sage sees, whenever that is.
+- **Welcome back** -- the user returns after an absence of at least an hour,
+  whether Sage watched them leave or was off in between.
 - **Told on request** -- the user said "tell me when X" and X happened: a
   time arrived, or a scheduled job finished.
 
@@ -46,17 +49,14 @@ from openjarvis.core.presence import (
 
 logger = logging.getLogger(__name__)
 
-MOMENT_GOOD_MORNING = "good_morning"
+MOMENT_GREETING = "greeting"
 MOMENT_WELCOME_BACK = "welcome_back"
 MOMENT_TOLD = "told"
-KINDS = (MOMENT_GOOD_MORNING, MOMENT_WELCOME_BACK, MOMENT_TOLD)
+KINDS = (MOMENT_GREETING, MOMENT_WELCOME_BACK, MOMENT_TOLD)
 
-# Good morning once a day; welcome back a few times, because a day can hold
+# One greeting a day; welcome back a few times, because a day can hold
 # several real absences; told-on-request as often as it was asked for.
-DAILY_CAPS = {MOMENT_GOOD_MORNING: 1, MOMENT_WELCOME_BACK: 3, MOMENT_TOLD: 20}
-# The morning window closes at noon: a first appearance at 14:00 is a
-# welcome back, not a good morning.
-MORNING_ENDS_HOUR = 12
+DAILY_CAPS = {MOMENT_GREETING: 1, MOMENT_WELCOME_BACK: 3, MOMENT_TOLD: 20}
 # A watch that could not be delivered for this long (asleep, away, snoozed)
 # is stale: "your class started yesterday" helps nobody.
 WATCH_STALE_SECONDS = 12 * 3600
@@ -230,9 +230,12 @@ def in_quiet_hours(hour: int, start: int, end: int) -> bool:
     return hour >= start or hour < end
 
 
-def in_morning_window(hour: int, quiet_end: int) -> bool:
-    opens = quiet_end if quiet_end < MORNING_ENDS_HOUR else 5
-    return opens <= hour < MORNING_ENDS_HOUR
+def time_of_day(hour: int) -> str:
+    if hour < 12:
+        return "morning"
+    if hour < 18:
+        return "afternoon"
+    return "evening"
 
 
 def describe_duration(seconds: float) -> str:
@@ -261,8 +264,18 @@ class Decision:
     reason: str = ""
 
 
-def fired_today(state: MomentsState, kind: str, now: float) -> int:
-    return sum(1 for t in state.fired.get(kind, []) if now - t < 24 * 3600)
+def fired_today(state: MomentsState, kind: str, local: datetime) -> int:
+    """How often *kind* was spoken on the local calendar day of *local*.
+
+    A calendar day, not the last 24 hours: a greeting at 22:40 must not use
+    up the next morning's.
+    """
+    day = local.date()
+    return sum(
+        1
+        for t in state.fired.get(kind, [])
+        if datetime.fromtimestamp(t, local.tzinfo).date() == day
+    )
 
 
 def decide(
@@ -295,10 +308,11 @@ def decide(
         decision.reason = "quiet hours"
         return decision
 
-    # A return: the monitor saw an absence end that no moment has answered
-    # yet. A gap in this module's own readings (the server was down, or the
-    # night passed) is evidence only for good morning, never for welcome
-    # back -- the monitor must have watched the user leave for that.
+    # A return: either the monitor saw an absence end that no moment has
+    # answered yet, or this module's own readings have a gap -- Sage was off,
+    # or the night passed. The user's choice: a gap counts, because Sage is
+    # shut down for the night and for outings, and an absence it did not
+    # watch is still an absence.
     absence_end = snapshot.last_absence_ended_at
     absence_seconds = None
     if (
@@ -316,27 +330,28 @@ def decide(
         and absence_seconds >= settings.welcome_back_after_seconds
     )
     gap = None if state.last_present_at is None else now - state.last_present_at
-    long_gap = gap is None or gap >= settings.welcome_back_after_seconds
+    long_gap = gap is not None and gap >= settings.welcome_back_after_seconds
+    # No reading ever is a first appearance (greeting), not a return.
+    returned = observed_return or long_gap or gap is None
+    away_for = absence_seconds if observed_return else gap
 
     if (
-        settings.good_morning_enabled
-        and in_morning_window(local.hour, settings.quiet_hours_end_local)
-        and fired_today(state, MOMENT_GOOD_MORNING, now)
-        < DAILY_CAPS[MOMENT_GOOD_MORNING]
-        and (observed_return or long_gap)
+        settings.greeting_enabled
+        and returned
+        and fired_today(state, MOMENT_GREETING, local) < DAILY_CAPS[MOMENT_GREETING]
     ):
-        decision.kinds.append(MOMENT_GOOD_MORNING)
+        decision.kinds.append(MOMENT_GREETING)
         decision.absence_end = absence_end if observed_return else None
-        decision.absence_seconds = absence_seconds if observed_return else gap
+        decision.absence_seconds = away_for
     elif (
         settings.welcome_back_enabled
-        and observed_return
-        and fired_today(state, MOMENT_WELCOME_BACK, now)
+        and (observed_return or long_gap)
+        and fired_today(state, MOMENT_WELCOME_BACK, local)
         < DAILY_CAPS[MOMENT_WELCOME_BACK]
     ):
         decision.kinds.append(MOMENT_WELCOME_BACK)
-        decision.absence_end = absence_end
-        decision.absence_seconds = absence_seconds
+        decision.absence_end = absence_end if observed_return else None
+        decision.absence_seconds = away_for
 
     if settings.told_enabled:
         for watch in state.watches:
@@ -350,7 +365,7 @@ def decide(
             if now - due_since > WATCH_STALE_SECONDS:
                 decision.stale_watches.append(watch)
             elif (
-                fired_today(state, MOMENT_TOLD, now) + len(decision.watches)
+                fired_today(state, MOMENT_TOLD, local) + len(decision.watches)
                 < DAILY_CAPS[MOMENT_TOLD]
             ):
                 decision.watches.append(watch)
@@ -498,11 +513,12 @@ def build_context(
     local = to_local(now, timezone_name)
     context: Dict[str, str] = {
         "now": local.strftime("%A %d %B %Y, %H:%M"),
+        "time_of_day": time_of_day(local.hour),
         "profile": _profile_excerpt(config_dir),
     }
     if decision.absence_seconds:
         context["away_for"] = describe_duration(decision.absence_seconds)
-    if kind == MOMENT_GOOD_MORNING:
+    if kind == MOMENT_GREETING:
         try:
             from openjarvis.memory.episodes import format_recent_days, recent_episodes
 
@@ -514,7 +530,7 @@ def build_context(
             context["recent_days"] = ""
         context["classes_today"] = _today_classes()
         context["calendar_today"] = _today_calendar(timezone_name, now)
-    if kind in (MOMENT_GOOD_MORNING, MOMENT_WELCOME_BACK):
+    if kind in (MOMENT_GREETING, MOMENT_WELCOME_BACK):
         since = decision.absence_end
         if since is not None and decision.absence_seconds:
             since = since - decision.absence_seconds
@@ -546,8 +562,8 @@ def build_context(
 
 def fallback_text(kind: str, context: Dict[str, str]) -> str:
     """Spoken when the model is unavailable; a moment must never go silent."""
-    if kind == MOMENT_GOOD_MORNING:
-        return "Good morning, sir."
+    if kind == MOMENT_GREETING:
+        return f"Good {context.get('time_of_day') or 'day'}, sir."
     if kind == MOMENT_WELCOME_BACK:
         away = context.get("away_for")
         return (
@@ -584,7 +600,10 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
         )
     engine = resolved[1]
     labels = {
-        MOMENT_GOOD_MORNING: "Good morning: the user's first appearance today.",
+        MOMENT_GREETING: (
+            "Greeting: the user's first appearance today. Greet them for the "
+            "time of day given in the context, not by assumption."
+        ),
         MOMENT_WELCOME_BACK: "Welcome back: the user has returned after being away.",
         MOMENT_TOLD: (
             "Told on request: something the user asked to be told about has happened."
@@ -659,6 +678,7 @@ class MomentEngine:
         speaker: Callable[[str], bool] = speak_aloud,
         scheduler_lookup: Optional[Callable[[], Any]] = None,
         timezone_name: Optional[str] = None,
+        startup_hook: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._monitor = monitor
         self._config_dir = config_dir
@@ -667,6 +687,9 @@ class MomentEngine:
         self._speaker = speaker
         self._scheduler_lookup = scheduler_lookup or _default_scheduler
         self._timezone = timezone_name
+        # Runs once before the first tick: the greeting draws on yesterday's
+        # episode, and with Sage off at 23:00 that has to be written first.
+        self._startup_hook = startup_hook
         self._state = load_state(config_dir)
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -869,6 +892,11 @@ class MomentEngine:
         return self._thread is not None and self._thread.is_alive()
 
     def _run(self) -> None:
+        if self._startup_hook is not None:
+            try:
+                self._startup_hook()
+            except Exception:
+                logger.warning("Moments startup hook failed", exc_info=True)
         while not self._stop.is_set():
             try:
                 self.tick()
@@ -908,7 +936,7 @@ def _default_scheduler() -> Any:
 __all__ = [
     "DAILY_CAPS",
     "KINDS",
-    "MOMENT_GOOD_MORNING",
+    "MOMENT_GREETING",
     "MOMENT_TOLD",
     "MOMENT_WELCOME_BACK",
     "Decision",
@@ -922,11 +950,11 @@ __all__ = [
     "decide",
     "describe_duration",
     "fallback_text",
-    "in_morning_window",
     "in_quiet_hours",
     "load_state",
     "local_to_timestamp",
     "save_state",
     "set_current_engine",
     "speak_aloud",
+    "time_of_day",
 ]

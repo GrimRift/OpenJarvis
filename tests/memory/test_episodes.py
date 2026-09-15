@@ -56,11 +56,19 @@ def _at(day: date, hour: int) -> str:
 class TestCollectTurns:
     def test_only_the_users_agents_count(self, tmp_path: Path) -> None:
         today = date.today()
-        traces = _traces(tmp_path, [
-            ("orchestrator", "fix the waze pack", "done", _at(today, 10)),
-            ("class_notifier", "Check the class schedule", "nothing", _at(today, 11)),
-            ("morning_digest", "Generate my morning digest.", "...", _at(today, 5)),
-        ])
+        traces = _traces(
+            tmp_path,
+            [
+                ("orchestrator", "fix the waze pack", "done", _at(today, 10)),
+                (
+                    "class_notifier",
+                    "Check the class schedule",
+                    "nothing",
+                    _at(today, 11),
+                ),
+                ("morning_digest", "Generate my morning digest.", "...", _at(today, 5)),
+            ],
+        )
         turns = collect_turns(today, traces_path=traces, scheduler_path=tmp_path / "x")
         assert [t.query for t in turns] == ["fix the waze pack"]
 
@@ -69,10 +77,13 @@ class TestCollectTurns:
         # Without this, every episode would open with the user "asking" it.
         today = date.today()
         prompt = "Check my calendar for any events before 9:00 AM today."
-        traces = _traces(tmp_path, [
-            ("orchestrator", prompt, "clear", _at(today, 8)),
-            ("orchestrator", "what did we do yesterday", "...", _at(today, 9)),
-        ])
+        traces = _traces(
+            tmp_path,
+            [
+                ("orchestrator", prompt, "clear", _at(today, 8)),
+                ("orchestrator", "what did we do yesterday", "...", _at(today, 9)),
+            ],
+        )
         scheduler = _scheduler(tmp_path, [prompt])
         turns = collect_turns(today, traces_path=traces, scheduler_path=scheduler)
         assert [t.query for t in turns] == ["what did we do yesterday"]
@@ -80,10 +91,13 @@ class TestCollectTurns:
     def test_only_that_day(self, tmp_path: Path) -> None:
         today = date.today()
         yesterday = today - timedelta(days=1)
-        traces = _traces(tmp_path, [
-            ("orchestrator", "old", "x", _at(yesterday, 12)),
-            ("orchestrator", "new", "y", _at(today, 12)),
-        ])
+        traces = _traces(
+            tmp_path,
+            [
+                ("orchestrator", "old", "x", _at(yesterday, 12)),
+                ("orchestrator", "new", "y", _at(today, 12)),
+            ],
+        )
         turns = collect_turns(today, traces_path=traces, scheduler_path=tmp_path / "x")
         assert [t.query for t in turns] == ["new"]
 
@@ -190,3 +204,59 @@ class TestAgentGate:
             result = agent.run("ignored")
         assert generated == []
         assert "No conversations" in result.content
+
+
+class TestCatchUp:
+    """Sage is off most nights at 23:00, so missed days are written on boot."""
+
+    def test_missing_days_are_the_ones_with_turns_and_no_episode(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from datetime import date, timedelta
+
+        from openjarvis.agents import episode_writer as ew
+        from openjarvis.core.presence import PresenceSettings
+
+        today = date(2026, 9, 15)
+        talked = {today - timedelta(days=1), today - timedelta(days=3)}
+        monkeypatch.setattr(ew, "load_settings", lambda: PresenceSettings(enabled=True))
+        monkeypatch.setattr(
+            "openjarvis.memory.episodes.load_episodes",
+            lambda config_dir=None: {(today - timedelta(days=3)).isoformat(): object()},
+        )
+        monkeypatch.setattr(
+            "openjarvis.memory.episodes.collect_turns",
+            lambda day, **kw: ["turn"] if day in talked else [],
+        )
+        assert ew.missing_episode_days(7, today=today) == [today - timedelta(days=1)]
+
+    def test_nothing_is_written_with_the_switch_off(self, monkeypatch) -> None:
+        from openjarvis.agents import episode_writer as ew
+        from openjarvis.core.presence import PresenceSettings
+
+        monkeypatch.setattr(
+            ew, "load_settings", lambda: PresenceSettings(enabled=False)
+        )
+        assert ew.missing_episode_days(7) == []
+
+    def test_each_missed_day_goes_through_the_writer_agent(self, monkeypatch) -> None:
+        from datetime import date
+
+        from openjarvis.agents import episode_writer as ew
+
+        monkeypatch.setattr(
+            ew,
+            "missing_episode_days",
+            lambda days_back=7: [date(2026, 9, 13), date(2026, 9, 14)],
+        )
+        asked = []
+
+        class _System:
+            def ask(self, prompt, **kwargs):
+                asked.append((prompt, kwargs.get("agent")))
+
+        assert ew.write_missing_episodes(_System()) == ["2026-09-13", "2026-09-14"]
+        assert asked == [
+            ("Write Sage's diary entry for 2026-09-13", "episode_writer"),
+            ("Write Sage's diary entry for 2026-09-14", "episode_writer"),
+        ]

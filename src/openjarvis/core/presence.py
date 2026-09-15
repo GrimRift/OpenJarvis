@@ -74,7 +74,7 @@ class PresenceSettings:
     # Moments: the occasions Sage speaks first (M36 phase 3). Each has its own
     # switch beneath the master, as decided; the guards are not switchable.
     moments_enabled: bool = True
-    good_morning_enabled: bool = True
+    greeting_enabled: bool = True
     welcome_back_enabled: bool = True
     told_enabled: bool = True
     # An absence has to be this long before coming back earns a greeting.
@@ -96,7 +96,7 @@ BOOL_SETTINGS = (
     "enabled",
     "episodes_enabled",
     "moments_enabled",
-    "good_morning_enabled",
+    "greeting_enabled",
     "welcome_back_enabled",
     "told_enabled",
 )

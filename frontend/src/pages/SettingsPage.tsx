@@ -1103,10 +1103,10 @@ export function SettingsPage() {
             <SettingRow label="Sage may speak first" description="Out loud through the speakers, only while you are at the desk and never during quiet hours. Each occasion below has its own switch.">
               <Switch on={Boolean(presence?.moments_enabled)} onClick={flip('moments_enabled')} disabled={!presence?.enabled} />
             </SettingRow>
-            <SettingRow label="Good morning" description="Once a day, the first time you are at the desk in the morning: what you were on yesterday and what today holds.">
-              <Switch on={Boolean(presence?.good_morning_enabled)} onClick={flip('good_morning_enabled')} disabled={!presence?.enabled || !presence?.moments_enabled} />
+            <SettingRow label="Daily greeting" description="Once a day, the first time Sage sees you: good morning, afternoon or evening, with what you were on yesterday and what today holds.">
+              <Switch on={Boolean(presence?.greeting_enabled)} onClick={flip('greeting_enabled')} disabled={!presence?.enabled || !presence?.moments_enabled} />
             </SettingRow>
-            <SettingRow label="Welcome back" description={`When you return after at least ${Math.round((presence?.welcome_back_after_seconds ?? 3600) / 60)} minutes away, with anything that finished while you were gone.`}>
+            <SettingRow label="Welcome back" description={`When you return after at least ${Math.round((presence?.welcome_back_after_seconds ?? 3600) / 60)} minutes away (Sage off in between counts), with anything that finished while you were gone.`}>
               <Switch on={Boolean(presence?.welcome_back_enabled)} onClick={flip('welcome_back_enabled')} disabled={!presence?.enabled || !presence?.moments_enabled} />
             </SettingRow>
             <SettingRow label="Tell me when" description="Things you asked to be told about, spoken when they happen. Ask in chat or by voice: tell me when my class starts.">

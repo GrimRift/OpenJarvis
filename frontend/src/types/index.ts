@@ -153,7 +153,7 @@ export interface ChatMessage {
    *  turn meant "what are its references?" got "please reattach the file". */
   documents?: Array<{ name: string; text: string }>;
   /** Set when Sage said this aloud, unprompted (M36): which kind of moment. */
-  moment?: 'good_morning' | 'welcome_back' | 'told';
+  moment?: 'greeting' | 'welcome_back' | 'told';
 }
 
 export interface Conversation {

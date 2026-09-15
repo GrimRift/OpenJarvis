@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import socket
 import sys
@@ -936,7 +937,12 @@ def serve(
         try:
             from openjarvis.core.moments import MomentEngine, set_current_engine
 
-            moment_engine = MomentEngine(presence_monitor)
+            _catch_up = None
+            if scheduler_system is not None:
+                from openjarvis.agents.episode_writer import write_missing_episodes
+
+                _catch_up = functools.partial(write_missing_episodes, scheduler_system)
+            moment_engine = MomentEngine(presence_monitor, startup_hook=_catch_up)
             moment_engine.start()
             app.state.moment_engine = moment_engine
             set_current_engine(moment_engine)

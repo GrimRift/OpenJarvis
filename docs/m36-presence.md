@@ -188,7 +188,21 @@ said and the transcript reads as what happened. Settings gained the
 per-moment switches, quiet hours, today's "not now", pending watches and the
 last things said; the Health page gained a Moments line.
 
-Verified live: see the commit that closes this section.
+Verified live (2026-09-15): "Tell me when it is 12:56" through the real
+chat path registered a watch; the user was away at 12:56 so it was held,
+and on their return at 12:59 it was spoken through the speakers, worded by
+the cloud model ("three minutes past the time you asked to be told").
+
+**Revised for a machine that is not on all day (2026-09-15).** Sage is shut
+down at night and for outings, which changed three things: the morning
+greeting became a **daily greeting** named for the time of day (first
+appearance Sage sees, once per local calendar day); a **gap in the engine's
+own readings of an hour or more counts as a return** for welcome back too,
+because Sage being off is how most absences look (a restart under an hour
+stays silent); and **missed episodes are written on boot** -- the 23:00 cron
+only runs when Sage is up at 23:00, so the engine's startup hook writes any
+past day with conversations and no entry through the same agent before the
+first greeting is composed.
 
 ## Phase 4 — Texture
 
