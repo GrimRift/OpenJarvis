@@ -11,6 +11,7 @@ const STATUS: Record<ReturnType<typeof useOrbState>, string> = {
   idle: 'STANDING BY',
   listening: 'LISTENING',
   speaking: 'SPEAKING',
+  away: 'AWAY',
 };
 
 /**

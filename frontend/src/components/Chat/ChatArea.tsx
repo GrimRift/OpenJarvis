@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
+import { orbStateLabel as labelFor } from '../../lib/orb-state';
 import { useNavigate } from 'react-router';
 import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
@@ -27,7 +28,7 @@ export function ChatArea() {
   const lastScrollTop = useRef(0);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
   const currentStreamContent = isCurrentChatStreaming ? streamState.content : '';
-  const orbStateLabel = orbState === 'listening' ? 'Listening' : orbState === 'speaking' ? 'Speaking' : 'Standing by';
+  const orbStateLabel = labelFor(orbState);
 
   // Check if any data sources are connected
   const [hasConnectedSources, setHasConnectedSources] = useState<boolean | null>(null);

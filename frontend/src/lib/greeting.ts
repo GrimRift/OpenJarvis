@@ -10,10 +10,14 @@ const FALLBACK_CLIPS = ['greetings/jarvis/hello-sir-sonic36.mp3'];
 interface GreetingManifest {
   default_voice_id: string;
   voices: Record<string, string[]>;
+  /** "One moment" lines for a tool call that is taking a while (M36). */
+  fillers?: Record<string, string[]>;
 }
 
+export type ClipKind = 'greetings' | 'fillers';
+
 let manifestPromise: Promise<GreetingManifest | null> | null = null;
-let lastPlayed: string | null = null;
+const lastPlayed: Record<ClipKind, string | null> = { greetings: null, fillers: null };
 
 function loadManifest(): Promise<GreetingManifest | null> {
   if (!manifestPromise) {
@@ -33,19 +37,29 @@ function loadManifest(): Promise<GreetingManifest | null> {
 export function clipsForVoice(
   manifest: GreetingManifest | null,
   voiceId: string,
+  kind: ClipKind = 'greetings',
 ): string[] {
-  if (!manifest) return FALLBACK_CLIPS;
-  const selected = manifest.voices[voiceId];
+  if (!manifest) return kind === 'greetings' ? FALLBACK_CLIPS : [];
+  const table = kind === 'greetings' ? manifest.voices : (manifest.fillers ?? {});
+  const selected = table[voiceId];
   if (Array.isArray(selected) && selected.length > 0) return selected;
-  const fallback = manifest.voices[manifest.default_voice_id];
-  return Array.isArray(fallback) && fallback.length > 0 ? fallback : FALLBACK_CLIPS;
+  const fallback = table[manifest.default_voice_id];
+  if (Array.isArray(fallback) && fallback.length > 0) return fallback;
+  // A filler is optional: with none rendered, the turn is simply quiet
+  // until the answer, as it was before.
+  return kind === 'greetings' ? FALLBACK_CLIPS : [];
 }
 
 /** Warm the manifest and decoder before the first trigger. */
 export function preloadGreetings(): void {
   loadManifest().then((manifest) => {
     const clips = manifest
-      ? Array.from(new Set(Object.values(manifest.voices).flat()))
+      ? Array.from(
+          new Set([
+            ...Object.values(manifest.voices).flat(),
+            ...Object.values(manifest.fillers ?? {}).flat(),
+          ]),
+        )
       : FALLBACK_CLIPS;
     for (const clip of clips) {
       const audio = new Audio(clip);
@@ -75,15 +89,34 @@ export interface GreetingOptions {
 const GREETING_TIMEOUT_MS = 8000;
 
 export function playGreeting(options: GreetingOptions): Promise<void> {
+  return playClip('greetings', options);
+}
+
+/**
+ * "One moment, sir." while a tool call runs on. Plain audio, deliberately
+ * not registered as `audioPlaying`: that flag's falling edge re-arms the
+ * microphone for continuous conversation, and a filler ending mid-turn
+ * must not open the mic while the answer is still being generated.
+ */
+export function playFiller(options: GreetingOptions): Promise<void> {
+  return playClip('fillers', options);
+}
+
+function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
   return loadManifest().then(
     (manifest) =>
       new Promise<void>((resolve) => {
-        const clips = clipsForVoice(manifest, options.voiceId);
+        const clips = clipsForVoice(manifest, options.voiceId, kind);
+        if (clips.length === 0) {
+          resolve();
+          return;
+        }
         // Avoid repeating the previous clip so consecutive triggers don't
         // sound like a stuck recording.
-        const choices = clips.length > 1 ? clips.filter((c) => c !== lastPlayed) : clips;
+        const previous = lastPlayed[kind];
+        const choices = clips.length > 1 ? clips.filter((c) => c !== previous) : clips;
         const clip = choices[Math.floor(Math.random() * choices.length)];
-        lastPlayed = clip;
+        lastPlayed[kind] = clip;
 
         const audio = new Audio(clip);
         let settled = false;

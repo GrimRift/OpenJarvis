@@ -6,9 +6,10 @@ import {
   stepRotation,
 } from '../../lib/orb-motion';
 import { getSpeechLevel } from '../../lib/audio-level';
+import { resolveOrbState, type OrbState } from '../../lib/orb-state';
 import { useAppStore } from '../../lib/store';
 
-export type OrbState = 'idle' | 'listening' | 'speaking';
+export type { OrbState } from '../../lib/orb-state';
 
 // Single source of truth for the orb's state, shared by every component
 // that renders one (the empty-state hero orb, the persistent composer orb)
@@ -18,20 +19,18 @@ export function useOrbState(): OrbState {
   const streamState = useAppStore((s) => s.streamState);
   const voiceState = useAppStore((s) => s.voiceState);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
+  const presenceState = useAppStore((s) => s.presenceState);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
   // "speaking" is reserved for actually speaking. Generating text used to
   // claim it too, so the orb looked identical whether Sage was thinking or
   // talking — and since text now streams well ahead of speech, that covered
   // most of a turn.
-  if (audioPlaying) return 'speaking';
-  if (
-    isCurrentChatStreaming ||
-    voiceState === 'recording' ||
-    voiceState === 'transcribing'
-  ) {
-    return 'listening';
-  }
-  return 'idle';
+  return resolveOrbState({
+    audioPlaying,
+    streamingHere: isCurrentChatStreaming,
+    voiceState,
+    presenceState,
+  });
 }
 
 interface Particle {
@@ -70,8 +69,16 @@ const SPEED_MAP: Record<OrbState, number> = {
   idle: 0.0045,
   listening: 0.01248,
   speaking: 0.023,
+  // Nobody at the desk (M36): slower and dimmer, so the brighten-up as the
+  // user sits down is the thing they see.
+  away: 0.002,
 };
-const BRIGHT_MAP: Record<OrbState, number> = { idle: 0.85, listening: 1.05, speaking: 1.3 };
+const BRIGHT_MAP: Record<OrbState, number> = {
+  idle: 0.85,
+  listening: 1.05,
+  speaking: 1.3,
+  away: 0.5,
+};
 
 export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);

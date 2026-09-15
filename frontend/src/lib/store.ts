@@ -324,6 +324,8 @@ interface AppState {
   // so the orb's "speaking" state tracks real spoken audio, not just
   // token-streaming duration.
   audioPlaying: boolean;
+  /** What the server believes about the desk (M36): 'present', 'away', 'disabled', 'unknown'. */
+  presenceState: string;
   // Each playback path owns a separate claim. A boolean alone allowed an old
   // stream or player cleanup to mark newer audio idle while it was audible.
   audioPlaybackOwners: Record<string, true>;
@@ -375,6 +377,7 @@ interface AppState {
   setSelectedModel: (model: string) => void;
   setCloudModelAvailable: (available: boolean) => void;
   setServerInfo: (info: ServerInfo | null) => void;
+  setPresenceState: (state: string) => void;
   setSavings: (data: SavingsData | null) => void;
   incrementSavings: (usage: TokenUsage) => void;
 
@@ -470,6 +473,7 @@ export const useAppStore = create<AppState>((set, get) => {
     sidebarOpen: true,
     voiceState: 'idle',
     audioPlaying: false,
+    presenceState: 'unknown',
     audioPlaybackOwners: {},
 
     optInEnabled: localStorage.getItem(OPTIN_KEY) === 'true',
@@ -765,6 +769,7 @@ export const useAppStore = create<AppState>((set, get) => {
         return next;
       }),
     setServerInfo: (info: ServerInfo | null) => set({ serverInfo: info }),
+    setPresenceState: (state: string) => set({ presenceState: state }),
     setSavings: (data: SavingsData | null) => set({ savings: data }),
     incrementSavings: (usage: TokenUsage) => {
       const cur = get().savings;

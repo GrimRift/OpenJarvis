@@ -11,5 +11,19 @@
       "greetings/frieren/yes-sir-sonic36-content.mp3",
       "greetings/frieren/sir-sonic36-content.mp3"
     ]
+  },
+  "fillers": {
+    "78a05d7d-268b-4a18-aad7-7a96902a95ee": [
+      "greetings/jarvis/one-moment-sonic36-content.mp3",
+      "greetings/jarvis/checking-sonic36-content.mp3",
+      "greetings/jarvis/let-me-look-sonic36-content.mp3",
+      "greetings/jarvis/working-on-it-sonic36-content.mp3"
+    ],
+    "e23c9ecf-e002-4f7a-8e39-13d18d09923f": [
+      "greetings/frieren/one-moment-sonic36-content.mp3",
+      "greetings/frieren/checking-sonic36-content.mp3",
+      "greetings/frieren/let-me-look-sonic36-content.mp3",
+      "greetings/frieren/working-on-it-sonic36-content.mp3"
+    ]
   }
 }

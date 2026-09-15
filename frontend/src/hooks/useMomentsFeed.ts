@@ -9,11 +9,14 @@
  */
 
 import { useEffect } from 'react';
-import { fetchMoments, type MomentRecord } from '../lib/api';
+import { fetchMoments, fetchPresence, type MomentRecord } from '../lib/api';
 import { newMoments } from '../lib/moments-feed';
 import { useAppStore } from '../lib/store';
 
 const POLL_MS = 20_000;
+// The orb dims for an empty desk and brightens on return; the monitor
+// itself polls every 15 s, so faster than this buys nothing.
+const PRESENCE_POLL_MS = 10_000;
 const SEEN_KEY = 'sage-moments-seen';
 
 function readSeen(): number | null {
@@ -31,6 +34,27 @@ function writeSeen(at: number): void {
   } catch {
     /* a lost watermark only means one duplicate on the next load */
   }
+}
+
+/** What the server believes about the desk, into the store for the orb. */
+export function usePresenceState(): void {
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () =>
+      fetchPresence()
+        .then((snap) => {
+          if (!cancelled) useAppStore.getState().setPresenceState(snap.state);
+        })
+        .catch(() => {
+          if (!cancelled) useAppStore.getState().setPresenceState('unknown');
+        });
+    void poll();
+    const timer = setInterval(poll, PRESENCE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 }
 
 export function useMomentsFeed(): void {

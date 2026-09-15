@@ -30,6 +30,15 @@ GREETINGS = [
     ("sir", "Sir."),
 ]
 
+# Spoken while a tool call is still running and nothing has been said back
+# yet (M36 phase 4). Short, because the real answer follows it.
+FILLERS = [
+    ("one-moment", "One moment, sir."),
+    ("checking", "Checking."),
+    ("let-me-look", "Let me look."),
+    ("working-on-it", "Working on it."),
+]
+
 DELIVERY = {
     "jarvis": {"emotion": "content", "version": "sonic36-content"},
     "frieren": {"emotion": "content", "version": "sonic36-content"},
@@ -56,35 +65,41 @@ def main() -> int:
         manifest = {
             "default_voice_id": DEFAULT_VOICE.voice_id,
             "voices": {},
+            "fillers": {},
         }
     voices = manifest["voices"]
-    assert isinstance(voices, dict)
+    fillers = manifest.setdefault("fillers", {})
+    assert isinstance(voices, dict) and isinstance(fillers, dict)
     for profile in VOICE_PROFILES:
         profile_key = profile.name.casefold()
         if args.voice != "all" and args.voice != profile_key:
             continue
         delivery = DELIVERY[profile_key]
-        profile_clips = []
         voice_dir = OUT_DIR / profile_key
         voice_dir.mkdir(parents=True, exist_ok=True)
-        for slug, text in GREETINGS:
-            result = tool.execute(
-                text=text,
-                voice_id=profile.voice_id,
-                backend="cartesia",
-                speed=profile.speed,
-                volume=profile.volume,
-                emotion=delivery["emotion"],
-            )
-            if not result.success:
-                print(f"FAILED {profile.name} {slug!r}: {result.content}")
-                return 1
-            src = Path(result.metadata["audio_path"])
-            dest = voice_dir / f"{slug}-{delivery['version']}{src.suffix}"
-            shutil.copyfile(src, dest)
-            profile_clips.append(f"greetings/{profile_key}/{dest.name}")
-            print(f"{profile.name} {text!r} -> {dest} ({dest.stat().st_size} bytes)")
-        voices[profile.voice_id] = profile_clips
+        rendered: dict[str, list[str]] = {}
+        for kind, lines in (("greetings", GREETINGS), ("fillers", FILLERS)):
+            clips = []
+            for slug, text in lines:
+                result = tool.execute(
+                    text=text,
+                    voice_id=profile.voice_id,
+                    backend="cartesia",
+                    speed=profile.speed,
+                    volume=profile.volume,
+                    emotion=delivery["emotion"],
+                )
+                if not result.success:
+                    print(f"FAILED {profile.name} {slug!r}: {result.content}")
+                    return 1
+                src = Path(result.metadata["audio_path"])
+                dest = voice_dir / f"{slug}-{delivery['version']}{src.suffix}"
+                shutil.copyfile(src, dest)
+                clips.append(f"greetings/{profile_key}/{dest.name}")
+                print(f"{profile.name} {text!r} -> {dest} ({dest.stat().st_size} bytes)")
+            rendered[kind] = clips
+        voices[profile.voice_id] = rendered["greetings"]
+        fillers[profile.voice_id] = rendered["fillers"]
 
     # The frontend reads this rather than hardcoding filenames, so adding a
     # variant here is the only change needed to put it in rotation.

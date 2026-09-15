@@ -18,7 +18,8 @@ import {
   attachDocument,
   ingestDocument,
 } from '../../lib/api';
-import { playGreeting, preloadGreetings } from '../../lib/greeting';
+import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
+import { FILLER_AFTER_MS, fillerDue, initialFillerState } from '../../lib/filler';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
@@ -646,6 +647,34 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (!incrementalSpeech) return;
       spokenChars = pushSpokenDelta(spokenChars, delta, !wasVoice, incrementalSpeech);
     };
+    // "One moment, sir." when a tool call runs on with nothing said back
+    // yet. The clip is plain audio, never `audioPlaying` (see playFiller).
+    const filler = initialFillerState(incrementalSpeech !== null);
+    let fillerTimer: ReturnType<typeof setTimeout> | null = null;
+    const noteToolStarted = () => {
+      if (filler.toolStartedAt !== null) return;
+      filler.toolStartedAt = Date.now();
+      fillerTimer = setTimeout(() => {
+        fillerTimer = null;
+        if (!fillerDue(filler, Date.now())) return;
+        filler.played = true;
+        useAppStore.getState().addLogEntry({
+          timestamp: Date.now(), level: 'info', category: 'voice',
+          message: 'Sage (aloud): one moment',
+        });
+        void playFiller({ voiceId: ttsVoice.id });
+      }, FILLER_AFTER_MS);
+    };
+    const noteContentStarted = () => {
+      filler.contentStarted = true;
+    };
+    const endFiller = () => {
+      filler.ended = true;
+      if (fillerTimer) {
+        clearTimeout(fillerTimer);
+        fillerTimer = null;
+      }
+    };
 
     setStreamState({
       conversationId: convId,
@@ -764,6 +793,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           } else if (ev.type === 'synthesis') {
             if (!ttftMs) ttftMs = Date.now() - startTime;
             accumulatedContent += ev.text;
+            noteContentStarted();
             speakDelta(ev.text);
             const now = Date.now();
             if (
@@ -864,6 +894,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               status: 'running',
             };
             toolCalls.push(tc);
+            noteToolStarted();
             setStreamState({
               phase: `Calling ${data.tool}...`,
               activeToolCalls: [...toolCalls],
@@ -917,6 +948,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             if (delta?.content) {
               if (!ttftMs) ttftMs = Date.now() - startTime;
               accumulatedContent += delta.content;
+              noteContentStarted();
               speakDelta(delta.content);
 
               const now = Date.now();
@@ -954,6 +986,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // numbers don't get stuck on the last sample.
       useAppStore.getState().setLiveEnergy(null);
     } finally {
+      // A stopped or failed turn must not say "one moment" afterwards.
+      endFiller();
       // First, before anything that can throw.
       //
       // `isStreaming` feeds `micDisabled`, so a turn that leaves it set

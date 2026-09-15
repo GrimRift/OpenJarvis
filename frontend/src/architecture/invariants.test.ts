@@ -228,6 +228,27 @@ describe('anything that claims audio playback also releases it', () => {
   });
 });
 
+describe('pre-rendered clips never claim audio playback', () => {
+  /**
+   * The "one moment" filler plays while a tool call runs, before the reply.
+   * `audioPlaying`'s falling edge is what re-arms the microphone for
+   * continuous conversation, so a filler that claimed playback would open
+   * the mic mid-turn when its clip ended -- the reply would then be recorded
+   * as the user's next question. The clip module therefore never touches the
+   * store or the playback claim; this pins that.
+   */
+  const source = readFileSync(join(SRC, 'lib', 'greeting.ts'), 'utf8');
+
+  it('greeting.ts does not import the store or call setAudioPlayback', () => {
+    expect(source).not.toMatch(/from ['"]\.\/store['"]/);
+    expect(source).not.toContain('setAudioPlayback');
+  });
+
+  it('still contains the filler it guards', () => {
+    expect(source).toContain('export function playFiller');
+  });
+});
+
 describe('audioPlaying has a single writer', () => {
   /**
    * It is a derived value: the store computes it from the owners map. Any
