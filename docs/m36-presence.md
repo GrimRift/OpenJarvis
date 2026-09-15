@@ -204,6 +204,15 @@ only runs when Sage is up at 23:00, so the engine's startup hook writes any
 past day with conversations and no entry through the same agent before the
 first greeting is composed.
 
+**Audio ducking (2026-09-15).** Everything the server speaks -- moments,
+scheduled reminders, class alerts, the briefing -- now holds every other
+app's mixer volume at 35% of its own level while the voice plays, with a
+300 ms fade each way, and restores each exactly (`speech/ducking.py`, via
+`pycaw`; a no-op without it). Web-UI replies are excluded on purpose: a
+browser is one audio session, so lowering the YouTube tab would lower the
+reply in the Sage tab. Verified against a tone in a second process: 1.0 →
+0.35 for the sentence → 1.0.
+
 ## Phase 4 — Texture
 
 Cheap, high felt impact, no intelligence involved:

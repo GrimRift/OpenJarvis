@@ -15,8 +15,22 @@ import sys
 _PLAYERS = ["ffplay -nodisp -autoexit -loglevel quiet", "aplay", "afplay", "paplay"]
 
 
-def play_file(audio_path: str) -> bool:
-    """Play *audio_path* to completion. Returns whether a silent player ran."""
+def play_file(audio_path: str, *, duck: bool = True) -> bool:
+    """Play *audio_path* to completion. Returns whether a silent player ran.
+
+    Other apps are held at a fraction of their volume for the duration (see
+    ``ducking``), so a film does not drown the voice and the voice does not
+    have to shout over the film.
+    """
+    from openjarvis.speech.ducking import ducked
+
+    if not duck:
+        return _play(audio_path)
+    with ducked():
+        return _play(audio_path)
+
+
+def _play(audio_path: str) -> bool:
     for player in _PLAYERS:
         cmd_parts = player.split() + [audio_path]
         try:

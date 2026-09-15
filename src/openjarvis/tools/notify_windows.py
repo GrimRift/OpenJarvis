@@ -6,6 +6,7 @@ import logging
 import struct
 import subprocess
 import sys
+import threading
 import wave
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -309,17 +310,35 @@ def _wav_sample_rate(raw: bytes) -> Optional[int]:
 
 
 def _run_hidden(script: str) -> bool:
+    """Run a PowerShell player without waiting for it.
+
+    The wait happens on a thread of its own, holding the other apps' volume
+    down (see ``speech.ducking``) until the player exits, so the film comes
+    back up when the voice stops and not before. The caller is not blocked:
+    a reminder returns as soon as the sound has started.
+    """
     try:
-        subprocess.Popen(
+        process = subprocess.Popen(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return True
     except Exception:
         logger.warning("Could not start the spoken alert", exc_info=True)
         return False
+
+    def _hold() -> None:
+        from openjarvis.speech.ducking import ducked
+
+        with ducked():
+            try:
+                process.wait(timeout=120)
+            except Exception:
+                pass
+
+    threading.Thread(target=_hold, name="reminder-voice", daemon=True).start()
+    return True
 
 
 def _play_wav(path: str) -> bool:
