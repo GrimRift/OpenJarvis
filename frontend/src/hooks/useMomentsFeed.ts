@@ -14,9 +14,9 @@ import { newMoments } from '../lib/moments-feed';
 import { useAppStore } from '../lib/store';
 
 const POLL_MS = 20_000;
-// The orb dims for an empty desk and brightens on return; the monitor
-// itself polls every 15 s, so faster than this buys nothing.
-const PRESENCE_POLL_MS = 10_000;
+// The orb dims for an empty desk and brightens on return; five seconds so
+// the brighten-up is seen as the user sits down, not a while after.
+const PRESENCE_POLL_MS = 5_000;
 const SEEN_KEY = 'sage-moments-seen';
 
 function readSeen(): number | null {

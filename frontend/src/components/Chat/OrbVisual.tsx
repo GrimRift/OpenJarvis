@@ -71,12 +71,13 @@ const SPEED_MAP: Record<OrbState, number> = {
   speaking: 0.023,
   // Nobody at the desk (M36): slower and dimmer, so the brighten-up as the
   // user sits down is the thing they see.
-  away: 0.002,
+  away: 0.0025,
 };
 const BRIGHT_MAP: Record<OrbState, number> = {
   idle: 0.85,
   listening: 1.05,
   speaking: 1.3,
+  // Standing by, at about 60% -- a sleeping orb next to the idle one.
   away: 0.5,
 };
 
@@ -196,6 +197,9 @@ function drawOrb(
     }
   } else if (orbState === 'listening') {
     targetScale = 0.95;
+  } else if (orbState === 'away') {
+    // Standing by at about 85% size.
+    targetScale = 0.62;
   } else {
     targetScale = 0.73;
   }
@@ -249,7 +253,17 @@ function drawOrb(
 
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  const ringAlpha = (orbState === 'idle' ? 0.1 : orbState === 'listening' ? 0.2 : 0.32) * breathe;
+  // The away ring is dimmer than idle's: the first cut let it fall into the
+  // "everything else" level and the sleeping orb read brighter than the
+  // waking one.
+  const ringAlpha =
+    (orbState === 'away'
+      ? 0.06
+      : orbState === 'idle'
+        ? 0.1
+        : orbState === 'listening'
+          ? 0.2
+          : 0.32) * breathe;
   const grad = ctx.createRadialGradient(cx, cy, scaledR * 0.15, cx, cy, scaledR * 1.1);
   grad.addColorStop(0, `rgba(34,211,238,${ringAlpha})`);
   grad.addColorStop(1, 'rgba(34,211,238,0)');
