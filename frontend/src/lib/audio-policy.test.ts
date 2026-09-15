@@ -3,6 +3,7 @@ import {
   isDigestPrompt,
   pushSpokenDelta,
   shouldStreamReplySpeech,
+  SPEECH_CAPPED,
   shouldSynthesizeReplyAudio,
   speakableText,
   SPOKEN_REPLY_LIMIT,
@@ -95,7 +96,7 @@ describe('speakableText', () => {
   });
 
   it('ends a cut reply on a sentence when one is close to the limit', () => {
-    const long = `${'a'.repeat(1000)}. ${'b'.repeat(500)}`;
+    const long = `${'a'.repeat(SPOKEN_REPLY_LIMIT - 200)}. ${'b'.repeat(500)}`;
     const spoken = speakableText(long);
     expect(spoken.endsWith('.')).toBe(true);
   });
@@ -143,13 +144,22 @@ describe('pushSpokenDelta', () => {
     expect(s.finishedTimes()).toBe(0);
   });
 
-  it('cuts a typed reply at the limit and finishes the stream once', () => {
+  it('stops a typed reply at the end of the sentence the limit falls in', () => {
     const s = stream();
-    let n = pushSpokenDelta(0, 'abcdef', true, s, 10);
-    n = pushSpokenDelta(n, 'ghijkl', true, s, 10);
-    n = pushSpokenDelta(n, 'mnop', true, s, 10);
-    expect(s.pushed).toEqual(['abcdef', 'ghij']);
-    expect(n).toBe(10);
+    let n = pushSpokenDelta(0, 'First sentence. ', true, s, 20);
+    n = pushSpokenDelta(n, 'Second one runs', true, s, 20);
+    n = pushSpokenDelta(n, ' past the cap. Third never', true, s, 20);
+    n = pushSpokenDelta(n, ' heard.', true, s, 20);
+    expect(s.pushed.join('')).toBe('First sentence. Second one runs past the cap.');
+    expect(n).toBe(SPEECH_CAPPED);
     expect(s.finishedTimes()).toBe(1);
+  });
+
+  it('treats a newline as a sentence end too', () => {
+    const s = stream();
+    let n = pushSpokenDelta(0, '- item one that is long', true, s, 10);
+    n = pushSpokenDelta(n, '\n- item two', true, s, 10);
+    expect(s.pushed.join('')).toBe('- item one that is long\n');
+    expect(n).toBe(SPEECH_CAPPED);
   });
 });

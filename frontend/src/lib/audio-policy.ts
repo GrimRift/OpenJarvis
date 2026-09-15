@@ -41,10 +41,15 @@ export function shouldStreamReplySpeech(
   return wasVoice || speakTyped;
 }
 
+/** Returned by pushSpokenDelta once the stream has been finished by the cap. */
+export const SPEECH_CAPPED = -1;
+
 /**
  * Feed model deltas to the speech stream, stopping at the spoken limit for
- * typed replies. Pure over a small state so the cut-off is testable: returns
- * the chars spoken so far and whether the stream was finished by the cap.
+ * typed replies -- at the end of the sentence the limit falls in, never
+ * mid-word: a briefing that stopped at "Steam reports Lies of" sounded like
+ * a fault, not a choice. Pure over a running count so the cut-off is
+ * testable; returns the chars spoken so far, or SPEECH_CAPPED once done.
  */
 export function pushSpokenDelta(
   spokenChars: number,
@@ -53,26 +58,43 @@ export function pushSpokenDelta(
   stream: { push: (delta: string) => unknown; finish: () => unknown },
   limit: number = SPOKEN_REPLY_LIMIT,
 ): number {
-  if (!capped) {
+  if (spokenChars === SPEECH_CAPPED) return SPEECH_CAPPED;
+  if (!capped || spokenChars + delta.length < limit) {
     stream.push(delta);
     return spokenChars + delta.length;
   }
-  if (spokenChars >= limit) return spokenChars;
-  const room = limit - spokenChars;
-  const piece = delta.length > room ? delta.slice(0, room) : delta;
-  stream.push(piece);
-  const total = spokenChars + piece.length;
-  // The cut is silent, as in speakableText: the listener hears a complete
-  // sentence end (the server only releases stable boundaries), not a notice.
-  if (total >= limit) stream.finish();
-  return total;
+  // Past the limit: speak up to and including the next sentence end, then
+  // stop. Everything before it in this delta is spoken so the sentence is
+  // whole; anything after it is dropped.
+  const overshoot = Math.max(0, limit - spokenChars);
+  const end = sentenceEndAfter(delta, overshoot);
+  if (end === -1) {
+    stream.push(delta);
+    return spokenChars + delta.length;
+  }
+  stream.push(delta.slice(0, end));
+  stream.finish();
+  return SPEECH_CAPPED;
+}
+
+/** Index just past the first sentence end at or after *from*, or -1. */
+function sentenceEndAfter(text: string, from: number): number {
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\n') return i + 1;
+    const next = i + 1 === text.length ? ' ' : text[i + 1];
+    if ((c === '.' || c === '!' || c === '?') && /\s/.test(next)) {
+      return i + 1;
+    }
+  }
+  return -1;
 }
 
 /**
  * How much of a reply is worth reading out before it stops being useful.
  * Long enough for a real answer, short enough not to trap the listener.
  */
-export const SPOKEN_REPLY_LIMIT = 1200;
+export const SPOKEN_REPLY_LIMIT = 3000;
 
 /**
  * Strip a reply down to what is worth hearing.
