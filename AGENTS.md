@@ -150,6 +150,12 @@ full run, fails alone),
 `test_manager::TestCheckpoints` (one case fails per run and which one moves —
 `test_checkpoint_retention_max_5` and `test_get_latest_checkpoint` have both
 been seen; each passes when run alone).
+`tests/install/test_bg_state.py` (5), `test_chat_banner::test_banner_shows_model_downloading`
+and `test_doctor_bg::test_doctor_shows_bg_section_when_state_present` read
+this machine's real Ollama/model state (`qwen3.5:9b` is installed here) and
+have failed since at least 2 September; until 17 September the whole
+`tests/install` directory errored in its conftest instead (it patched a
+`doctor_cmd.DEFAULT_CONFIG_PATH` that M34 removed), which hid them. Not in CI.
 
 `ruff check src/ tests/` is clean as of 2026-09-04 and is enforced by CI, so
 lint the whole thing, not just your own files. The 12 remaining repo-wide
