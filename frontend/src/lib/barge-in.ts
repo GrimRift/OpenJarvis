@@ -105,17 +105,54 @@ export function hasConfidentStopWord(
   });
 }
 
+/** Of the heard words, the share that must be found in Sage's text, in order. */
+export const ECHO_MATCH_SHARE = 0.75;
+/** Consecutive matches may be this many of Sage's words apart. */
+const ECHO_MAX_GAP = 2;
+
+const NUMBER_WORDS: Record<string, string> = {
+  zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6',
+  seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12',
+};
+
+function echoToken(word: string): string {
+  const w = normalise(word);
+  return NUMBER_WORDS[w] ?? w;
+}
+
 /**
- * Whether the words, in order, are a contiguous run of what Sage has said
- * in this reply. Sage's own voice past echo cancellation comes back as its
- * own sentences; a person adds words of their own.
+ * Whether the words are what Sage has said in this reply, heard back.
+ * Sage's own voice past echo cancellation comes back as its own sentences,
+ * give or take a word the recogniser dropped or spelt differently ("7"
+ * for "seven"); a person adds words of their own. So most of the heard
+ * words must appear in Sage's text, in order, close together -- not all
+ * of them, and not adjacent.
  */
 export function isEchoOf(words: readonly FluxWord[], spokenText: string): boolean {
-  const heard = words.map((w) => normalise(w.word)).filter(Boolean);
+  const heard = words.map((w) => echoToken(w.word)).filter(Boolean);
   if (heard.length === 0) return false;
-  const said = spokenText.split(/\s+/).map(normalise).filter(Boolean);
-  for (let i = 0; i + heard.length <= said.length; i++) {
-    if (heard.every((w, j) => said[i + j] === w)) return true;
+  const said = spokenText.split(/\s+/).map(echoToken).filter(Boolean);
+  if (said.length === 0) return false;
+  const needed = Math.max(1, Math.ceil(heard.length * ECHO_MATCH_SHARE));
+  // From each place Sage's text could start, walk the heard words and
+  // count how many land in order within the gap.
+  for (let start = 0; start < said.length; start++) {
+    let matched = 0;
+    let pos = start;
+    for (const word of heard) {
+      const limit = Math.min(said.length, pos + ECHO_MAX_GAP + 1);
+      let found = -1;
+      for (let k = pos; k < limit; k++) {
+        if (said[k] === word) {
+          found = k;
+          break;
+        }
+      }
+      if (found === -1) continue;
+      matched += 1;
+      pos = found + 1;
+      if (matched >= needed) return true;
+    }
   }
   return false;
 }

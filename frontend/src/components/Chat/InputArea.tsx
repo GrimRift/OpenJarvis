@@ -1176,6 +1176,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // link targets are unlistenable, and a very long answer traps the
         // listener with no way to skim.
         const spokenContent = speakableText(accumulatedContent);
+        spokenTextRef.current = spokenContent;
         speakStreaming(spokenContent, ttsVoice)
           .then((spoke) => {
             if (spoke) {
@@ -1305,6 +1306,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         const releasePlayback = () =>
           useAppStore.getState().setAudioPlayback(playbackOwner, false);
         useAppStore.getState().setAudioPlayback(playbackOwner, true);
+        spokenTextRef.current = answer;
         speakStreaming(answer, ttsVoice)
           .then((spoke) => {
             if (spoke) {
@@ -1618,6 +1620,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         chars: transcript.length,
         reason: verdict.reason,
         mode: settings.bargeInMode,
+        heard: words.map((w) => `${w.word}:${w.confidence.toFixed(2)}`).join(' '),
+        spokenChars: spokenTextRef.current.length,
       });
       useAppStore.getState().addLogEntry({
         timestamp: Date.now(), level: 'info', category: 'voice',

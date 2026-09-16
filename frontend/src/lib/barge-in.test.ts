@@ -104,11 +104,20 @@ describe('rules on their own', () => {
     expect(hasConfidentStopWord([w('waiter')])).toBe(false);
   });
 
-  it('isEchoOf matches a contiguous run regardless of case and punctuation', () => {
+  it('isEchoOf matches a run regardless of case and punctuation', () => {
     expect(isEchoOf(say('Seven days.'), REPLY)).toBe(true);
     expect(isEchoOf(say('seven strength'), REPLY)).toBe(false);
     expect(isEchoOf([], REPLY)).toBe(false);
     expect(isEchoOf(say('anything'), '')).toBe(false);
+  });
+
+  it('isEchoOf survives a dropped word, a numeral, and a small gap', () => {
+    expect(isEchoOf(say('cure for 7 days'), REPLY)).toBe(true);
+    expect(isEchoOf(say('needs cure for seven days'), REPLY)).toBe(true);
+    expect(isEchoOf(say('reach strength loading'), REPLY)).toBe(true);
+    // Half the words being Sage's is a person using Sage's words.
+    expect(isEchoOf(say('seven days is too long'), REPLY)).toBe(false);
+    expect(isEchoOf(say('what about the strength'), REPLY)).toBe(false);
   });
 
   it('isGarbled needs three of the same token', () => {
