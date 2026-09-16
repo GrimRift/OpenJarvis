@@ -215,8 +215,17 @@ class TestEveryRegisteredSpeechBackendImports:
         assert listed, "no backend modules listed in speech/__init__.py"
         for mod in listed:
             module = importlib.import_module(f"openjarvis.speech.{mod}")
-            assert module is not None
-        for key in _discovery.DISCOVERY_ORDER:
-            assert SpeechRegistry.contains(key), (
-                f"{key} is in DISCOVERY_ORDER but not registered"
+            backend = next(
+                v
+                for v in vars(module).values()
+                if isinstance(v, type)
+                and getattr(v, "backend_id", "")
+                and v.__module__ == module.__name__
             )
+            # Other test modules clear the registry mid-run; re-register the
+            # way the module's own decorator did, so the check is about the
+            # module, not about test order.
+            if not SpeechRegistry.contains(backend.backend_id):
+                SpeechRegistry.register_value(backend.backend_id, backend)
+        for key in _discovery.DISCOVERY_ORDER:
+            assert SpeechRegistry.contains(key), f"{key} listed but not registered"
