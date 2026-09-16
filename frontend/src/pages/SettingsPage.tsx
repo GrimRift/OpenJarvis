@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useAppStore, type ThemeMode } from '../lib/store';
 import { VOICE_PROFILES } from '../lib/voice-profiles';
+import type { BargeMode } from '../lib/barge-in';
 import { modelForToggle } from '../lib/model-preference';
 import {
   checkHealth,
@@ -1024,8 +1025,21 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
-                <SettingRow label="Interrupt by speaking" description="Talk over a spoken reply and Sage stops to listen, after your second word. Voice questions in Flux mode only; typed replies are not cut.">
+                <SettingRow label="Interrupt by speaking" description="Talk over a spoken reply and Sage stops to listen. One clear 'stop', 'wait' or 'hold on' cuts at once; otherwise it takes a few words Sage is sure of. Sage's own voice and words it is unsure of never cut. Voice questions in Flux mode only; typed replies are not cut.">
                   <Switch on={settings.bargeInEnabled} onClick={() => { updateSettings({ bargeInEnabled: !settings.bargeInEnabled }); showSaved(); }} />
+                </SettingRow>
+                <SettingRow label="Interruption sensitivity" description="Conservative: three confident words. Balanced: two. Sensitive: two, or one very sure word. Start conservative; move up only if Sage talks over you.">
+                  <select
+                    value={settings.bargeInMode}
+                    disabled={!settings.bargeInEnabled}
+                    onChange={(e) => { updateSettings({ bargeInMode: e.target.value as BargeMode }); showSaved(); }}
+                    className="px-2 py-1 rounded-lg text-sm"
+                    style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                  >
+                    <option value="conservative">Conservative</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="sensitive">Sensitive</option>
+                  </select>
                 </SettingRow>
                 <SettingRow label="Speak Typed Replies" description={`Also read answers aloud when you typed the question, not just when you spoke it. Code blocks are skipped and very long answers are cut short, because neither is listenable.${settings.voiceRepliesEnabled ? '' : ' Currently silent: Speak Replies above is off, and it overrides this.'}`}>
                   <button

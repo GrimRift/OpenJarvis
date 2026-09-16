@@ -1,6 +1,6 @@
 # Barge-in v2 — interrupt by speaking, without false cuts
 
-Status: **phase 1 built 2026-09-16** (per-word confidences forwarded, confident stop-word fast path; 2-word rule kept). **Ducking was built, tried and removed the same day** -- see Decisions. Phases 2-3 not started. Supersedes the first barge-in
+Status: **phase 1 built 2026-09-16** (per-word confidences forwarded, confident stop-word fast path; 2-word rule kept). **Ducking was built, tried and removed the same day** -- see Decisions. **Phase 2 built 2026-09-16** (words-only verdicts with modes, echo-by-text, confidence floor, garbled/stale rejection, Settings picker, Voice-log reasons). Phase 3 not started. Supersedes the first barge-in
 (cut on the second transcribed word; see `frontend/src/lib/barge-in.ts`).
 
 ## Why
@@ -177,12 +177,35 @@ frontend.
 - A stop-word cut whose whole turn is stop vocabulary is consumed, not
   sent (`isStopCommand` gained the same words).
 
-## Open questions (before phase 2)
+## Decisions (phase 2, 2026-09-16)
 
-1. Ship Conservative as the default (3 words), accepting that "actually I
-   meant" is not confirmed until the third word?
-2. Rehearsal mode: a Settings switch, or a query flag on the dev server
+- Default mode Conservative (3 counted words, mean confidence >= 0.70).
+  Balanced 2 / 0.60; Sensitive 2 / 0.50 or one word at >= 0.85. Picker in
+  Settings beside the switch; stored as `bargeInMode`.
+- Echo always rejects, whatever the count, and is checked *before* the
+  stop words: a reply saying "wait for the concrete to cure" must not stop
+  itself. The comparison is against the whole text sent to the
+  synthesiser for the reply now playing (`spokenTextRef`), not a 15 s
+  window -- an echo can only be of this reply.
+- Words under 0.5 confidence are not counted at all; a transcript of one
+  token repeated three or more times is garbled; a partial for a turn
+  already finalised is stale and ignored.
+- Speech duration (`audio_window_*`) is not a rule: the browser never
+  needed it once the count and confidence were in place. Dropped from the
+  table.
+- The state machine collapsed to two states (Playing, Interrupted) once
+  `Candidate` went with ducking, so `InputArea` keeps its refs and calls
+  `judge()`; a reducer would have been ceremony.
+- Voice log: cuts always ("You stopped Sage: ..." / "You interrupted
+  Sage: ..."); rejections only when there were words ("Ignored while Sage
+  spoke: ... (echo)"); wordless noise turns stay in the trace.
+
+## Open questions (before phase 3)
+
+1. Rehearsal mode: a Settings switch, or a query flag on the dev server
    only?
+2. Which fixture cases to capture live first: fan, keyboard, a video
+   playing, someone else talking, a real "stop", a real question.
 
 ## Known limits
 

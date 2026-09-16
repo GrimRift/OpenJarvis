@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { DEFAULT_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
+import { type BargeMode, BARGE_MODES, DEFAULT_BARGE_MODE } from './barge-in';
 import {
   DEFAULT_CLOUD_MODEL,
   preferredModelId,
@@ -242,6 +243,8 @@ interface Settings {
   speakTypedReplies: boolean;
   /** Talking over a spoken reply cuts it (Flux voice mode). */
   bargeInEnabled: boolean;
+  /** How sure the words must be before they cut (lib/barge-in.ts). */
+  bargeInMode: BargeMode;
   ttsVoiceId: string;
   // Deepgram Flux streaming transcription. Off by default: local
   // faster-whisper stays the default and the fallback.
@@ -273,6 +276,7 @@ function loadSettings(): Settings {
     voiceRepliesEnabled: true,
     speakTypedReplies: false,
     bargeInEnabled: true,
+    bargeInMode: DEFAULT_BARGE_MODE,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,
     fluxEagerEnabled: false,
@@ -291,6 +295,9 @@ function loadSettings(): Settings {
       ttsVoiceId: isKnownVoiceId(parsed.ttsVoiceId)
         ? parsed.ttsVoiceId
         : defaults.ttsVoiceId,
+      bargeInMode: BARGE_MODES.includes(parsed.bargeInMode)
+        ? parsed.bargeInMode
+        : DEFAULT_BARGE_MODE,
     };
     // Ultra depends on Flux. A stored combination with eager on and Flux off
     // (settings edited by hand, or Flux switched off while eager stayed set)

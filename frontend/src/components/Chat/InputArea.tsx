@@ -21,11 +21,12 @@ import {
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
 import {
+  type BargeVerdict,
+  describeVerdict,
   INTERRUPTED_MARK,
-  interruptReason,
   isEchoTurn,
   isStopCommand,
-  shouldInterrupt,
+  judge,
 } from '../../lib/barge-in';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
@@ -202,6 +203,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // end-of-turn from an echo's.
   const bargeListeningRef = useRef(false);
   const bargeTriggeredRef = useRef(false);
+  // Everything sent to the synthesiser for the reply now playing, so a
+  // turn made only of Sage's own words is known for the echo it is.
+  const spokenTextRef = useRef('');
+  // The last verdict on the open turn, so its end can be logged with a reason.
+  const bargeVerdictRef = useRef<BargeVerdict | null>(null);
   const interruptedRef = useRef(false);
   // Distinguishes a hands-free (wake-word / continuous-mode) recording from
   // a manual mic-button click, so only the hands-free path auto-stops on a
@@ -656,6 +662,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       shouldStreamReplySpeech(wasVoice, content, speakTypedReplies)
         ? beginStreamingSpeech(ttsVoice)
         : null;
+    spokenTextRef.current = '';
     // "One moment, sir." when nothing has been said back for a while,
     // generating or waiting on a tool alike, then "still working on it"
     // every twenty seconds of continued silence. The clip is plain audio,
@@ -670,6 +677,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     const speakNow = (delta: string) => {
       if (!incrementalSpeech) return;
       spokenChars = pushSpokenDelta(spokenChars, delta, !wasVoice, incrementalSpeech);
+      spokenTextRef.current += delta;
     };
     const speakDelta = (delta: string) => {
       if (fillerPlaying) heldDeltas.push(delta);
@@ -1432,10 +1440,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           triggered: bargeTriggeredRef.current,
         })
       ) {
-        voiceTrace('barge.echoDropped', { chars: spoken.length });
+        voiceTrace('barge.echoDropped', {
+          chars: spoken.length,
+          reason: bargeVerdictRef.current?.reason ?? 'no-words',
+        });
+        const verdict = bargeVerdictRef.current;
+        bargeVerdictRef.current = null;
+        const line =
+          verdict && verdict.decision === 'reject' ? describeVerdict(verdict, spoken) : null;
+        if (line) {
+          useAppStore.getState().addLogEntry({
+            timestamp: Date.now(), level: 'info', category: 'voice', message: line,
+          });
+        }
         flux.beginTurn();
         return;
       }
+      bargeVerdictRef.current = null;
       const wasBargeIn = bargeTriggeredRef.current;
       bargeListeningRef.current = false;
       bargeTriggeredRef.current = false;
@@ -1449,10 +1470,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // thirty minutes".
       if (wasBargeIn && isStopCommand(spoken)) {
         voiceTrace('barge.stopOnly', { chars: spoken.length });
-        useAppStore.getState().addLogEntry({
-          timestamp: Date.now(), level: 'info', category: 'voice',
-          message: `You stopped Sage: "${spoken}"`,
-        });
         setFluxTurnActive(false);
         return;
       }
@@ -1575,15 +1592,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         stopStreaming();
       }
     },
-    onUpdate: (transcript, _turnIndex, words) => {
+    onUpdate: (transcript, turnIndex, words) => {
       if (!bargeListeningRef.current) return;
-      const state = {
-        enabled: useAppStore.getState().settings.bargeInEnabled,
-        sageSpeaking: useAppStore.getState().audioPlaying,
-        voiceReply: lastReplyWasVoiceRef.current,
-        triggered: bargeTriggeredRef.current,
-      };
-      if (!shouldInterrupt(state, transcript, words)) return;
+      // A partial for a turn already finalised is stale; it belongs to the
+      // normal path that handled it.
+      if (lastFluxTurnRef.current !== null && turnIndex <= lastFluxTurnRef.current) return;
+      const { settings, audioPlaying: sageSpeaking } = useAppStore.getState();
+      if (
+        !settings.bargeInEnabled ||
+        !sageSpeaking ||
+        !lastReplyWasVoiceRef.current ||
+        bargeTriggeredRef.current
+      ) {
+        return;
+      }
+      const verdict = judge(words, spokenTextRef.current, settings.bargeInMode);
+      bargeVerdictRef.current = verdict;
+      if (verdict.decision !== 'cut') return;
       // The user is talking over the reply: stop the voice and the model,
       // keep the microphone where it is. Deepgram's end-of-turn for what
       // they are saying arrives through the normal path.
@@ -1591,11 +1616,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       interruptedRef.current = true;
       voiceTrace('barge.interrupt', {
         chars: transcript.length,
-        reason: interruptReason(words),
+        reason: verdict.reason,
+        mode: settings.bargeInMode,
       });
       useAppStore.getState().addLogEntry({
         timestamp: Date.now(), level: 'info', category: 'voice',
-        message: 'You interrupted Sage',
+        message: describeVerdict(verdict, transcript) ?? 'You interrupted Sage',
       });
       stopSpeaking();
       const store = useAppStore.getState();
