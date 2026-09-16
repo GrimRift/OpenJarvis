@@ -105,8 +105,14 @@ export function hasConfidentStopWord(
   });
 }
 
-/** Of the heard words, the share that must be found in Sage's text, in order. */
-export const ECHO_MATCH_SHARE = 0.75;
+/**
+ * Of the heard words, the share that must be found in Sage's text, in
+ * order. Three fifths: Deepgram's partials of an echo are mangled at the
+ * edges ("before I change" for "before changing anything"), and a verdict
+ * of echo is not final -- the next partial is judged again, so a person
+ * whose first words happened to be Sage's is cut a word later.
+ */
+export const ECHO_MATCH_SHARE = 0.6;
 /** Consecutive matches may be this many of Sage's words apart. */
 const ECHO_MAX_GAP = 2;
 
@@ -115,23 +121,46 @@ const NUMBER_WORDS: Record<string, string> = {
   seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12',
 };
 
-function echoToken(word: string): string {
-  const w = normalise(word);
-  return NUMBER_WORDS[w] ?? w;
+/** "changing", "changed", "changes", "change" all compare equal. */
+function stem(word: string): string {
+  let w = word;
+  for (const suffix of ['ing', 'ed', 'es', 's']) {
+    if (w.length > suffix.length + 3 && w.endsWith(suffix)) {
+      w = w.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return w.length > 4 && w.endsWith('e') ? w.slice(0, -1) : w;
+}
+
+/**
+ * The comparable forms of one written or heard word. Deepgram hears
+ * "OpenJarvis" as "open jarvis" and Sage writes "won’t" with a curly
+ * apostrophe where Deepgram writes "won't", so camel case is split, every
+ * apostrophe dropped, number words made numerals, and inflections stemmed.
+ */
+export function echoTokens(word: string): string[] {
+  return word
+    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2')
+    .split(/\s+/)
+    .map((part) => part.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ''))
+    .filter(Boolean)
+    .map((part) => NUMBER_WORDS[part] ?? stem(part));
 }
 
 /**
  * Whether the words are what Sage has said in this reply, heard back.
  * Sage's own voice past echo cancellation comes back as its own sentences,
- * give or take a word the recogniser dropped or spelt differently ("7"
- * for "seven"); a person adds words of their own. So most of the heard
- * words must appear in Sage's text, in order, close together -- not all
- * of them, and not adjacent.
+ * give or take a word the recogniser dropped or spelt differently; a
+ * person adds words of their own. So most of the heard words must appear
+ * in Sage's text, in order, close together -- not all of them, and not
+ * adjacent. Deepgram is fully confident in an echo (1.00 on every word
+ * in the trace), so confidence is no help here; only the words are.
  */
 export function isEchoOf(words: readonly FluxWord[], spokenText: string): boolean {
-  const heard = words.map((w) => echoToken(w.word)).filter(Boolean);
+  const heard = words.flatMap((w) => echoTokens(w.word));
   if (heard.length === 0) return false;
-  const said = spokenText.split(/\s+/).map(echoToken).filter(Boolean);
+  const said = spokenText.split(/\s+/).flatMap(echoTokens);
   if (said.length === 0) return false;
   const needed = Math.max(1, Math.ceil(heard.length * ECHO_MATCH_SHARE));
   // From each place Sage's text could start, walk the heard words and

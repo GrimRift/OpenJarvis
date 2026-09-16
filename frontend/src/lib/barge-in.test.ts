@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countedWords,
   describeVerdict,
+  echoTokens,
   hasConfidentStopWord,
   isEchoOf,
   isEchoTurn,
@@ -40,8 +41,10 @@ describe('judge: conservative by default', () => {
     expect(judge(say('wait for it'), REPLY)).toEqual({ decision: 'reject', reason: 'echo' });
   });
 
-  it('is not echo once a word of the user\'s own is added', () => {
-    expect(judge(say('why seven days'), REPLY)).toEqual({ decision: 'cut', reason: 'words' });
+  it('a partial that is mostly Sage\'s words waits; the next one with the user\'s own cuts', () => {
+    // Echo is not a final verdict: the partial is judged again as it grows.
+    expect(judge(say('why seven days'), REPLY)).toEqual({ decision: 'reject', reason: 'echo' });
+    expect(judge(say('why seven days not three'), REPLY)).toEqual({ decision: 'cut', reason: 'words' });
   });
 
   it('rejects enough words Deepgram is not sure of', () => {
@@ -115,9 +118,26 @@ describe('rules on their own', () => {
     expect(isEchoOf(say('cure for 7 days'), REPLY)).toBe(true);
     expect(isEchoOf(say('needs cure for seven days'), REPLY)).toBe(true);
     expect(isEchoOf(say('reach strength loading'), REPLY)).toBe(true);
-    // Half the words being Sage's is a person using Sage's words.
+    // Under half the words being Sage's is a person using Sage's words.
     expect(isEchoOf(say('seven days is too long'), REPLY)).toBe(false);
     expect(isEchoOf(say('what about the strength'), REPLY)).toBe(false);
+  });
+
+  it('isEchoOf: the three misses from the 16 September trace', () => {
+    const intro = 'Sir, I’m Sage—your personal AI assistant running locally through a customized OpenJarvis installation.';
+    expect(isEchoOf(say('k. Customize open'), intro)).toBe(true);
+    const plan = '“Customize OpenJarvis” is broad, so I need the target area before changing anything.';
+    expect(isEchoOf(say('before I change'), plan)).toBe(true);
+    const wont = 'Of course, Sir. I won’t change anything yet.';
+    expect(isEchoOf(say("I won't change"), wont)).toBe(true);
+  });
+
+  it('echoTokens splits camel case, drops apostrophes, and stems', () => {
+    expect(echoTokens('OpenJarvis')).toEqual(['open', 'jarvi']);
+    expect(echoTokens('won’t')).toEqual(echoTokens("won't"));
+    expect(echoTokens('changing')).toEqual(echoTokens('change'));
+    expect(echoTokens('customized')).toEqual(echoTokens('customize'));
+    expect(echoTokens('seven')).toEqual(['7']);
   });
 
   it('isGarbled needs three of the same token', () => {
