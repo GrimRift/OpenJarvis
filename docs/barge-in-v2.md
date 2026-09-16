@@ -1,6 +1,6 @@
 # Barge-in v2 — interrupt by speaking, without false cuts
 
-Status: **phase 1 built 2026-09-16** (duck on StartOfTurn, 3 s candidate window, per-word confidences forwarded, confident stop-word fast path; 2-word rule kept). Phases 2-3 not started. Supersedes the first barge-in
+Status: **phase 1 built 2026-09-16** (per-word confidences forwarded, confident stop-word fast path; 2-word rule kept). **Ducking was built, tried and removed the same day** -- see Decisions. Phases 2-3 not started. Supersedes the first barge-in
 (cut on the second transcribed word; see `frontend/src/lib/barge-in.ts`).
 
 ## Why
@@ -164,8 +164,13 @@ frontend.
 
 ## Decisions (phase 1, 2026-09-16)
 
-- Duck to 35 % (150 ms in, 300 ms out), the server's level.
-- Candidate window 3 s from `StartOfTurn`.
+- **No ducking, and nothing reacts to `StartOfTurn`.** Built as designed
+  (35 %, 3 s window) and removed within the hour: Deepgram opens a turn
+  for the desk fan, the keyboard and Sage's own voice past echo
+  cancellation, so the reply dipped constantly. Section 1 and the
+  `Candidate` state above are therefore void; phase 2 decides from
+  transcribed words and their confidence only. Speech-start events are
+  not an input to barge-in at any stage.
 - Stop-word fast path ships in phase 1: one word of `stop / wait / hold
   on / hang on / pause / enough` at Deepgram confidence >= 0.8 cuts at
   once. `sage` alone does not; it is said mid-sentence too often.

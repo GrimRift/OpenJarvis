@@ -12,22 +12,16 @@
  *
  * Pure, so the decision is tested without a microphone.
  *
- * Phase 1 of barge-in v2 (docs/barge-in-v2.md) adds two things around
- * that rule. First, playback is protected: when Deepgram opens a turn the
- * reply is ducked, not stopped, and if nothing confirms an interruption
- * within the candidate window it comes back. Second, a confident stop word
- * on its own -- "stop", "wait", "hold on" -- cuts at once, because one such
- * word is what people say when they want the talking to end.
+ * Phase 1 of barge-in v2 (docs/barge-in-v2.md) adds one thing to that
+ * rule: a confident stop word on its own -- "stop", "wait", "hold on" --
+ * cuts at once, because one such word is what people say when they want
+ * the talking to end. Nothing here reacts to speech *starting*: Deepgram
+ * opens a turn for the fan, the keyboard and Sage's own voice, so only
+ * words, weighed by Deepgram's confidence in them, ever change playback.
  */
 
 export const BARGE_IN_WORDS = 2;
 
-/** How low the reply goes while a possible interruption is judged. */
-export const DUCK_LEVEL = 0.35;
-export const DUCK_IN_MS = 150;
-export const DUCK_OUT_MS = 300;
-/** A candidate not confirmed within this long of its StartOfTurn is noise. */
-export const CANDIDATE_WINDOW_MS = 3000;
 /** A stop word below this confidence is not trusted on its own. */
 export const STOP_WORD_CONFIDENCE = 0.8;
 
@@ -64,11 +58,6 @@ export function hasConfidentStopWord(
     }
     return false;
   });
-}
-
-/** Whether a candidate opened at `startedAt` has outlived its window. */
-export function candidateExpired(startedAt: number, now: number): boolean {
-  return now - startedAt >= CANDIDATE_WINDOW_MS;
 }
 
 export interface BargeState {

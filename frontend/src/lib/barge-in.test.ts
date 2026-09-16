@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CANDIDATE_WINDOW_MS,
-  candidateExpired,
   hasConfidentStopWord,
   interruptReason,
   isEchoTurn,
@@ -61,13 +59,6 @@ describe('hasConfidentStopWord', () => {
   it('ignores stop words inside other words', () => {
     expect(hasConfidentStopWord([w('stopwatch')])).toBe(false);
     expect(hasConfidentStopWord([w('waiter')])).toBe(false);
-  });
-});
-
-describe('candidateExpired', () => {
-  it('closes the window after CANDIDATE_WINDOW_MS', () => {
-    expect(candidateExpired(1000, 1000 + CANDIDATE_WINDOW_MS - 1)).toBe(false);
-    expect(candidateExpired(1000, 1000 + CANDIDATE_WINDOW_MS)).toBe(true);
   });
 });
 
