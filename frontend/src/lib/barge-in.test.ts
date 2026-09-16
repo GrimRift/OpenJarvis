@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { isEchoTurn, isStopCommand, shouldInterrupt, wordCount } from './barge-in';
+import {
+  CANDIDATE_WINDOW_MS,
+  candidateExpired,
+  hasConfidentStopWord,
+  interruptReason,
+  isEchoTurn,
+  isStopCommand,
+  shouldInterrupt,
+  wordCount,
+} from './barge-in';
+
+const w = (word: string, confidence = 0.95) => ({ word, confidence });
 
 const live = { enabled: true, sageSpeaking: true, voiceReply: true, triggered: false };
 
@@ -23,6 +34,41 @@ describe('shouldInterrupt', () => {
   it('only once per turn', () => {
     expect(shouldInterrupt({ ...live, triggered: true }, 'wait no stop')).toBe(false);
   });
+
+  it('cuts on one confident stop word, and says so', () => {
+    expect(shouldInterrupt(live, 'stop', [w('stop')])).toBe(true);
+    expect(shouldInterrupt(live, 'Wait.', [w('Wait.')])).toBe(true);
+    expect(shouldInterrupt(live, 'hold on', [w('hold'), w('on')])).toBe(true);
+    expect(interruptReason([w('stop')])).toBe('stop-word');
+    expect(interruptReason([w('the'), w('weather')])).toBe('words');
+  });
+
+  it('does not trust an unsure stop word alone, nor the name alone', () => {
+    expect(shouldInterrupt(live, 'stop', [w('stop', 0.6)])).toBe(false);
+    expect(shouldInterrupt(live, 'sage', [w('sage')])).toBe(false);
+    // Without word data there is nothing to be confident about.
+    expect(shouldInterrupt(live, 'stop')).toBe(false);
+  });
+});
+
+describe('hasConfidentStopWord', () => {
+  it('needs both words of a two-word phrase confident and adjacent', () => {
+    expect(hasConfidentStopWord([w('hold'), w('on', 0.5)])).toBe(false);
+    expect(hasConfidentStopWord([w('hold'), w('it'), w('on')])).toBe(false);
+    expect(hasConfidentStopWord([w('no'), w('hang'), w('on')])).toBe(true);
+  });
+
+  it('ignores stop words inside other words', () => {
+    expect(hasConfidentStopWord([w('stopwatch')])).toBe(false);
+    expect(hasConfidentStopWord([w('waiter')])).toBe(false);
+  });
+});
+
+describe('candidateExpired', () => {
+  it('closes the window after CANDIDATE_WINDOW_MS', () => {
+    expect(candidateExpired(1000, 1000 + CANDIDATE_WINDOW_MS - 1)).toBe(false);
+    expect(candidateExpired(1000, 1000 + CANDIDATE_WINDOW_MS)).toBe(true);
+  });
 });
 
 describe('isEchoTurn', () => {
@@ -38,7 +84,7 @@ describe('isEchoTurn', () => {
 
 describe('isStopCommand', () => {
   it('recognises a bare stop, however it is dressed', () => {
-    for (const said of ['stop', 'Okay. You can stop. No.', "that's enough, Sage", 'shut up', 'okay okay stop stop']) {
+    for (const said of ['stop', 'Okay. You can stop. No.', "that's enough, Sage", 'shut up', 'okay okay stop stop', 'wait', 'hold on', 'okay pause']) {
       expect(isStopCommand(said), said).toBe(true);
     }
   });

@@ -20,7 +20,17 @@ import {
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
-import { INTERRUPTED_MARK, isEchoTurn, isStopCommand, shouldInterrupt } from '../../lib/barge-in';
+import {
+  CANDIDATE_WINDOW_MS,
+  DUCK_IN_MS,
+  DUCK_LEVEL,
+  DUCK_OUT_MS,
+  INTERRUPTED_MARK,
+  interruptReason,
+  isEchoTurn,
+  isStopCommand,
+  shouldInterrupt,
+} from '../../lib/barge-in';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
@@ -196,6 +206,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // end-of-turn from an echo's.
   const bargeListeningRef = useRef(false);
   const bargeTriggeredRef = useRef(false);
+  // A possible interruption: Deepgram opened a turn while Sage was speaking.
+  // The reply is ducked from here until it is confirmed (cut) or the window
+  // runs out (restored). `null` when there is no candidate.
+  const bargeCandidateAtRef = useRef<number | null>(null);
+  const bargeWindowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const interruptedRef = useRef(false);
   // Distinguishes a hands-free (wake-word / continuous-mode) recording from
   // a manual mic-button click, so only the hands-free path auto-stops on a
@@ -220,7 +235,37 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     begin: beginStreamingSpeech,
     speak: speakStreaming,
     stop: stopSpeaking,
+    duck: duckSpeech,
+    restore: restoreSpeech,
   } = useStreamingTts();
+
+  const clearBargeCandidate = useCallback(() => {
+    bargeCandidateAtRef.current = null;
+    if (bargeWindowTimerRef.current) {
+      clearTimeout(bargeWindowTimerRef.current);
+      bargeWindowTimerRef.current = null;
+    }
+  }, []);
+  // The candidate came to nothing: bring the reply back.
+  const rejectBargeCandidate = useCallback(
+    (reason: string) => {
+      if (bargeCandidateAtRef.current === null) return;
+      clearBargeCandidate();
+      restoreSpeech(DUCK_OUT_MS);
+      voiceTrace('barge.rejected', { reason });
+    },
+    [clearBargeCandidate, restoreSpeech],
+  );
+  const openBargeCandidate = useCallback(() => {
+    if (bargeCandidateAtRef.current !== null) return;
+    bargeCandidateAtRef.current = Date.now();
+    duckSpeech(DUCK_LEVEL, DUCK_IN_MS);
+    voiceTrace('barge.candidate');
+    bargeWindowTimerRef.current = setTimeout(
+      () => rejectBargeCandidate('window'),
+      CANDIDATE_WINDOW_MS,
+    );
+  }, [duckSpeech, rejectBargeCandidate]);
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
   // Turn continuation (see lib/turn-continuation.ts). After a Flux turn is
@@ -1427,12 +1472,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         })
       ) {
         voiceTrace('barge.echoDropped', { chars: spoken.length });
+        rejectBargeCandidate('turn-ended');
         flux.beginTurn();
         return;
       }
       const wasBargeIn = bargeTriggeredRef.current;
       bargeListeningRef.current = false;
       bargeTriggeredRef.current = false;
+      clearBargeCandidate();
 
       if (!spoken) {
         setFluxTurnActive(false);
@@ -1540,6 +1587,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     onTurnStarted: () => {
       // Real speech: from here Deepgram owns the ending.
       clearFluxSilenceTimer();
+      if (
+        bargeListeningRef.current &&
+        !bargeTriggeredRef.current &&
+        useAppStore.getState().settings.bargeInEnabled &&
+        useAppStore.getState().audioPlaying
+      ) {
+        openBargeCandidate();
+      }
       const state = continuationRef.current;
       if (
         !continuingRef.current &&
@@ -1569,7 +1624,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         stopStreaming();
       }
     },
-    onUpdate: (transcript) => {
+    onUpdate: (transcript, _turnIndex, words) => {
       if (!bargeListeningRef.current) return;
       const state = {
         enabled: useAppStore.getState().settings.bargeInEnabled,
@@ -1577,13 +1632,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         voiceReply: lastReplyWasVoiceRef.current,
         triggered: bargeTriggeredRef.current,
       };
-      if (!shouldInterrupt(state, transcript)) return;
+      if (!state.enabled || !state.sageSpeaking || !state.voiceReply || state.triggered) {
+        return;
+      }
+      // An Update with no candidate means the StartOfTurn was missed (or
+      // the window already closed on this turn); judge it all the same.
+      if (bargeCandidateAtRef.current === null) openBargeCandidate();
+      if (!shouldInterrupt(state, transcript, words)) return;
       // The user is talking over the reply: stop the voice and the model,
       // keep the microphone where it is. Deepgram's end-of-turn for what
       // they are saying arrives through the normal path.
+      clearBargeCandidate();
       bargeTriggeredRef.current = true;
       interruptedRef.current = true;
-      voiceTrace('barge.interrupt', { chars: transcript.length });
+      voiceTrace('barge.interrupt', {
+        chars: transcript.length,
+        reason: interruptReason(words),
+      });
       useAppStore.getState().addLogEntry({
         timestamp: Date.now(), level: 'info', category: 'voice',
         message: 'You interrupted Sage',
@@ -1784,6 +1849,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // turn is kept open instead and the policy in lib/barge-in.ts tells the
   // user from the echo.
   useEffect(() => {
+    // A candidate belongs to one reply's playback; none outlives it. While
+    // playing this effect also re-runs on `fluxTurnActive`, which must not
+    // reset a candidate mid-window.
+    if (!audioPlaying) clearBargeCandidate();
     if (audioPlaying) {
       // Sage is audibly speaking: anything said now is a new turn, not the
       // rest of the last one.
@@ -1798,6 +1867,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           setFluxTurnActive(true);
         }
         clearFluxSilenceTimer();
+        if (!bargeListeningRef.current) clearBargeCandidate();
         bargeListeningRef.current = true;
         bargeTriggeredRef.current = false;
         voiceTrace('barge.listening');

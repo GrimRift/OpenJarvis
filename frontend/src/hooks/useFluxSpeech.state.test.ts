@@ -36,6 +36,19 @@ describe('Flux message interpretation', () => {
       expect(interpretFluxMessage(turnInfo('Update'), null).kind).toBe('update');
     });
 
+    it('carries word confidences on an Update, dropping malformed entries', () => {
+      const action = interpretFluxMessage(
+        turnInfo('Update', { words: [{ word: 'stop', confidence: 0.9 }, { word: 7 }, null] }),
+        null,
+      );
+      expect(action).toEqual({
+        kind: 'update',
+        turnIndex: 1,
+        transcript: expect.any(String),
+        words: [{ word: 'stop', confidence: 0.9 }],
+      });
+    });
+
     it('reports StartOfTurn without any side effect', () => {
       expect(interpretFluxMessage(turnInfo('StartOfTurn'), null).kind).toBe(
         'turnStarted',

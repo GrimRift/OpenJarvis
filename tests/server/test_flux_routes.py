@@ -542,3 +542,55 @@ class TestRetryUsesADifferentAddress:
         dialled, first = self._run([], fail=set())
         assert dialled == [""]
         assert first["type"] == "FluxReady"
+
+
+class TestWordConfidencesReachTheBrowser:
+    """Barge-in trusts a lone "stop" only when Deepgram does (barge-in v2).
+
+    The per-word confidences were parsed server-side from the start but never
+    relayed; the browser's policy could count words, not weigh them.
+    """
+
+    class _FakeSession:
+        def __init__(self, **kwargs):
+            self.closed = False
+
+        async def connect(self, address: str = ""):
+            return None
+
+        async def send_audio(self, data):
+            return None
+
+        async def events(self):
+            from openjarvis.speech.flux import TurnEvent
+
+            yield TurnEvent.from_message(
+                {
+                    "type": "TurnInfo",
+                    "event": "Update",
+                    "turn_index": 0,
+                    "transcript": "stop",
+                    "words": [
+                        {"word": "stop", "confidence": 0.93},
+                        {"word": 7, "confidence": 0.5},
+                        "not a word",
+                    ],
+                }
+            )
+            await asyncio.Event().wait()
+
+        async def close(self):
+            self.closed = True
+
+    def test_update_carries_words_with_confidence(self):
+        client = TestClient(_app(_enabled_config()))
+        with patch.object(flux_routes.flux, "is_available", return_value=True):
+            with patch.object(flux_routes.flux, "FluxSession", self._FakeSession):
+                with client.websocket_connect("/v1/speech/flux") as ws:
+                    assert ws.receive_json()["type"] == "FluxReady"
+                    msg = ws.receive_json()
+        assert msg["event"] == "Update"
+        assert msg["words"] == [
+            {"word": "stop", "confidence": 0.93},
+            {"word": "7", "confidence": 0.5},
+        ]

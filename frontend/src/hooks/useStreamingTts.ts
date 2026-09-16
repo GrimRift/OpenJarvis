@@ -336,5 +336,26 @@ export function useStreamingTts() {
     [begin],
   );
 
-  return { begin, speak, stop: teardown };
+  // Barge-in v2 protects playback: a possible interruption lowers the reply
+  // rather than stopping it, and a candidate that comes to nothing brings
+  // it back. Both are no-ops when nothing is playing.
+  const setLevel = useCallback((level: number, overMs: number) => {
+    const gain = gainRef.current;
+    const ctx = ctxRef.current;
+    if (!gain || !ctx) return;
+    try {
+      gain.gain.cancelScheduledValues(ctx.currentTime);
+      // setTargetAtTime reaches ~95% of the way in three time constants.
+      gain.gain.setTargetAtTime(level, ctx.currentTime, overMs / 3000);
+    } catch {
+      gain.gain.value = level;
+    }
+  }, []);
+  const duck = useCallback(
+    (level: number, overMs: number) => setLevel(level, overMs),
+    [setLevel],
+  );
+  const restore = useCallback((overMs: number) => setLevel(1, overMs), [setLevel]);
+
+  return { begin, speak, stop: teardown, duck, restore };
 }

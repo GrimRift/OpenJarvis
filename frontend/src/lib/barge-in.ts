@@ -11,9 +11,65 @@
  * half a second, which is how people interrupt each other anyway.
  *
  * Pure, so the decision is tested without a microphone.
+ *
+ * Phase 1 of barge-in v2 (docs/barge-in-v2.md) adds two things around
+ * that rule. First, playback is protected: when Deepgram opens a turn the
+ * reply is ducked, not stopped, and if nothing confirms an interruption
+ * within the candidate window it comes back. Second, a confident stop word
+ * on its own -- "stop", "wait", "hold on" -- cuts at once, because one such
+ * word is what people say when they want the talking to end.
  */
 
 export const BARGE_IN_WORDS = 2;
+
+/** How low the reply goes while a possible interruption is judged. */
+export const DUCK_LEVEL = 0.35;
+export const DUCK_IN_MS = 150;
+export const DUCK_OUT_MS = 300;
+/** A candidate not confirmed within this long of its StartOfTurn is noise. */
+export const CANDIDATE_WINDOW_MS = 3000;
+/** A stop word below this confidence is not trusted on its own. */
+export const STOP_WORD_CONFIDENCE = 0.8;
+
+/** One transcribed word with Deepgram's confidence in it. */
+export interface FluxWord {
+  word: string;
+  confidence: number;
+}
+
+/** The words that cut a reply alone; "sage" is not one, by decision. */
+const FAST_STOP_PHRASES = ['stop', 'wait', 'hold on', 'hang on', 'pause', 'enough'];
+
+function normalise(word: string): string {
+  return word.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, '');
+}
+
+/**
+ * Whether the transcript so far contains a stop phrase every word of which
+ * Deepgram is confident about. Two-word phrases need both words confident
+ * and adjacent.
+ */
+export function hasConfidentStopWord(
+  words: readonly FluxWord[],
+  minConfidence = STOP_WORD_CONFIDENCE,
+): boolean {
+  const norm = words.map((w) => ({ word: normalise(w.word), confidence: w.confidence }));
+  return FAST_STOP_PHRASES.some((phrase) => {
+    const parts = phrase.split(' ');
+    for (let i = 0; i + parts.length <= norm.length; i++) {
+      const run = norm.slice(i, i + parts.length);
+      if (run.every((w, j) => w.word === parts[j] && w.confidence >= minConfidence)) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+/** Whether a candidate opened at `startedAt` has outlived its window. */
+export function candidateExpired(startedAt: number, now: number): boolean {
+  return now - startedAt >= CANDIDATE_WINDOW_MS;
+}
 
 export interface BargeState {
   /** The Settings switch. */
@@ -30,12 +86,24 @@ export function wordCount(transcript: string): number {
   return transcript.trim().split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
 }
 
-/** Whether this partial transcript should cut the reply now. */
-export function shouldInterrupt(state: BargeState, transcript: string): boolean {
+/**
+ * Whether this partial transcript should cut the reply now: two real words,
+ * or one confident stop word.
+ */
+export function shouldInterrupt(
+  state: BargeState,
+  transcript: string,
+  words: readonly FluxWord[] = [],
+): boolean {
   if (!state.enabled || !state.sageSpeaking || !state.voiceReply || state.triggered) {
     return false;
   }
-  return wordCount(transcript) >= BARGE_IN_WORDS;
+  return wordCount(transcript) >= BARGE_IN_WORDS || hasConfidentStopWord(words);
+}
+
+/** Why a cut happened, for the trace and the Voice log. */
+export function interruptReason(words: readonly FluxWord[]): 'stop-word' | 'words' {
+  return hasConfidentStopWord(words) ? 'stop-word' : 'words';
 }
 
 /**
@@ -58,6 +126,10 @@ export const INTERRUPTED_MARK = '\n\n_(interrupted)_';
  */
 const STOP_PHRASES = [
   'stop',
+  'wait',
+  'hold on',
+  'hang on',
+  'pause',
   'enough',
   "that's enough",
   'shut up',
@@ -87,7 +159,7 @@ export function isStopCommand(transcript: string): boolean {
     .filter(Boolean);
   if (words.length === 0 || words.length > 8) return false;
   const text = words.join(' ');
-  if (!/\b(stop|enough|shut up|quiet)\b/.test(text)) return false;
+  if (!/\b(stop|wait|hold on|hang on|pause|enough|shut up|quiet)\b/.test(text)) return false;
   // Every word must belong to the stop vocabulary: "stop and tell me the
   // weather" is a question, not a stop.
   const vocab = new Set(STOP_PHRASES.flatMap((p) => p.split(' ')));

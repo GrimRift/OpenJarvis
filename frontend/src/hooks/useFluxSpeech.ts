@@ -1,6 +1,7 @@
 import { voiceTrace } from '../lib/voice-trace';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
+import type { FluxWord } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
 
 // Same capture format the wake-word socket already uses, so the browser
@@ -79,8 +80,11 @@ export interface UseFluxSpeechOptions {
    * release the microphone.
    */
   onTurnStarted?: (turnIndex: number) => void;
-  /** Partial transcript while a turn is in progress (never displayed). */
-  onUpdate?: (transcript: string, turnIndex: number) => void;
+  /**
+   * Partial transcript while a turn is in progress (never displayed), with
+   * Deepgram's confidence in each word.
+   */
+  onUpdate?: (transcript: string, turnIndex: number, words: FluxWord[]) => void;
   onTurnResumed?: (turnIndex: number) => void;
   /**
    * Flux cannot be used, or failed mid-session. `audio` carries whatever of
@@ -88,6 +92,18 @@ export interface UseFluxSpeechOptions {
    * instead of losing the utterance.
    */
   onUnavailable: (reason: string, audio: Int16Array | null) => void;
+}
+
+function fluxWords(raw: unknown): FluxWord[] {
+  if (!Array.isArray(raw)) return [];
+  const words: FluxWord[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const { word, confidence } = item as { word?: unknown; confidence?: unknown };
+    if (typeof word !== 'string') continue;
+    words.push({ word, confidence: typeof confidence === 'number' ? confidence : 0 });
+  }
+  return words;
 }
 
 /** What a server message means, decided without touching any state. */
@@ -100,7 +116,7 @@ export type FluxAction =
    * A partial transcript of the turn in progress. Nothing in the UI shows
    * it; it exists so barge-in can count words while Sage is speaking.
    */
-  | { kind: 'update'; turnIndex: number; transcript: string }
+  | { kind: 'update'; turnIndex: number; transcript: string; words: FluxWord[] }
   | { kind: 'speculate'; turnIndex: number; transcript: string }
   | { kind: 'cancelSpeculation'; turnIndex: number }
   | {
@@ -160,7 +176,7 @@ export function interpretFluxMessage(
     case 'StartOfTurn':
       return { kind: 'turnStarted', turnIndex };
     case 'Update':
-      return { kind: 'update', turnIndex, transcript };
+      return { kind: 'update', turnIndex, transcript, words: fluxWords(data.words) };
     case 'EagerEndOfTurn':
       return { kind: 'speculate', turnIndex, transcript };
     case 'TurnResumed':
@@ -352,7 +368,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           cb.onTurnStarted?.(action.turnIndex);
           break;
         case 'update':
-          cb.onUpdate?.(action.transcript, action.turnIndex);
+          cb.onUpdate?.(action.transcript, action.turnIndex, action.words);
           break;
         case 'speculate':
           cb.onEagerEndOfTurn?.(action.transcript, action.turnIndex);

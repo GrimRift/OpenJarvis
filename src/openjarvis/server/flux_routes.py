@@ -309,6 +309,16 @@ async def flux_stream(websocket: WebSocket) -> None:
                 "end_of_turn_confidence": event.end_of_turn_confidence,
                 "audio_window_start": event.audio_window_start,
                 "audio_window_end": event.audio_window_end,
+                # Per-word confidences: barge-in trusts a lone "stop" only
+                # when Deepgram does.
+                "words": [
+                    {
+                        "word": str(w.get("word", "")),
+                        "confidence": float(w.get("confidence", 0.0) or 0.0),
+                    }
+                    for w in event.words
+                    if isinstance(w, dict)
+                ],
             }
 
             if event.is_final:
