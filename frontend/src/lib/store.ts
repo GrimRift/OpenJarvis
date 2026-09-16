@@ -245,8 +245,9 @@ interface Settings {
   wakeWordGreetingEnabled: boolean;
   /**
    * Second opinion on every wake-word firing: the last two seconds are
-   * transcribed and must contain the phrase. Deepgram is ~250 ms, the
-   * local model ~400 ms and up; off is the bare detector.
+   * transcribed and must contain the phrase. Local is a small dedicated
+   * model on the GPU (~110 ms); Deepgram ~250 ms plus a handshake; off is
+   * the bare detector.
    */
   wakeWordVerify: WakeWordVerify;
   /** Seconds the microphone stays open after "Hey Sage" with nothing said. */
@@ -298,7 +299,7 @@ function loadSettings(): Settings {
     speakTypedReplies: false,
     bargeInEnabled: true,
     bargeInMode: DEFAULT_BARGE_MODE,
-    wakeWordVerify: 'deepgram',
+    wakeWordVerify: 'local',
     wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,

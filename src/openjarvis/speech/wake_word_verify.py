@@ -19,6 +19,7 @@ import io
 import logging
 import os
 import re
+import threading
 import time
 import wave
 from collections import deque
@@ -139,6 +140,8 @@ class Verdict:
     #: Why a firing was confirmed without the words -- empty when the
     #: transcript itself decided.
     note: str = ""
+    #: How long the transcriber took, so slowness is measured, not felt.
+    ms: int = 0
 
 
 class AudioRing:
@@ -230,6 +233,7 @@ class WakeWordVerifier:
             return Verdict(True, "", "no speech backend")
         if not pcm:
             return Verdict(True, "", "no audio buffered")
+        started = time.perf_counter()
         try:
             heard = await asyncio.wait_for(
                 asyncio.to_thread(self._transcribe, pcm), timeout=self._timeout
@@ -239,7 +243,8 @@ class WakeWordVerifier:
         except Exception as exc:  # noqa: BLE001 -- fail open, by design
             logger.debug("Wake-word verification failed: %s", exc)
             return Verdict(True, "", f"verifier error: {exc}")
-        verdict = Verdict(heard_wake_phrase(heard), heard)
+        ms = int((time.perf_counter() - started) * 1000)
+        verdict = Verdict(heard_wake_phrase(heard), heard, "", ms)
         keep_clip(pcm, verdict)
         return verdict
 
@@ -290,6 +295,45 @@ def _deepgram_key() -> str:
     return ""
 
 
+#: The dedicated local verifier model, loaded once per process. Measured
+#: 16 September on the recorded and live clips: tiny.en on CUDA answers in
+#: ~110 ms warm and, prompted with the phrase, writes "Hey Sage." where
+#: distil-large wrote "hazage" -- 117/119 positives, no negative accepted.
+#: The big transcription model is the wrong tool for a two-second yes/no.
+_LOCAL_MODEL: Any = None
+_LOCAL_MODEL_KEY: tuple = ()
+_LOCAL_LOCK = threading.Lock()
+
+
+def local_verifier_backend(config: Any) -> Any:
+    """The small Whisper for verification, built on first use and kept."""
+    global _LOCAL_MODEL, _LOCAL_MODEL_KEY
+    speech = getattr(config, "speech", None)
+    key = (
+        str(getattr(speech, "wake_word_verify_model", "tiny.en") or "tiny.en"),
+        str(getattr(speech, "device", "auto") or "auto"),
+        str(getattr(speech, "compute_type", "float16") or "float16"),
+    )
+    with _LOCAL_LOCK:
+        if _LOCAL_MODEL is not None and _LOCAL_MODEL_KEY == key:
+            return _LOCAL_MODEL
+        from openjarvis.speech.faster_whisper import FasterWhisperBackend
+
+        _LOCAL_MODEL = FasterWhisperBackend(
+            model_size=key[0], device=key[1], compute_type=key[2]
+        )
+        _LOCAL_MODEL_KEY = key
+        return _LOCAL_MODEL
+
+
+def warm_local_verifier(config: Any) -> None:
+    """Load the small model now, so the first "Hey Sage" is not the slow one."""
+    try:
+        local_verifier_backend(config).health()
+    except Exception as exc:  # noqa: BLE001 -- warm-up is optional
+        logger.debug("Wake-word verifier warm-up failed: %s", exc)
+
+
 def make_verifier(
     config: Any, backend: Any, mode: Optional[str] = None
 ) -> Optional[WakeWordVerifier]:
@@ -307,7 +351,12 @@ def make_verifier(
         logger.warning("Unknown wake_word_verify=%r; treating as 'local'", chosen)
         chosen = "local"
     transcriber = backend
-    if chosen == "deepgram":
+    if chosen == "local":
+        try:
+            transcriber = local_verifier_backend(config)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Small verifier model unavailable (%s); using main", exc)
+    elif chosen == "deepgram":
         key = _deepgram_key()
         if key:
             try:
@@ -330,7 +379,9 @@ __all__ = [
     "Verdict",
     "WakeWordVerifier",
     "heard_wake_phrase",
+    "local_verifier_backend",
     "make_verifier",
     "normalise_level",
     "pcm_to_wav",
+    "warm_local_verifier",
 ]

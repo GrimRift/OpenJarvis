@@ -13,7 +13,6 @@ import pytest
 from openjarvis.speech.wake_word_verify import (
     RING_FRAMES,
     AudioRing,
-    Verdict,
     WakeWordVerifier,
     heard_wake_phrase,
     make_verifier,
@@ -99,15 +98,16 @@ class TestVerifier:
     def test_confirms_the_phrase_and_reports_what_it_heard(self):
         backend = _Backend("Hey Sage.")
         verdict = asyncio.run(WakeWordVerifier(backend).verify(b"\x00" * 3200))
-        assert verdict == Verdict(True, "Hey Sage.")
+        assert (verdict.confirmed, verdict.heard) == (True, "Hey Sage.")
+        assert verdict.note == ""
         assert backend.calls == [("wav", "en", "Hey Sage.")]
 
     def test_rejects_a_transcript_without_the_phrase(self):
         pcm = b"\x00" * 3200
         verdict = asyncio.run(WakeWordVerifier(_Backend("the stage")).verify(pcm))
-        assert verdict == Verdict(False, "the stage")
+        assert (verdict.confirmed, verdict.heard) == (False, "the stage")
         silent = asyncio.run(WakeWordVerifier(_Backend("")).verify(pcm))
-        assert silent == Verdict(False, "")
+        assert (silent.confirmed, silent.heard) == (False, "")
 
     def test_fails_open_on_every_kind_of_failure(self):
         """Verification may only remove firings, never make the wake word deaf."""
@@ -130,7 +130,14 @@ class TestVerifier:
 
 
 class TestConfig:
-    def test_off_disables_and_local_is_the_default(self):
+    def test_off_disables_and_local_is_the_default(self, monkeypatch):
+        def _unavailable(config):
+            raise RuntimeError("no model in tests")
+
+        monkeypatch.setattr(
+            "openjarvis.speech.wake_word_verify.local_verifier_backend", _unavailable
+        )
+
         class Speech:
             initial_prompt = "Hey Sage."
 

@@ -1556,10 +1556,14 @@ class SpeechConfig:
     wake_word_model: str = ""
     # Second opinion on every detection: transcribe the last two seconds
     # with the speech backend and confirm only if "hey sage" is in the
-    # text. "deepgram" (nova-3, ~250 ms), "local" (the configured backend)
-    # or "off"; the browser's Settings choice overrides this per session.
-    # Any verifier failure confirms, so this can only remove false firings.
-    wake_word_verify: str = "deepgram"
+    # text. "local" (a small dedicated Whisper, ~110 ms on the GPU),
+    # "deepgram" (nova-3, ~250 ms plus a TLS handshake when idle) or "off";
+    # the browser's Settings choice overrides this per session. Any
+    # verifier failure confirms, so this can only remove false firings.
+    wake_word_verify: str = "local"
+    # The small model for "local" verification, separate from `model`
+    # above: a two-second yes/no does not need the transcription model.
+    wake_word_verify_model: str = "tiny.en"
     # Primes Whisper's decoder toward expected vocabulary — otherwise it has
     # no way to know "Sage" (the assistant's name) is even a likely word,
     # and readily mishears it as something phonetically closer to common

@@ -128,7 +128,30 @@ no word list spells and the phonetic rule did not allow. Changes:
   follow-up**, 3-30 s, default 8 s each, replacing the fixed 8 s Flux
   timer and 12 s local fallback.
 
+## Revision, later the same evening: a dedicated small model
+
+Both engines still felt slow -- over a second to the greeting. Timing
+was added to every verdict (`ms` on the message and in the trace). The
+likely culprit for Deepgram is the TLS handshake on a connection that
+idled out between firings (1.3 s measured cold, 200-350 ms warm); the
+big local model is simply the wrong size for a two-second yes/no.
+
+Measured on the recorded natural sessions and the live clips, on CUDA:
+
+| model | warm median | positives | negatives | live clips |
+|---|---|---|---|---|
+| distil-large-v3.5 (transcription model) | ~400 ms | 114/126 | all real ones | "hazage", "acid" |
+| Deepgram nova-3 + keyterm | 200-350 ms (+1.3 s cold) | -- | -- | "hazage", "hazy" |
+| **tiny.en, prompted "Hey Sage."** | **~110-130 ms** (480 cold) | **117/119** | all real ones | writes "Hey Sage." |
+
+So "Local" is now a **dedicated `tiny.en`** (`[speech] wake_word_verify_model`),
+loaded at startup alongside the speech backend so the first firing is not
+the cold one, and the default again. The five "negatives" tiny.en
+accepted are `natural_session_1/auto_neg_004-008`, which every model
+hears the phrase in -- mislabelled captures.
+
 ## Open questions
 
-1. After a day: is "sage" alone worth confirming, or is the shape rule
-   now enough?
+1. After a day: does tiny.en, prompted with the phrase, ever write "Hey
+   Sage." for something that was not? The Voice log and kept clips will
+   say; if it does, drop the prompt (measured cost: unknown yet).

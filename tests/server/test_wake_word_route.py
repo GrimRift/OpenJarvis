@@ -52,6 +52,19 @@ class _Backend:
         return r
 
 
+@pytest.fixture(autouse=True)
+def _no_small_model(monkeypatch):
+    """The dedicated verifier model is never loaded in tests; "local" then
+    falls back to whatever speech backend the app has, which is the fake."""
+
+    def _unavailable(config):
+        raise RuntimeError("no model in tests")
+
+    monkeypatch.setattr(
+        "openjarvis.speech.wake_word_verify.local_verifier_backend", _unavailable
+    )
+
+
 def _app(heard, verify="local"):
     app = FastAPI()
     app.include_router(websocket_router)

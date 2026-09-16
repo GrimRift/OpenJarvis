@@ -209,11 +209,12 @@ export function useWakeWord(
             verified: Boolean(data.verified),
             heard: String(data.heard ?? ''),
             note: String(data.note ?? ''),
+            ms: Number(data.ms ?? 0),
           });
           onDetectedRef.current();
         } else if (data.type === 'rejected') {
           const heard = String(data.heard ?? '');
-          voiceTrace('wakeword.rejected', { heard });
+          voiceTrace('wakeword.rejected', { heard, ms: Number(data.ms ?? 0) });
           onRejectedRef.current?.(heard);
         }
       } catch {

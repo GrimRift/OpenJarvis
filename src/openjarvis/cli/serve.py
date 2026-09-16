@@ -561,6 +561,10 @@ def serve(
                     backend.health()  # type: ignore[attr-defined]
                 except Exception as exc:  # noqa: BLE001 — warmup is optional
                     logger.debug("Speech warmup failed: %s", exc)
+                # The wake-word verifier's own small model, same reason.
+                from openjarvis.speech.wake_word_verify import warm_local_verifier
+
+                warm_local_verifier(config)
 
             threading.Thread(
                 target=_warm_speech, name="speech-warmup", daemon=True

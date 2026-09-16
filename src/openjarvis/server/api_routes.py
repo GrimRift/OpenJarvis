@@ -718,7 +718,12 @@ async def wake_word_stream(websocket: WebSocket):
                     verdict = await verifier.verify(ring.pcm())
                 if verdict is not None and not verdict.confirmed:
                     await websocket.send_json(
-                        {"type": "rejected", "score": score, "heard": verdict.heard}
+                        {
+                            "type": "rejected",
+                            "score": score,
+                            "heard": verdict.heard,
+                            "ms": verdict.ms,
+                        }
                     )
                     ring.clear()
                     await asyncio.to_thread(detector.reset)
@@ -730,6 +735,7 @@ async def wake_word_stream(websocket: WebSocket):
                         "verified": bool(verdict is not None and not verdict.note),
                         "heard": verdict.heard if verdict is not None else "",
                         "note": verdict.note if verdict is not None else "",
+                        "ms": verdict.ms if verdict is not None else 0,
                     }
                 )
                 ring.clear()
