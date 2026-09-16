@@ -1955,6 +1955,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       effectiveSpeechState === 'idle' &&
       !audioPlaying &&
       wakeWordSettled,
+    // A firing the transcript did not back: the words were not there. One
+    // line so a false trigger is readable afterwards instead of a mystery.
+    (heard) =>
+      useAppStore.getState().addLogEntry({
+        timestamp: Date.now(), level: 'info', category: 'voice',
+        message: heard
+          ? `Ignored a wake-word-like sound: heard "${heard}"`
+          : 'Ignored a wake-word-like sound: no words in it',
+      }),
   );
 
   // The Settings switch is the authority: flipping it either way ends a

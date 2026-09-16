@@ -1554,6 +1554,11 @@ class SpeechConfig:
     compute_type: str = "float16"  # "float16", "int8", "float32"
     # Path to a trained openWakeWord .onnx file; empty = disabled
     wake_word_model: str = ""
+    # Second opinion on every detection: transcribe the last two seconds
+    # with the speech backend and confirm only if "hey sage" is in the
+    # text. "local" (the configured backend) or "off". Any verifier failure
+    # confirms, so this can only remove false firings.
+    wake_word_verify: str = "local"
     # Primes Whisper's decoder toward expected vocabulary — otherwise it has
     # no way to know "Sage" (the assistant's name) is even a likely word,
     # and readily mishears it as something phonetically closer to common

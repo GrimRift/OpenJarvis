@@ -694,13 +694,44 @@ async def wake_word_stream(websocket: WebSocket):
     # Building a fresh one costs ~0.07s once the ONNX runtime is warm.
     detector = await asyncio.to_thread(shared.clone)
 
+    # The detector judges acoustic shape; a loud transient can pass for the
+    # phrase. Before a detection is announced, the last two seconds are
+    # transcribed and must contain the words (speech/wake_word_verify.py).
+    from openjarvis.speech.wake_word_verify import AudioRing, make_verifier
+
+    verifier = make_verifier(
+        getattr(websocket.app.state, "config", None),
+        getattr(websocket.app.state, "speech_backend", None),
+    )
+    ring = AudioRing()
+
     await websocket.accept(subprotocol=subprotocol)
     try:
         while True:
             frame = await websocket.receive_bytes()
+            ring.push(frame)
             score = await asyncio.to_thread(detector.score, frame)
             if detector.is_detection(score):
-                await websocket.send_json({"type": "detected", "score": score})
+                verdict = None
+                if verifier is not None:
+                    verdict = await verifier.verify(ring.pcm())
+                if verdict is not None and not verdict.confirmed:
+                    await websocket.send_json(
+                        {"type": "rejected", "score": score, "heard": verdict.heard}
+                    )
+                    ring.clear()
+                    await asyncio.to_thread(detector.reset)
+                    continue
+                await websocket.send_json(
+                    {
+                        "type": "detected",
+                        "score": score,
+                        "verified": bool(verdict is not None and not verdict.note),
+                        "heard": verdict.heard if verdict is not None else "",
+                        "note": verdict.note if verdict is not None else "",
+                    }
+                )
+                ring.clear()
                 # One utterance must produce one detection. The model scores a
                 # rolling window, so a single "Hey Sage" stays above threshold
                 # for several consecutive frames and every one of them is a

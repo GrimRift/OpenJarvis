@@ -80,12 +80,19 @@ export function carriesSound(frame: number[]): boolean {
   return Math.sqrt(sum / frame.length) >= MIN_FRAME_RMS;
 }
 
-export function useWakeWord(onDetected: () => void, enabled: boolean) {
+export function useWakeWord(
+  onDetected: () => void,
+  enabled: boolean,
+  /** The server heard something wake-word-shaped but the words were not there. */
+  onRejected?: (heard: string) => void,
+) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const onDetectedRef = useRef(onDetected);
   onDetectedRef.current = onDetected;
+  const onRejectedRef = useRef(onRejected);
+  onRejectedRef.current = onRejected;
   const lastEnabledRef = useRef<boolean | null>(null);
   if (lastEnabledRef.current !== enabled) {
     lastEnabledRef.current = enabled;
@@ -191,8 +198,16 @@ export function useWakeWord(onDetected: () => void, enabled: boolean) {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'detected') {
-          voiceTrace('wakeword.fired');
+          voiceTrace('wakeword.fired', {
+            verified: Boolean(data.verified),
+            heard: String(data.heard ?? ''),
+            note: String(data.note ?? ''),
+          });
           onDetectedRef.current();
+        } else if (data.type === 'rejected') {
+          const heard = String(data.heard ?? '');
+          voiceTrace('wakeword.rejected', { heard });
+          onRejectedRef.current?.(heard);
         }
       } catch {
         // ignore malformed payload
