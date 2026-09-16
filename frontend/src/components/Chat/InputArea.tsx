@@ -65,10 +65,14 @@ import type {
  * Only used on the Flux fallback path: the buffered turn is raw 16-bit mono
  * samples, and faster-whisper is handed a file, not a stream.
  */
-// How long a Flux turn may hear nothing at all before the microphone is
-// released. Deliberately shorter than the local path's 12s fallback: a wake
-// word that fired on noise is the case this exists for.
-const FLUX_SILENCE_TIMEOUT_MS = 8000;
+// How long a turn may hear nothing at all before the microphone is
+// released: a wake word that fired on noise is the case this exists for.
+// Two settings, one for after "Hey Sage" and one for the follow-up window
+// after a reply, so the second can be more relaxed than the first.
+function listenMs(kind: 'wake' | 'followUp'): number {
+  const s = useAppStore.getState().settings;
+  return (kind === 'wake' ? s.wakeWordListenSeconds : s.continuousListenSeconds) * 1000;
+}
 
 function pcm16ToWav(samples: Int16Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -1539,16 +1543,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // torn-down socket.
   useEffect(() => clearFluxSilenceTimer, [clearFluxSilenceTimer]);
 
-  const armFluxSilenceTimer = useCallback(() => {
+  const armFluxSilenceTimer = useCallback((kind: 'wake' | 'followUp') => {
     clearFluxSilenceTimer();
     fluxSilenceTimerRef.current = setTimeout(() => {
       fluxSilenceTimerRef.current = null;
       // Silent by design: nothing was said, so there is nothing to report.
-      voiceTrace('silence.timer.close');
+      voiceTrace('silence.timer.close', { kind });
       flux.endTurn();
       clearFluxSilenceTimer();
       setFluxTurnActive(false);
-    }, FLUX_SILENCE_TIMEOUT_MS);
+    }, listenMs(kind));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clearFluxSilenceTimer]);
 
@@ -1687,13 +1691,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       clearContinuationWindow();
       setFluxTurnActive(true);
       flux.beginTurn();
-      armFluxSilenceTimer();
+      armFluxSilenceTimer('followUp');
       return;
     }
     await startRecording(finishAutoRecording);
     autoStopTimerRef.current = setTimeout(() => {
       finishAutoRecording();
-    }, 12000);
+    }, listenMs('followUp'));
     // effectiveSpeechState folds in fluxTurnActive; leaving it out of the
     // dependencies let this callback keep a stale 'recording' after the
     // turn had ended, and continuous conversation skipped every re-arm
@@ -1742,13 +1746,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // the turn Deepgram is judging.
         if (greeting) await greeting;
         flux.beginTurn();
-        armFluxSilenceTimer();
+        armFluxSilenceTimer('wake');
         return;
       }
       await startRecording(finishAutoRecording, { waitBeforeCapture: greeting });
       autoStopTimerRef.current = setTimeout(() => {
         finishAutoRecording();
-      }, 12000);
+      }, listenMs('wake'));
     } finally {
       // By now startRecording has set speechState to 'recording', so the
       // ordinary guard above takes over from here.
@@ -1794,6 +1798,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     if (wakeWordEnabled && wakeWordGreetingEnabled) preloadGreetings();
   }, [wakeWordEnabled, wakeWordGreetingEnabled]);
   const continuousConversationEnabled = useAppStore((s) => s.settings.continuousConversationEnabled);
+  const wakeWordVerify = useAppStore((s) => s.settings.wakeWordVerify);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
   const wasAudioPlayingRef = useRef(false);
 
@@ -1853,7 +1858,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       bargeListeningRef.current = false;
       if (continuousConversationEnabled && lastReplyWasVoiceRef.current) {
         voiceTrace('barge.handoff');
-        armFluxSilenceTimer();
+        armFluxSilenceTimer('followUp');
       } else if (fluxTurnActive) {
         voiceTrace('barge.closed');
         flux.endTurn();
@@ -1964,6 +1969,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           ? `Ignored a wake-word-like sound: heard "${heard}"`
           : 'Ignored a wake-word-like sound: no words in it',
       }),
+    wakeWordVerify,
   );
 
   // The Settings switch is the authority: flipping it either way ends a

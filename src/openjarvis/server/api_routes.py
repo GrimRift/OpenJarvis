@@ -702,6 +702,7 @@ async def wake_word_stream(websocket: WebSocket):
     verifier = make_verifier(
         getattr(websocket.app.state, "config", None),
         getattr(websocket.app.state, "speech_backend", None),
+        websocket.query_params.get("verify"),
     )
     ring = AudioRing()
 

@@ -47,10 +47,13 @@ export function wakeWordSessionOwnsSocket(
   return activeSessionId === socketSessionId && isCurrentSocket;
 }
 
-function buildWakeWordWsUrl(): string {
+function buildWakeWordWsUrl(verify: string): string {
   const base = getBase();
   const url = new URL('/v1/speech/wake-word', base || window.location.origin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  // The verifier is the user's choice, made in Settings; the server reads
+  // it per socket, so changing it means reconnecting (see the effect below).
+  url.searchParams.set('verify', verify);
   return url.toString();
 }
 
@@ -85,6 +88,8 @@ export function useWakeWord(
   enabled: boolean,
   /** The server heard something wake-word-shaped but the words were not there. */
   onRejected?: (heard: string) => void,
+  /** Which transcriber confirms a firing: 'deepgram' | 'local' | 'off'. */
+  verify: string = 'deepgram',
 ) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +98,8 @@ export function useWakeWord(
   onDetectedRef.current = onDetected;
   const onRejectedRef = useRef(onRejected);
   onRejectedRef.current = onRejected;
+  const verifyRef = useRef(verify);
+  verifyRef.current = verify;
   const lastEnabledRef = useRef<boolean | null>(null);
   if (lastEnabledRef.current !== enabled) {
     lastEnabledRef.current = enabled;
@@ -165,7 +172,7 @@ export function useWakeWord(
   // re-requesting mic permission or tearing down the AudioContext.
   const connectSocket = useCallback((sessionId: number) => {
     if (sessionIdRef.current !== sessionId) return;
-    const ws = new WebSocket(buildWakeWordWsUrl(), buildWsProtocols());
+    const ws = new WebSocket(buildWakeWordWsUrl(verifyRef.current), buildWsProtocols());
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
@@ -391,8 +398,10 @@ export function useWakeWord(
       stop();
     }
     return stop;
+    // The verifier choice is part of the socket URL, so a change rebuilds
+    // the listener the same way enabling does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [enabled, verify]);
 
   useEffect(() => {
     if (!enabled) return;

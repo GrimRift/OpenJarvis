@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import { DEFAULT_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
 import { type BargeMode, BARGE_MODES, DEFAULT_BARGE_MODE } from './barge-in';
+
+export type WakeWordVerify = 'deepgram' | 'local' | 'off';
+export const WAKE_WORD_VERIFY_MODES: readonly WakeWordVerify[] = ['deepgram', 'local', 'off'];
+export const LISTEN_SECONDS_MIN = 3;
+export const LISTEN_SECONDS_MAX = 30;
+export const DEFAULT_LISTEN_SECONDS = 8;
+
+function clampSeconds(value: unknown, fallback: number): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;
+  return Math.min(LISTEN_SECONDS_MAX, Math.max(LISTEN_SECONDS_MIN, n));
+}
 import {
   DEFAULT_CLOUD_MODEL,
   preferredModelId,
@@ -232,7 +243,17 @@ interface Settings {
   speechEnabled: boolean;
   wakeWordEnabled: boolean;
   wakeWordGreetingEnabled: boolean;
+  /**
+   * Second opinion on every wake-word firing: the last two seconds are
+   * transcribed and must contain the phrase. Deepgram is ~250 ms, the
+   * local model ~400 ms and up; off is the bare detector.
+   */
+  wakeWordVerify: WakeWordVerify;
+  /** Seconds the microphone stays open after "Hey Sage" with nothing said. */
+  wakeWordListenSeconds: number;
   continuousConversationEnabled: boolean;
+  /** Seconds the microphone stays open for a follow-up after a reply. */
+  continuousListenSeconds: number;
   // Speak replies to voice-originated turns. On by default -- it is the point
   // of talking to Sage -- but a streamed reply has no player, so this and the
   // stop control are the only ways to silence it.
@@ -277,6 +298,9 @@ function loadSettings(): Settings {
     speakTypedReplies: false,
     bargeInEnabled: true,
     bargeInMode: DEFAULT_BARGE_MODE,
+    wakeWordVerify: 'deepgram',
+    wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,
+    continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,
     fluxEagerEnabled: false,
@@ -298,6 +322,14 @@ function loadSettings(): Settings {
       bargeInMode: BARGE_MODES.includes(parsed.bargeInMode)
         ? parsed.bargeInMode
         : DEFAULT_BARGE_MODE,
+      wakeWordVerify: WAKE_WORD_VERIFY_MODES.includes(parsed.wakeWordVerify)
+        ? parsed.wakeWordVerify
+        : defaults.wakeWordVerify,
+      wakeWordListenSeconds: clampSeconds(parsed.wakeWordListenSeconds, DEFAULT_LISTEN_SECONDS),
+      continuousListenSeconds: clampSeconds(
+        parsed.continuousListenSeconds,
+        DEFAULT_LISTEN_SECONDS,
+      ),
     };
     // Ultra depends on Flux. A stored combination with eager on and Flux off
     // (settings edited by hand, or Flux switched off while eager stayed set)

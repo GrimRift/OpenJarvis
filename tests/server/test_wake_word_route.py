@@ -101,3 +101,22 @@ def test_off_skips_verification_entirely():
     out = _drive(app)
     assert out[-1]["type"] == "detected" and out[-1]["verified"] is False
     assert app.state.speech_backend.audio == []
+
+
+def test_the_browser_picks_the_verifier_per_socket():
+    """`?verify=off` on the socket beats the server default."""
+    app = _app("the stage", verify="local")
+    client = TestClient(app)
+    with client.websocket_connect("/v1/speech/wake-word?verify=off") as ws:
+        out = [ws.send_bytes(bytes([i]) * 2560) or ws.receive_json() for i in range(3)]
+    assert out[-1]["type"] == "detected"
+    assert app.state.speech_backend.audio == []
+
+
+def test_deepgram_without_a_key_falls_back_to_the_local_backend(monkeypatch):
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.setattr("openjarvis.speech.wake_word_verify._deepgram_key", lambda: "")
+    app = _app("hazage", verify="deepgram")
+    out = _drive(app)
+    assert out[-1]["type"] == "detected" and out[-1]["verified"] is True
+    assert len(app.state.speech_backend.audio) == 1

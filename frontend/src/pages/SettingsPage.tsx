@@ -18,7 +18,7 @@ import {
   Brain,
   RefreshCw,
 } from 'lucide-react';
-import { useAppStore, type ThemeMode } from '../lib/store';
+import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VOICE_PROFILES } from '../lib/voice-profiles';
 import type { BargeMode } from '../lib/barge-in';
 import { modelForToggle } from '../lib/model-preference';
@@ -991,6 +991,29 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
+                <SettingRow label="Wake word check" description="Before Sage answers a wake word it transcribes the last two seconds and must hear the phrase, so a loud noise or the TV cannot wake it. Deepgram takes about a quarter of a second; the local model about half; Off trusts the detector alone. Ignored firings show in the Voice log with what was heard.">
+                  <select
+                    value={settings.wakeWordVerify}
+                    onChange={(e) => { updateSettings({ wakeWordVerify: e.target.value as WakeWordVerify }); showSaved(); }}
+                    className="px-2 py-1 rounded-lg text-sm"
+                    style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                  >
+                    <option value="deepgram">Deepgram</option>
+                    <option value="local">Local</option>
+                    <option value="off">Off</option>
+                  </select>
+                </SettingRow>
+                <SettingRow label="Listen after wake word" description={`${settings.wakeWordListenSeconds} s — how long the microphone stays open after "Hey Sage" if you say nothing.`}>
+                  <input
+                    type="range"
+                    min={LISTEN_SECONDS_MIN}
+                    max={LISTEN_SECONDS_MAX}
+                    step="1"
+                    value={settings.wakeWordListenSeconds}
+                    onChange={(e) => { updateSettings({ wakeWordListenSeconds: parseInt(e.target.value) }); showSaved(); }}
+                    className="w-32 cursor-pointer accent-[var(--color-accent)]"
+                  />
+                </SettingRow>
                 <SettingRow label="Local Vision Model" description={`Answer image questions with ${settings.visionLocalModel} on this machine instead of the cloud model. Slower and a weaker reasoner, but the picture never leaves your computer`}>
                   <button
                     onClick={() => { updateSettings({ visionUseLocal: !settings.visionUseLocal }); showSaved(); }}
@@ -1058,6 +1081,18 @@ export function SettingsPage() {
                       }}
                     />
                   </button>
+                </SettingRow>
+                <SettingRow label="Listen for a follow-up" description={`${settings.continuousListenSeconds} s — with Continuous Conversation on, how long the microphone stays open after a reply for your next turn.`}>
+                  <input
+                    type="range"
+                    min={LISTEN_SECONDS_MIN}
+                    max={LISTEN_SECONDS_MAX}
+                    step="1"
+                    value={settings.continuousListenSeconds}
+                    disabled={!settings.continuousConversationEnabled}
+                    onChange={(e) => { updateSettings({ continuousListenSeconds: parseInt(e.target.value) }); showSaved(); }}
+                    className="w-32 cursor-pointer accent-[var(--color-accent)]"
+                  />
                 </SettingRow>
                 <SettingRow label="Continuous Conversation" description="After Sage replies, automatically listen for your next turn instead of requiring the wake word again">
                   <button

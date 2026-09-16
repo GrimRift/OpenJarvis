@@ -108,8 +108,27 @@ One server change, one message type added, no UI beyond a log line.
   "Hey Sage" is also lost and must be repeated. Each rejection is a
   Voice-log line with what was heard.
 
+## Revision, same evening
+
+Live, the local verifier felt slow and the wake word "super hard to
+fire". Kept clips (`OPENJARVIS_WAKE_WORD_KEEP_CLIPS`, set in
+`start-sage.ps1`, last 30) showed why: at the desk the phrase comes out
+as **"hazage"**, "hazy", "acid" -- a short "hey" and a voiced s -- which
+no word list spells and the phonetic rule did not allow. Changes:
+
+- The phonetic rule accepts `[scz]` for the s; every live shape is a test.
+- **Deepgram nova-3** (`keyterm=["Sage"]`) is the default verifier: 200-350
+  ms a clip live against 400 ms and up local. The old
+  `speech/deepgram.py` backend is dead on SDK v7 (imports
+  `PrerecordedOptions`), so the verifier has its own thin v7 call.
+- The choice lives in **Settings → Speech → Wake word check**
+  (Deepgram / Local / Off) and rides on the socket URL (`?verify=`); the
+  config key is only the default. No key: falls back to local, never off.
+- Two sliders beside it: **Listen after wake word** and **Listen for a
+  follow-up**, 3-30 s, default 8 s each, replacing the fixed 8 s Flux
+  timer and 12 s local fallback.
+
 ## Open questions
 
-1. After a day of Voice-log lines: is the one-in-ten miss on quiet/fast
-   says acceptable, or should "sage" alone confirm (recovers 2 of the 12
-   recorded misses)?
+1. After a day: is "sage" alone worth confirming, or is the shape rule
+   now enough?

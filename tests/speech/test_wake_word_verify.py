@@ -166,6 +166,11 @@ class TestPhonetic:
             "Haseage",
             "Hey, save",
             "best song. Hey Sage.",
+            # Deepgram, live clips: the s voiced or a soft c.
+            "hazage",
+            "hazy",
+            "acid",
+            "Peace",
         ],
     )
     def test_the_recorded_shapes_pass(self, text):
@@ -177,7 +182,8 @@ class TestPhonetic:
             "is it",
             "is blue",
             "change",
-            "Peace",
+            "ac",
+            "he's",
             "He changed.",
             "I see you soon.",
             "Sage",
