@@ -1442,9 +1442,45 @@ The extractor's default `max_tokens` was raised 512 → 2,000 and the
 greeting composer's 200 → 600 on the strength of the reasoning-headroom
 lesson, before either could fail in the wild.
 
+### Barge-in v2 and the verified wake word (evening of 2026-09-16)
+
+`docs/barge-in-v2.md`: the cut is now a verdict from transcribed words
+only -- Conservative (3 words at 0.70) / Balanced / Sensitive in
+Settings, echo rejected by comparing the words to the reply's own text
+(stemmed, camel case split, apostrophes dropped, three fifths in order),
+low-confidence and garbled turns rejected, reasons in the Voice log.
+Ducking on speech-start was built and removed the same hour. Phase 3
+(rehearsal mode, fixtures from live traces) is open.
+
+`docs/wake-word-verify.md`: every wake-word firing is confirmed by
+transcribing the last two seconds with a dedicated `tiny.en` kept warm on
+the GPU (~130 ms) and matching "hey sage" by shape; rejections are a
+Voice-log line with what was heard. Measured on the recorded samples:
+117/119 positives, no real negative accepted. Deepgram and the big local
+model were tried live and were slower and less accurate on this voice;
+the Deepgram verifier and the dead `speech/deepgram.py` backend were
+removed. Settings gained the On/Off check plus two sliders (listen after
+wake word; listen for a follow-up), 3-30 s.
+
+Also: Opera GX's login autostart now carries `--remote-debugging-port`,
+so the CDP tools work after a reboot; the voice backdrop glow was dimmed.
+
+### Verification pass 2 (2026-09-16, late)
+
+Five invariants added: `verify()` fails open on every path; the route
+rejects only on a read transcript; tests never load the small model;
+every listed speech backend imports and registers (`tests/architecture`);
+every `speakStreaming` call records its text and `onTurnStarted` knows
+nothing of barge-in (`frontend/src/architecture`). Six traps added to
+`AGENTS.md`.
+
 ### Open
 
 - Live with M37 for a day: does Gentle feel like company or interruption;
   does anything Social says belong on the "never bring up" list.
 - Skim Memory → Removed after the first hygiene run.
+- A day of Voice-log lines for the wake word: does tiny.en, prompted with
+  the phrase, ever confirm something that was not it? The kept clips in
+  `OpenJarvis-Data/wake-word-clips` (last 30) show what it heard.
+- Barge-in v2 phase 3 if any wrong cut shows up in the trace.
 - M33 (self-improvement) is next by recommendation; M29 (mobile) after.

@@ -508,3 +508,77 @@ describe('no callback reads effectiveSpeechState without depending on it', () =>
     ).toEqual([]);
   });
 });
+
+describe('every path that speaks a reply records what it says', () => {
+  /**
+   * Barge-in rejects a turn as echo by comparing the words against the
+   * text sent to the synthesiser for the reply now playing. Two of the
+   * three paths that speak a reply -- the Ultra answer and the post-stream
+   * fallback -- never recorded their text, so echo had nothing to compare
+   * against and Sage's own voice cut its own reply. Every call that hands
+   * text to speakStreaming must first put that text in spokenTextRef.
+   */
+  const file = join(SRC, 'components', 'Chat', 'InputArea.tsx');
+
+  it('assigns spokenTextRef before each speakStreaming call', () => {
+    const sf = parse(file);
+    const text = readFileSync(file, 'utf8');
+    const offenders: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'speakStreaming'
+      ) {
+        // The assignment belongs to the same statement block, just above.
+        const before = text.slice(Math.max(0, node.getStart() - 400), node.getStart());
+        if (!/spokenTextRef\.current\s*=/.test(before)) {
+          const { line } = sf.getLineAndCharacterOfPosition(node.getStart());
+          offenders.push(`InputArea.tsx:${line + 1}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect(
+      offenders,
+      'speakStreaming called without recording the text in spokenTextRef; ' +
+        'barge-in cannot tell this reply from the user',
+    ).toEqual([]);
+  });
+
+  it('there is something to guard', () => {
+    expect(readFileSync(file, 'utf8').match(/\bspeakStreaming\(/g)?.length ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe('barge-in never reacts to speech starting', () => {
+  /**
+   * Deepgram opens a turn for the desk fan, the keyboard and Sage's own
+   * voice past echo cancellation. A first version ducked the reply on
+   * StartOfTurn and the reply dipped constantly; it was removed the same
+   * hour. Only transcribed words may touch playback, so the onTurnStarted
+   * handler must not know barge-in exists. (It does stop a half-answer for
+   * turn continuation -- the user was not finished -- which is a different
+   * mechanism with its own window and is allowed.)
+   */
+  it('onTurnStarted contains no barge-in state or ducking', () => {
+    const file = join(SRC, 'components', 'Chat', 'InputArea.tsx');
+    const sf = parse(file);
+    let handler: ts.Node | null = null;
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isPropertyAssignment(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === 'onTurnStarted'
+      ) {
+        handler = node.initializer;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect(handler, 'onTurnStarted handler not found').not.toBeNull();
+    const body = (handler as unknown as ts.Node).getText();
+    expect(body).not.toMatch(/barge|duck/i);
+  });
+});

@@ -315,6 +315,41 @@ component works:
   only the manual toggle. Anything that must reach the user during a film
   has to be spoken (`notify_windows` now speaks every desktop reminder), and
   only the manual toggle silences that.
+- **Deepgram opens a turn for the desk fan, the keyboard and Sage's own
+  voice.** Anything keyed on "speech started" (`StartOfTurn`) fires
+  constantly; a ducking-on-speech-start feature lasted an hour. Only
+  transcribed words, weighed by confidence, may change playback
+  (`lib/barge-in.ts`; pinned by `architecture/invariants.test.ts`). And
+  Deepgram is *fully* confident in an echo -- 1.00 on every word in the
+  trace -- so confidence cannot tell Sage's voice from the user's; only
+  comparing the words to what Sage said can.
+- **Speech-to-text never spells the name the same way twice.** At the desk
+  "Hey Sage" arrives as "hazage", "hazy", "acid", "A sage", "He's in",
+  "Hey, see you"; Sage's own text uses curly apostrophes ("won’t") where
+  Deepgram uses straight ones, and camel case ("OpenJarvis") where speech
+  has two words. Any rule that matches transcript against text must
+  normalise (stem, split camel case, drop apostrophes) and match on shape,
+  never exact tokens. The live kept clips
+  (`OPENJARVIS_WAKE_WORD_KEEP_CLIPS`) are the only way to see what the
+  recogniser actually heard; guessing from the trace was wrong three
+  times running on 16 September.
+- **The transcription model is the wrong tool for a two-second yes/no.**
+  distil-large-v3.5 took 400 ms+ and mis-spelt the phrase; Deepgram paid a
+  1.3 s TLS handshake after every idle spell; `tiny.en` kept warm answers
+  in ~130 ms and, prompted with the phrase, writes it correctly
+  (`speech/wake_word_verify.py`). Measure on the recorded samples in
+  `OpenJarvis-Data/wake_word_samples` before choosing -- and note two of
+  those sessions (23 Aug browser captures, 63 clips) contain no speech at
+  all; Whisper returns "you"/"Thank you." for them even with VAD off.
+- **Opera GX autostarts at login without `--remote-debugging-port`**, so
+  the flagged taskbar pin only focuses the running instance and the CDP
+  tools report "browser-control port unavailable". The flag has to be on
+  the `HKCU\...\Run` entry too (set 16 Sept); check
+  `http://127.0.0.1:9222/json/version` before anything else.
+- **`speech/deepgram.py` was dead for as long as SDK v7 was installed**
+  (it imported `PrerecordedOptions`); nothing noticed because the import
+  sat in a `try`. Removed; `test_invariants_lessons.py` now imports every
+  listed backend.
 
 ## Web parity
 
