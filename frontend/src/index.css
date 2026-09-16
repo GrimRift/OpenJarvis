@@ -489,7 +489,7 @@
     pointer-events: none;
     z-index: 0;
     background-image:
-      radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 42%),
+      radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--color-accent) 3%, transparent), transparent 34%),
       radial-gradient(circle at 85% 110%, color-mix(in srgb, var(--color-accent-purple) 8%, transparent), transparent 46%),
       linear-gradient(to bottom, transparent, transparent);
   }
