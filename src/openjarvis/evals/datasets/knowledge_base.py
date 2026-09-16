@@ -68,9 +68,9 @@ _RECORDS = [
         "answer": "The workflow engine supports agent, tool, condition, parallel, loop, and transform node types. Parallel stages are executed via ThreadPoolExecutor.",
     },
     {
-        "documents": "Speech Subsystem Technical Reference:\nOpenJarvis supports speech-to-text with pluggable backends. SpeechBackend ABC defines transcribe(), health(), and supported_formats() methods. Three backends are available: FasterWhisperBackend (local, CTranslate2, key 'faster-whisper'), OpenAIWhisperBackend (cloud, whisper-1, key 'openai'), and DeepgramSpeechBackend (cloud, nova-2, key 'deepgram'). Auto-discovery prioritizes local backends.",
+        "documents": "Speech Subsystem Technical Reference:\nOpenJarvis supports speech-to-text with pluggable backends. SpeechBackend ABC defines transcribe(), health(), and supported_formats() methods. Two backends are available: FasterWhisperBackend (local, CTranslate2, key 'faster-whisper') and OpenAIWhisperBackend (cloud, whisper-1, key 'openai'). Auto-discovery prioritizes local backends.",
         "question": "What speech backends are available and which models do the cloud backends use?",
-        "answer": "Three backends are available: FasterWhisperBackend (local), OpenAIWhisperBackend (cloud, using whisper-1), and DeepgramSpeechBackend (cloud, using nova-2). Auto-discovery prioritizes local backends.",
+        "answer": "Two backends are available: FasterWhisperBackend (local) and OpenAIWhisperBackend (cloud, using whisper-1). Auto-discovery prioritizes local backends.",
     },
     {
         "documents": "Sandbox System Guide:\nOpenJarvis provides two sandbox options. ContainerRunner manages Docker/Podman container lifecycle with mount validation. WasmRunner uses wasmtime-py with fuel and memory limits. SandboxedAgent is a transparent wrapper that routes agent execution through either sandbox. MountAllowlist prevents path traversal attacks. The create_sandbox_runner() factory selects the appropriate runner.",

@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import { DEFAULT_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
 import { type BargeMode, BARGE_MODES, DEFAULT_BARGE_MODE } from './barge-in';
 
-export type WakeWordVerify = 'deepgram' | 'local' | 'off';
-export const WAKE_WORD_VERIFY_MODES: readonly WakeWordVerify[] = ['deepgram', 'local', 'off'];
+export type WakeWordVerify = 'local' | 'off';
+export const WAKE_WORD_VERIFY_MODES: readonly WakeWordVerify[] = ['local', 'off'];
 export const LISTEN_SECONDS_MIN = 3;
 export const LISTEN_SECONDS_MAX = 30;
 export const DEFAULT_LISTEN_SECONDS = 8;
@@ -246,8 +246,7 @@ interface Settings {
   /**
    * Second opinion on every wake-word firing: the last two seconds are
    * transcribed and must contain the phrase. Local is a small dedicated
-   * model on the GPU (~110 ms); Deepgram ~250 ms plus a handshake; off is
-   * the bare detector.
+   * model on the GPU (~130 ms); off is the bare detector.
    */
   wakeWordVerify: WakeWordVerify;
   /** Seconds the microphone stays open after "Hey Sage" with nothing said. */

@@ -150,6 +150,16 @@ the cold one, and the default again. The five "negatives" tiny.en
 accepted are `natural_session_1/auto_neg_004-008`, which every model
 hears the phrase in -- mislabelled captures.
 
+## Removed the same night: the Deepgram verifier and the old prerecorded backend
+
+With tiny.en faster and more accurate on this voice, the Deepgram
+verifier (`DeepgramTranscriber`, the key lookup, the Settings option)
+was extra code with no case for it and went. So did
+`speech/deepgram.py`, the prerecorded backend from before Flux: it
+imported `PrerecordedOptions`, which SDK v7 no longer has, so it had
+raised on every call for as long as v7 has been installed. Flux (the
+streaming turn path) is untouched. The Settings choice is On / Off.
+
 ## Open questions
 
 1. After a day: does tiny.en, prompted with the phrase, ever write "Hey

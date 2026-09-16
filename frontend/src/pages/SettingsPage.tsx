@@ -991,15 +991,14 @@ export function SettingsPage() {
                     />
                   </button>
                 </SettingRow>
-                <SettingRow label="Wake word check" description="Before Sage answers a wake word it transcribes the last two seconds and must hear the phrase, so a loud noise or the TV cannot wake it. Local is a small model kept ready on this machine (about a tenth of a second); Deepgram is the cloud (a quarter of a second, more after a quiet spell); Off trusts the detector alone. Ignored firings show in the Voice log with what was heard.">
+                <SettingRow label="Wake word check" description="Before Sage answers a wake word it transcribes the last two seconds with a small model kept ready on this machine (about a tenth of a second) and must hear the phrase, so a loud noise or the TV cannot wake it. Off trusts the detector alone. Ignored firings show in the Voice log with what was heard.">
                   <select
                     value={settings.wakeWordVerify}
                     onChange={(e) => { updateSettings({ wakeWordVerify: e.target.value as WakeWordVerify }); showSaved(); }}
                     className="px-2 py-1 rounded-lg text-sm"
                     style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
                   >
-                    <option value="local">Local</option>
-                    <option value="deepgram">Deepgram</option>
+                    <option value="local">On</option>
                     <option value="off">Off</option>
                   </select>
                 </SettingRow>

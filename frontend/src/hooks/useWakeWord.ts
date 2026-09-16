@@ -88,8 +88,8 @@ export function useWakeWord(
   enabled: boolean,
   /** The server heard something wake-word-shaped but the words were not there. */
   onRejected?: (heard: string) => void,
-  /** Which transcriber confirms a firing: 'deepgram' | 'local' | 'off'. */
-  verify: string = 'deepgram',
+  /** Whether a transcript confirms a firing: 'local' | 'off'. */
+  verify: string = 'local',
 ) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);

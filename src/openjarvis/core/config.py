@@ -1547,7 +1547,7 @@ class OperatorsConfig:
 class SpeechConfig:
     """Speech input and output settings."""
 
-    backend: str = "auto"  # "auto", "faster-whisper", "openai", "deepgram"
+    backend: str = "auto"  # "auto", "faster-whisper", "openai"
     model: str = "base"  # Whisper model size: tiny, base, small, medium, large-v3
     language: str = ""  # Empty = auto-detect
     device: str = "auto"  # "auto", "cpu", "cuda"
@@ -1556,9 +1556,8 @@ class SpeechConfig:
     wake_word_model: str = ""
     # Second opinion on every detection: transcribe the last two seconds
     # with the speech backend and confirm only if "hey sage" is in the
-    # text. "local" (a small dedicated Whisper, ~110 ms on the GPU),
-    # "deepgram" (nova-3, ~250 ms plus a TLS handshake when idle) or "off";
-    # the browser's Settings choice overrides this per session. Any
+    # text. "local" (a small dedicated Whisper, ~130 ms on the GPU) or
+    # "off"; the browser's Settings choice overrides this per session. Any
     # verifier failure confirms, so this can only remove false firings.
     wake_word_verify: str = "local"
     # The small model for "local" verification, separate from `model`

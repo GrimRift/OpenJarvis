@@ -3,7 +3,7 @@
 import importlib
 
 # Optional STT backends — each registers itself via @SpeechRegistry.register()
-for _mod in ("faster_whisper", "openai_whisper", "deepgram"):
+for _mod in ("faster_whisper", "openai_whisper"):
     try:
         importlib.import_module(f".{_mod}", __name__)
     except ImportError:

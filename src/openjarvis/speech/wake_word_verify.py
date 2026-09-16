@@ -37,7 +37,9 @@ RING_FRAMES = 25
 VERIFY_TIMEOUT_SECONDS = 1.5
 
 #: The modes ``[speech] wake_word_verify`` and the browser's setting accept.
-VERIFY_MODES = ("deepgram", "local", "off")
+#: There was a Deepgram option for an evening; the small local model was
+#: both faster and more accurate on this voice, so it went.
+VERIFY_MODES = ("local", "off")
 
 _HEY = {"hey", "hi", "hay", "he", "a", "eh", "ay", "ok", "okay", "hei", "hej", "yo"}
 _SAGE = {
@@ -160,44 +162,6 @@ class AudioRing:
         self._frames.clear()
 
 
-class DeepgramTranscriber:
-    """Deepgram prerecorded (nova-3) on the v7 SDK, for one two-second clip.
-
-    ``keyterm`` boosts the name so it is spelt as itself when it is heard
-    clearly. The key never leaves the server; this is the same key Flux
-    uses. About 200-350 ms a clip, measured live.
-    """
-
-    backend_id = "deepgram"
-
-    def __init__(self, api_key: str, model: str = "nova-3") -> None:
-        from deepgram import DeepgramClient
-
-        self._client = DeepgramClient(api_key=api_key)
-        self._model = model
-
-    def transcribe(
-        self, audio: bytes, *, format: str = "wav", language: Optional[str] = None
-    ) -> Any:
-        response = self._client.listen.v1.media.transcribe_file(
-            request=audio,
-            model=self._model,
-            language=language or "en",
-            keyterm=["Sage"],
-            smart_format=False,
-        )
-        channels = getattr(getattr(response, "results", None), "channels", None) or []
-        alternatives = getattr(channels[0], "alternatives", None) if channels else None
-        text = alternatives[0].transcript if alternatives else ""
-
-        class _Result:
-            pass
-
-        result = _Result()
-        result.text = text  # type: ignore[attr-defined]
-        return result
-
-
 class WakeWordVerifier:
     """Runs a transcriber over the ring and decides."""
 
@@ -220,7 +184,7 @@ class WakeWordVerifier:
 
     def _transcribe(self, pcm: bytes) -> str:
         kwargs: dict = {"format": "wav", "language": self._language or None}
-        # Only Whisper takes a prompt; Deepgram is steered by keyterm instead.
+        # A backend that takes no prompt (a fake in tests) still works.
         if self._initial_prompt and _accepts(
             self._backend.transcribe, "initial_prompt"
         ):
@@ -278,23 +242,6 @@ def _accepts(func: Any, name: str) -> bool:
         return False
 
 
-def _deepgram_key() -> str:
-    from openjarvis.speech import flux
-
-    key = flux.api_key()
-    if key:
-        return key
-    try:
-        from openjarvis.core.credentials import load_credentials
-
-        for _tool, kvs in load_credentials().items():
-            if kvs.get("DEEPGRAM_API_KEY"):
-                return str(kvs["DEEPGRAM_API_KEY"])
-    except Exception:  # noqa: BLE001
-        pass
-    return ""
-
-
 #: The dedicated local verifier model, loaded once per process. Measured
 #: 16 September on the recorded and live clips: tiny.en on CUDA answers in
 #: ~110 ms warm and, prompted with the phrase, writes "Hey Sage." where
@@ -340,8 +287,7 @@ def make_verifier(
     """The verifier for one socket, or ``None`` when switched off.
 
     ``mode`` is the browser's choice (the Settings page); the config key
-    is the default when it sends none. Deepgram without a key falls back
-    to the local backend rather than to nothing.
+    is the default when it sends none.
     """
     speech = getattr(config, "speech", None)
     chosen = str(mode or getattr(speech, "wake_word_verify", "local") or "off").lower()
@@ -350,21 +296,11 @@ def make_verifier(
     if chosen not in VERIFY_MODES:
         logger.warning("Unknown wake_word_verify=%r; treating as 'local'", chosen)
         chosen = "local"
-    transcriber = backend
-    if chosen == "local":
-        try:
-            transcriber = local_verifier_backend(config)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Small verifier model unavailable (%s); using main", exc)
-    elif chosen == "deepgram":
-        key = _deepgram_key()
-        if key:
-            try:
-                transcriber = DeepgramTranscriber(key)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Deepgram verifier unavailable (%s); using local", exc)
-        else:
-            logger.info("No DEEPGRAM_API_KEY; wake-word verifier falls back to local")
+    try:
+        transcriber = local_verifier_backend(config)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Small verifier model unavailable (%s); using main", exc)
+        transcriber = backend
     return WakeWordVerifier(
         transcriber,
         initial_prompt=str(getattr(speech, "initial_prompt", "Hey Sage.") or ""),
@@ -373,7 +309,6 @@ def make_verifier(
 
 __all__ = [
     "AudioRing",
-    "DeepgramTranscriber",
     "RING_FRAMES",
     "VERIFY_MODES",
     "Verdict",
