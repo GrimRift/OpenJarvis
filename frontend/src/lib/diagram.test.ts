@@ -150,3 +150,49 @@ describe('what the model really sent', () => {
     expect(activeNodeIndex('light gathering matters most', d.nodes)).toBe(-1);
   });
 });
+
+describe('isCloseDiagramCommand', () => {
+  it('hears the ways of asking for it to go', async () => {
+    const { isCloseDiagramCommand } = await import('./diagram');
+    for (const said of [
+      'close the diagram',
+      'Close diagram.',
+      'close it',
+      'hide it',
+      'hide the diagram',
+      'dismiss the illustration',
+      'remove that chart',
+      'get rid of the diagram',
+      'get rid of it',
+      'close that',
+    ]) {
+      expect(isCloseDiagramCommand(said), said).toBe(true);
+    }
+  });
+
+  it('does not fire on ordinary talk', async () => {
+    const { isCloseDiagramCommand } = await import('./diagram');
+    for (const said of [
+      '',
+      'the diagram shows how water enters the crack',
+      'close the deal before Friday',
+      'what does the third step mean',
+      // A command is short; a sentence that merely contains the words is not
+      // someone asking for the overlay to close.
+      'I was going to close the diagram but actually tell me more about step two',
+      'can you explain that picture in more detail please',
+    ]) {
+      expect(isCloseDiagramCommand(said), said).toBe(false);
+    }
+  });
+});
+
+describe('rowEndsOn', () => {
+  it('alternates, so the wrap arrow hangs under the box the row ended on', async () => {
+    const { rowEndsOn } = await import('./diagram');
+    // Row 0 runs left-to-right and hands down on the right; row 1 runs back.
+    expect(rowEndsOn(0)).toBe('right');
+    expect(rowEndsOn(1)).toBe('left');
+    expect(rowEndsOn(2)).toBe('right');
+  });
+});

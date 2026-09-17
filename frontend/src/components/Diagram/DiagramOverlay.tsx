@@ -10,12 +10,14 @@
 
 import { useEffect, useMemo } from 'react';
 import type { Diagram } from '../../lib/diagram';
-import { activeNodeIndex } from '../../lib/diagram';
+import { activeNodeIndex, rowEndsOn } from '../../lib/diagram';
 import { Arrow, DiagramBox, Legend, RESULT, tint } from './DiagramParts';
 
 const ACCENT = '#22d3ee';
 /** Wide enough for three boxes and their arrows before wrapping. */
 const ROW = 3;
+/** Matches DiagramBox's default, so the wrap arrow lines up under a box. */
+const NODE_WIDTH = 300;
 
 interface Props {
   diagram: Diagram;
@@ -68,7 +70,10 @@ export function DiagramOverlay({ diagram, spoken, speaking, wasSpoken, onClose }
       onClick={onClose}
       role="presentation"
     >
-      <div style={{ position: 'absolute', inset: 0, background: 'rgba(10, 10, 11, 0.84)', backdropFilter: 'blur(3px)' }} />
+      {/* Dim enough that the diagram is plainly the subject, light enough
+          that the answer behind is still legible -- the user found 84% too
+          heavy. */}
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(10, 10, 11, 0.62)', backdropFilter: 'blur(2px)' }} />
       <div
         style={{
           position: 'absolute',
@@ -127,9 +132,24 @@ export function DiagramOverlay({ diagram, spoken, speaking, wasSpoken, onClose }
           ? rows.map((row, rowIndex) => {
               const backwards = rowIndex % 2 === 1;
               const cells = backwards ? [...row].reverse() : row;
+              // The wrap arrow belongs under the box the PREVIOUS row ended
+              // on, not in the middle of nothing.
+              const handsDownOnTheRight = rowEndsOn(rowIndex - 1) === 'right';
               return (
                 <div key={rowIndex} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-                  {rowIndex > 0 ? <Arrow direction="down" colour="#3f3f46" /> : null}
+                  {rowIndex > 0 ? (
+                    <div
+                      style={{
+                        alignSelf: 'stretch',
+                        display: 'flex',
+                        justifyContent: handsDownOnTheRight ? 'flex-end' : 'flex-start',
+                        paddingRight: handsDownOnTheRight ? NODE_WIDTH / 2 - 10 : 0,
+                        paddingLeft: handsDownOnTheRight ? 0 : NODE_WIDTH / 2 - 10,
+                      }}
+                    >
+                      <Arrow direction="down" colour="#3f3f46" />
+                    </div>
+                  ) : null}
                   <div style={{ display: 'flex', alignItems: 'stretch', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
                     {cells.map(({ node, index }, i) => (
                       <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -210,7 +230,11 @@ export function DiagramOverlay({ diagram, spoken, speaking, wasSpoken, onClose }
             </div>
           )}
           <Legend accent={ACCENT} showActive={speaking} />
-          <div style={{ fontSize: 11.5, color: '#71717a' }}>Esc or Close to dismiss · reopen from the message</div>
+          <div style={{ fontSize: 11.5, color: '#71717a' }}>
+            {speaking
+              ? 'Esc, Close, or say "close the diagram" — Sage keeps talking'
+              : 'Esc or Close to dismiss · reopen from the message'}
+          </div>
         </div>
       </div>
 

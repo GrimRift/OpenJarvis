@@ -9,7 +9,7 @@ import {
   type AttachedImage,
 } from '../../lib/image-attach';
 import { streamChat, streamResearch } from '../../lib/sse';
-import { diagramMode } from '../../lib/diagram';
+import { diagramMode, isCloseDiagramCommand } from '../../lib/diagram';
 import { useDiagramPresenter } from '../../lib/diagram-presenter';
 import type { ChatRequest } from '../../lib/sse';
 import {
@@ -218,6 +218,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // that this turn cut the reply, which is what separates the user's
   // end-of-turn from an echo's.
   const bargeListeningRef = useRef(false);
+  /** The Flux turn that was only "close the diagram", so it never becomes a
+   * message and never counts as an interruption. */
+  const diagramCommandTurnRef = useRef<number | null>(null);
   const bargeTriggeredRef = useRef(false);
   // Everything sent to the synthesiser for the reply now playing, so a
   // turn made only of Sage's own words is known for the echo it is.
@@ -1460,6 +1463,17 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (lastFluxTurnRef.current === turnIndex) return;
       lastFluxTurnRef.current = turnIndex;
 
+      // This turn only asked for the diagram to go away. It has gone; the
+      // words are not a message, and Sage keeps talking.
+      if (
+        diagramCommandTurnRef.current === turnIndex ||
+        (useDiagramPresenter.getState().current && isCloseDiagramCommand(transcript))
+      ) {
+        useDiagramPresenter.getState().close();
+        diagramCommandTurnRef.current = null;
+        return;
+      }
+
       let spoken = (transcript || '').trim();
       if (fastFollowRef.current.active) {
         clearGreetingTimer();
@@ -1676,6 +1690,22 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (fastFollowRef.current.active && continuesPastWakePhrase(transcript)) {
         clearGreetingTimer();
       }
+      // "Close the diagram" is an instruction to the screen, not an
+      // interruption of the answer: it must be caught before barge-in judges
+      // the same words, or asking for the picture to go would also cut Sage
+      // off mid-sentence. The voice carries on; only the overlay goes.
+      if (
+        useDiagramPresenter.getState().current &&
+        isCloseDiagramCommand(transcript)
+      ) {
+        useDiagramPresenter.getState().close();
+        diagramCommandTurnRef.current = turnIndex;
+        voiceTrace('diagram.closedByVoice', { heard: transcript });
+        return;
+      }
+      // The rest of this turn is that same command still arriving; never let
+      // it reach barge-in or the composer.
+      if (diagramCommandTurnRef.current === turnIndex) return;
       if (!bargeListeningRef.current) return;
       // A partial for a turn already finalised is stale; it belongs to the
       // normal path that handled it.

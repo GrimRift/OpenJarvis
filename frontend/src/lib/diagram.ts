@@ -156,6 +156,45 @@ export function activeNodeIndex(spoken: string, nodes: DiagramNode[]): number {
   return best;
 }
 
+/**
+ * Which end of a serpentine row the flow leaves from.
+ *
+ * Rows alternate direction, so row 0 runs left-to-right and hands down on the
+ * right, row 1 runs back and hands down on the left. The wrap arrow was drawn
+ * centred, which pointed down out of the gap between two boxes and read as a
+ * step that wasn't there.
+ */
+export function rowEndsOn(rowIndex: number): 'left' | 'right' {
+  return rowIndex % 2 === 0 ? 'right' : 'left';
+}
+
+/**
+ * "Close the diagram", said out loud while Sage is still explaining.
+ *
+ * This is a command to the screen, not an interruption of the answer, so it
+ * must be recognised BEFORE barge-in judges the same words -- otherwise
+ * asking for the picture to go away also cuts Sage off mid-sentence, which is
+ * the opposite of what was asked for.
+ *
+ * Deliberately narrow: a real command is short, so anything past six words is
+ * someone talking. "Close the deal" names no diagram and does not match.
+ */
+const CLOSE_COMMAND =
+  /\b(?:close|hide|dismiss|remove|get rid of)\s+(?:the\s+|that\s+|this\s+)?(?:diagram|illustration|drawing|chart|graphic|overlay|picture|it|that|this)\b/;
+
+export const CLOSE_COMMAND_MAX_WORDS = 6;
+
+export function isCloseDiagramCommand(text: string): boolean {
+  const said = (text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!said) return false;
+  if (said.split(' ').length > CLOSE_COMMAND_MAX_WORDS) return false;
+  return CLOSE_COMMAND.test(said);
+}
+
 /** What to tell the server this turn, from the two Settings switches. */
 export function diagramMode(enabled: boolean, automatic: boolean): 'auto' | 'on-request' | 'off' {
   if (!enabled) return 'off';
