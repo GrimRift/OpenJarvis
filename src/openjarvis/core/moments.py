@@ -434,6 +434,13 @@ def decide(
     # No reading ever is a first appearance (greeting), not a return.
     returned = observed_return or long_gap or gap is None
     away_for = absence_seconds if observed_return else gap
+    # Where the "at the desk" clock restarts. A return the monitor watched
+    # ends at its absence_end; one seen only as a gap in Sage's own
+    # readings ends now. It used to be None for a gap, so after a
+    # "welcome back" at 21:22 the clock still ran from the last watched
+    # absence at 13:12, and 22:24's initiative spoke of nine hours at the
+    # desk to someone who had just sat down.
+    return_at = absence_end if observed_return else (now if long_gap else None)
 
     if (
         settings.greeting_enabled
@@ -441,7 +448,7 @@ def decide(
         and fired_today(state, MOMENT_GREETING, local) < DAILY_CAPS[MOMENT_GREETING]
     ):
         decision.kinds.append(MOMENT_GREETING)
-        decision.absence_end = absence_end if observed_return else None
+        decision.absence_end = return_at
         decision.absence_seconds = away_for
     elif (
         settings.welcome_back_enabled
@@ -450,7 +457,7 @@ def decide(
         < DAILY_CAPS[MOMENT_WELCOME_BACK]
     ):
         decision.kinds.append(MOMENT_WELCOME_BACK)
-        decision.absence_end = absence_end if observed_return else None
+        decision.absence_end = return_at
         decision.absence_seconds = away_for
 
     if settings.told_enabled:

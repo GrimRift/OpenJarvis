@@ -268,6 +268,24 @@ class TestWelcomeBack:
         assert [r.kind for r in said] == [MOMENT_WELCOME_BACK]
         assert again.spoken == ["[welcome_back] 3 hours"]
 
+    def test_the_desk_clock_restarts_on_a_return_sage_only_inferred(
+        self, tmp_path
+    ) -> None:
+        """17 September: the monitor last watched an absence end at 13:12;
+        at 21:22 a return was recognised from a gap in Sage's own readings
+        ("welcome back"), and at 22:24 the initiative said "after nine hours
+        at the desk" -- the clock had never restarted."""
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.leave_and_return(_at(13, 2), _at(13, 12))  # watched, too short to greet
+        rig.tick(_at(13, 13), idle=1.0)
+        again = _Rig(tmp_path)  # Sage restarted while the user was away
+        said = again.tick(_at(21, 22), idle=1.0)
+        assert [r.kind for r in said] == [MOMENT_WELCOME_BACK]
+        again.initiative_line = "[useful] Water, sir."
+        again.tick(_at(21, 30), idle=1.0)
+        assert again.initiative_contexts[-1]["at_desk_for"] == "8 minutes"
+
     def test_a_short_restart_is_not(self, tmp_path) -> None:
         rig = _Rig(tmp_path)
         rig.tick(_at(13), idle=1.0)
