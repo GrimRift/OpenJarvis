@@ -164,10 +164,17 @@ class _FakePage:
         self.visited = []
         self.pressed = []
         self.clicked = []
+        self.installed = []
+        self.order = []
 
     def navigate(self, url, timeout=0):
         self.visited.append(url)
+        self.order.append("navigate")
         self._url = url
+
+    def install_script(self, source):
+        self.installed.append(source)
+        self.order.append("install")
 
     def wait_for(self, expression, timeout=0):
         return self._ready
@@ -822,3 +829,33 @@ class TestSkippingAds:
         monkeypatch.setattr("openjarvis.tools.cdp.Browser", lambda port: object())
         result = opera_control.SkipAdTool().execute()
         assert not result.success and "No YouTube video" in result.content
+
+
+class TestTheStalledVideoHealsItself:
+    """Opera's decode wedges on a video Sage opened: play head frozen,
+    readyState 1, no frames, while 17 s sits buffered. pause()+play()
+    recovers it. The script must be installed BEFORE the watch page loads,
+    because the wedge happens minutes in, long after Sage has detached."""
+
+    def test_the_healer_is_installed_before_the_page_loads(self, monkeypatch):
+        page = _FakePage(url="https://www.youtube.com/watch?v=x")
+        session = _install(monkeypatch, page)
+        session.show_compact = lambda: ""
+        monkeypatch.setattr(
+            opera_control.YouTubePlayTool,
+            "_resolve",
+            lambda self, p, q, latest: ("/watch?v=x", "Egg"),
+        )
+        monkeypatch.setattr(opera_control, "_ensure_playing", lambda p: True)
+        monkeypatch.setattr(opera_control, "skip_ad", lambda p, **k: "no ad")
+        assert opera_control.YouTubePlayTool().execute(query="egg").success
+        assert page.order.index("install") < page.order.index("navigate")
+        assert "__sageMediaHeal" in page.installed[0]
+
+    def test_it_leaves_a_healthy_or_paused_video_alone(self):
+        """The guards that matter: a paused video, an ad, a seek and a
+        healthy readyState must never be nudged."""
+        script = opera_control._MEDIA_SELF_HEAL_JS
+        assert "v.paused" in script and "v.ended" in script
+        assert "v.seeking" in script and "ad-showing" in script
+        assert "v.readyState >= 3" in script

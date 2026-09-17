@@ -615,6 +615,53 @@ def _ensure_playing(page) -> bool:
     return _is_playing(page)
 
 
+#: A video that stalls with a full buffer heals itself.
+#:
+#: Opera's decode intermittently wedges on a video Sage opened: the play
+#: head frozen, `readyState` 1-2, no frames decoded, while `buffered` holds
+#: 17 s of data -- so the bytes arrive and never become pictures. Measured
+#: 17 September; the player's own stall counter reached 859 on one window.
+#: A `pause()` then `play()` recovers it at once (readyState 1 -> 4), which
+#: is what the user was doing by hand when they dragged the tab elsewhere.
+#:
+#: This runs in the page and keeps running after Sage detaches, because the
+#: wedge usually happens minutes in, long after the tool returned. It only
+#: acts while the video is meant to be playing and is not an ad, and waits
+#: out a genuine rebuffer (readyState 3+ is healthy, and a moving play head
+#: is healthy) so an ordinary buffering pause is never interrupted.
+_MEDIA_SELF_HEAL_JS = r"""
+(() => {
+  if (window.__sageMediaHeal) return; window.__sageMediaHeal = true;
+  const STILL_TICKS = 3;      // 1.5 s of a frozen play head
+  const COOLDOWN_MS = 4000;   // never nudge faster than this
+  let last = -1, still = 0, nudgedAt = 0;
+  window.__sageMediaHeals = 0;
+  setInterval(() => {
+    const v = document.querySelector('video');
+    const player = document.querySelector('#movie_player');
+    if (!v || v.paused || v.ended || v.seeking ||
+        (player && player.classList.contains('ad-showing'))) {
+      last = -1; still = 0; return;
+    }
+    if (v.readyState >= 3 || v.currentTime !== last) {
+      last = v.currentTime; still = 0; return;
+    }
+    if (++still < STILL_TICKS) return;
+    still = 0;
+    const now = Date.now();
+    if (now - nudgedAt < COOLDOWN_MS) return;
+    nudgedAt = now;
+    window.__sageMediaHeals++;
+    // Left in the console on purpose: the wedge is intermittent, so the
+    // count is the evidence of whether this ever fires in real use.
+    try {
+      console.debug('sage: media stalled, nudging', window.__sageMediaHeals);
+    } catch (e) {}
+    try { v.pause(); v.play(); } catch (e) {}
+  }, 500);
+})();
+"""
+
 #: YouTube's ad state, read off the player: the player carries `ad-showing`
 #: for the whole ad, and the Skip button (`ytp-skip-ad-button`) is in the DOM
 #: from the start but only laid out -- `offsetParent` set -- once the ad
@@ -896,6 +943,9 @@ class YouTubePlayTool(_OperaTool):
                 href, known_title = self._resolve(page, query, latest)
                 if not href:
                     return self._fail(f"No YouTube results for {query!r}.")
+                # Installed before the watch page loads, so it is already
+                # running when the decode wedges minutes later.
+                page.install_script(_MEDIA_SELF_HEAL_JS)
                 page.navigate(
                     urllib.parse.urljoin("https://www.youtube.com", href),
                     timeout=_NAV_TIMEOUT,

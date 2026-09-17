@@ -241,6 +241,18 @@ class Page:
         except CDPError:
             return ""
 
+    def install_script(self, source: str) -> None:
+        """Run *source* at the start of every document this tab loads next.
+
+        The script keeps running after Sage detaches, so it is how a page
+        fixes itself unattended -- here, capping YouTube's quality so the
+        decoder is never handed a bitrate it cannot sustain."""
+        with _ignored():
+            self._connection.send("Page.enable")
+            self._connection.send(
+                "Page.addScriptToEvaluateOnNewDocument", {"source": source}
+            )
+
     def click(self, selector: str) -> bool:
         """A real mouse click on the centre of *selector*, or False if it is
         not laid out. Dispatched through the input pipeline, so the page
