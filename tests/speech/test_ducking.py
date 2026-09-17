@@ -331,8 +331,10 @@ class TestRepliesAndServerVoicesTakeTurns:
             await wait_for_server_voice(timeout=5.0)
             waited = loop.time() - t0
             holder.join()
-            # Released at 0.3 s plus the one-second echo tail.
-            assert 1.2 <= waited < 3.0
+            # Released at 0.3 s plus the echo tail.
+            from openjarvis.speech.player import ECHO_TAIL_SECONDS
+
+            assert 0.2 + ECHO_TAIL_SECONDS <= waited < 2.0 + ECHO_TAIL_SECONDS
 
         asyncio.run(scenario())
 

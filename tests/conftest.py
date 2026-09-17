@@ -44,6 +44,23 @@ def _no_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _nobody_speaking() -> None:
+    """Any test that plays sound leaves the server "speaking" for the echo
+    tail (2 s), and the wake-word socket and Flux relay go deaf for it --
+    which made the route tests fail only after the volume tests."""
+    try:
+        from openjarvis.speech import player
+    except Exception:  # noqa: BLE001 -- speech extras may be absent
+        yield
+        return
+    player._speakers = 0
+    player._last_spoke_at = 0.0
+    yield
+    player._speakers = 0
+    player._last_spoke_at = 0.0
+
+
+@pytest.fixture(autouse=True)
 def _clean_registries() -> None:
     """Ensure each test starts with empty registries and a fresh event bus."""
     ModelRegistry.clear()

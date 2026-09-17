@@ -5,9 +5,10 @@ and a loud transient of the right length can clear it. This transcribes
 the last two seconds of audio and confirms only if the phrase is in the
 text. Speech-to-text mishears the name in the same few ways every time
 ("stage", "sayge"), so the match is a written-down list, not a learned
-one. Verification can only remove firings: any failure -- no backend,
-timeout, exception -- confirms, so the wake word never goes deaf because
-the verifier did (docs/wake-word-verify.md).
+one. Verification can only remove firings: no backend or an exception
+confirms, so the wake word never goes deaf because the verifier did; a
+*timeout* rejects, since a check that cannot finish is usually the GPU
+busy while Sage's own voice tripped the detector (docs/wake-word-verify.md).
 """
 
 from __future__ import annotations
@@ -34,7 +35,11 @@ FRAME_SAMPLES = 1280
 #: Two seconds of 80 ms frames: enough for "Hey Sage" said slowly plus the
 #: detector's own lag behind the end of the phrase.
 RING_FRAMES = 25
-VERIFY_TIMEOUT_SECONDS = 1.5
+#: The local model answers in ~130 ms warm and ~500 ms cold; past this it
+#: is fighting something for the GPU. A timeout used to confirm, and a
+#: class reminder's own voice woke Sage through it: now it rejects, and
+#: the user says the word again.
+VERIFY_TIMEOUT_SECONDS = 3.0
 #: After a detection, this many more 80 ms frames are gathered before the
 #: transcript is read, up to this many times: the detector fires on "hey
 #: sa-" with the phrase still in the air (measured 17 September on 61
@@ -252,7 +257,9 @@ class WakeWordVerifier:
                 asyncio.to_thread(self._transcribe, pcm), timeout=self._timeout
             )
         except asyncio.TimeoutError:
-            return Verdict(True, "", f"verifier slower than {self._timeout:g}s")
+            # Not fail-open like the other paths: a firing that cannot be
+            # checked in time is more likely Sage's own voice than the user.
+            return Verdict(False, "", f"verifier slower than {self._timeout:g}s")
         except Exception as exc:  # noqa: BLE001 -- fail open, by design
             logger.debug("Wake-word verification failed: %s", exc)
             return Verdict(True, "", f"verifier error: {exc}")

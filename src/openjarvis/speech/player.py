@@ -25,8 +25,11 @@ _PLAYERS = ["ffplay -nodisp -autoexit -loglevel quiet", "aplay", "afplay", "papl
 SPEAKING = threading.RLock()
 
 #: Echo of the server's own voice reaches the microphone for a moment after
-#: the player exits; the listeners stay deaf this long past the end.
-ECHO_TAIL_SECONDS = 1.0
+#: the player exits, and the wake-word detector scores a 1.28 s rolling
+#: window that still holds the voice after that; the listeners stay deaf
+#: this long past the end. At 1.0 s a class reminder fired the wake word
+#: on its own last words.
+ECHO_TAIL_SECONDS = 2.0
 _state_lock = threading.Lock()
 _speakers = 0
 _last_spoke_at = 0.0

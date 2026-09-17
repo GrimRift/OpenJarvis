@@ -1785,7 +1785,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // greeting always being heard in full and the recording holding only the
   // user. The microphone is still opened during the greeting (see
   // waitBeforeCapture), so speaking the instant it ends loses nothing.
-  const beginWakeWordRecording = useCallback(async (info?: { sinceFiringMs: number }) => {
+  const beginWakeWordRecording = useCallback(async (info?: { sinceFiringMs: number; verified: boolean }) => {
     // speechState only becomes 'recording' once the greeting has finished,
     // so for that whole window it still reads 'idle' and cannot by itself
     // keep a second trigger out. A ref closes the gap immediately, before
@@ -1796,7 +1796,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     wakeWordBusyRef.current = true;
     try {
       autoTriggeredRef.current = true;
-      const greeting = wakeWordGreetingEnabled && !(wakeWordFastFollow && fluxActive)
+      // An unverified firing (no transcript check ran) gets the old,
+      // sequential flow: no pre-roll of audio nobody vouched for.
+      const fastFollow = wakeWordFastFollow && fluxActive && info?.verified !== false;
+      const greeting = wakeWordGreetingEnabled && !fastFollow
         ? playGreeting({
             voiceId: ttsVoice.id,
             onFailure: (reason) =>
@@ -1808,7 +1811,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // disarms the wake word, and leaving it armed through the greeting
         // let a second detection of the same "Hey Sage" through.
         setFluxTurnActive(true);
-        if (wakeWordFastFollow && !greeting) {
+        if (fastFollow && !greeting) {
           // One breath: the turn starts from the wake phrase itself, with
           // the audio the detector already heard as pre-roll, and the
           // greeting waits to see whether the user pauses.

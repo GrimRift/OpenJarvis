@@ -109,8 +109,9 @@ class TestVerifier:
         silent = asyncio.run(WakeWordVerifier(_Backend("")).verify(pcm))
         assert (silent.confirmed, silent.heard) == (False, "")
 
-    def test_fails_open_on_every_kind_of_failure(self):
-        """Verification may only remove firings, never make the wake word deaf."""
+    def test_fails_open_on_every_kind_of_failure_but_a_timeout(self):
+        """Verification may only remove firings, never make the wake word deaf
+        -- except that a timeout rejects (see below)."""
         no_backend = asyncio.run(WakeWordVerifier(None).verify(b"\x00" * 3200))
         assert no_backend.confirmed and no_backend.note
 
@@ -123,7 +124,10 @@ class TestVerifier:
                 b"\x00" * 3200
             )
         )
-        assert slow.confirmed and "slower" in slow.note
+        # A timeout is the one failure that rejects: a check that cannot
+        # finish is usually the GPU busy while Sage's own voice tripped the
+        # detector (a class reminder woke Sage through the old fail-open).
+        assert not slow.confirmed and "slower" in slow.note
 
         empty = asyncio.run(WakeWordVerifier(_Backend("x")).verify(b""))
         assert empty.confirmed and "no audio" in empty.note

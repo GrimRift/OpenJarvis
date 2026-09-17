@@ -166,8 +166,12 @@ class TestWakeWordVerificationOnlyEverRemovesFirings:
             if isinstance(first, ast.Constant):
                 early.append((node.lineno, repr(first.value)))
         assert early, "expected literal Verdict(...) returns on the failure paths"
-        assert all(value == "True" for _, value in early), (
-            f"a failure path in verify() returns a rejection: {early}"
+        # Every failure path confirms -- except the timeout, which rejects
+        # by decision (a class reminder woke Sage through a fail-open
+        # timeout on 17 September). Exactly one rejecting path, then.
+        rejecting = [line for line, value in early if value == "False"]
+        assert len(rejecting) == 1, (
+            f"expected exactly one rejecting failure path (the timeout): {early}"
         )
 
     def test_the_route_rejects_only_on_a_read_transcript(self):
@@ -300,3 +304,31 @@ class TestTheWakeWordWaitsForTheRestOfThePhrase:
             assert DEFAULT_THRESHOLD >= 0.79
         else:
             assert DEFAULT_THRESHOLD <= 0.7
+
+
+class TestARepliesAudioWaitsForAServerVoice:
+    """The browser reads replies aloud; the server plays greetings and
+    reminders; an initiative line was heard over a chat answer because
+    neither waited for the other. Every place the TTS relay sends its
+    first audio must first wait for a server-side voice to finish, and the
+    server side waits for the reply in turn (pinned by the player tests).
+    """
+
+    def test_every_start_message_is_preceded_by_the_wait(self):
+        source = (SRC / "server" / "tts_stream_routes.py").read_text(encoding="utf-8")
+        starts = source.count('"type": "start"')
+        waits = source.count("await wait_for_server_voice()")
+        assert starts >= 2 and waits == starts, (starts, waits)
+
+
+class TestFluxKnowsTheName:
+    """Deepgram has never heard of Sage: the pre-rolled wake phrase came back
+    as "ACGE" and "His age" and went to the model as a message. Every Flux
+    socket carries the name as a keyterm.
+    """
+
+    def test_keyterms_include_the_name(self):
+        from openjarvis.speech import flux
+
+        assert any("sage" in term.lower() for term in flux.KEYTERMS)
+        assert "keyterm" in (SRC / "speech" / "flux.py").read_text(encoding="utf-8")

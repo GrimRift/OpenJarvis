@@ -712,6 +712,7 @@ async def wake_word_stream(websocket: WebSocket):
         websocket.query_params.get("verify"),
     )
     ring = AudioRing()
+    was_speaking = False
 
     await websocket.accept(subprotocol=subprotocol)
     try:
@@ -723,6 +724,7 @@ async def wake_word_stream(websocket: WebSocket):
                 # The server's own voice (a greeting, a reminder) is what
                 # the microphone hears now. Nothing it says is a wake word,
                 # and the window must not carry it into the next frames.
+                was_speaking = True
                 if detector.is_detection(score):
                     await asyncio.to_thread(detector.reset)
                     ring.clear()
@@ -730,6 +732,12 @@ async def wake_word_stream(websocket: WebSocket):
                     {"type": "score", "value": score, "muted": True}
                 )
                 continue
+            if was_speaking:
+                # The voice just ended: whatever of it the window and the
+                # ring still hold must not become the next detection.
+                was_speaking = False
+                await asyncio.to_thread(detector.reset)
+                ring.clear()
             if detector.is_detection(score):
                 verdict = None
                 # The browser's pause timer counts from the end of the

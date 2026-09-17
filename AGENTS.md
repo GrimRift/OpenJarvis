@@ -389,6 +389,40 @@ component works:
   (conftest patched a `doctor_cmd` attribute M34 removed) and hid seven
   real pre-existing failures underneath. A whole directory erroring is a
   fixture problem, not a test problem; look at the conftest first.
+- **Deepgram has never heard of "Sage".** Given the whole wake phrase it
+  wrote "ACGE", "His age", "Usage"; every Flux socket now carries
+  `keyterm=Sage` (`speech/flux.py`, pinned). Any transcript rule that
+  looks for the name must also accept its debris in a turn the wake word
+  opened (`lib/wake-follow.ts`: up to two short non-starter tokens).
+- **A pause after the wake word is read off the microphone, never off
+  Deepgram's partials.** The first partial arrives later than a greeting
+  timer of a few hundred ms; "Yes, Sir?" played over "tell me about",
+  held the mic, and the turn ended there. `useFluxSpeech.lastSoundAt()`
+  is the source; Deepgram events may cancel a greeting, never cause one
+  (pinned).
+- **The browser and the server are two players.** The browser reads
+  replies aloud; the server plays greetings, initiative and reminders.
+  Neither knew of the other until 17 September: `player.speaking()` waits
+  for `activity.tts_streams`, and `tts_stream_routes.wait_for_server_voice`
+  waits for `is_speaking()` before the first audio chunk (pinned).
+- **A volume slider is only as good as its last playback site.** Every
+  `new Audio`, `.play()` and speech `createGain` under `frontend/src` must
+  read `volumeFor(channel)` (pinned); the batch player's manual play
+  button was missed first time. Browser gains are set at stream start,
+  so a change applies to the next reply, not the one playing.
+- **Same-branch CI runs cancel each other.** `sage-ci.yml` groups by ref,
+  so rapid pushes leave a trail of "cancelled" runs; only the run for the
+  current head means anything. `gh run list --limit 1` before reading a
+  watcher's output.
+- **A fail-open wake-word check is a hole the moment the detector can
+  hear Sage.** With the threshold at 0.65 a class reminder's own last
+  words fired the detector after the 1 s echo tail; the transcript check
+  timed out (GPU busy) and *confirmed*; the 2.5 s pre-roll carried the
+  reminder into the turn and "p m one d in ten minutes" became a message.
+  Now: a timeout rejects (3 s budget), the echo tail is 2 s and the
+  detector's window is reset when the voice ends, and an unverified
+  firing never gets the pre-rolled fast-follow. Any test that plays sound
+  must reset `player._speakers/_last_spoke_at` (conftest does).
 - **`speech/deepgram.py` was dead for as long as SDK v7 was installed**
   (it imported `PrerecordedOptions`); nothing noticed because the import
   sat in a `try`. Removed; `test_invariants_lessons.py` now imports every
