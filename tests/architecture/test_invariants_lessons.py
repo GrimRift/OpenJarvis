@@ -37,10 +37,11 @@ class TestRigsNeverReachTheSpeakersOrTheCloud:
     """A test run once played the real chime through the speakers thirty
     times, because the rig faked the voice but not the chime. Every
     construction of the moment engine in a test must fake all three
-    outputs: what is spoken, the chime, and the initiative writer.
+    outputs: what is spoken, the chime, the initiative writer -- and, since
+    reminders, the toast-and-voice delivery.
     """
 
-    REQUIRED = frozenset({"speaker", "chimer", "initiative_composer"})
+    REQUIRED = frozenset({"speaker", "chimer", "initiative_composer", "reminder"})
 
     def _constructions(self) -> list[tuple[str, int, set[str]]]:
         found = []

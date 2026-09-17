@@ -90,7 +90,13 @@ class _Rig:
             activity_source=lambda: self.activity,
             scheduler_lookup=lambda: None,
             timezone_name=TZ,
+            reminder=self._remind,
         )
+        self.reminders: list[str] = []
+
+    def _remind(self, what: str) -> bool:
+        self.reminders.append(what)
+        return True
 
     def _compose(self, kind: str, context: dict) -> str:
         self.compose_calls.append(kind)
@@ -365,6 +371,38 @@ class TestTellMeWhen:
         assert records and records[0].spoken is False
         assert "too late" in records[0].detail
         assert rig.engine.list_watches() == []
+
+    def test_a_reminder_is_delivered_when_due_even_while_away(self, tmp_path) -> None:
+        """ "Tell me in five minutes that I have to eat": toast and voice,
+        wherever the user is, no composer, no presence gate."""
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.engine.add_watch("you have to eat", due_at=_at(13, 5), anywhere=True)
+        assert rig.tick(_at(13, 4), idle=1500.0) == []
+        assert rig.reminders == []
+        rig.tick(_at(13, 5), idle=1500.0)  # away from the desk
+        assert rig.reminders == ["you have to eat"]
+        assert rig.engine.list_watches() == []
+        assert MOMENT_TOLD not in rig.compose_calls
+        record = [r for r in rig.engine.history() if r.kind == MOMENT_TOLD][-1]
+        assert record.spoken is False and record.detail == "reminder"
+        assert "(reminder)" in record.text
+
+    def test_a_reminder_found_hours_late_is_dropped(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        rig.tick(_at(13), idle=1.0)
+        rig.engine.add_watch("you have to eat", due_at=_at(13, 5), anywhere=True)
+        rig.tick(_at(17), idle=1.0)  # Sage was off through the afternoon
+        assert rig.reminders == []
+        record = [r for r in rig.engine.history() if r.kind == MOMENT_TOLD][-1]
+        assert "too late" in record.detail and rig.engine.list_watches() == []
+
+    def test_a_reminder_needs_a_time(self, tmp_path) -> None:
+        import pytest
+
+        rig = _Rig(tmp_path)
+        with pytest.raises(ValueError):
+            rig.engine.add_watch("x", task_id="job", anywhere=True)
 
     def test_a_job_watch_fires_when_the_task_has_run(self, tmp_path) -> None:
         class _Store:

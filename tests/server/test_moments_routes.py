@@ -36,6 +36,7 @@ def engine(tmp_path):
         busy_sensor=lambda a, s: [],
         scheduler_lookup=lambda: None,
         timezone_name="Asia/Singapore",
+        reminder=lambda what: True,
     )
     set_current_engine(engine)
     yield engine
@@ -171,3 +172,39 @@ class TestTools:
         assert not tool.execute(what="x", at="2027-01-19T15:00", task_id="abc").success
         assert not tool.execute(what="x", at="three o'clock").success
         assert tool.execute(what="x", task_id="abc").success
+        assert not tool.execute(what="x", in_minutes=5, at="2027-01-19T15:00").success
+        assert not tool.execute(what="x", in_minutes=0).success
+        assert not tool.execute(what="x", in_minutes="soon").success
+        # A job watch cannot be a reminder: it is said at the desk.
+        assert not tool.execute(what="x", task_id="abc", anywhere=True).success
+
+    def test_a_relative_time_is_a_reminder_wherever_the_user_is(self, engine) -> None:
+        """ "Tell me five minutes from now that I have to eat" was refused
+        because only an absolute datetime was accepted."""
+        import time
+
+        from openjarvis.tools.moments import TellMeWhenTool
+
+        tool = TellMeWhenTool()
+        before = time.time()
+        result = tool.execute(what="you have to eat", in_minutes=5)
+        assert result.success, result.content
+        assert result.content.startswith("I'll tell you in 5 minutes (")
+        assert "wherever you are" in result.content
+        [watch] = engine.list_watches()
+        assert watch.anywhere is True
+        assert abs(watch.due_at - (before + 300)) < 5
+        assert "anywhere" in tool.execute(action="list").content
+
+        hour = tool.execute(what="stretch", in_minutes=90)
+        assert "in 1 hour 30 minutes" in hour.content
+
+    def test_an_absolute_time_stays_at_the_desk_unless_asked(self, engine) -> None:
+        from openjarvis.tools.moments import TellMeWhenTool
+
+        tool = TellMeWhenTool()
+        desk = tool.execute(what="a", at="2027-01-19T15:00")
+        assert "at the desk" in desk.content
+        anywhere = tool.execute(what="b", at="2027-01-19T16:00", anywhere=True)
+        assert "wherever you are" in anywhere.content
+        assert [w.anywhere for w in engine.list_watches()] == [False, True]

@@ -182,15 +182,18 @@ class TellMeWhenTool(BaseTool):
             description=(
                 "The user asked to be TOLD, out loud, when something happens: "
                 "'tell me when my class starts', 'let me know when it's 3', "
-                "'tell me when that job finishes'. Register a watch with "
-                "either `at` (a local ISO datetime you have resolved, e.g. "
-                "'2026-09-15T15:00' -- work it out from the schedule or the "
-                "clock first) or `task_id` (a scheduled task id from "
-                "list_scheduled_tasks). Sage speaks when it is due and the "
-                "user is at the desk. Not for reminders that should reach the "
-                "phone -- those are schedule_task with a notification. "
-                "action='list' shows pending watches; action='cancel' with "
-                "watch_id removes one."
+                "'tell me in five minutes that I have to eat', 'tell me when "
+                "that job finishes'. Give exactly one of: `in_minutes` (a "
+                "relative time -- 'in five minutes' is 5, 'in an hour' is 60, "
+                "'in two hours' is 120; never refuse a relative time), `at` "
+                "(a local ISO datetime you have resolved, e.g. "
+                "'2026-09-15T15:00'), or `task_id` (a scheduled task id from "
+                "list_scheduled_tasks). A relative time is a reminder: said "
+                "aloud and shown as a Windows toast when due, wherever the "
+                "user is. An absolute time or a job is a watch: said when due "
+                "and the user is at the desk (pass anywhere=true to make it a "
+                "reminder too). action='list' shows pending ones; "
+                "action='cancel' with watch_id removes one."
             ),
             parameters={
                 "type": "object",
@@ -207,9 +210,24 @@ class TellMeWhenTool(BaseTool):
                             "'your Structural Analysis class starts'."
                         ),
                     },
+                    "in_minutes": {
+                        "type": "number",
+                        "description": (
+                            "Minutes from now. Use for any relative time the "
+                            "user gives."
+                        ),
+                    },
                     "at": {
                         "type": "string",
                         "description": "Local ISO datetime for a time watch.",
+                    },
+                    "anywhere": {
+                        "type": "boolean",
+                        "description": (
+                            "Deliver as a reminder (toast + voice, wherever the "
+                            "user is) rather than only at the desk. Implied by "
+                            "in_minutes."
+                        ),
                     },
                     "task_id": {
                         "type": "string",
@@ -271,14 +289,38 @@ class TellMeWhenTool(BaseTool):
             )
         at = str(params.get("at") or "").strip()
         task_id = str(params.get("task_id") or "").strip()
-        if bool(at) == bool(task_id):
+        raw_minutes = params.get("in_minutes")
+        in_minutes: Optional[float] = None
+        if raw_minutes not in (None, ""):
+            try:
+                in_minutes = float(raw_minutes)
+            except (TypeError, ValueError):
+                return ToolResult(
+                    tool_name=self.tool_id,
+                    content=f"Could not read {raw_minutes!r} as minutes.",
+                    success=False,
+                )
+            if in_minutes <= 0:
+                return ToolResult(
+                    tool_name=self.tool_id,
+                    content="in_minutes must be positive.",
+                    success=False,
+                )
+        given = sum(1 for v in (at, task_id, in_minutes) if v not in ("", None))
+        if given != 1:
             return ToolResult(
                 tool_name=self.tool_id,
-                content="Give exactly one of `at` (a local datetime) or `task_id`.",
+                content=(
+                    "Give exactly one of `in_minutes`, `at` (a local datetime) "
+                    "or `task_id`."
+                ),
                 success=False,
             )
         due_at = None
-        if at:
+        now = time.time()
+        if in_minutes is not None:
+            due_at = now + in_minutes * 60
+        elif at:
             due_at = local_to_timestamp(at, configured_timezone())
             if due_at is None:
                 return ToolResult(
@@ -286,36 +328,63 @@ class TellMeWhenTool(BaseTool):
                     content=f"Could not read {at!r} as a local ISO datetime.",
                     success=False,
                 )
+        anywhere = in_minutes is not None or bool(params.get("anywhere", False))
+        if anywhere and due_at is None:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content="A reminder needs a time; a job watch is said at the desk.",
+                success=False,
+            )
         try:
             if engine is not None:
-                watch = engine.add_watch(what, due_at=due_at, task_id=task_id or None)
+                watch = engine.add_watch(
+                    what, due_at=due_at, task_id=task_id or None, anywhere=anywhere
+                )
             else:
                 state = load_state()
                 watch = Watch(
                     id=uuid.uuid4().hex[:8],
                     what=what,
-                    created_at=time.time(),
+                    created_at=now,
                     due_at=due_at,
                     task_id=task_id or None,
+                    anywhere=anywhere,
                 )
                 state.watches.append(watch)
                 save_state(state)
         except ValueError as exc:
             return ToolResult(tool_name=self.tool_id, content=str(exc), success=False)
-        when = (
-            f"at {to_local(due_at, configured_timezone()).strftime('%H:%M on %A')}"
-            if due_at is not None
-            else f"when task {task_id} finishes"
+        if due_at is not None:
+            local_due = to_local(due_at, configured_timezone())
+            when = (
+                f"in {_minutes_phrase(in_minutes)} ({local_due.strftime('%H:%M')})"
+                if in_minutes is not None
+                else f"at {local_due.strftime('%H:%M on %A')}"
+            )
+        else:
+            when = f"when task {task_id} finishes"
+        how = (
+            "Said aloud and shown as a toast, wherever you are"
+            if anywhere
+            else "Only if you're at the desk"
         )
         return ToolResult(
             tool_name=self.tool_id,
-            content=(
-                f"I'll tell you {when}: {what}. (Only if you're at the desk; "
-                f"watch id {watch.id}.)"
-            ),
+            content=f"I'll tell you {when}: {what}. ({how}; watch id {watch.id}.)",
             success=True,
             metadata={"watch": watch.to_dict()},
         )
+
+
+def _minutes_phrase(minutes: Optional[float]) -> str:
+    total = int(round(minutes or 0))
+    hours, mins = divmod(total, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if mins or not parts:
+        parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
+    return " ".join(parts)
 
 
 def _describe(watches: Any) -> str:
@@ -327,7 +396,7 @@ def _describe(watches: Any) -> str:
             if w.due_at is not None
             else f"task {w.task_id}"
         )
-        lines.append(f"{w.id}: {w.what} ({when})")
+        lines.append(f"{w.id}: {w.what} ({when}{', anywhere' if w.anywhere else ''})")
     return "\n".join(lines)
 
 

@@ -252,3 +252,17 @@ if the state is wrong, every moment is wrong. Phase 4 last, or alongside 3.
 M33 (self-improvement) and M29 (mobile) are queued. M36 should precede M29:
 presence and episodes are what a phone client would want to inherit, and
 building the phone first means building both twice.
+
+
+## Reminders (2026-09-17)
+
+"Tell me five minutes from now that I have to eat" was refused: `tell_me_when`
+took only an absolute datetime. It now takes `in_minutes` too, and a
+relative time makes the watch a **reminder** (`Watch.anywhere`): when due it
+is delivered as a toast and a voice through `notify_windows` -- wherever the
+user is, no presence gate, no quiet hours, no composer -- and recorded in
+the history as `(reminder) ...` without being appended to chat. An absolute
+time or a job stays a desk watch unless `anywhere=true`. A reminder found
+more than 30 minutes late (Sage was off) is dropped, not said. Every
+server-side voice, reminders included, queues on `player.speaking()`, waits
+for the user's open turn, and cannot be heard by the microphone.

@@ -93,6 +93,9 @@ HELD_LINE_STALE_SECONDS = 600
 # A watch that could not be delivered for this long (asleep, away, snoozed)
 # is stale: "your class started yesterday" helps nobody.
 WATCH_STALE_SECONDS = 12 * 3600
+#: A reminder is about now: "eat" said half an hour late is still a nudge;
+#: found four hours late (Sage was off) it is noise, and is dropped.
+REMINDER_STALE_SECONDS = 30 * 60
 HISTORY_LIMIT = 50
 
 _STATE_FILE = "moments.json"
@@ -109,6 +112,10 @@ class Watch:
     # Exactly one of these is set: a time watch or a job watch.
     due_at: Optional[float] = None
     task_id: Optional[str] = None
+    # A reminder rather than a moment: delivered when due, wherever the
+    # user is -- toast and voice, no presence gate, no quiet hours, no
+    # composer. "Tell me in five minutes that I have to eat" is this.
+    anywhere: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -234,6 +241,7 @@ def load_state(config_dir: Optional[Path] = None) -> MomentsState:
                     created_at=float(item["created_at"]),
                     due_at=item.get("due_at"),
                     task_id=item.get("task_id"),
+                    anywhere=bool(item.get("anywhere", False)),
                 )
             )
         except Exception:
@@ -447,6 +455,8 @@ def decide(
 
     if settings.told_enabled:
         for watch in state.watches:
+            if watch.anywhere:
+                continue
             due_since: Optional[float] = None
             if watch.due_at is not None and watch.due_at <= now:
                 due_since = watch.due_at
@@ -1105,6 +1115,14 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
 # -- Delivery ----------------------------------------------------------------
 
 
+def deliver_reminder(what: str) -> bool:
+    """A reminder the user set: toast and voice through ``notify_windows``,
+    which already waits for the user's turn and holds the speaking lock."""
+    from openjarvis.tools.notify_windows import deliver
+
+    return bool(deliver("Reminder", what))
+
+
 def chime_now() -> bool:
     """The chime on its own: played the moment there is something to say,
     before the model has written it, so the acknowledgement is instant even
@@ -1172,8 +1190,10 @@ class MomentEngine:
         scheduler_lookup: Optional[Callable[[], Any]] = None,
         timezone_name: Optional[str] = None,
         startup_hook: Optional[Callable[[], Any]] = None,
+        reminder: Callable[[str], bool] = deliver_reminder,
     ) -> None:
         self._monitor = monitor
+        self._reminder = reminder
         self._config_dir = config_dir
         self._clock = clock
         self._composer = composer
@@ -1253,20 +1273,66 @@ class MomentEngine:
         *,
         due_at: Optional[float] = None,
         task_id: Optional[str] = None,
+        anywhere: bool = False,
     ) -> Watch:
         if (due_at is None) == (task_id is None):
             raise ValueError("a watch is either a time or a job, not both or neither")
+        if anywhere and due_at is None:
+            raise ValueError("a reminder needs a time")
         watch = Watch(
             id=uuid.uuid4().hex[:8],
             what=what.strip(),
             created_at=self._clock(),
             due_at=due_at,
             task_id=task_id,
+            anywhere=anywhere,
         )
         with self._lock:
             self._state.watches.append(watch)
             self._save()
         return watch
+
+    def _take_due_reminders(self, now: float) -> List[tuple]:
+        """Pop every reminder whose time has come; ``late`` is how far past."""
+        due: List[tuple] = []
+        with self._lock:
+            keep = []
+            for watch in self._state.watches:
+                if watch.anywhere and watch.due_at is not None and watch.due_at <= now:
+                    due.append((watch, now - watch.due_at))
+                else:
+                    keep.append(watch)
+            if due:
+                self._state.watches = keep
+                self._save()
+        return due
+
+    def _deliver_reminder(self, watch: Watch, late: float, now: float) -> None:
+        """Toast and voice, wherever the user is; not a moment, so nothing
+        is composed and nothing is gated -- except that a reminder found
+        hours late (Sage was off) is dropped rather than said: "eat" at
+        14:00 for a 10:05 lunch helps nobody."""
+        if late > REMINDER_STALE_SECONDS:
+            self._record(
+                MOMENT_TOLD,
+                f"(not said) {watch.what}",
+                spoken=False,
+                detail="reminder found too late to be useful",
+                now=now,
+            )
+            return
+        try:
+            said = bool(self._reminder(watch.what))
+        except Exception:
+            logger.warning("Reminder could not be delivered", exc_info=True)
+            said = False
+        self._record(
+            MOMENT_TOLD,
+            f"(reminder) {watch.what}",
+            spoken=False,
+            detail="reminder" if said else "reminder could not be delivered",
+            now=now,
+        )
 
     def cancel_watch(self, watch_id: str) -> bool:
         with self._lock:
@@ -1303,6 +1369,10 @@ class MomentEngine:
                 busy = list(self._busy_sensor(activity, settings))
             except Exception:
                 logger.debug("Busy sensor failed", exc_info=True)
+        due_reminders = self._take_due_reminders(now)
+        for watch, late in due_reminders:
+            self._deliver_reminder(watch, late, now)
+
         with self._lock:
             state = self._state
             settled = self._settle_pending(state, activity, snapshot, now)
