@@ -32,23 +32,25 @@ _speakers = 0
 _last_spoke_at = 0.0
 
 
-#: How long a voice waits for the user's open turn to end before speaking
-#: anyway. A reminder is time-sensitive; a turn is at most the listening
-#: window plus the sentence being said.
-FLOOR_WAIT_SECONDS = 20.0
+#: How long a voice waits for the exchange in progress -- the user's open
+#: turn, or a reply being read aloud -- before speaking anyway. A reminder
+#: is time-sensitive; a long reply can run half a minute.
+FLOOR_WAIT_SECONDS = 45.0
 
 
 def _wait_for_the_floor(timeout: float) -> None:
-    """Do not talk over the user. While the browser is transmitting a turn
-    (after a wake word, in a reply window, for a follow-up) the microphone
-    would go deaf for the voice and lose what was being said; wait for the
-    turn to close, up to ``timeout``."""
+    """Do not talk over the exchange. While the browser is transmitting a
+    turn (after a wake word, in a reply window, for a follow-up) the
+    microphone would go deaf for the voice and lose what was being said;
+    while it is reading a reply aloud, two voices would play at once -- an
+    initiative line was heard over a chat answer on 17 September. Wait for
+    both to end, up to ``timeout``."""
     if timeout <= 0:
         return
     from openjarvis.core import activity
 
     deadline = time.monotonic() + timeout
-    while activity.snapshot().flux_transmitting and time.monotonic() < deadline:
+    while activity.snapshot().sage_mid_turn and time.monotonic() < deadline:
         time.sleep(0.1)
 
 

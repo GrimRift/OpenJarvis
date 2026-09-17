@@ -360,8 +360,10 @@ component works:
   ("online in ten minutes"), and the wake word fired on it. `speaking()`
   is one lock (voices queue), a flag the wake-word socket and the Flux
   relay read to go deaf (plus a 1 s echo tail), and a wait for the user's
-  open turn to close (up to 20 s) so nothing is talked over. Anything new
-  that plays sound from the server must hold it.
+  exchange to end -- the user's open turn *or a reply being read aloud*
+  (up to 45 s) -- so nothing is talked over; and the reply's own audio
+  waits for a server voice (`tts_stream_routes.wait_for_server_voice`).
+  Anything new that plays sound from the server must hold it.
 - **The wake-word detector fires while the phrase is still being said.**
   It triggers on the shape of "hey sa-". Transcribing the ring at that
   instant found the whole phrase in 14 of 61 recorded takes; +320 ms, 38;

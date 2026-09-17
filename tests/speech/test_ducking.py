@@ -282,3 +282,71 @@ class TestAVoiceWaitsForTheUsersTurn:
             assert time.monotonic() - t0 < 1.0
         finally:
             activity.flux_transmitting(False)
+
+
+class TestRepliesAndServerVoicesTakeTurns:
+    """An initiative line was heard over a chat answer on 17 September: the
+    server's lock covered its own voices, not the browser's reply. Now a
+    server voice waits for a reply being read aloud, and a reply's audio
+    waits for a server voice."""
+
+    def test_a_server_voice_waits_for_the_browsers_reply(self):
+        import threading
+        import time
+
+        from openjarvis.core import activity
+        from openjarvis.speech import player
+
+        activity.tts_begin()
+        try:
+            threading.Timer(0.3, activity.tts_end).start()
+            t0 = time.monotonic()
+            with player.speaking(wait_for_turn=5.0):
+                waited = time.monotonic() - t0
+            assert 0.25 <= waited < 2.0
+        finally:
+            activity.tts_end()
+
+    def test_a_reply_waits_for_a_server_voice(self):
+        import asyncio
+        import threading
+
+        from openjarvis.server.tts_stream_routes import wait_for_server_voice
+        from openjarvis.speech import player
+
+        async def scenario():
+            release = threading.Event()
+
+            def _hold():
+                with player.speaking(wait_for_turn=0):
+                    release.wait(2.0)
+
+            holder = threading.Thread(target=_hold)
+            holder.start()
+            await asyncio.sleep(0.05)
+            assert player.is_speaking()
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.3, release.set)
+            t0 = loop.time()
+            await wait_for_server_voice(timeout=5.0)
+            waited = loop.time() - t0
+            holder.join()
+            # Released at 0.3 s plus the one-second echo tail.
+            assert 1.2 <= waited < 3.0
+
+        asyncio.run(scenario())
+
+    def test_but_a_reply_does_not_wait_forever(self):
+        import asyncio
+
+        from openjarvis.server.tts_stream_routes import wait_for_server_voice
+        from openjarvis.speech import player
+
+        async def scenario():
+            with player.speaking(wait_for_turn=0):
+                loop = asyncio.get_running_loop()
+                t0 = loop.time()
+                await wait_for_server_voice(timeout=0.2)
+                assert loop.time() - t0 < 1.0
+
+        asyncio.run(scenario())

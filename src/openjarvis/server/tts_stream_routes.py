@@ -75,6 +75,22 @@ def _resolve_volume(config: Any, requested: Optional[float]) -> float:
     return float(volume) if isinstance(volume, (int, float)) and volume > 0 else 1.0
 
 
+#: A reply's audio waits this long for a server-side voice (a greeting, a
+#: reminder) to finish before it starts; the text streams on screen
+#: regardless. Past this it plays anyway rather than hang the reply.
+SERVER_VOICE_WAIT_SECONDS = 30.0
+
+
+async def wait_for_server_voice(timeout: float = SERVER_VOICE_WAIT_SECONDS) -> None:
+    """The reverse of ``player._wait_for_the_floor``: the browser's reply
+    does not start over a voice the server is already playing."""
+    from openjarvis.speech.player import is_speaking
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while is_speaking() and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.1)
+
+
 @router.websocket("/v1/speech/tts-stream")
 async def tts_stream(websocket: WebSocket) -> None:
     """Relay Cartesia's PCM stream to the browser as it is produced."""
@@ -282,6 +298,7 @@ async def _stream_incremental_turn(
                 async for chunk in speaking.receive_audio():
                     if not started:
                         started = True
+                        await wait_for_server_voice()
                         await websocket.send_json(
                             {
                                 "type": "start",
@@ -413,6 +430,7 @@ async def _speak(
         async for chunk in stream:
             if not started:
                 started = True
+                await wait_for_server_voice()
                 await websocket.send_json(
                     {
                         "type": "start",
