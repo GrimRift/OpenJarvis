@@ -241,6 +241,33 @@ class Page:
         except CDPError:
             return ""
 
+    def click(self, selector: str) -> bool:
+        """A real mouse click on the centre of *selector*, or False if it is
+        not laid out. Dispatched through the input pipeline, so the page
+        sees a trusted event: YouTube's Skip button ignores a scripted
+        ``element.click()`` (observed 17 September) but not this."""
+        box = self.evaluate(
+            "(() => { const e = document.querySelector("
+            + json.dumps(selector)
+            + "); if (!e || e.offsetParent === null) return null;"
+            " const r = e.getBoundingClientRect();"
+            " return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()"
+        )
+        if not isinstance(box, dict):
+            return False
+        for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+            self._connection.send(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": kind,
+                    "x": float(box["x"]),
+                    "y": float(box["y"]),
+                    "button": "left",
+                    "clickCount": 1,
+                },
+            )
+        return True
+
     def press(self, key: str) -> None:
         """Send a real key press.
 

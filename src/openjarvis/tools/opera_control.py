@@ -615,6 +615,70 @@ def _ensure_playing(page) -> bool:
     return _is_playing(page)
 
 
+#: YouTube's ad state, read off the player: the player carries `ad-showing`
+#: for the whole ad, and the Skip button (`ytp-skip-ad-button`) is in the DOM
+#: from the start but only laid out -- `offsetParent` set -- once the ad
+#: allows skipping, about five seconds in (observed 17 September).
+_AD_STATE_JS = (
+    "(() => { const p = document.querySelector('#movie_player');"
+    " const s = document.querySelector("
+    "'.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');"
+    " return { ad: !!(p && p.classList.contains('ad-showing')),"
+    " skip: !!(s && s.offsetParent !== null) }; })()"
+)
+_SKIP_SELECTOR = ".ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern"
+
+#: How long the pre-roll check keeps watching an ad for its Skip button. A
+#: skippable ad offers it at five seconds; one that has not by now is the
+#: unskippable kind, which the user chose to leave alone. Two back-to-back
+#: ads fit inside it.
+AD_SKIP_WAIT_SECONDS = 12.0
+
+
+def ad_state(page) -> dict:
+    try:
+        state = page.evaluate(_AD_STATE_JS)
+    except Exception:
+        state = None
+    if not isinstance(state, dict):
+        return {"ad": False, "skip": False}
+    return {"ad": bool(state.get("ad")), "skip": bool(state.get("skip"))}
+
+
+def skip_ad(page, wait_seconds: float = AD_SKIP_WAIT_SECONDS) -> str:
+    """Skip the ad playing on *page*, if it can be skipped.
+
+    Returns "skipped", "no ad" or "unskippable". Waits for the Skip button
+    for up to *wait_seconds* while an ad is showing, then clicks it; an ad
+    that never offers one is left alone (the user's choice). Polls in
+    half-second steps so the button is hit within a beat of appearing.
+    """
+    state = ad_state(page)
+    if not state["ad"]:
+        return "no ad"
+    skipped = False
+    deadline = _now() + wait_seconds
+    while _now() < deadline:
+        if state["skip"]:
+            # A trusted mouse click: the button ignores a scripted click().
+            with contextlib.suppress(Exception):
+                if page.click(_SKIP_SELECTOR):
+                    skipped = True
+            page.sleep(0.8)
+        else:
+            page.sleep(0.5)
+        state = ad_state(page)
+        if not state["ad"]:
+            return "skipped" if skipped else "no ad"
+    return "skipped" if skipped else "unskippable"
+
+
+def _now() -> float:
+    import time
+
+    return time.monotonic()
+
+
 def _go_fullscreen(page) -> None:
     """YouTube's own shortcut, sent to the focused player.
 
@@ -642,6 +706,65 @@ class _OperaTool(BaseTool):
         if not port_is_open():
             return self._fail(setup_hint())
         return None
+
+
+@ToolRegistry.register("skip_ad")
+class SkipAdTool(_OperaTool):
+    """Click Skip on the YouTube ad playing now: Sage's window first, then
+    whichever YouTube tab the user has open."""
+
+    tool_id = "skip_ad"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="skip_ad",
+            description=(
+                "Skip the advert playing on YouTube right now ('skip the ad', "
+                "'skip this ad'). Clicks YouTube's own Skip button on the "
+                "video Sage opened, or on any YouTube tab the user has open. "
+                "An ad without a Skip button is left to play."
+            ),
+            parameters={"type": "object", "properties": {}},
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        blocked = self._guard()
+        if blocked:
+            return blocked
+        from openjarvis.tools.cdp import Browser
+
+        try:
+            browser = Browser(DEBUG_PORT)
+            page = _media_page(browser) or _any_youtube_page(browser)
+            if page is None:
+                return self._fail("No YouTube video is open.")
+            try:
+                outcome = skip_ad(page, wait_seconds=6.0)
+            finally:
+                with contextlib.suppress(Exception):
+                    page.close()
+        except Exception as error:
+            return self._fail(f"could not skip the ad: {error}")
+        content = {
+            "skipped": "Skipped the ad.",
+            "no ad": "No ad is playing.",
+            "unskippable": "This ad has no Skip button; it will end on its own.",
+        }[outcome]
+        return ToolResult(
+            tool_name=self.tool_id,
+            content=content,
+            success=True,
+            metadata={"outcome": outcome},
+        )
+
+
+def _any_youtube_page(browser):
+    for target in browser.page_targets():
+        if "youtube.com/watch" in (target.get("url") or ""):
+            with contextlib.suppress(Exception):
+                return browser.attach(target)
+    return None
 
 
 @ToolRegistry.register("web_open")
@@ -782,6 +905,9 @@ class YouTubePlayTool(_OperaTool):
                 )
                 title = known_title or page.title().replace(" - YouTube", "")
                 playing = _ensure_playing(page)
+                # The pre-roll: skip it while still attached, so the user
+                # never sits through one Sage could have clicked away.
+                ad = skip_ad(page)
                 if wants_to_watch:
                     # Monitor first: going fullscreen and *then* moving the
                     # window drops it back out of fullscreen.
@@ -793,11 +919,12 @@ class YouTubePlayTool(_OperaTool):
         except Exception as error:
             return self._fail(f"could not play that: {error}")
         state = "Playing" if playing else "Opened (paused — press play)"
+        note = {"skipped": " Skipped the ad.", "unskippable": " (An ad is playing.)"}
         return ToolResult(
             tool_name=self.tool_id,
-            content=f"{state} {title!r} on YouTube.{where}",
+            content=f"{state} {title!r} on YouTube.{where}{note.get(ad, '')}",
             success=True,
-            metadata={"playing": playing, "latest": latest},
+            metadata={"playing": playing, "latest": latest, "ad": ad},
         )
 
     def _resolve(self, page, query: str, latest: bool):

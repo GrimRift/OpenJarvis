@@ -203,6 +203,8 @@ BROWSER_TOOLS = {
     "outlook_read",
     "web_open",
     "youtube_play",
+    # Clicks YouTube's own Skip button in the user's browser.
+    "skip_ad",
     "browser_click",
     "browser_extract",
     "browser_navigate",

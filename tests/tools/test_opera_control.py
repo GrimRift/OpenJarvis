@@ -729,3 +729,96 @@ class TestSayingWhenThereIsNothingNew:
         _install(monkeypatch, page)
         newest = OutlookReadTool().execute().metadata["newest"]
         assert newest.endswith("-08-28")
+
+
+class _AdPage(_FakePage):
+    """A YouTube player whose ad state changes as time passes.
+
+    `timeline` is the sequence of ad states returned on successive reads;
+    the last one repeats. A Skip click is recorded and, when the ad is
+    skippable, ends it."""
+
+    def __init__(self, timeline):
+        super().__init__(url="https://www.youtube.com/watch?v=x")
+        self.timeline = list(timeline)
+        self.skips = 0
+        self.slept = 0.0
+
+    def evaluate(self, expression):
+        if "ad-showing" in expression:
+            state = self.timeline.pop(0) if len(self.timeline) > 1 else self.timeline[0]
+            return state
+        return None
+
+    def click(self, selector):
+        self.skips += 1
+        self.timeline = [{"ad": False, "skip": False}]
+        return True
+
+    def sleep(self, seconds):
+        self.slept += seconds
+
+
+class TestSkippingAds:
+    """The user's choice: skip the pre-roll when the video opens and on
+    "skip the ad"; never touch an ad without a Skip button."""
+
+    def test_no_ad_costs_nothing(self):
+        page = _AdPage([{"ad": False, "skip": False}])
+        assert opera_control.skip_ad(page) == "no ad"
+        assert (page.skips, page.slept) == (0, 0.0)
+
+    def test_the_skip_button_is_clicked_once_it_is_laid_out(self):
+        page = _AdPage(
+            [
+                {"ad": True, "skip": False},
+                {"ad": True, "skip": False},
+                {"ad": True, "skip": True},
+            ]
+        )
+        assert opera_control.skip_ad(page) == "skipped"
+        assert page.skips == 1
+
+    def test_an_ad_without_a_skip_button_is_left_alone(self, monkeypatch):
+        clock = [0.0]
+        monkeypatch.setattr(opera_control, "_now", lambda: clock[0])
+        page = _AdPage([{"ad": True, "skip": False}])
+        original = page.sleep
+
+        def _sleep(seconds):
+            clock[0] += seconds
+            original(seconds)
+
+        page.sleep = _sleep
+        assert opera_control.skip_ad(page, wait_seconds=3.0) == "unskippable"
+        assert page.skips == 0
+
+    def test_youtube_play_skips_the_pre_roll_and_says_so(self, monkeypatch):
+        page = _AdPage([{"ad": True, "skip": True}])
+        session = _install(monkeypatch, page)
+        session.show_compact = lambda: ""
+        monkeypatch.setattr(
+            opera_control.YouTubePlayTool,
+            "_resolve",
+            lambda self, p, q, latest: ("/watch?v=x", "Egg"),
+        )
+        monkeypatch.setattr(opera_control, "_ensure_playing", lambda p: True)
+        result = opera_control.YouTubePlayTool().execute(query="egg")
+        assert result.success and "Skipped the ad." in result.content
+        assert result.metadata["ad"] == "skipped"
+
+    def test_the_command_reports_no_ad_when_there_is_none(self, monkeypatch):
+        page = _AdPage([{"ad": False, "skip": False}])
+        monkeypatch.setattr(opera_control, "port_is_open", lambda timeout=1.5: True)
+        monkeypatch.setattr(opera_control, "_media_page", lambda browser: page)
+        monkeypatch.setattr("openjarvis.tools.cdp.Browser", lambda port: object())
+        result = opera_control.SkipAdTool().execute()
+        assert result.success and result.content == "No ad is playing."
+
+    def test_the_command_says_when_nothing_is_open(self, monkeypatch):
+        monkeypatch.setattr(opera_control, "port_is_open", lambda timeout=1.5: True)
+        monkeypatch.setattr(opera_control, "_media_page", lambda browser: None)
+        monkeypatch.setattr(opera_control, "_any_youtube_page", lambda browser: None)
+        monkeypatch.setattr("openjarvis.tools.cdp.Browser", lambda port: object())
+        result = opera_control.SkipAdTool().execute()
+        assert not result.success and "No YouTube video" in result.content
