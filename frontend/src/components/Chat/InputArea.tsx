@@ -19,6 +19,7 @@ import {
   ingestDocument,
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
+import { GREETING_PAUSE_MS, PRE_ROLL_MS, isOnlyWakePhrase, stripWakePhrase } from '../../lib/wake-follow';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
 import {
   type BargeVerdict,
@@ -260,6 +261,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const messages = useAppStore((s) => s.messages);
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
+  const wakeWordFastFollow = useAppStore((s) => s.settings.wakeWordFastFollow);
+  // One-breath wake word (lib/wake-follow.ts): the turn opened straight
+  // from the wake phrase, greeting deferred until a pause. `greeted` keeps
+  // the pause greeting to one per wake, whichever path notices the pause
+  // first (the timer, or an end-of-turn holding only the phrase).
+  const fastFollowRef = useRef<{ active: boolean; greeted: boolean }>({
+    active: false,
+    greeted: false,
+  });
+  const greetingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const takeRecentAudioRef = useRef<((ms: number) => Int16Array) | null>(null);
+  const clearGreetingTimer = () => {
+    if (greetingTimerRef.current) {
+      clearTimeout(greetingTimerRef.current);
+      greetingTimerRef.current = null;
+    }
+  };
   const fluxEnabled = useAppStore((s) => s.settings.fluxEnabled);
   const voiceRepliesEnabled = useAppStore((s) => s.settings.voiceRepliesEnabled);
   const speakTypedReplies = useAppStore((s) => s.settings.speakTypedReplies);
@@ -1423,7 +1441,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (lastFluxTurnRef.current === turnIndex) return;
       lastFluxTurnRef.current = turnIndex;
 
-      const spoken = (transcript || '').trim();
+      let spoken = (transcript || '').trim();
+      if (fastFollowRef.current.active) {
+        clearGreetingTimer();
+        if (isOnlyWakePhrase(spoken)) {
+          // "Hey Sage." and then nothing: the user paused. Greet now and
+          // keep listening for the question.
+          if (!fastFollowRef.current.greeted && wakeWordGreetingEnabled) {
+            greetAfterPause('phrase-only');
+          }
+          voiceTrace('wake.phraseOnly');
+          flux.beginTurn();
+          armFluxSilenceTimer('wake');
+          return;
+        }
+        fastFollowRef.current = { active: false, greeted: false };
+        spoken = stripWakePhrase(spoken);
+      }
 
       // The rest of a sentence that was cut off. The half-answer was stopped
       // when this speech began; withdraw it and the half-question now, and
@@ -1587,6 +1621,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     onTurnStarted: () => {
       // Real speech: from here Deepgram owns the ending.
       clearFluxSilenceTimer();
+      // Speech straight after the wake word: no greeting needed.
+      if (fastFollowRef.current.active) clearGreetingTimer();
       const state = continuationRef.current;
       if (
         !continuingRef.current &&
@@ -1747,7 +1783,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     wakeWordBusyRef.current = true;
     try {
       autoTriggeredRef.current = true;
-      const greeting = wakeWordGreetingEnabled
+      const greeting = wakeWordGreetingEnabled && !(wakeWordFastFollow && fluxActive)
         ? playGreeting({
             voiceId: ttsVoice.id,
             onFailure: (reason) =>
@@ -1759,6 +1795,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // disarms the wake word, and leaving it armed through the greeting
         // let a second detection of the same "Hey Sage" through.
         setFluxTurnActive(true);
+        if (wakeWordFastFollow && !greeting) {
+          // One breath: the turn starts from the wake phrase itself, with
+          // the audio the detector already heard as pre-roll, and the
+          // greeting waits to see whether the user pauses.
+          fastFollowRef.current = { active: true, greeted: false };
+          flux.beginTurn(takeRecentAudioRef.current?.(PRE_ROLL_MS));
+          armFluxSilenceTimer('wake');
+          voiceTrace('wake.fastFollow');
+          if (wakeWordGreetingEnabled) {
+            clearGreetingTimer();
+            greetingTimerRef.current = setTimeout(() => {
+              greetingTimerRef.current = null;
+              greetAfterPause('timer');
+            }, GREETING_PAUSE_MS);
+          }
+          return;
+        }
         // Same sequential contract as the local path: the greeting finishes
         // before any audio is transmitted, so Sage's own voice never enters
         // the turn Deepgram is judging.
@@ -1783,7 +1836,26 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     startRecording,
     finishAutoRecording,
     wakeWordGreetingEnabled,
+    wakeWordFastFollow,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   ]);
+
+  // The pause greeting: "Yes, Sir?" once, into an open turn, with the
+  // microphone held for the clip's length so the greeting is not heard back
+  // as the user's words.
+  const greetAfterPause = (why: 'timer' | 'phrase-only') => {
+    const state = fastFollowRef.current;
+    if (!state.active || state.greeted) return;
+    state.greeted = true;
+    clearGreetingTimer();
+    voiceTrace('wake.pauseGreeting', { why });
+    const clip = playGreeting({
+      voiceId: ttsVoice.id,
+      onFailure: (reason) =>
+        toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
+    });
+    flux.holdAudio(clip);
+  };
 
   useEffect(() => {
     if (speechState !== 'recording' && autoStopTimerRef.current) {
@@ -1962,7 +2034,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     flux.status,
   ]);
 
-  const { error: wakeWordError } = useWakeWord(
+  const { error: wakeWordError, takeRecentAudio } = useWakeWord(
     beginWakeWordRecording,
     // !audioPlaying matters as much as speechState === 'idle' here:
     // speechState returns to 'idle' as soon as transcription finishes,
@@ -1989,6 +2061,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }),
     wakeWordVerify,
   );
+  takeRecentAudioRef.current = takeRecentAudio;
 
   // The Settings switch is the authority: flipping it either way ends a
   // pause started from the mic button, so the two controls cannot disagree

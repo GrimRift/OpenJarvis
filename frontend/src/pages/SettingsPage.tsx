@@ -1052,6 +1052,9 @@ export function SettingsPage() {
                     <option value="off">Off</option>
                   </select>
                 </SettingRow>
+                <SettingRow label="Speak right after the wake word" description='Say "Hey Sage, any news on AI?" in one breath: Sage keeps what you said from the wake word on and skips "Yes, Sir?" unless you pause for a second. Flux mode only.'>
+                  <Switch on={settings.wakeWordFastFollow} onClick={() => { updateSettings({ wakeWordFastFollow: !settings.wakeWordFastFollow }); showSaved(); }} />
+                </SettingRow>
                 <SettingRow label="Listen after wake word" description={`${settings.wakeWordListenSeconds} s — how long the microphone stays open after "Hey Sage" if you say nothing.`}>
                   <input
                     type="range"

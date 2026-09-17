@@ -7,6 +7,8 @@ import { buildWsProtocols } from '../lib/useAgentEvents';
 const CHUNK_SAMPLES = 1280;
 const TARGET_SAMPLE_RATE = 16000;
 export const WAKE_WORD_STALE_MS = 12_000;
+// Frames of recent audio kept for the one-breath wake word: 4 s.
+const RECENT_FRAMES = 50;
 
 /**
  * Whether the listener is dead and should be rebuilt.
@@ -118,6 +120,10 @@ export function useWakeWord(
   const trackMutedRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingSamplesRef = useRef<number[]>([]);
+  // The last few seconds of frames, silent ones included, so a turn
+  // opened after the wake word can start from the phrase itself rather
+  // than from the moment the greeting ended (lib/wake-follow.ts).
+  const recentFramesRef = useRef<Int16Array[]>([]);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The server answers every submitted 80 ms frame. If those replies stop,
@@ -273,6 +279,7 @@ export function useWakeWord(
     setError(null);
     reconnectAttemptsRef.current = 0;
     fatalRef.current = false;
+    recentFramesRef.current = [];
     lastResponseAtRef.current = Date.now();
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -376,7 +383,11 @@ export function useWakeWord(
 
         while (pending.length >= CHUNK_SAMPLES) {
           const chunk = pending.splice(0, CHUNK_SAMPLES);
-          if (carriesSound(chunk)) ws.send(new Int16Array(chunk).buffer);
+          const frame = new Int16Array(chunk);
+          const recent = recentFramesRef.current;
+          recent.push(frame);
+          if (recent.length > RECENT_FRAMES) recent.splice(0, recent.length - RECENT_FRAMES);
+          if (carriesSound(chunk)) ws.send(frame.buffer);
         }
       };
 
@@ -435,5 +446,13 @@ export function useWakeWord(
     return () => window.clearInterval(watchdog);
   }, [enabled, start, stop]);
 
-  return { listening, error };
+  /** The last `ms` of microphone audio, as the detector heard it. */
+  const takeRecentAudio = useCallback((ms: number): Int16Array => {
+    const frames = recentFramesRef.current.slice(-Math.ceil(ms / 80));
+    const out = new Int16Array(frames.length * CHUNK_SAMPLES);
+    frames.forEach((frame, i) => out.set(frame, i * CHUNK_SAMPLES));
+    return out;
+  }, []);
+
+  return { listening, error, takeRecentAudio };
 }

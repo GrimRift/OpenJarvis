@@ -251,6 +251,11 @@ interface Settings {
   wakeWordVerify: WakeWordVerify;
   /** Seconds the microphone stays open after "Hey Sage" with nothing said. */
   wakeWordListenSeconds: number;
+  /**
+   * "Hey Sage, any news?" in one breath: the turn starts from the wake
+   * phrase itself and "Yes, Sir?" plays only after a pause.
+   */
+  wakeWordFastFollow: boolean;
   continuousConversationEnabled: boolean;
   /** Seconds the microphone stays open for a follow-up after a reply. */
   continuousListenSeconds: number;
@@ -300,6 +305,7 @@ function loadSettings(): Settings {
     bargeInMode: DEFAULT_BARGE_MODE,
     wakeWordVerify: 'local',
     wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,
+    wakeWordFastFollow: true,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,

@@ -480,6 +480,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     processor.onaudioprocess = (event) => {
       if (!sendingRef.current) return;
       if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+      if (Date.now() < holdUntilRef.current) return;
 
       const pcm = downsample(
         event.inputBuffer.getChannelData(0),
@@ -517,13 +518,37 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     silent.connect(ctx.destination);
   }, [eager, fail, handleMessage]);
 
-  const beginTurn = useCallback(() => {
+  const beginTurn = useCallback((preRoll?: Int16Array) => {
     pendingRef.current = [];
     fallbackRef.current = [];
     sendingRef.current = true;
     voiceTrace('flux.beginTurn', {
       socket: wsRef.current ? wsRef.current.readyState : 'none',
+      preRollMs: preRoll ? Math.round((preRoll.length / TARGET_SAMPLE_RATE) * 1000) : 0,
     });
+    // Audio from before this moment -- the wake phrase and the first words
+    // after it -- goes first, so the turn starts where the user did.
+    if (preRoll && preRoll.length && wsRef.current?.readyState === WebSocket.OPEN) {
+      for (let i = 0; i < preRoll.length; i++) fallbackRef.current.push(preRoll[i]);
+      for (let at = 0; at + CHUNK_SAMPLES <= preRoll.length; at += CHUNK_SAMPLES) {
+        try {
+          wsRef.current.send(preRoll.slice(at, at + CHUNK_SAMPLES).buffer);
+        } catch {
+          break;
+        }
+      }
+    }
+  }, []);
+
+  // Frames are dropped while this is set: a greeting clip playing into an
+  // open turn would come back as the user's words.
+  const holdUntilRef = useRef(0);
+  const holdAudio = useCallback((promise: Promise<unknown>, tailMs = 250) => {
+    holdUntilRef.current = Number.POSITIVE_INFINITY;
+    const release = () => {
+      holdUntilRef.current = Date.now() + tailMs;
+    };
+    promise.then(release, release);
   }, []);
 
   const endTurn = useCallback(() => {
@@ -576,6 +601,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     reason,
     beginTurn,
     endTurn,
+    holdAudio,
     connect,
     disconnect,
     takeFallbackAudio,
