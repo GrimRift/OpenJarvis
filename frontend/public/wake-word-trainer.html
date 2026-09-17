@@ -77,10 +77,15 @@ const isTopup = params.get('mode') === 'topup' && !!topupSession;
 // while the app was busy responding.
 const isFree = params.get('mode') === 'free';
 const isGuided = params.get('mode') === 'guided';
+// The conditions the recorded set lacks (17 September): far, quiet, fast,
+// with the fan, with a video playing -- and negatives of the same length
+// in the same conditions. Recall at a distance and in noise is the gain;
+// precision is the transcript stage's job now.
+const isConditions = params.get('mode') === 'conditions';
 
 const sessionId = isTopup
   ? topupSession
-  : (isFree || isGuided)
+  : (isFree || isGuided || isConditions)
     ? params.get('session') || 'session_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
     : 'browser_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
 document.getElementById('sessionId').textContent = sessionId + (isTopup ? ' (adding to existing)' : '');
@@ -151,6 +156,58 @@ if (isGuided) {
       prompt: `Say: "${s}"`,
       note: 'Ordinary speech — teaches it that talking is not a trigger',
       durationMs: 4500,
+    });
+  });
+} else if (isConditions) {
+  const positive = (n, prefix, prompt, note, durationMs) => {
+    for (let i = 1; i <= n; i++) {
+      items.push({
+        label: 'positive',
+        name: `${prefix}_${String(i).padStart(2, '0')}.wav`,
+        prompt,
+        note,
+        durationMs,
+      });
+    }
+  };
+  const negative = (n, prefix, prompt, note, durationMs, isSpeech = true) => {
+    for (let i = 1; i <= n; i++) {
+      items.push({
+        label: 'negative',
+        name: `${prefix}_${String(i).padStart(2, '0')}.wav`,
+        prompt,
+        note,
+        durationMs,
+        isSpeech,
+      });
+    }
+  };
+  positive(8, 'c_far', 'Say "Hey Sage" from the door',
+    'Click Next, walk to the door (or as far as the room allows), say it once at normal volume, walk back. 6 seconds.',
+    6000);
+  negative(4, 'c_far_talk', 'From the door, say a sentence to someone else',
+    'e.g. "I\'ll be back in a minute" / "did you see where I put it" -- not the wake word. 6 seconds.',
+    6000);
+  positive(6, 'c_quiet', 'Say "Hey Sage" quietly',
+    'As if someone were asleep next to you. At the desk.', 2300);
+  positive(6, 'c_fast', 'Say "heysage" fast, as one word',
+    'The way you say it when you are in a hurry.', 1800);
+  positive(5, 'c_fan', 'Say "Hey Sage" with the fan on',
+    'Fan running as it usually does; normal delivery.', 2300);
+  negative(3, 'c_fan_only', 'Fan only -- stay quiet', 'Room tone with the fan.', 6000, false);
+  positive(6, 'c_video', 'Say "Hey Sage" with a video playing',
+    'Before the first take: start a YouTube video at the volume you normally use. Normal delivery over it.',
+    2300);
+  negative(6, 'c_video_only', 'Let the video play -- do not speak',
+    'The video alone, at that volume.', 5000, false);
+  const overVideo = ['What time is it', 'Okay, let\'s go', 'Wait a minute', 'No, not that one'];
+  overVideo.forEach((s, i) => {
+    items.push({
+      label: 'negative',
+      name: `c_video_talk_${String(i + 1).padStart(2, '0')}.wav`,
+      prompt: `With the video playing, say: "${s}"`,
+      note: 'Ordinary speech over the video.',
+      durationMs: 3000,
     });
   });
 } else if (isTopup) {

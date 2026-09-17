@@ -190,7 +190,38 @@ next time. Changes:
   the detector's job is recall; a firing costs ~200 ms of GPU, a miss costs
   the user a repeat.
 
-## Recording session (planned, not done)
+## Recording session (done 2026-09-17): what it showed
+
+`conditions_20260917`: 31 positives (far ×8, quiet ×6, fast ×6, fan ×5,
+over a video ×6) and 17 negatives in the same conditions (Tagalog from
+the door, fan only, video only, speech over the video), captured through
+the trainer page (`?mode=conditions`). `scripts/wake_word_holdout.py`
+holds out a fifth by clip, retrains, and scores the held-out clips the
+way the live gate does, against the installed verifier.
+
+- **The installed verifier at 0.65 already had the recall**: 30/30 held
+  out (far, quiet, fast, video included), 31/31 on the whole new session.
+  The retrained candidate gained nothing and rejected *less* (7/9 → 3/9 on
+  one split, worse on two more seeds). **Not replaced.**
+- **The detector fires on the fan alone, Tagalog from the door, and 4 of
+  10 video negatives** at 0.65; the transcript stage rejected every one of
+  them (17/17), whatever the wait.
+- **The real bottleneck was the moment of transcription.** The detector
+  fires on the shape of "hey sa-" while the phrase is still being said.
+  With the two-second ring cut at the firing frame, the whole phrase was
+  in it for 14 of 61 takes; at +320 ms for 38; at +640 ms for 51; nothing
+  more by +960 ms. This, not the model, is why the wake word felt "super
+  hard to fire" on day one. The socket now gathers four more frames, judges,
+  and if not confirmed four more and judges again (`VERIFY_STAGE_FRAMES`,
+  `VERIFY_STAGES`); typical cost 320 ms + one check, worst 640 ms + two.
+- **Strict mode wants the name, not the phrase.** Over music the
+  recogniser hears "Thank you, Sage", "And Sage", "In Sage": the name
+  right, the "hey" wrong. Strict now asks for a sage-word anywhere; "Peace
+  in you" / "Peace English" still fail. The lead list gained `thank, and,
+  in, i'm`.
+- Left: from the door, tiny.en hears nothing 5 times in 8 (the detector
+  did fire) -- a bigger model for the verifier, or accepting the detector's
+  word at a distance, are the two ways forward if that matters.
 
 Five minutes, through the existing `/v1/speech/wake-word-sample` capture,
 in the conditions the current set lacks: **far** (from the door), **quiet**

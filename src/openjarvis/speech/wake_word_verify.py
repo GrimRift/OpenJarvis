@@ -35,13 +35,40 @@ FRAME_SAMPLES = 1280
 #: detector's own lag behind the end of the phrase.
 RING_FRAMES = 25
 VERIFY_TIMEOUT_SECONDS = 1.5
+#: After a detection, this many more 80 ms frames are gathered before the
+#: transcript is read, up to this many times: the detector fires on "hey
+#: sa-" with the phrase still in the air (measured 17 September on 61
+#: takes: whole phrase in the ring at the firing for 14, at +320 ms for 38,
+#: at +640 ms for 51; the extra audio let no negative through).
+VERIFY_STAGE_FRAMES = 4
+VERIFY_STAGES = 2
 
 #: The modes ``[speech] wake_word_verify`` and the browser's setting accept.
 #: There was a Deepgram option for an evening; the small local model was
 #: both faster and more accurate on this voice, so it went.
 VERIFY_MODES = ("local", "off")
 
-_HEY = {"hey", "hi", "hay", "he", "a", "eh", "ay", "ok", "okay", "hei", "hej", "yo", "thanks"}
+_HEY = {
+    "hey",
+    "hi",
+    "hay",
+    "he",
+    "a",
+    "eh",
+    "ay",
+    "ok",
+    "okay",
+    "hei",
+    "hej",
+    "yo",
+    # Heard live before the name, 17 September: "thanks Sage", "thank you,
+    # Sage", "and Sage", "peace in Sage".
+    "thanks",
+    "thank",
+    "and",
+    "in",
+    "i'm",
+}
 _SAGE = {
     "sage",
     "sages",
@@ -99,19 +126,21 @@ def heard_wake_phrase(text: str, *, strict: bool = False) -> bool:
     the run-together letters end in the phrase's shape (see
     ``_PHONETIC_TAIL``). "sage" alone passes neither: the detector already
     required the whole phrase acoustically, and the decision was to hold
-    the transcript to the same standard. ``strict`` drops the sound rule:
-    used while another app is audibly playing, when a lyric can have the
-    shape and the user, who knows there is music on, says the name clearly.
+    the transcript to the same standard. ``strict`` drops the sound rule
+    and asks only that the *name* be spelt out: used while another app is
+    audibly playing, when a lyric can have the shape but rarely the word,
+    and the recogniser, hearing the user over music, gets the name right
+    and the "hey" wrong ("Thank you, Sage", "And Sage" -- 17 September).
     """
     words = [w.rstrip("'s") if w.endswith("'s") else w for w in _tokens(text)]
+    if strict:
+        return any(w in _SAGE for w in words)
     for i, word in enumerate(words):
         if word not in _HEY:
             continue
         for j in (i + 1, i + 2):
             if j < len(words) and words[j] in _SAGE:
                 return True
-    if strict:
-        return False
     letters = re.sub(r"[^a-z]", "", text.lower())[-_PHONETIC_LETTERS:]
     match = _PHONETIC_TAIL.search(letters)
     if not match:
@@ -344,6 +373,8 @@ def make_verifier(
 
 
 __all__ = [
+    "VERIFY_STAGE_FRAMES",
+    "VERIFY_STAGES",
     "AudioRing",
     "RING_FRAMES",
     "VERIFY_MODES",

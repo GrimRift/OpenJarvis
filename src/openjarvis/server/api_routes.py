@@ -699,6 +699,8 @@ async def wake_word_stream(websocket: WebSocket):
     # transcribed and must contain the words (speech/wake_word_verify.py).
     from openjarvis.speech.player import is_speaking
     from openjarvis.speech.wake_word_verify import (
+        VERIFY_STAGE_FRAMES,
+        VERIFY_STAGES,
         AudioRing,
         make_verifier,
         media_is_playing,
@@ -731,8 +733,19 @@ async def wake_word_stream(websocket: WebSocket):
             if detector.is_detection(score):
                 verdict = None
                 if verifier is not None:
+                    # The detector fires on the shape of "hey sa-", while the
+                    # phrase is still being said: at that instant the ring
+                    # held the whole phrase for 14 of 61 recorded takes, at
+                    # +320 ms for 38, at +640 ms for 51, and no negative
+                    # was let through by the extra audio. So: a few more
+                    # frames, judge; not confirmed, a few more, judge again.
                     strict = await asyncio.to_thread(media_is_playing)
-                    verdict = await verifier.verify(ring.pcm(), strict=strict)
+                    for _stage in range(VERIFY_STAGES):
+                        for _ in range(VERIFY_STAGE_FRAMES):
+                            ring.push(await websocket.receive_bytes())
+                        verdict = await verifier.verify(ring.pcm(), strict=strict)
+                        if verdict.confirmed:
+                            break
                 if verdict is not None and not verdict.confirmed:
                     await websocket.send_json(
                         {

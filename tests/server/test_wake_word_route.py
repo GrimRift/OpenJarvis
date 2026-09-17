@@ -77,12 +77,23 @@ def _app(heard, verify="local"):
     return app
 
 
-def _drive(app, frames=3):
+def _drive(app, frames=3, path="/v1/speech/wake-word"):
+    """Send `frames` frames and read a reply for each. The third frame
+    fires the fake detector; a verifying server then gathers more frames
+    before it answers (the phrase is still being said when the detector
+    fires), so those are sent too and, when the server did not need them,
+    read back as ordinary scores."""
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGE_FRAMES, VERIFY_STAGES
+
+    extra = VERIFY_STAGE_FRAMES * VERIFY_STAGES
     client = TestClient(app)
-    with client.websocket_connect("/v1/speech/wake-word") as ws:
+    with client.websocket_connect(path) as ws:
         out = []
         for i in range(frames):
             ws.send_bytes(bytes([i]) * 2560)
+            if i == frames - 1:
+                for j in range(extra):
+                    ws.send_bytes(bytes([100 + j]) * 2560)
             out.append(ws.receive_json())
     return out
 
@@ -92,9 +103,26 @@ def test_a_firing_without_the_words_is_rejected_with_what_was_heard():
     out = _drive(app)
     assert [m["type"] for m in out] == ["score", "score", "rejected"]
     assert out[-1]["heard"] == "the stage"
-    # The clip handed to the verifier is the ring: every frame so far, as WAV.
+    # The clip handed to the verifier is the ring, as WAV -- and it was read
+    # once per stage, since nothing confirmed it.
     assert app.state.speech_backend.audio[0][:4] == b"RIFF"
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGES
+
+    assert len(app.state.speech_backend.audio) == VERIFY_STAGES
     assert app.state.wake_word_detector.resets == 1
+
+
+def test_the_ring_grows_between_stages_and_a_confirmation_stops_them():
+    """The frames after the firing are what the second stage hears."""
+    app = _app("hey sage")
+    out = _drive(app)
+    assert out[-1]["type"] == "detected"
+    # Confirmed at the first stage: one read, of a ring holding the three
+    # scored frames plus the first stage's extra ones.
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGE_FRAMES
+
+    [clip] = app.state.speech_backend.audio
+    assert len(clip) == 44 + (3 + VERIFY_STAGE_FRAMES) * 2560
 
 
 def test_a_firing_with_the_words_is_detected_and_marked_verified():
@@ -119,8 +147,6 @@ def test_off_skips_verification_entirely():
 def test_the_browser_picks_the_verifier_per_socket():
     """`?verify=off` on the socket beats the server default."""
     app = _app("the stage", verify="local")
-    client = TestClient(app)
-    with client.websocket_connect("/v1/speech/wake-word?verify=off") as ws:
-        out = [ws.send_bytes(bytes([i]) * 2560) or ws.receive_json() for i in range(3)]
+    out = _drive(app, path="/v1/speech/wake-word?verify=off")
     assert out[-1]["type"] == "detected"
     assert app.state.speech_backend.audio == []

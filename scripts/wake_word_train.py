@@ -327,6 +327,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--session",
+        action="append",
         default="",
         help="Session id under wake_word_samples/ to train from (with --train-only).",
     )
@@ -335,14 +336,17 @@ def main() -> None:
     if args.train_only:
         if not args.session:
             parser.error("--train-only requires --session")
-        session_dir = DATA_ROOT / args.session
-        if not session_dir.is_dir():
-            parser.error(f"No such session directory: {session_dir}")
-        positive_paths = sorted((session_dir / "positive").glob("*.wav"))
-        negative_paths = sorted((session_dir / "negative").glob("*.wav"))
+        positive_paths: list[Path] = []
+        negative_paths: list[Path] = []
+        for name in args.session:
+            session_dir = DATA_ROOT / name
+            if not session_dir.is_dir():
+                parser.error(f"No such session directory: {session_dir}")
+            positive_paths += sorted((session_dir / "positive").glob("*.wav"))
+            negative_paths += sorted((session_dir / "negative").glob("*.wav"))
         if not positive_paths or not negative_paths:
-            parser.error(f"Session {args.session} has no positive/negative clips")
-        print(f"Training from {session_dir}")
+            parser.error("The sessions have no positive/negative clips")
+        print(f"Training from {', '.join(args.session)}")
         print(
             f"  {len(positive_paths)} positive, "
             f"{len(negative_paths)} negative clips\n"

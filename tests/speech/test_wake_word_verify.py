@@ -210,3 +210,55 @@ def test_quiet_audio_is_brought_up_and_loud_audio_left_alone():
     loud = array.array("h", [0, 30000, -30000]).tobytes()
     assert normalise_level(loud) == loud
     assert normalise_level(b"") == b""
+
+
+class TestTheShapeNeedsAHeyLead:
+    """First day live: "Class starting soon. See you", "You see?" and "Can
+    you see?" confirmed on the shape alone. The lead before the s must be
+    hey-shaped."""
+
+    @pytest.mark.parametrize(
+        "text",
+        ["see you", "You see?", "Can you see?", "I see", "I see you soon.", "soon see"],
+    )
+    def test_see_you_and_friends_do_not(self, text):
+        assert not heard_wake_phrase(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "hazage",
+            "hazy",
+            "Easy",
+            "Peace Sage.",
+            "Peace in Sage.",
+            "He said",
+            "A sage.",
+        ],
+    )
+    def test_the_real_shapes_still_do(self, text):
+        assert heard_wake_phrase(text)
+
+    def test_strict_wants_the_name_spelt_out(self):
+        """With music on, the recogniser gets the name right and the "hey"
+        wrong ("Thank you, Sage", "And Sage"); a lyric has the shape but
+        rarely the word."""
+        yes = [
+            "Hey Sage.",
+            "hey stage",
+            "Thank you, Sage.",
+            "And Sage.",
+            "In the Sage.",
+        ]
+        for said in yes:
+            assert heard_wake_phrase(said, strict=True), said
+        for said in ["hazage", "Easy", "Peace English.", "Peace in you."]:
+            assert not heard_wake_phrase(said, strict=True), said
+
+
+def test_verify_passes_strict_through_to_the_verdict():
+    pcm = bytes(3200)
+    loose = asyncio.run(WakeWordVerifier(_Backend("hazage")).verify(pcm))
+    assert loose.confirmed and loose.strict is False
+    strict = asyncio.run(WakeWordVerifier(_Backend("hazage")).verify(pcm, strict=True))
+    assert not strict.confirmed and strict.strict is True
