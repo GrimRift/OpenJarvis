@@ -17,17 +17,25 @@ describe('stripWakePhrase', () => {
     expect(stripWakePhrase('hazage any news')).toBe('any news');
     expect(stripWakePhrase('Hey acage, what time is it')).toBe('what time is it');
     expect(stripWakePhrase('Peace Sage.')).toBe('');
+    // Debris with no s-sound at all, heard live with the longer pre-roll.
+    expect(stripWakePhrase("ACGE. What's up?")).toBe("What's up?");
+    expect(stripWakePhrase('His age.')).toBe('');
+    expect(stripWakePhrase('ACG.')).toBe('');
     expect(stripWakePhrase('He said, tell me a joke')).toBe('tell me a joke');
   });
 
   it('does not take a short real word for the name', () => {
     expect(stripWakePhrase('say hello to mom')).toBe('say hello to mom');
-    expect(stripWakePhrase('see you')).toBe('see you');
+    expect(stripWakePhrase('what time is it')).toBe('what time is it');
+    expect(stripWakePhrase('open youtube')).toBe('open youtube');
+    expect(stripWakePhrase('play some music')).toBe('play some music');
+    expect(stripWakePhrase('yes')).toBe('yes');
   });
 
   it('leaves a transcript that is not the phrase alone', () => {
     expect(stripWakePhrase('what time is it')).toBe('what time is it');
-    expect(stripWakePhrase('hey what is this')).toBe('hey what is this');
+    // A bare "hey" in a wake-opened turn is the phrase with the name dropped.
+    expect(stripWakePhrase('hey what is this')).toBe('what is this');
     expect(stripWakePhrase('')).toBe('');
   });
 });
@@ -45,8 +53,10 @@ describe('the pause', () => {
     const { isOnlyWakePhrase: only, PAUSE_TURN_MS } = await import('./wake-follow');
     expect(only('ACG.', 900)).toBe(true);
     expect(only('age.', 1200)).toBe(true);
-    expect(only('age.', PAUSE_TURN_MS + 1)).toBe(false);
-    // Two real words within the window are still a question later on.
+    // A real short answer right after the wake word is still the pause...
+    expect(only('yes', 900)).toBe(true);
+    // ...but not once the window has passed, and never for a whole question.
+    expect(only('yes', PAUSE_TURN_MS + 1)).toBe(false);
     expect(only('what time is it', 900)).toBe(false);
   });
 

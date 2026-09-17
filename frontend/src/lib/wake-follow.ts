@@ -60,6 +60,27 @@ function isNameToken(token: string): boolean {
 }
 
 /**
+ * Words a request can begin with. In a turn opened by the wake word, a
+ * short leading token that is none of these is debris of the phrase
+ * ("ACGE", "his", "age" -- all heard live), whatever it looks like.
+ */
+const STARTERS = new Set([
+  'what', 'whats', "what's", 'how', 'when', 'where', 'why', 'who', 'which',
+  'can', 'could', 'will', 'would', 'is', 'are', 'do', 'did', 'does', 'am',
+  'tell', 'set', 'play', 'open', 'close', 'stop', 'show', 'find', 'read',
+  'send', 'turn', 'call', 'remind', 'any', 'give', 'get', 'add', 'make',
+  'put', 'run', 'say', 'go', 'let', 'i', "i'm", 'im', 'my', 'the', 'a',
+  'an', 'in', 'on', 'to', 'good', 'hi', 'hello', 'yes', 'no', 'ok', 'okay',
+  'quit', 'pause', 'skip', 'next', 'mute', 'search', 'look', 'check', 'note',
+  'list', 'start', 'wake', 'time', 'date', 'news', 'help', 'thanks', 'thank',
+  'never', 'not', 'nothing', 'just', 'so', 'and', 'but', 'please', 'be',
+]);
+
+function isDebris(token: string): boolean {
+  return token.length > 0 && token.length <= 4 && !STARTERS.has(token);
+}
+
+/**
  * Remove "hey sage" (or how it was heard) from the front of a transcript.
  * "Hey Sage, any news on AI?" -> "any news on AI?"; "Hey Sage." -> "".
  * A transcript that does not start with the phrase is returned as it is.
@@ -74,6 +95,11 @@ export function stripWakePhrase(transcript: string): string {
     i += 1;
     // "Peace Sage", "Peace in Sage": the name heard twice over.
     if (i < tokens.length && isNameToken(norm(tokens[i]))) i += 1;
+  } else if (isDebris(norm(tokens[0])) && (tokens.length === 1 || isDebris(norm(tokens[1])) || STARTERS.has(norm(tokens[1])) || tokens[1].length > 4)) {
+    // No recognisable name, but the turn starts with what is left of it:
+    // up to two short non-words ("ACGE", "his age") before the request.
+    i = 1;
+    if (i < tokens.length && isDebris(norm(tokens[i]))) i += 1;
   } else {
     // No name: not the phrase (a bare "hey" is the user's own word).
     return text;

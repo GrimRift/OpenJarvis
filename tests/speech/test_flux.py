@@ -221,3 +221,15 @@ class TestAddressCandidates:
             flux_mod.note_address_ok(addr)
         with patch.object(flux_mod, "resolve_addresses", return_value=["198.51.100.1"]):
             assert len(flux_mod.connect_candidates(limit=2)) == 2
+
+
+def test_the_name_is_boosted_on_every_flux_socket():
+    """Without keyterm the pre-rolled wake phrase came back as "ACGE" and
+    "His age" and went to the model as a message."""
+    url = build_url(
+        model="flux-general-en",
+        eot_threshold=0.7,
+        eager_eot_threshold=None,
+        eot_timeout_ms=5000,
+    )
+    assert "keyterm=Sage" in url and "keyterm=Hey+Sage" in url

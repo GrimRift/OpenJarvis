@@ -153,6 +153,11 @@ def validate_thresholds(
         )
 
 
+#: Words Deepgram should favour: the assistant's name, said in every turn
+#: that starts with the wake word.
+KEYTERMS = ("Sage", "Hey Sage")
+
+
 def build_url(
     *,
     model: str,
@@ -173,7 +178,13 @@ def build_url(
     # absent — not zero, not empty — in Standard mode.
     if eager_eot_threshold is not None:
         params["eager_eot_threshold"] = eager_eot_threshold
-    return f"{FLUX_URL}?{urlencode(params)}"
+    # Term boosting: without it the name comes back as "ACGE", "His age",
+    # "Usage" -- Deepgram has never heard of Sage. The same boost is what
+    # made the wake-word verifier spell the phrase reliably.
+    query = urlencode(params)
+    for term in KEYTERMS:
+        query += "&" + urlencode({"keyterm": term})
+    return f"{FLUX_URL}?{query}"
 
 
 #: How long to wait for Deepgram's handshake before giving up and letting the
