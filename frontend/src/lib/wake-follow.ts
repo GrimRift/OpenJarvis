@@ -13,10 +13,33 @@
 /** Audio kept from before the confirmation: the detector fires mid-phrase and
  * the transcript check runs up to ~0.9 s, so this covers the whole phrase
  * and the first words after it. */
-export const PRE_ROLL_MS = 1500;
+export const PRE_ROLL_MS = 2500;
 
 /** Nothing heard this long after the wake word: say "Yes, Sir?" as before. */
 export const GREETING_PAUSE_MS = 1000;
+/** The timer never fires sooner than this after the browser hears of the
+ * detection, so a first partial has a chance to arrive and cancel it. */
+export const GREETING_MIN_DELAY_MS = 150;
+/** A turn that ends this soon after the wake word, with this few tokens,
+ * is the phrase itself however it was spelt ("ACG.", "age."). */
+export const PAUSE_TURN_MS = 1800;
+export const PAUSE_TURN_MAX_TOKENS = 2;
+
+/** How long to wait for a pause greeting, given how long ago the phrase
+ * ended (the server reports the frames gathered and checks run). */
+export function greetingDelayMs(sinceFiringMs: number): number {
+  return Math.max(GREETING_MIN_DELAY_MS, GREETING_PAUSE_MS - Math.max(0, sinceFiringMs));
+}
+
+/**
+ * Whether a fast-follow turn's transcript is the user carrying on past the
+ * wake phrase: at least one real word beyond it. Used on partials to cancel
+ * the pause greeting, so it cancels only for speech, never for the phrase's
+ * own fragments.
+ */
+export function continuesPastWakePhrase(transcript: string): boolean {
+  return /[\p{L}\p{N}]/u.test(stripWakePhrase(transcript));
+}
 
 /** How the wake phrase comes out of Deepgram, as leading tokens. */
 const LEAD = new Set(['hey', 'hi', 'hay', 'he', 'a', 'ok', 'okay', 'yo', 'oh']);
@@ -59,7 +82,16 @@ export function stripWakePhrase(transcript: string): string {
   return rest.trim();
 }
 
-/** Whether a turn's transcript was only the wake phrase (the user paused). */
-export function isOnlyWakePhrase(transcript: string): boolean {
-  return transcript.trim() !== '' && stripWakePhrase(transcript) === '';
+/**
+ * Whether a turn's transcript was only the wake phrase (the user paused):
+ * nothing left once the phrase is stripped, or -- because Deepgram spells a
+ * fragment of the phrase any way it likes -- a turn that ended within
+ * PAUSE_TURN_MS of the wake word holding no more than two tokens.
+ */
+export function isOnlyWakePhrase(transcript: string, elapsedMs = Infinity): boolean {
+  const text = transcript.trim();
+  if (text === '') return false;
+  if (stripWakePhrase(text) === '') return true;
+  const tokens = text.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t));
+  return elapsedMs < PAUSE_TURN_MS && tokens.length <= PAUSE_TURN_MAX_TOKENS;
 }

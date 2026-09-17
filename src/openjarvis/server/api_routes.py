@@ -732,6 +732,10 @@ async def wake_word_stream(websocket: WebSocket):
                 continue
             if detector.is_detection(score):
                 verdict = None
+                # The browser's pause timer counts from the end of the
+                # phrase, not from when it hears of the detection: the
+                # frames gathered and the checks run are time already gone.
+                since_firing_ms = 0
                 if verifier is not None:
                     # The detector fires on the shape of "hey sa-", while the
                     # phrase is still being said: at that instant the ring
@@ -743,7 +747,9 @@ async def wake_word_stream(websocket: WebSocket):
                     for _stage in range(VERIFY_STAGES):
                         for _ in range(VERIFY_STAGE_FRAMES):
                             ring.push(await websocket.receive_bytes())
+                            since_firing_ms += 80
                         verdict = await verifier.verify(ring.pcm(), strict=strict)
+                        since_firing_ms += verdict.ms
                         if verdict.confirmed:
                             break
                 if verdict is not None and not verdict.confirmed:
@@ -768,6 +774,7 @@ async def wake_word_stream(websocket: WebSocket):
                         "note": verdict.note if verdict is not None else "",
                         "ms": verdict.ms if verdict is not None else 0,
                         "strict": bool(verdict is not None and verdict.strict),
+                        "since_firing_ms": since_firing_ms,
                     }
                 )
                 ring.clear()

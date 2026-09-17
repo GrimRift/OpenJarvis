@@ -39,3 +39,28 @@ describe('isOnlyWakePhrase', () => {
     expect(isOnlyWakePhrase('')).toBe(false);
   });
 });
+
+describe('the pause', () => {
+  it('a short turn that ends right after the wake word is the phrase, however spelt', async () => {
+    const { isOnlyWakePhrase: only, PAUSE_TURN_MS } = await import('./wake-follow');
+    expect(only('ACG.', 900)).toBe(true);
+    expect(only('age.', 1200)).toBe(true);
+    expect(only('age.', PAUSE_TURN_MS + 1)).toBe(false);
+    // Two real words within the window are still a question later on.
+    expect(only('what time is it', 900)).toBe(false);
+  });
+
+  it('the greeting timer counts from the end of the phrase', async () => {
+    const { greetingDelayMs, GREETING_MIN_DELAY_MS } = await import('./wake-follow');
+    expect(greetingDelayMs(0)).toBe(1000);
+    expect(greetingDelayMs(700)).toBe(300);
+    expect(greetingDelayMs(1500)).toBe(GREETING_MIN_DELAY_MS);
+  });
+
+  it('only words beyond the phrase cancel the greeting', async () => {
+    const { continuesPastWakePhrase } = await import('./wake-follow');
+    expect(continuesPastWakePhrase('Hey Sage')).toBe(false);
+    expect(continuesPastWakePhrase('Usage.')).toBe(false);
+    expect(continuesPastWakePhrase('Hey Sage any')).toBe(true);
+  });
+});

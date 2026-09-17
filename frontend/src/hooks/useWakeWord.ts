@@ -86,7 +86,7 @@ export function carriesSound(frame: number[]): boolean {
 }
 
 export function useWakeWord(
-  onDetected: () => void,
+  onDetected: (info: { sinceFiringMs: number }) => void,
   enabled: boolean,
   /** The server heard something wake-word-shaped but the words were not there. */
   onRejected?: (heard: string) => void,
@@ -217,8 +217,9 @@ export function useWakeWord(
             note: String(data.note ?? ''),
             ms: Number(data.ms ?? 0),
             strict: Boolean(data.strict),
+            sinceFiringMs: Number(data.since_firing_ms ?? 0),
           });
-          onDetectedRef.current();
+          onDetectedRef.current({ sinceFiringMs: Number(data.since_firing_ms ?? 0) });
         } else if (data.type === 'rejected') {
           const heard = String(data.heard ?? '');
           voiceTrace('wakeword.rejected', {

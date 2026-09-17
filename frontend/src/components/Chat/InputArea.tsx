@@ -19,7 +19,7 @@ import {
   ingestDocument,
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
-import { GREETING_PAUSE_MS, PRE_ROLL_MS, isOnlyWakePhrase, stripWakePhrase } from '../../lib/wake-follow';
+import { PRE_ROLL_MS, continuesPastWakePhrase, greetingDelayMs, isOnlyWakePhrase, stripWakePhrase } from '../../lib/wake-follow';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
 import {
   type BargeVerdict,
@@ -266,9 +266,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // from the wake phrase, greeting deferred until a pause. `greeted` keeps
   // the pause greeting to one per wake, whichever path notices the pause
   // first (the timer, or an end-of-turn holding only the phrase).
-  const fastFollowRef = useRef<{ active: boolean; greeted: boolean }>({
+  const fastFollowRef = useRef<{ active: boolean; greeted: boolean; startedAt: number }>({
     active: false,
     greeted: false,
+    startedAt: 0,
   });
   const greetingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const takeRecentAudioRef = useRef<((ms: number) => Int16Array) | null>(null);
@@ -1444,7 +1445,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       let spoken = (transcript || '').trim();
       if (fastFollowRef.current.active) {
         clearGreetingTimer();
-        if (isOnlyWakePhrase(spoken)) {
+        const elapsed = Date.now() - fastFollowRef.current.startedAt;
+        if (isOnlyWakePhrase(spoken, elapsed)) {
           // "Hey Sage." and then nothing: the user paused. Greet now and
           // keep listening for the question.
           if (!fastFollowRef.current.greeted && wakeWordGreetingEnabled) {
@@ -1455,7 +1457,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           armFluxSilenceTimer('wake');
           return;
         }
-        fastFollowRef.current = { active: false, greeted: false };
+        fastFollowRef.current = { active: false, greeted: false, startedAt: 0 };
         spoken = stripWakePhrase(spoken);
       }
 
@@ -1621,8 +1623,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     onTurnStarted: () => {
       // Real speech: from here Deepgram owns the ending.
       clearFluxSilenceTimer();
-      // Speech straight after the wake word: no greeting needed.
-      if (fastFollowRef.current.active) clearGreetingTimer();
       const state = continuationRef.current;
       if (
         !continuingRef.current &&
@@ -1653,6 +1653,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }
     },
     onUpdate: (transcript, turnIndex, words) => {
+      // Words beyond the wake phrase: the user carried on, no greeting.
+      // (StartOfTurn cannot tell: the pre-rolled phrase opens a turn too.)
+      if (fastFollowRef.current.active && continuesPastWakePhrase(transcript)) {
+        clearGreetingTimer();
+      }
       if (!bargeListeningRef.current) return;
       // A partial for a turn already finalised is stale; it belongs to the
       // normal path that handled it.
@@ -1772,7 +1777,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // greeting always being heard in full and the recording holding only the
   // user. The microphone is still opened during the greeting (see
   // waitBeforeCapture), so speaking the instant it ends loses nothing.
-  const beginWakeWordRecording = useCallback(async () => {
+  const beginWakeWordRecording = useCallback(async (info?: { sinceFiringMs: number }) => {
     // speechState only becomes 'recording' once the greeting has finished,
     // so for that whole window it still reads 'idle' and cannot by itself
     // keep a second trigger out. A ref closes the gap immediately, before
@@ -1799,16 +1804,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           // One breath: the turn starts from the wake phrase itself, with
           // the audio the detector already heard as pre-roll, and the
           // greeting waits to see whether the user pauses.
-          fastFollowRef.current = { active: true, greeted: false };
+          const sinceFiringMs = info?.sinceFiringMs ?? 0;
+          fastFollowRef.current = {
+            active: true,
+            greeted: false,
+            startedAt: Date.now() - sinceFiringMs,
+          };
           flux.beginTurn(takeRecentAudioRef.current?.(PRE_ROLL_MS));
           armFluxSilenceTimer('wake');
-          voiceTrace('wake.fastFollow');
+          voiceTrace('wake.fastFollow', { sinceFiringMs });
           if (wakeWordGreetingEnabled) {
             clearGreetingTimer();
+            // Counted from the end of the phrase, which the server says
+            // was `sinceFiringMs` ago; the user's silence started then.
             greetingTimerRef.current = setTimeout(() => {
               greetingTimerRef.current = null;
               greetAfterPause('timer');
-            }, GREETING_PAUSE_MS);
+            }, greetingDelayMs(sinceFiringMs));
           }
           return;
         }
