@@ -36,6 +36,10 @@ class ChatCompletionRequest(BaseModel):
     # voice question gets a voice answer instead of requiring the user to
     # read a screen they spoke to specifically to avoid looking at.
     voice: bool = False
+    # Whether Sage may draw a diagram this turn, and whether it may do so
+    # unasked: "auto", "on-request" or "off" (openjarvis.prompt.diagrams).
+    # Off by default so every other caller is unaffected.
+    diagrams: str = "off"
     tools: Optional[List[Dict[str, Any]]] = None
 
 

@@ -256,6 +256,12 @@ interface Settings {
    * phrase itself and "Yes, Sir?" plays only after a pause.
    */
   wakeWordFastFollow: boolean;
+  /** Sage may draw a diagram at all. Off means it never does, and the
+   * instruction is left out of the prompt entirely. */
+  diagramsEnabled: boolean;
+  /** Sage decides when a diagram helps. Off means it draws one only when
+   * asked ("show me how", "illustrate that"). */
+  diagramsAutomatic: boolean;
   continuousConversationEnabled: boolean;
   /** Seconds the microphone stays open for a follow-up after a reply. */
   continuousListenSeconds: number;
@@ -306,6 +312,8 @@ function loadSettings(): Settings {
     wakeWordVerify: 'local',
     wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,
     wakeWordFastFollow: true,
+    diagramsEnabled: true,
+    diagramsAutomatic: true,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
     fluxEnabled: false,

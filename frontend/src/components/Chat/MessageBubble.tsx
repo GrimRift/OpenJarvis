@@ -1,5 +1,6 @@
 import { memo, useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { DiagramCard } from '../Diagram/DiagramCard';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -44,13 +45,20 @@ function getTextContent(node: any): string {
   return '';
 }
 
-function CodeBlockPre({ children, ...props }: any) {
+function CodeBlockPre({ children, messageId, isLive, ...props }: any) {
   const [copied, setCopied] = useState(false);
   const codeElement = Array.isArray(children) ? children[0] : children;
   const className = codeElement?.props?.className || '';
   const match = /language-([\w-]+)/.exec(className);
   const lang = match ? match[1] : '';
   const code = getTextContent(codeElement?.props?.children).replace(/\n$/, '');
+
+  // Sage's own diagrams are drawn, not printed: the JSON is an instruction to
+  // the UI, and showing it raw would read worse than the text sketch it
+  // replaced. A half-streamed block simply renders nothing yet.
+  if (lang === 'sage-diagram') {
+    return <DiagramCard source={code} messageId={messageId ?? ''} isLive={isLive} />;
+  }
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
@@ -118,6 +126,17 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   // from one that had quietly lost it -- which is exactly the confusion the
   // user hit, twice, with only the token count as evidence.
   const attachedDocuments = message.documents ?? documentsFor(message.id) ?? [];
+
+  // Memoised because a component type created inline is a NEW type on every
+  // render, which unmounts and remounts every code block on each streamed
+  // token.
+  const preRenderer = useMemo(
+    () =>
+      function Pre(props: any) {
+        return <CodeBlockPre {...props} messageId={message.id} isLive={isLive} />;
+      },
+    [message.id, isLive],
+  );
 
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
   // Escaped only for rendering. Copy must still yield "$200", not "\$200".
@@ -250,7 +269,7 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
             remarkPlugins={[remarkGfm, remarkMath]}
             rehypePlugins={rehypePlugins}
             components={{
-              pre: CodeBlockPre,
+              pre: preRenderer,
               a: ({ href, children, node: _node, ...props }) => (
                 <a href={href} {...externalLinkAttributes(href)} {...props}>
                   {children}

@@ -9,6 +9,8 @@ import {
   type AttachedImage,
 } from '../../lib/image-attach';
 import { streamChat, streamResearch } from '../../lib/sse';
+import { diagramMode } from '../../lib/diagram';
+import { useDiagramPresenter } from '../../lib/diagram-presenter';
 import type { ChatRequest } from '../../lib/sse';
 import {
   fetchSavings,
@@ -269,6 +271,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const streamState = useAppStore((s) => s.streamState);
   const messages = useAppStore((s) => s.messages);
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
+  const diagramsEnabled = useAppStore((s) => s.settings.diagramsEnabled);
+  const diagramsAutomatic = useAppStore((s) => s.settings.diagramsAutomatic);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const wakeWordFastFollow = useAppStore((s) => s.settings.wakeWordFastFollow);
   // One-breath wake word (lib/wake-follow.ts): the turn opened straight
@@ -955,6 +959,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           temperature,
           max_tokens: maxTokens,
           voice: wasVoice,
+          diagrams: diagramMode(diagramsEnabled, diagramsAutomatic),
         },
         controller.signal,
       )) {
@@ -1228,6 +1233,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // listener with no way to skim.
         const spokenContent = speakableText(accumulatedContent);
         spokenTextRef.current = spokenContent;
+        // Feeds the open diagram's "which step is being said" highlight.
+        useDiagramPresenter.getState().noteSpoken(spokenContent);
         speakStreaming(spokenContent, ttsVoice)
           .then((spoke) => {
             if (spoke) {
@@ -1358,6 +1365,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           useAppStore.getState().setAudioPlayback(playbackOwner, false);
         useAppStore.getState().setAudioPlayback(playbackOwner, true);
         spokenTextRef.current = answer;
+        useDiagramPresenter.getState().noteSpoken(answer);
         speakStreaming(answer, ttsVoice)
           .then((spoke) => {
             if (spoke) {

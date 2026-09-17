@@ -79,7 +79,9 @@ def _to_messages(chat_messages) -> list[Message]:
     return messages
 
 
-def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message]:
+def _ensure_identity_prompt(
+    messages: list[Message], app_config, diagrams: str = "off"
+) -> list[Message]:
     """Prepend OpenJarvis's identity system prompt when the client omits one.
 
     The desktop UI's chat backend posts only user/assistant turns to
@@ -129,6 +131,13 @@ def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message
             system_prompt_config=getattr(cfg, "system_prompt", None),
         )
         prompt = builder.build()
+        # Appended rather than built in: the frozen prefix is what keeps the
+        # prompt cacheable, and this section changes with a Settings switch.
+        from openjarvis.prompt.diagrams import instruction
+
+        drawing = instruction(diagrams)
+        if drawing:
+            prompt = prompt + "\n\n" + drawing
     except Exception:
         logging.getLogger("openjarvis.server").debug(
             "Identity system prompt resolution failed; "
@@ -340,7 +349,9 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
 
             if query_text:
                 messages = _to_messages(request_body.messages)
-                messages = _ensure_identity_prompt(messages, config)
+                messages = _ensure_identity_prompt(
+                    messages, config, request_body.diagrams
+                )
                 ctx_cfg = ContextConfig(
                     top_k=config.memory.context_top_k,
                     min_score=config.memory.context_min_score,
@@ -749,7 +760,7 @@ def _handle_direct(
 ) -> ChatCompletionResponse:
     """Direct engine call without agent."""
     messages = _to_messages(req.messages)
-    messages = _ensure_identity_prompt(messages, app_config)
+    messages = _ensure_identity_prompt(messages, app_config, req.diagrams)
     kwargs: dict[str, Any] = {}
     if req.tools:
         kwargs["tools"] = req.tools
@@ -1694,7 +1705,7 @@ async def _handle_stream_tools(
     regresses non-tool-capable engines.
     """
     messages = _to_messages(req.messages)
-    messages = _ensure_identity_prompt(messages, app_config)
+    messages = _ensure_identity_prompt(messages, app_config, req.diagrams)
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     use_cloud = _uses_direct_cloud_router(engine, model)
     telemetry_engine = (
@@ -1824,7 +1835,7 @@ async def _handle_stream(
     from openjarvis.server.cloud_router import stream_cloud, stream_local
 
     messages = _to_messages(req.messages)
-    messages = _ensure_identity_prompt(messages, app_config)
+    messages = _ensure_identity_prompt(messages, app_config, req.diagrams)
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
     # Last user message — recorded as the trace query.

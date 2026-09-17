@@ -582,6 +582,32 @@ export function SettingsPage() {
 
         <div className="flex flex-col gap-4">
           {/* Appearance */}
+          <Section title="Diagrams">
+            <SettingRow
+              label="Let Sage draw diagrams"
+              description="Explanations of how something works, how it is made, what goes into it, or two options weighed up are drawn as a diagram over the app instead of sketched in text. Esc or Close dismisses it; a spoken one leaves when Sage stops talking."
+            >
+              <Switch
+                on={settings.diagramsEnabled}
+                onClick={() => { updateSettings({ diagramsEnabled: !settings.diagramsEnabled }); showSaved(); }}
+              />
+            </SettingRow>
+            <SettingRow
+              label="Decide on its own when to draw"
+              description={
+                settings.diagramsAutomatic
+                  ? 'Sage draws one whenever the answer is a process, a structure or a set of parts.'
+                  : 'Sage draws one only when you ask — "show me how", "illustrate that", "diagram it".'
+              }
+            >
+              <Switch
+                on={settings.diagramsAutomatic}
+                disabled={!settings.diagramsEnabled}
+                onClick={() => { updateSettings({ diagramsAutomatic: !settings.diagramsAutomatic }); showSaved(); }}
+              />
+            </SettingRow>
+          </Section>
+
           <Section title="Appearance">
             <SettingRow label="Theme" description="Choose how OpenJarvis looks">
               <div className="flex gap-1 p-0.5 rounded-lg" style={{ background: 'var(--color-bg-secondary)' }}>

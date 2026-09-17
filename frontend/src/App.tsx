@@ -18,6 +18,7 @@ import { useAppStore } from './lib/store';
 import { useMomentsFeed, usePresenceState } from './hooks/useMomentsFeed';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri, fetchToolCredentialStatus } from './lib/api';
 import { OptInModal } from './components/OptInModal';
+import { DiagramLayer } from './components/Diagram/DiagramLayer';
 import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
@@ -214,6 +215,7 @@ export default function App() {
         </Route>
       </Routes>
       <Toaster position="bottom-right" />
+      <DiagramLayer />
       {commandPaletteOpen && <CommandPalette />}
       {optInModalOpen && (
         <OptInModal onClose={() => setOptInModalOpen(false)} />
