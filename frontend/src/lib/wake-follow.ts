@@ -23,6 +23,10 @@ export const GREETING_MIN_DELAY_MS = 150;
 /** A turn that ends this soon after the wake word, with this few tokens,
  * is the phrase itself however it was spelt ("ACG.", "age."). */
 export const PAUSE_TURN_MS = 1800;
+/** The pause greeting is no longer considered this long after the phrase:
+ * the greeting needs a second of quiet, so by now the user has spoken for
+ * a second or more and a pause is a pause inside a question. */
+export const GREETING_GIVE_UP_MS = 2000;
 export const PAUSE_TURN_MAX_TOKENS = 2;
 
 /** How long to wait for a pause greeting, given how long ago the phrase

@@ -20,8 +20,8 @@ import {
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
 import {
+  GREETING_GIVE_UP_MS,
   GREETING_PAUSE_MS,
-  PAUSE_TURN_MS,
   PRE_ROLL_MS,
   continuesPastWakePhrase,
   greetingDelayMs,
@@ -1840,7 +1840,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 return;
               }
               // Give up once a question is clearly under way.
-              if (Date.now() - phraseEndedAt > PAUSE_TURN_MS * 2) return;
+              if (Date.now() - phraseEndedAt > GREETING_GIVE_UP_MS) return;
               greetingTimerRef.current = setTimeout(check, 100);
             };
             greetingTimerRef.current = setTimeout(check, greetingDelayMs(sinceFiringMs));
