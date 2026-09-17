@@ -939,6 +939,24 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             timestamp: Date.now(), level: 'info', category: 'chat',
             message: `Generating with ${selectedModel}...`,
           });
+        } else if (eventName === 'text_retract') {
+          // The model wrote this in the same round as a tool call: a
+          // preamble, not the answer. Take it off the message (the answer
+          // after the tool restates it) and let it stand as the status line
+          // while the tool runs. Speech already synthesised from it cannot
+          // be unsaid; that is the one limit here.
+          try {
+            const data = JSON.parse(sseEvent.data);
+            const chars = Number(data.chars ?? 0);
+            if (chars > 0 && accumulatedContent.endsWith(String(data.text ?? '').slice(-chars))) {
+              accumulatedContent = accumulatedContent.slice(0, -chars);
+              updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
+            }
+            const said = String(data.text ?? '').trim();
+            if (said) setStreamState({ phase: said.length > 80 ? `${said.slice(0, 77)}...` : said });
+          } catch {
+            /* skip */
+          }
         } else if (eventName === 'tool_call_start') {
           try {
             const data = JSON.parse(sseEvent.data);

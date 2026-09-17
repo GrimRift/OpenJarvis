@@ -2225,3 +2225,88 @@ class TestExtractionFollowsTheModelThatAnswered:
         from openjarvis.server.routes import _answering_model
 
         assert _answering_model("", None) == ""
+
+
+class TestPreambleBeforeAToolCallIsTakenBack:
+    """ "I'll tell you at 10:05 AM today, Sir." streamed before the tool ran,
+    then "Done, Sir. I'll tell you at 10:05 AM" after it, glued into one
+    message. Text in a tool round is a preamble; the client is told to
+    retract it and the answer after the tool stands alone."""
+
+    def test_text_retract_names_the_preamble(self):
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        class _Tool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="tell_me_when",
+                    description="x",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(tool_name="tell_me_when", content="ok", success=True)
+
+        engine = _make_engine(content="unused")
+        turn = 0
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            nonlocal turn
+            turn += 1
+            if turn == 1:
+                yield StreamChunk(content="I'll tell you at 10:05, Sir.")
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "tell_me_when", "arguments": "{}"},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            yield StreamChunk(content="Done, Sir. I'll tell you at 10:05.")
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_Tool()],
+            bus=EventBus(),
+            max_turns=3,
+            temperature=0.7,
+            max_tokens=128,
+            system_prompt="x",
+        )
+        app = create_app(
+            engine, "test-model", agent=agent, bus=EventBus(), config=_test_config()
+        )
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "tell me at 10:05"}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "event: text_retract" in body
+        retract = next(
+            json.loads(line[5:].strip())
+            for line in body.split("\n")
+            if line.startswith("data:") and '"chars"' in line
+        )
+        assert retract == {
+            "chars": len("I'll tell you at 10:05, Sir."),
+            "text": "I'll tell you at 10:05, Sir.",
+        }
+        # The retract arrives before the tool starts, so the client trims
+        # before the tool's own status line replaces it.
+        assert body.index("event: text_retract") < body.index("event: tool_call_start")

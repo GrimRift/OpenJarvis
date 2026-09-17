@@ -919,6 +919,8 @@ export async function sendAgentMessage(
     onContentDelta?: (delta: string, fullContent: string) => void;
     onToolCallStart?: (info: AgentToolCallStart) => void;
     onToolCallEnd?: (info: AgentToolCallEnd) => void;
+    /** Text streamed in the same round as a tool call: a preamble, not the answer. */
+    onTextRetract?: (info: { chars: number; text: string }) => void;
     onDone?: (fullContent: string, usage?: Record<string, number>, telemetry?: Record<string, unknown>) => void;
   },
 ): Promise<AgentMessage> {
@@ -969,6 +971,18 @@ export async function sendAgentMessage(
               callbacks?.onToolCallStart?.({
                 tool: parsed.tool,
                 arguments: serializeToolCallArguments(parsed.arguments),
+              });
+            } catch {
+              /* skip */
+            }
+            continue;
+          }
+          if (evName === 'text_retract') {
+            try {
+              const parsed = JSON.parse(data);
+              callbacks?.onTextRetract?.({
+                chars: Number(parsed.chars ?? 0),
+                text: String(parsed.text ?? ''),
               });
             } catch {
               /* skip */

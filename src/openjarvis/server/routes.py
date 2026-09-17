@@ -1190,6 +1190,16 @@ async def _handle_streaming_orchestrator(
                 )
 
                 if tool_fragments:
+                    # Text the model wrote in the same round as a tool call
+                    # is a preamble ("I'll tell you at 10:05, Sir."), not
+                    # the answer; the answer comes after the tool result and
+                    # restates it. Streamed already, so tell the client to
+                    # take it back rather than show both, glued together.
+                    if turn_content.strip():
+                        retract_payload = _json.dumps(
+                            {"chars": len(turn_content), "text": turn_content}
+                        )
+                        yield f"event: text_retract\ndata: {retract_payload}\n\n"
                     ordered = [
                         tool_fragments[index] for index in sorted(tool_fragments)
                     ]
