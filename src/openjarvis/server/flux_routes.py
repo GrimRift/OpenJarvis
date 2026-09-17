@@ -23,6 +23,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from openjarvis.core import activity
 from openjarvis.speech import flux
+from openjarvis.speech.player import is_speaking
 from openjarvis.speech.speculative import SpeculativeManager, generate_speculative
 
 logger = logging.getLogger(__name__)
@@ -231,6 +232,11 @@ async def flux_stream(websocket: WebSocket) -> None:
             data = message.get("bytes")
             if data:
                 activity.flux_transmitting(True)
+                # While the server itself is speaking, Deepgram gets silence
+                # of the same length: a reminder played into an open reply
+                # window once came back as the user's answer.
+                if is_speaking():
+                    data = bytes(len(data))
                 await session.send_audio(data)
                 continue
             text = message.get("text")

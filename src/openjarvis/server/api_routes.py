@@ -697,6 +697,7 @@ async def wake_word_stream(websocket: WebSocket):
     # The detector judges acoustic shape; a loud transient can pass for the
     # phrase. Before a detection is announced, the last two seconds are
     # transcribed and must contain the words (speech/wake_word_verify.py).
+    from openjarvis.speech.player import is_speaking
     from openjarvis.speech.wake_word_verify import AudioRing, make_verifier
 
     verifier = make_verifier(
@@ -712,6 +713,17 @@ async def wake_word_stream(websocket: WebSocket):
             frame = await websocket.receive_bytes()
             ring.push(frame)
             score = await asyncio.to_thread(detector.score, frame)
+            if is_speaking():
+                # The server's own voice (a greeting, a reminder) is what
+                # the microphone hears now. Nothing it says is a wake word,
+                # and the window must not carry it into the next frames.
+                if detector.is_detection(score):
+                    await asyncio.to_thread(detector.reset)
+                    ring.clear()
+                await websocket.send_json(
+                    {"type": "score", "value": score, "muted": True}
+                )
+                continue
             if detector.is_detection(score):
                 verdict = None
                 if verifier is not None:

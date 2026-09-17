@@ -352,6 +352,16 @@ component works:
   tools report "browser-control port unavailable". The flag has to be on
   the `HKCU\...\Run` entry too (set 16 Sept); check
   `http://127.0.0.1:9222/json/version` before anything else.
+- **Every server-side voice goes through `speech/player.speaking()`.** The
+  moments engine and the desktop reminder each had their own player, and
+  on 17 September the morning greeting and the 9:25 class reminder for the
+  same class played over each other; the reminder then fell into the reply
+  window the greeting had opened and came back as the user's answer
+  ("online in ten minutes"), and the wake word fired on it. `speaking()`
+  is one lock (voices queue), a flag the wake-word socket and the Flux
+  relay read to go deaf (plus a 1 s echo tail), and a wait for the user's
+  open turn to close (up to 20 s) so nothing is talked over. Anything new
+  that plays sound from the server must hold it.
 - **`speech/deepgram.py` was dead for as long as SDK v7 was installed**
   (it imported `PrerecordedOptions`); nothing noticed because the import
   sat in a `try`. Removed; `test_invariants_lessons.py` now imports every

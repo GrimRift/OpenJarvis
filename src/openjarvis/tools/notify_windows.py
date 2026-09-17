@@ -312,32 +312,42 @@ def _wav_sample_rate(raw: bytes) -> Optional[int]:
 def _run_hidden(script: str) -> bool:
     """Run a PowerShell player without waiting for it.
 
-    The wait happens on a thread of its own, holding the other apps' volume
-    down (see ``speech.ducking``) until the player exits, so the film comes
-    back up when the voice stops and not before. The caller is not blocked:
-    a reminder returns as soon as the sound has started.
+    The player starts and is waited for on a thread of its own, holding the
+    server-wide speaking lock (so a greeting already playing finishes
+    first) and the other apps' volume down (see ``speech.ducking``) until it
+    exits, so the film comes back up when the voice stops and not before.
+    The caller is not blocked: a reminder returns at once.
     """
-    try:
-        process = subprocess.Popen(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception:
-        logger.warning("Could not start the spoken alert", exc_info=True)
-        return False
 
-    def _hold() -> None:
+    def _play_when_free() -> None:
         from openjarvis.speech.ducking import ducked
+        from openjarvis.speech.player import speaking
 
-        with ducked():
+        with speaking():
             try:
-                process.wait(timeout=120)
+                process = subprocess.Popen(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-WindowStyle",
+                        "Hidden",
+                        "-Command",
+                        script,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
             except Exception:
-                pass
+                logger.warning("Could not start the spoken alert", exc_info=True)
+                return
+            with ducked():
+                try:
+                    process.wait(timeout=120)
+                except Exception:
+                    pass
 
-    threading.Thread(target=_hold, name="reminder-voice", daemon=True).start()
+    threading.Thread(target=_play_when_free, name="reminder-voice", daemon=True).start()
     return True
 
 
