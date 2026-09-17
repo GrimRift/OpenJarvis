@@ -582,3 +582,54 @@ describe('barge-in never reacts to speech starting', () => {
     expect(body).not.toMatch(/barge|duck/i);
   });
 });
+
+describe('everything the browser plays reads the volume', () => {
+  /**
+   * Sage's volumes live on the server and every sound must honour them:
+   * a player that forgets to read `volumeFor` is a slider that does
+   * nothing. Every file that constructs an Audio element or calls play()
+   * on one, or creates a Web Audio gain for speech, must read it.
+   */
+  it('every playback site imports volumeFor', () => {
+    const offenders: string[] = [];
+    for (const file of sourceFiles(SRC)) {
+      if (file.includes(`${sep}lib${sep}volume.ts`)) continue;
+      const text = readFileSync(file, 'utf8');
+      const plays = /new Audio\(|\.play\(\)|createGain\(\)/.test(text);
+      if (!plays) continue;
+      // The wake-word and Flux hooks create silent gains to keep a graph
+      // alive; they play nothing.
+      if (/gain\.value = 0;/.test(text) && !/\.play\(\)|new Audio\(/.test(text)) continue;
+      if (!/volumeFor\(/.test(text)) offenders.push(relative(SRC, file));
+    }
+    expect(offenders, 'plays sound without reading the volume').toEqual([]);
+  });
+});
+
+describe('the pause greeting after the wake word is never decided by Deepgram', () => {
+  /**
+   * The greeting timer once raced Deepgram's first partial, the only thing
+   * that could cancel it; "Yes, Sir?" played over "tell me about" and the
+   * turn ended there. The pause is read off the microphone. Deepgram's
+   * events may cancel a greeting, never cause one.
+   */
+  it('greetAfterPause is not called from a Flux event handler', () => {
+    const file = join(SRC, 'components', 'Chat', 'InputArea.tsx');
+    const sf = parse(file);
+    const offenders: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isPropertyAssignment(node) &&
+        ts.isIdentifier(node.name) &&
+        /^on(TurnStarted|Update|EagerEndOfTurn|TurnResumed)$/.test(node.name.text)
+      ) {
+        if (/greetAfterPause\(/.test(node.initializer.getText())) {
+          offenders.push(node.name.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect(offenders).toEqual([]);
+  });
+});

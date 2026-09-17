@@ -1499,6 +1499,25 @@ nothing of barge-in (`frontend/src/architecture`). Six traps added to
 - `tests/install` conftest fixed; its seven real pre-existing failures
   recorded.
 
+### 2026-09-17, afternoon: volume, turn-taking, the one-breath wake word
+
+- **Volume** (`speech/volume.py`, `/v1/speech/volume`, Settings → Volume):
+  master × {chat, ack, moments, reminders, chime}, in `volume.json`, read
+  by every playback site in the browser and on the server. Nothing is
+  skipped at zero.
+- **Turn-taking between players**: a server voice waits for a reply being
+  read aloud (up to 45 s); a reply's audio waits for a server voice (up
+  to 30 s).
+- **One-breath wake word** (`lib/wake-follow.ts`, Settings → "Speak right
+  after the wake word", on): the wake-word stream's last 2.5 s is
+  pre-rolled into the Flux turn; the phrase (and its debris) is stripped
+  from the transcript; "Yes, Sir?" plays only after a second of
+  microphone quiet since the phrase ended, considered for 2 s; the server
+  reports `since_firing_ms` so the clock starts at the phrase, not at the
+  browser. Flux sockets carry `keyterm=Sage`. Five iterations against the
+  live UI to get here -- the traps are in AGENTS.md.
+- **`close_media`** tool; **`tell_me_when` reminders**; **preamble retract**.
+
 ### Verification pass 3 (2026-09-17)
 
 Full python suite and frontend green apart from the documented set; CI
@@ -1507,13 +1526,25 @@ green on the final push. Invariants added: every sound producer under
 stages and the detector threshold is tied to verification being on. Five
 traps added to `AGENTS.md`.
 
+### Verification pass 4 (2026-09-17, evening)
+
+Full python suite (9,226 passed, the 35 failures all in the documented
+set) and frontend (339) green; lint clean; CI green on the head.
+Invariants: every browser playback site reads the volume; the pause
+greeting is never called from a Flux event handler; every TTS "start" is
+preceded by the wait for a server voice; Flux keyterms include the name;
+exactly one rejecting failure path in the verifier (the timeout). Six
+traps added, the last for the class reminder that woke Sage through a
+fail-open timeout (fixed: timeout rejects, 2 s echo tail with a detector
+reset, no pre-roll on an unverified firing).
+
 ### Open
 
 - Live with M37 for a day: does Gentle feel like company or interruption;
   does anything Social says belong on the "never bring up" list.
 - Skim Memory → Removed after the first hygiene run.
-- Wake word: a day of Voice-log lines at 0.65 with staged verification;
-  from-the-door recall (bigger verifier model, or trusting the detector in
-  a quiet room) if it matters.
+- Wake word: a day with the one-breath flow -- watch for a greeting over
+  speech (mic energy threshold `SPEECH_RMS` = 350) or a fragment sent as a
+  message (the debris rule); from-the-door recall if it matters.
 - Barge-in v2 phase 3 if any wrong cut shows up in the trace.
 - M33 (self-improvement) is next by recommendation; M29 (mobile) after.

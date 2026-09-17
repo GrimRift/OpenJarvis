@@ -55,6 +55,7 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
     if (playing) {
       el.pause();
     } else {
+      el.volume = volumeFor('chat');
       el.play();
     }
     setPlaying(!playing);
