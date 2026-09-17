@@ -1474,13 +1474,46 @@ every `speakStreaming` call records its text and `onTurnStarted` knows
 nothing of barge-in (`frontend/src/architecture`). Six traps added to
 `AGENTS.md`.
 
+### 2026-09-17: the wake word, the voices, and reminders
+
+- **Wake word, second day** (`docs/wake-word-verify.md`): threshold
+  0.79 → 0.65; the phonetic rule needs a hey-shaped lead ("see you" no
+  longer confirms); strict mode while media plays (pycaw peak meters)
+  wants the name spelt out; the socket gathers frames in two stages after
+  a firing before judging, which was the actual cause of "hard to fire".
+  A recording session in the missing conditions (`conditions_20260917`)
+  and `scripts/wake_word_holdout.py` showed the installed verifier already
+  had the recall and a retrain lost rejection -- **not replaced**. Left:
+  from the door, tiny.en hears nothing 5 times in 8.
+- **One server-side voice at a time** (`speech/player.speaking()`): a lock,
+  a flag the wake-word socket and Flux relay read to go deaf (+1 s echo
+  tail), and a wait of up to 20 s for the user's open turn. The greeting
+  leaves out a class the reminder is about to announce.
+- **Reminders**: `tell_me_when` takes `in_minutes`; a relative time is a
+  reminder (toast + voice wherever the user is, no composer, dropped if
+  found > 30 min late). Rigs must inject `reminder`.
+- **Preamble retract**: text streamed in a tool round is taken back
+  (`text_retract`) and shown as the status line.
+- **`close_media`**: YouTube / Netflix tabs by site over CDP, Spotify quit.
+- Opera GX's login autostart now carries `--remote-debugging-port`.
+- `tests/install` conftest fixed; its seven real pre-existing failures
+  recorded.
+
+### Verification pass 3 (2026-09-17)
+
+Full python suite and frontend green apart from the documented set; CI
+green on the final push. Invariants added: every sound producer under
+`src/` goes through `speaking()`; the wake-word socket gathers frames in
+stages and the detector threshold is tied to verification being on. Five
+traps added to `AGENTS.md`.
+
 ### Open
 
 - Live with M37 for a day: does Gentle feel like company or interruption;
   does anything Social says belong on the "never bring up" list.
 - Skim Memory → Removed after the first hygiene run.
-- A day of Voice-log lines for the wake word: does tiny.en, prompted with
-  the phrase, ever confirm something that was not it? The kept clips in
-  `OpenJarvis-Data/wake-word-clips` (last 30) show what it heard.
+- Wake word: a day of Voice-log lines at 0.65 with staged verification;
+  from-the-door recall (bigger verifier model, or trusting the detector in
+  a quiet room) if it matters.
 - Barge-in v2 phase 3 if any wrong cut shows up in the trace.
 - M33 (self-improvement) is next by recommendation; M29 (mobile) after.

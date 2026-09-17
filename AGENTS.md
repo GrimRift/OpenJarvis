@@ -362,6 +362,31 @@ component works:
   relay read to go deaf (plus a 1 s echo tail), and a wait for the user's
   open turn to close (up to 20 s) so nothing is talked over. Anything new
   that plays sound from the server must hold it.
+- **The wake-word detector fires while the phrase is still being said.**
+  It triggers on the shape of "hey sa-". Transcribing the ring at that
+  instant found the whole phrase in 14 of 61 recorded takes; +320 ms, 38;
+  +640 ms, 51 -- and the extra audio let no negative through. The socket
+  gathers frames in two stages before judging (`VERIFY_STAGE_FRAMES`,
+  `VERIFY_STAGES`, pinned). Any evaluation of the verifier must cut the
+  audio *at the firing frame*, not at the end of the clip: the first eval
+  cut the last two seconds and reported 90 % where the live figure was 23 %.
+- **Retraining the wake-word verifier on new conditions did not help.**
+  `scripts/wake_word_holdout.py` (hold out a fifth by clip, retrain, score
+  with the live gate, compare with the installed verifier) showed the
+  installed one already had 30/30 recall at 0.65 and the candidate lost
+  rejection on every seed. Run it before replacing the `.pkl`; more
+  positives are not the lever, the second stage is.
+- **Text the model writes in the same round as a tool call is a preamble,
+  not the answer**, and streaming it glues it onto the post-tool answer
+  ("...Sir.Done, Sir..."). The server emits `text_retract` before
+  `tool_call_start`; the browser trims it and shows it as the status line.
+- **A tool that takes only absolute datetimes makes the model refuse
+  relative ones** ("tell me five minutes from now" → "I can't"). Give it
+  `in_minutes` and say in the description never to refuse a relative time.
+- **`tests/install` errored at setup from 2 September to 17 September**
+  (conftest patched a `doctor_cmd` attribute M34 removed) and hid seven
+  real pre-existing failures underneath. A whole directory erroring is a
+  fixture problem, not a test problem; look at the conftest first.
 - **`speech/deepgram.py` was dead for as long as SDK v7 was installed**
   (it imported `PrerecordedOptions`); nothing noticed because the import
   sat in a `try`. Removed; `test_invariants_lessons.py` now imports every

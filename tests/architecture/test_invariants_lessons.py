@@ -230,3 +230,73 @@ class TestEveryRegisteredSpeechBackendImports:
                 SpeechRegistry.register_value(backend.backend_id, backend)
         for key in _discovery.DISCOVERY_ORDER:
             assert SpeechRegistry.contains(key), f"{key} listed but not registered"
+
+
+class TestEveryServerSideVoiceHoldsTheFloor:
+    """Two players with no lock: the morning greeting and the class reminder
+    for the same 9:40 class played over each other, and the reminder then
+    fell into the reply window the greeting had opened and came back as
+    the user's answer. Anything under ``src/`` that starts a sound must go
+    through ``speech.player.speaking()`` -- the lock, the deaf-while-speaking
+    flag, and the wait for the user's turn are all in there.
+    """
+
+    # The calls that start sound, not names of players (ducking.py names
+    # ffplay only to leave it alone).
+    SOUND_MARKERS = (
+        "ffplay -nodisp",
+        "Media.SoundPlayer",
+        "SpeechSynthesizer",
+        'afplay"',
+        'aplay"',
+    )
+
+    def test_sound_producers_use_speaking(self):
+        offenders = []
+        for path in SRC.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if not any(marker in text for marker in self.SOUND_MARKERS):
+                continue
+            if "speaking()" not in text:
+                offenders.append(path.relative_to(ROOT).as_posix())
+        assert offenders == [], (
+            f"these modules make sound without speech.player.speaking(): {offenders}"
+        )
+
+    def test_there_is_something_to_guard(self):
+        producers = [
+            p
+            for p in SRC.rglob("*.py")
+            if any(m in p.read_text(encoding="utf-8") for m in self.SOUND_MARKERS)
+        ]
+        assert len(producers) >= 2, "expected the player and the reminder at least"
+
+
+class TestTheWakeWordWaitsForTheRestOfThePhrase:
+    """The detector fires on the shape of "hey sa-" while the phrase is still
+    being said. Transcribed at that instant, the ring held the whole phrase
+    for 14 of 61 recorded takes; at +320 ms for 38; at +640 ms for 51, and
+    the extra audio let no negative through. The socket must gather frames
+    after a firing before it judges, and more than once.
+    """
+
+    def test_stages_are_configured_and_used(self):
+        from openjarvis.speech import wake_word_verify as wv
+
+        assert wv.VERIFY_STAGE_FRAMES * 80 >= 320
+        assert wv.VERIFY_STAGES >= 2
+        source = (SRC / "server" / "api_routes.py").read_text(encoding="utf-8")
+        assert "for _stage in range(VERIFY_STAGES):" in source
+        assert "for _ in range(VERIFY_STAGE_FRAMES):" in source
+
+    def test_the_detector_threshold_leans_on_verification(self):
+        """0.79 was the margin a lone detector needed; 0.65 is affordable only
+        because every firing is transcribed. Turn verification off by
+        default and the margin has to come back."""
+        from openjarvis.core.config import SpeechConfig
+        from openjarvis.speech.wake_word import DEFAULT_THRESHOLD
+
+        if SpeechConfig().wake_word_verify == "off":
+            assert DEFAULT_THRESHOLD >= 0.79
+        else:
+            assert DEFAULT_THRESHOLD <= 0.7
