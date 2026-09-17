@@ -4,6 +4,8 @@
 // scripts/generate_greetings.py — synthesizing per trigger would put a
 // network call at exactly the moment latency is most obvious.
 
+import { volumeFor } from './volume';
+
 const MANIFEST_URL = 'greetings/manifest.json';
 const FALLBACK_CLIPS = ['greetings/jarvis/hello-sir-sonic36.mp3'];
 
@@ -133,6 +135,7 @@ function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
         lastPlayed[kind] = clip;
 
         const audio = new Audio(clip);
+        audio.volume = volumeFor('ack');
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const finish = () => {

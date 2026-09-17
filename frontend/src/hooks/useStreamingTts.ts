@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { IncrementalTtsOutbox } from '../lib/incremental-tts';
+import { volumeFor } from '../lib/volume';
 import {
   chunkDuration,
   decodePcmF32,
@@ -151,6 +152,8 @@ export function useStreamingTts() {
       ctxRef.current = ctx;
       stopAnalyserRef.current?.();
       const gain = ctx.createGain();
+      // The user's chat-reply volume (Settings → Volume), master × chat.
+      gain.gain.value = volumeFor('chat');
       gainRef.current = gain;
       try {
         stopAnalyserRef.current = analyseInto(ctx, gain);

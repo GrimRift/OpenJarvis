@@ -91,25 +91,31 @@ def is_speaking(now: float | None = None) -> bool:
         return current - _last_spoke_at < ECHO_TAIL_SECONDS
 
 
-def play_file(audio_path: str, *, duck: bool = True) -> bool:
+def play_file(audio_path: str, *, duck: bool = True, channel: str = "moments") -> bool:
     """Play *audio_path* to completion. Returns whether a silent player ran.
 
     Other apps are held at a fraction of their volume for the duration (see
     ``ducking``), so a film does not drown the voice and the voice does not
-    have to shout over the film.
+    have to shout over the film. ``channel`` picks the user's volume for
+    this kind of sound (``speech.volume``).
     """
     from openjarvis.speech.ducking import ducked
+    from openjarvis.speech.volume import level
 
+    volume = level(channel)
     with speaking():
         if not duck:
-            return _play(audio_path)
+            return _play(audio_path, volume)
         with ducked():
-            return _play(audio_path)
+            return _play(audio_path, volume)
 
 
-def _play(audio_path: str) -> bool:
+def _play(audio_path: str, volume: float = 1.0) -> bool:
     for player in _PLAYERS:
-        cmd_parts = player.split() + [audio_path]
+        cmd_parts = player.split()
+        if cmd_parts[0] == "ffplay":
+            cmd_parts += ["-volume", str(int(round(max(0.0, min(1.0, volume)) * 100)))]
+        cmd_parts.append(audio_path)
         try:
             subprocess.run(
                 cmd_parts,

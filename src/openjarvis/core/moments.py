@@ -1130,7 +1130,7 @@ def chime_now() -> bool:
     from openjarvis.speech.chime import chime_path
     from openjarvis.speech.player import play_file
 
-    return play_file(str(chime_path()))
+    return play_file(str(chime_path()), channel="chime")
 
 
 def speak_aloud(text: str) -> bool:
@@ -1157,7 +1157,7 @@ def speak_aloud(text: str) -> bool:
         path = handle.name
     try:
         with ducked():
-            return play_file(path, duck=False)
+            return play_file(path, duck=False, channel="moments")
     finally:
         try:
             Path(path).unlink()

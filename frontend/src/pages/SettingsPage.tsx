@@ -21,6 +21,16 @@ import {
 import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VOICE_PROFILES } from '../lib/voice-profiles';
 import type { BargeMode } from '../lib/barge-in';
+import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
+
+const VOLUME_ROWS: Array<[keyof Volumes, string, string]> = [
+  ['master', 'Master', 'everything Sage says or plays'],
+  ['chat', 'Chat replies', 'answers read aloud in the chat'],
+  ['ack', 'Wake-word acknowledgement', '"Yes, Sir?" and "one moment"'],
+  ['moments', 'Sage speaking first', 'greeting, welcome back, initiative, tell-me-when'],
+  ['reminders', 'Reminders', 'timed reminders and desktop alerts'],
+  ['chime', 'Chime', 'the tone before Sage speaks first'],
+];
 import { modelForToggle } from '../lib/model-preference';
 import {
   checkHealth,
@@ -273,6 +283,24 @@ export function SettingsPage() {
   const [fluxAvailable, setFluxAvailable] = useState<boolean | null>(null);
   const [fluxReason, setFluxReason] = useState<string>('');
   const [saved, setSaved] = useState(false);
+  const [volumes, setVolumes] = useState<Volumes | null>(null);
+  const [volumeError, setVolumeError] = useState<string | null>(null);
+  useEffect(() => {
+    fetchVolumes()
+      .then(setVolumes)
+      .catch((err) => setVolumeError(err instanceof Error ? err.message : String(err)));
+  }, []);
+  const patchVolume = async (patch: Partial<Volumes>) => {
+    // Optimistic: the slider must follow the hand, not the round trip.
+    setVolumes((v) => (v ? { ...v, ...patch } : v));
+    try {
+      setVolumes(await updateVolumes(patch));
+      setVolumeError(null);
+      showSaved();
+    } catch (err) {
+      setVolumeError(err instanceof Error ? err.message : String(err));
+    }
+  };
   const [presence, setPresence] = useState<PresenceSettings | null>(null);
   const [presenceError, setPresenceError] = useState<string | null>(null);
   useEffect(() => {
@@ -895,6 +923,28 @@ export function SettingsPage() {
                 className="w-32 cursor-pointer accent-[var(--color-accent)]"
               />
             </SettingRow>
+          </Section>
+
+          {/* Volume */}
+          <Section title="Volume">
+            <p className="text-xs mb-3" style={{ color: 'var(--color-text-secondary)' }}>
+              How loud Sage is, separately from Windows. Master scales every channel; each channel is a share of it. Shared by every tab and by the voices the server plays itself.
+              {volumeError ? ` (${volumeError})` : ''}
+            </p>
+            {VOLUME_ROWS.map(([key, label, description]) => (
+              <SettingRow key={key} label={label} description={`${Math.round((volumes?.[key] ?? 1) * 100)}% — ${description}`}>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={Math.round((volumes?.[key] ?? 1) * 100)}
+                  disabled={!volumes}
+                  onChange={(e) => { void patchVolume({ [key]: parseInt(e.target.value) / 100 }); }}
+                  className="w-32 cursor-pointer accent-[var(--color-accent)]"
+                />
+              </SettingRow>
+            ))}
           </Section>
 
           {/* Speech */}

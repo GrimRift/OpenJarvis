@@ -20,6 +20,7 @@ import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri, fet
 import { OptInModal } from './components/OptInModal';
 import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
+import { fetchVolumes } from './lib/volume';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -51,6 +52,12 @@ export default function App() {
   const setOptInModalOpen = useAppStore((s) => s.setOptInModalOpen);
   const markOptInModalSeen = useAppStore((s) => s.markOptInModalSeen);
   const savings = useAppStore((s) => s.savings);
+
+  // Sage's volumes live on the server (they also govern the voices it
+  // plays itself); the browser needs them before its first sound.
+  useEffect(() => {
+    void fetchVolumes().catch(() => undefined);
+  }, []);
 
   // Apply theme class to <html>
   useEffect(() => {

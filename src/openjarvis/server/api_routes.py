@@ -1222,6 +1222,38 @@ async def speech_trace(request: Request):
     return {"received": len(lines)}
 
 
+@speech_router.get("/volume")
+async def get_volume():
+    """Sage's volumes: master and five channels, 0-1 (speech/volume.py)."""
+    from openjarvis.speech.volume import load_volumes
+
+    return load_volumes().to_dict()
+
+
+@speech_router.put("/volume")
+async def put_volume(request: Request):
+    from openjarvis.speech.volume import CHANNELS, load_volumes, save_volumes
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    volumes = load_volumes()
+    for key, value in body.items():
+        if key not in ("master", *CHANNELS):
+            raise HTTPException(status_code=400, detail=f"Unknown channel {key!r}")
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail=f"{key} must be a number 0-1"
+            ) from None
+        if not 0.0 <= number <= 1.0:
+            raise HTTPException(status_code=400, detail=f"{key} must be 0-1")
+        setattr(volumes, key, number)
+    save_volumes(volumes)
+    return volumes.to_dict()
+
+
 @speech_router.get("/health")
 async def speech_health(request: Request):
     """Check if a speech backend is available."""

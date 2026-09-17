@@ -252,6 +252,13 @@ def _voice_wav(text: str) -> Optional[str]:
         count = len(payload) // 4
         samples = struct.unpack(f"<{count}f", payload[: count * 4])
         samples = _normalised(samples)
+        # The user's reminder volume (Settings): SoundPlayer has no level of
+        # its own, so it goes into the samples.
+        from openjarvis.speech.volume import level
+
+        gain = level("reminders")
+        if gain < 1.0:
+            samples = [value * gain for value in samples]
 
         destination = get_config_dir() / "alerts" / "reminder.wav"
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -363,9 +370,13 @@ def _play_wav(path: str) -> bool:
 
 
 def _speak_builtin(text: str) -> bool:
+    from openjarvis.speech.volume import level
+
     escaped = text.replace("'", "''")
+    percent = int(round(level("reminders") * 100))
     return _run_hidden(
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"$s.Volume = {percent}; "
         f"$s.Speak('{escaped}')"
     )

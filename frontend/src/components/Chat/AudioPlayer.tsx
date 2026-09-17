@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback, useId } from 'react';
 import { Play, Pause } from 'lucide-react';
 import { useAppStore } from '../../lib/store';
+import { volumeFor } from '../../lib/volume';
 import { analyseInto } from '../../lib/speech-analyser';
 
 interface AudioPlayerProps {
@@ -33,6 +34,7 @@ export function AudioPlayer({ src, autoPlay = false }: AudioPlayerProps) {
     if (!autoPlay) return;
     const el = audioRef.current;
     if (!el) return;
+    el.volume = volumeFor('chat');
     el
       .play()
       .then(() => setPlaying(true))
