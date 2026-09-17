@@ -75,6 +75,21 @@ def test_ffplay_gets_the_level(monkeypatch, tmp_path):
     monkeypatch.setattr("openjarvis.speech.volume.DEFAULT_CONFIG_DIR", tmp_path)
     save_volumes(Volumes(master=0.5, chime=0.5), tmp_path)
     player.play_file("x.wav", duck=False, channel="chime")
-    assert calls[0][:1] == ["ffplay"] and "-volume" in calls[0]
-    assert calls[0][calls[0].index("-volume") + 1] == "25"
+    assert calls[0][:1] == ["ffplay"] and "-af" in calls[0]
+    # 0.25 with the boost on top, through a limiter (ffplay's own -volume
+    # stops at 100, so the boost needs the filter).
+    filters = calls[0][calls[0].index("-af") + 1]
+    assert filters == "volume=0.300,alimiter=limit=0.97:level=false"
     assert calls[0][-1] == "x.wav"
+
+
+def test_full_volume_is_the_boost_and_zero_stays_zero(tmp_path):
+    from openjarvis.speech.volume import BOOST, gain
+
+    monkeypatch_dir = tmp_path
+    save_volumes(Volumes(), monkeypatch_dir)
+    assert BOOST == pytest.approx(1.2)
+    assert gain("chat", monkeypatch_dir) == pytest.approx(BOOST)
+    assert level("chat", monkeypatch_dir) == pytest.approx(1.0)
+    save_volumes(Volumes(master=0.0), monkeypatch_dir)
+    assert gain("chat", monkeypatch_dir) == 0.0

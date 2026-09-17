@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { IncrementalTtsOutbox } from '../lib/incremental-tts';
-import { volumeFor } from '../lib/volume';
+import { limiter } from '../lib/audio-out';
+import { gainFor } from '../lib/volume';
 import {
   chunkDuration,
   decodePcmF32,
@@ -152,13 +153,16 @@ export function useStreamingTts() {
       ctxRef.current = ctx;
       stopAnalyserRef.current?.();
       const gain = ctx.createGain();
-      // The user's chat-reply volume (Settings → Volume), master × chat.
-      gain.gain.value = volumeFor('chat');
+      // The user's chat-reply volume (Settings → Volume), master × chat,
+      // with the boost on top; the limiter keeps a loud stretch clean.
+      gain.gain.value = gainFor('chat');
       gainRef.current = gain;
+      const limit = limiter(ctx);
+      gain.connect(limit);
       try {
-        stopAnalyserRef.current = analyseInto(ctx, gain);
+        stopAnalyserRef.current = analyseInto(ctx, limit);
       } catch {
-        gain.connect(ctx.destination);
+        limit.connect(ctx.destination);
       }
 
       let socket: WebSocket;

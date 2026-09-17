@@ -253,11 +253,12 @@ def _voice_wav(text: str) -> Optional[str]:
         samples = struct.unpack(f"<{count}f", payload[: count * 4])
         samples = _normalised(samples)
         # The user's reminder volume (Settings): SoundPlayer has no level of
-        # its own, so it goes into the samples.
-        from openjarvis.speech.volume import level
+        # its own, so it goes into the samples. The boost rides on top; the
+        # 16-bit clamp below is the limiter.
+        from openjarvis.speech.volume import gain as volume_gain
 
-        gain = level("reminders")
-        if gain < 1.0:
+        gain = volume_gain("reminders")
+        if gain != 1.0:
             samples = [value * gain for value in samples]
 
         destination = get_config_dir() / "alerts" / "reminder.wav"

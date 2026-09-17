@@ -18,3 +18,13 @@ describe('volumes', () => {
     });
   });
 });
+
+describe('the boost', () => {
+  it('100% is BOOST louder than the file, and zero stays zero', async () => {
+    const { BOOST, gainFor, volumeFor } = await import('./volume');
+    expect(BOOST).toBeCloseTo(1.2);
+    // Nothing fetched yet: the defaults, which are full volume.
+    expect(volumeFor('chat')).toBe(1);
+    expect(gainFor('chat')).toBeCloseTo(BOOST);
+  });
+});

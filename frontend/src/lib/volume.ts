@@ -30,6 +30,14 @@ export const DEFAULT_VOLUMES: Volumes = {
   chime: 1,
 };
 
+/**
+ * 100% plays this much louder than the file. At unity the sliders could
+ * only make Sage quieter than the audio was rendered, and 100% was not
+ * loud enough. Mirrors `speech/volume.py`; change both together. A gain
+ * above 1 must go through a limiter (`lib/audio-out.ts`).
+ */
+export const BOOST = 1.2;
+
 let current: Volumes = { ...DEFAULT_VOLUMES };
 
 function clamp(value: unknown, fallback = 1): number {
@@ -57,6 +65,11 @@ export function effectiveVolume(volumes: Volumes, channel: VolumeChannel): numbe
 /** The level for a channel right now, from the last fetched values. */
 export function volumeFor(channel: VolumeChannel): number {
   return effectiveVolume(current, channel);
+}
+
+/** The level with the boost, 0-BOOST: for a Web Audio gain, never an `<audio>`. */
+export function gainFor(channel: VolumeChannel): number {
+  return volumeFor(channel) * BOOST;
 }
 
 export function currentVolumes(): Volumes {

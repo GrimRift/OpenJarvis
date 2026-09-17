@@ -105,9 +105,9 @@ def play_file(audio_path: str, *, duck: bool = True, channel: str = "moments") -
     this kind of sound (``speech.volume``).
     """
     from openjarvis.speech.ducking import ducked
-    from openjarvis.speech.volume import level
+    from openjarvis.speech.volume import gain
 
-    volume = level(channel)
+    volume = gain(channel)
     with speaking():
         if not duck:
             return _play(audio_path, volume)
@@ -115,11 +115,18 @@ def play_file(audio_path: str, *, duck: bool = True, channel: str = "moments") -
             return _play(audio_path, volume)
 
 
+def _volume_filter(volume: float) -> str:
+    """ffplay's ``-volume`` stops at 100, so the gain goes through the
+    volume filter, and a lookahead limiter keeps a boosted loud file from
+    clipping."""
+    return f"volume={max(0.0, volume):.3f},alimiter=limit=0.97:level=false"
+
+
 def _play(audio_path: str, volume: float = 1.0) -> bool:
     for player in _PLAYERS:
         cmd_parts = player.split()
         if cmd_parts[0] == "ffplay":
-            cmd_parts += ["-volume", str(int(round(max(0.0, min(1.0, volume)) * 100)))]
+            cmd_parts += ["-af", _volume_filter(volume)]
         cmd_parts.append(audio_path)
         try:
             subprocess.run(

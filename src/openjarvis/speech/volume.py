@@ -10,6 +10,13 @@ was not attempted.
 
 Kept in ``volume.json`` under the data directory, read at each play, so a
 change on the Settings page reaches the next sound without a restart.
+
+At 100% every player ran at unity, so the sliders could only make Sage
+quieter than the files were rendered -- and the user found 100% not loud
+enough on 17 September. ``gain()`` is the level with ``BOOST`` on top,
+for players that can amplify (Web Audio, ffplay's volume filter, the
+reminder samples); ``level()`` stays 0-1 for those that cannot (SAPI).
+Anything that amplifies must limit, so a loud file does not distort.
 """
 
 from __future__ import annotations
@@ -25,6 +32,10 @@ from openjarvis.core.config import DEFAULT_CONFIG_DIR
 logger = logging.getLogger(__name__)
 
 CHANNELS = ("chat", "ack", "moments", "reminders", "chime")
+
+#: 100% plays this much louder than the file. Mirrored in the browser
+#: (``lib/volume.ts``); change both together.
+BOOST = 1.2
 
 
 @dataclass
@@ -77,4 +88,17 @@ def level(channel: str, config_dir: Optional[Path] = None) -> float:
     return load_volumes(config_dir).effective(channel)
 
 
-__all__ = ["CHANNELS", "Volumes", "level", "load_volumes", "save_volumes"]
+def gain(channel: str, config_dir: Optional[Path] = None) -> float:
+    """The level with the boost: 0-``BOOST``, for a player that can amplify."""
+    return level(channel, config_dir) * BOOST
+
+
+__all__ = [
+    "BOOST",
+    "CHANNELS",
+    "Volumes",
+    "gain",
+    "level",
+    "load_volumes",
+    "save_volumes",
+]

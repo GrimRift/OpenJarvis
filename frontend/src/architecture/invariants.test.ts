@@ -588,19 +588,23 @@ describe('everything the browser plays reads the volume', () => {
    * Sage's volumes live on the server and every sound must honour them:
    * a player that forgets to read `volumeFor` is a slider that does
    * nothing. Every file that constructs an Audio element or calls play()
-   * on one, or creates a Web Audio gain for speech, must read it.
+   * on one, or creates a Web Audio gain for speech, must read it -- through
+   * `volumeFor`, `gainFor` (boosted, Web Audio) or `setBoostedVolume`.
    */
   it('every playback site imports volumeFor', () => {
     const offenders: string[] = [];
     for (const file of sourceFiles(SRC)) {
       if (file.includes(`${sep}lib${sep}volume.ts`)) continue;
+      if (file.includes(`${sep}lib${sep}audio-out.ts`)) continue;
       const text = readFileSync(file, 'utf8');
       const plays = /new Audio\(|\.play\(\)|createGain\(\)/.test(text);
       if (!plays) continue;
       // The wake-word and Flux hooks create silent gains to keep a graph
       // alive; they play nothing.
       if (/gain\.value = 0;/.test(text) && !/\.play\(\)|new Audio\(/.test(text)) continue;
-      if (!/volumeFor\(/.test(text)) offenders.push(relative(SRC, file));
+      if (!/volumeFor\(|gainFor\(|setBoostedVolume\(/.test(text)) {
+        offenders.push(relative(SRC, file));
+      }
     }
     expect(offenders, 'plays sound without reading the volume').toEqual([]);
   });
