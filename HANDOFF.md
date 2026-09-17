@@ -1526,6 +1526,20 @@ green on the final push. Invariants added: every sound producer under
 stages and the detector threshold is tied to verification being on. Five
 traps added to `AGENTS.md`.
 
+### 2026-09-17, night: louder, and the video that lagged
+
+- **Volume boost**: 100% is now file × 1.2 on every path, each through a
+  limiter (`BOOST` in `speech/volume.py` and `lib/volume.ts`, change
+  together; `lib/audio-out.ts` routes `<audio>` elements through Web
+  Audio because `.volume` stops at 1; ffplay uses `-af volume,alimiter`).
+- **The laggy YouTube window**: Sage's forced-dark DevTools emulation
+  put the page on a slow render path (41 frames/8 s vs 480) and outlived
+  the call when the close stalled. Replaced by YouTube's own `PREF`
+  cookie; `Connection.close` aborts a stalled close; test pins no
+  `Emulation.*` in the browser tools. Verified live: 480/480, dark.
+- Memory note corrected: M34 (Health page) shipped 2026-09-08; it was
+  still filed as "not started" and got proposed as the next milestone.
+
 ### Verification pass 4 (2026-09-17, evening)
 
 Full python suite (9,226 passed, the 35 failures all in the documented

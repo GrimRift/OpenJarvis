@@ -389,6 +389,18 @@ component works:
   (conftest patched a `doctor_cmd` attribute M34 removed) and hid seven
   real pre-existing failures underneath. A whole directory erroring is a
   fixture problem, not a test problem; look at the conftest first.
+- **Never set a DevTools emulation on a page the user will watch.** The
+  `prefers-color-scheme` emulation Sage used for dark mode put the page on
+  a slow render path -- a 60 fps video played at about 5, measured with
+  `video.getVideoPlaybackQuality()` -- and it outlived the call whenever
+  the socket close stalled, so the tab stayed slow with Sage idle. Dark
+  mode is YouTube's own `PREF` cookie now (`cdp.py`, pinned: no
+  `Emulation.*` in the browser tools) and `Connection.close` aborts a
+  stalled close. When "Sage's window lags but mine doesn't", compare
+  `getVideoPlaybackQuality()` between the two before touching monitors.
+- **A slow video is not a slow network.** The first hour of that bug went
+  to Wi-Fi: Task Manager, link rate, ping, a 20 MB download, IPv4 vs IPv6
+  -- all fine. "Buffered but choppy" means rendering; ask that first.
 - **Deepgram has never heard of "Sage".** Given the whole wake phrase it
   wrote "ACGE", "His age", "Usage"; every Flux socket now carries
   `keyterm=Sage` (`speech/flux.py`, pinned). Any transcript rule that
