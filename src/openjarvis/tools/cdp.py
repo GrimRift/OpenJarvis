@@ -105,13 +105,22 @@ class Connection:
         Pending reads are cancelled and drained before the loop goes, because
         closing a proactor loop with a read in flight logs "Cancelling an
         overlapped future failed" and leaves the traceback in Sage's output.
+
+        If the handshake does not finish, the transport is torn down anyway:
+        a DevTools session that outlives the call keeps whatever it set on
+        the page (an emulation once kept a video on a slow render path for
+        as long as the tab lived), and the browser only ends a session when
+        the socket is really gone.
         """
         try:
             self._loop.run_until_complete(
                 asyncio.wait_for(self._socket.close(), timeout=_CLOSE_TIMEOUT)
             )
         except Exception:
-            pass
+            with _ignored():
+                transport = getattr(self._socket, "transport", None)
+                if transport is not None:
+                    transport.abort()
         try:
             pending = asyncio.all_tasks(self._loop)
             for task in pending:
@@ -140,16 +149,38 @@ class Page:
     def close(self) -> None:
         self._connection.close()
 
-    def emulate_dark(self) -> None:
+    def prefer_dark_youtube(self) -> None:
+        """Set YouTube's own dark theme, the way its Appearance menu does.
+
+        This used to be ``Emulation.setEmulatedMedia`` forcing
+        ``prefers-color-scheme: dark``. A page under that emulation renders
+        on a slow path: 41 video frames in 8 s with the clock at a fifth of
+        real time, against 480 without (measured 17 September), and the
+        emulation outlives the call whenever the socket close stalls, so the
+        user watched a stuttering video with Sage idle. YouTube keeps its
+        theme in the ``PREF`` cookie's ``f6`` bitfield; bit 0x400 is dark
+        (verified: white under an emulated light scheme, rgb(15,15,15) with
+        the bit). Any other site follows the browser's own scheme.
+        """
         with _ignored():
-            self._connection.send(
-                "Emulation.setEmulatedMedia",
-                {
-                    "features": [
-                        {"name": "prefers-color-scheme", "value": "dark"}
-                    ]
-                },
-            )
+            self._connection.send("Network.enable")
+            cookies = self._connection.send(
+                "Network.getCookies", {"urls": ["https://www.youtube.com/"]}
+            ).get("cookies") or []
+            pref = next((c for c in cookies if c.get("name") == "PREF"), None)
+            value = youtube_dark_pref(pref.get("value", "") if pref else "")
+            if pref and pref.get("value") == value:
+                return
+            cookie: Dict[str, Any] = {
+                "name": "PREF",
+                "value": value,
+                "domain": ".youtube.com",
+                "path": "/",
+                "secure": True,
+            }
+            if pref and pref.get("expires", -1) > 0:
+                cookie["expires"] = pref["expires"]
+            self._connection.send("Network.setCookie", cookie)
 
     def evaluate(self, expression: str) -> Any:
         """Evaluate *expression* and return a plain Python value.
@@ -324,6 +355,35 @@ class Browser:
                 return page
             _blocking_sleep(0.1)
         raise CDPError("the new tab never appeared")
+
+
+#: YouTube's dark theme, in the ``f6`` bitfield of its ``PREF`` cookie.
+YOUTUBE_DARK_BIT = 0x400
+
+
+def youtube_dark_pref(value: str) -> str:
+    """*value* of a ``PREF`` cookie with the dark-theme bit set in ``f6``.
+
+    The other fields (time zone, autoplay, ...) are kept as they are; an
+    empty or unparseable cookie becomes just the theme.
+    """
+    fields = []
+    seen = False
+    for part in (value or "").split("&"):
+        if not part:
+            continue
+        name, _, raw = part.partition("=")
+        if name == "f6":
+            try:
+                bits = int(raw or "0", 16)
+            except ValueError:
+                bits = 0
+            raw = format(bits | YOUTUBE_DARK_BIT, "x")
+            seen = True
+        fields.append(f"{name}={raw}")
+    if not seen:
+        fields.append(f"f6={YOUTUBE_DARK_BIT:x}")
+    return "&".join(fields)
 
 
 class _ignored:

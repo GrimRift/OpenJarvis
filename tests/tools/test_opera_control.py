@@ -196,7 +196,7 @@ class _FakePage:
     def url(self):
         return self._url
 
-    def emulate_dark(self):
+    def prefer_dark_youtube(self):
         return None
 
     def close(self):

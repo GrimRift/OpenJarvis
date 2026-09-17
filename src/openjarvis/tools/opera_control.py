@@ -60,13 +60,14 @@ DEBUG_PORT = int(os.environ.get("OPENJARVIS_OPERA_CDP_PORT", "9222"))
 _NAV_TIMEOUT = 25.0
 _SELECTOR_TIMEOUT = 12.0
 
-#: Opera reports ``prefers-color-scheme: light`` on this machine — verified
-#: across every tab the user had open, so it is the browser, not an artifact of
-#: how Sage creates pages. YouTube follows the device theme and so rendered
-#: white inside an otherwise dark setup, which read as a different site.
-#: Emulating dark affects only the pages Sage opens; the user can make it
-#: permanent everywhere in YouTube's own Appearance setting.
-_FORCE_DARK = True
+#: YouTube once rendered white inside an otherwise dark setup because Opera
+#: reported ``prefers-color-scheme: light``. Sage used to force dark through a
+#: DevTools emulation on every page it opened; that emulation put the page on
+#: a slow render path (a 60 fps video played at about 5) and outlived the
+#: call when the socket close stalled. Now Sage sets YouTube's own dark
+#: theme (its ``PREF`` cookie) before opening, and every other site follows
+#: the browser's scheme.
+_PREFER_DARK_YOUTUBE = True
 
 #: A page already showing one of these is Sage's media window, and is reused
 #: rather than opening yet another window.
@@ -218,8 +219,8 @@ def opera_session(own_window: bool = False, transient: bool = False):
         else:
             page = _new_tab(browser)
     try:
-        if _FORCE_DARK:
-            page.emulate_dark()
+        if _PREFER_DARK_YOUTUBE:
+            page.prefer_dark_youtube()
         yield Session(page, handle)
     finally:
         target_id = getattr(page, "target_id", "")
