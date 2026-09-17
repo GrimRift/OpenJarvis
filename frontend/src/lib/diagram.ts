@@ -179,20 +179,47 @@ export function rowEndsOn(rowIndex: number): 'left' | 'right' {
  * Deliberately narrow: a real command is short, so anything past six words is
  * someone talking. "Close the deal" names no diagram and does not match.
  */
-const CLOSE_COMMAND =
-  /\b(?:close|hide|dismiss|remove|get rid of)\s+(?:the\s+|that\s+|this\s+)?(?:diagram|illustration|drawing|chart|graphic|overlay|picture|it|that|this)\b/;
+const CLOSE_VERB = /\b(?:close|hide|dismiss|remove|get rid of)\b/;
+const CLOSE_TARGET =
+  /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|it|that|this)\b/;
 
 export const CLOSE_COMMAND_MAX_WORDS = 6;
 
-export function isCloseDiagramCommand(text: string): boolean {
-  const said = (text || '')
+function heard(text: string): string {
+  return (text || '')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function isCloseDiagramCommand(text: string): boolean {
+  const said = heard(text);
   if (!said) return false;
   if (said.split(' ').length > CLOSE_COMMAND_MAX_WORDS) return false;
-  return CLOSE_COMMAND.test(said);
+  const verb = CLOSE_VERB.exec(said);
+  if (!verb) return false;
+  // Anything may sit between the verb and its target. Deepgram put a phantom
+  // "to" in the middle -- "Close to the diagram" -- and an exact-article rule
+  // missed it, which let barge-in cut Sage off instead (18 September trace).
+  // The six-word cap is what keeps this from matching ordinary speech.
+  return CLOSE_TARGET.test(said.slice(verb.index + verb[0].length));
+}
+
+/**
+ * Whether this partial could still turn into "close the diagram".
+ *
+ * Barge-in judges every partial, so "close the" alone can reach the cutting
+ * threshold before the word "diagram" has even arrived -- the command would
+ * interrupt Sage on its way to asking not to. While a diagram is open, a
+ * partial that still might be the command is left unjudged until the turn
+ * finishes.
+ */
+export function mayBecomeCloseDiagramCommand(text: string): boolean {
+  const said = heard(text);
+  if (!said) return false;
+  if (said.split(' ').length > CLOSE_COMMAND_MAX_WORDS) return false;
+  return CLOSE_VERB.test(said);
 }
 
 /** What to tell the server this turn, from the two Settings switches. */

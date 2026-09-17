@@ -196,3 +196,36 @@ describe('rowEndsOn', () => {
     expect(rowEndsOn(2)).toBe('right');
   });
 });
+
+describe('the close command against what Deepgram really sent', () => {
+  it('survives the phantom word that cut Sage off', async () => {
+    const { isCloseDiagramCommand } = await import('./diagram');
+    // 18 September trace: barge-in cut the reply on
+    // "Close:1.00 to:0.80 the:0.98 diagram.:0.98" because the exact-article
+    // rule missed the inserted "to".
+    expect(isCloseDiagramCommand('Close to the diagram.')).toBe(true);
+    expect(isCloseDiagramCommand('close up the diagram')).toBe(true);
+    expect(isCloseDiagramCommand('can you close the diagram')).toBe(true);
+  });
+
+  it('waits while a command could still be forming', async () => {
+    const { mayBecomeCloseDiagramCommand } = await import('./diagram');
+    // The partials that arrive before the word "diagram" does.
+    expect(mayBecomeCloseDiagramCommand('Close')).toBe(true);
+    expect(mayBecomeCloseDiagramCommand('Close to')).toBe(true);
+    expect(mayBecomeCloseDiagramCommand('Close to the')).toBe(true);
+    // Nothing to do with closing, so barge-in judges it as usual.
+    expect(mayBecomeCloseDiagramCommand('what does step two mean')).toBe(false);
+    expect(mayBecomeCloseDiagramCommand('')).toBe(false);
+    // Too long to be a command: the user is talking, not instructing.
+    expect(
+      mayBecomeCloseDiagramCommand('I was going to close the diagram but tell me more'),
+    ).toBe(false);
+  });
+
+  it('still leaves ordinary speech alone', async () => {
+    const { isCloseDiagramCommand } = await import('./diagram');
+    expect(isCloseDiagramCommand('close the deal before Friday')).toBe(false);
+    expect(isCloseDiagramCommand('the diagram shows how water enters')).toBe(false);
+  });
+});

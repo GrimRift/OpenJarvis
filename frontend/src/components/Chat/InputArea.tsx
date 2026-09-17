@@ -9,7 +9,11 @@ import {
   type AttachedImage,
 } from '../../lib/image-attach';
 import { streamChat, streamResearch } from '../../lib/sse';
-import { diagramMode, isCloseDiagramCommand } from '../../lib/diagram';
+import {
+  diagramMode,
+  isCloseDiagramCommand,
+  mayBecomeCloseDiagramCommand,
+} from '../../lib/diagram';
 import { useDiagramPresenter } from '../../lib/diagram-presenter';
 import type { ChatRequest } from '../../lib/sse';
 import {
@@ -1694,14 +1698,20 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // interruption of the answer: it must be caught before barge-in judges
       // the same words, or asking for the picture to go would also cut Sage
       // off mid-sentence. The voice carries on; only the overlay goes.
-      if (
-        useDiagramPresenter.getState().current &&
-        isCloseDiagramCommand(transcript)
-      ) {
-        useDiagramPresenter.getState().close();
-        diagramCommandTurnRef.current = turnIndex;
-        voiceTrace('diagram.closedByVoice', { heard: transcript });
-        return;
+      if (useDiagramPresenter.getState().current) {
+        if (isCloseDiagramCommand(transcript)) {
+          useDiagramPresenter.getState().close();
+          diagramCommandTurnRef.current = turnIndex;
+          voiceTrace('diagram.closedByVoice', { heard: transcript });
+          return;
+        }
+        // Still might become one: "close the" reaches the cutting threshold
+        // before "diagram" arrives, so judging now interrupts Sage on the way
+        // to being asked not to. Wait for the turn to finish instead.
+        if (mayBecomeCloseDiagramCommand(transcript)) {
+          voiceTrace('diagram.closeMaybe', { heard: transcript });
+          return;
+        }
       }
       // The rest of this turn is that same command still arriving; never let
       // it reach barge-in or the composer.
