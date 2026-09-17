@@ -1561,4 +1561,8 @@ reset, no pre-roll on an unverified firing).
   speech (mic energy threshold `SPEECH_RMS` = 350) or a fragment sent as a
   message (the debris rule); from-the-door recall if it matters.
 - Barge-in v2 phase 3 if any wrong cut shows up in the trace.
+- YouTube mid-roll ads: `youtube_play` skips only the pre-roll, then
+  detaches; "skip the ad" covers the rest. If that gets annoying, a
+  whole-video watcher (light session, `Page.click` on the Skip button)
+  is a small addition on top -- user parked it 2026-09-17.
 - M33 (self-improvement) is next by recommendation; M29 (mobile) after.
