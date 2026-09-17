@@ -14,6 +14,9 @@
  * the transcript check runs up to ~0.9 s, so this covers the whole phrase
  * and the first words after it. */
 export const PRE_ROLL_MS = 2500;
+/** "Hey Sage" takes about 0.7 s; the pre-roll reaches back this far past
+ * the firing so the whole phrase is in it, and no further. */
+export const PHRASE_MS = 1000;
 
 /** Nothing heard this long after the wake word: say "Yes, Sir?" as before. */
 export const GREETING_PAUSE_MS = 1000;

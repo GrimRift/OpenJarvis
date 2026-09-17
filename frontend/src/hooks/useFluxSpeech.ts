@@ -8,9 +8,12 @@ import { buildWsProtocols } from '../lib/useAgentEvents';
 // needs no second audio path: 16-bit mono PCM at 16kHz.
 const TARGET_SAMPLE_RATE = 16000;
 // int16 RMS above which a frame is taken to carry speech rather than the
-// room: ordinary speech at the desk measures in the thousands, a fan in the
-// tens to low hundreds.
-const SPEECH_RMS = 350;
+// room. The floor: a quiet room measures ~350. The caller raises it for a
+// loud room (`setSpeechLevel`): a desk fan measured ~1,000 median with
+// peaks past 6,000, and against a fixed 350 it never looked quiet, so the
+// pause greeting never came from the microphone.
+const SPEECH_RMS_FLOOR = 350;
+const SPEECH_RMS_CEILING = 6000;
 
 function rms(pcm: Int16Array): number {
   let sum = 0;
@@ -497,7 +500,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         ctx.sampleRate,
       );
       for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
-      if (rms(pcm) >= SPEECH_RMS) lastSoundAtRef.current = Date.now();
+      if (rms(pcm) >= speechRmsRef.current) lastSoundAtRef.current = Date.now();
 
       // Retain the turn's audio so a mid-turn Flux failure can still be
       // transcribed locally rather than silently losing the utterance.
@@ -559,6 +562,16 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   // first partial, which arrives later than the greeting could be needed.
   const lastSoundAtRef = useRef(0);
   const lastSoundAt = useCallback(() => lastSoundAtRef.current, []);
+  const speechRmsRef = useRef(SPEECH_RMS_FLOOR);
+  /** Set the speech level for the room: four times its ambient RMS, within
+   * the floor and the ceiling. */
+  const setSpeechLevel = useCallback((ambientRms: number) => {
+    speechRmsRef.current = Math.min(
+      SPEECH_RMS_CEILING,
+      Math.max(SPEECH_RMS_FLOOR, ambientRms * 4),
+    );
+    return speechRmsRef.current;
+  }, []);
   const holdAudio = useCallback((promise: Promise<unknown>, tailMs = 250) => {
     holdUntilRef.current = Number.POSITIVE_INFINITY;
     const release = () => {
@@ -619,6 +632,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     endTurn,
     holdAudio,
     lastSoundAt,
+    setSpeechLevel,
     connect,
     disconnect,
     takeFallbackAudio,

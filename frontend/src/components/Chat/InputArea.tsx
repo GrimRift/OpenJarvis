@@ -22,6 +22,7 @@ import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
 import {
   GREETING_GIVE_UP_MS,
   GREETING_PAUSE_MS,
+  PHRASE_MS,
   PRE_ROLL_MS,
   continuesPastWakePhrase,
   greetingDelayMs,
@@ -281,6 +282,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   });
   const greetingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const takeRecentAudioRef = useRef<((ms: number) => Int16Array) | null>(null);
+  const ambientRmsRef = useRef<(() => number) | null>(null);
   const clearGreetingTimer = () => {
     if (greetingTimerRef.current) {
       clearTimeout(greetingTimerRef.current);
@@ -1821,9 +1823,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             greeted: false,
             startedAt: Date.now() - sinceFiringMs,
           };
-          flux.beginTurn(takeRecentAudioRef.current?.(PRE_ROLL_MS));
+          // Enough pre-roll to reach back past the phrase, no more:
+          // Deepgram works through it at about real time before it can
+          // end a turn, so every spare second is a second before "Yes,
+          // Sir?" when the user paused.
+          const preRollMs = Math.min(PRE_ROLL_MS, sinceFiringMs + PHRASE_MS);
+          const speechRms = flux.setSpeechLevel(ambientRmsRef.current?.() ?? 0);
+          flux.beginTurn(takeRecentAudioRef.current?.(preRollMs));
           armFluxSilenceTimer('wake');
-          voiceTrace('wake.fastFollow', { sinceFiringMs });
+          voiceTrace('wake.fastFollow', { sinceFiringMs, preRollMs, speechRms });
           if (wakeWordGreetingEnabled) {
             clearGreetingTimer();
             // The pause is a fact about the microphone: a second with no
@@ -2072,7 +2080,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     flux.status,
   ]);
 
-  const { error: wakeWordError, takeRecentAudio } = useWakeWord(
+  const { error: wakeWordError, takeRecentAudio, ambientRms } = useWakeWord(
     beginWakeWordRecording,
     // !audioPlaying matters as much as speechState === 'idle' here:
     // speechState returns to 'idle' as soon as transcription finishes,
@@ -2100,6 +2108,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     wakeWordVerify,
   );
   takeRecentAudioRef.current = takeRecentAudio;
+  ambientRmsRef.current = ambientRms;
 
   // The Settings switch is the authority: flipping it either way ends a
   // pause started from the mic button, so the two controls cannot disagree

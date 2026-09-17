@@ -458,5 +458,24 @@ export function useWakeWord(
     return out;
   }, []);
 
-  return { listening, error, takeRecentAudio };
+  /**
+   * The room's level: median frame RMS of the audio from before the
+   * phrase (the oldest second of the ring, when the ring is full). A desk
+   * fan measures ~1,000 here against ~350 for a quiet room, which is why a
+   * fixed speech threshold read the fan as someone talking.
+   */
+  const ambientRms = useCallback((): number => {
+    const frames = recentFramesRef.current;
+    const oldest = frames.slice(0, Math.min(frames.length, 12));
+    if (oldest.length === 0) return 0;
+    const levels = oldest.map((frame) => {
+      let sum = 0;
+      for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+      return Math.sqrt(sum / frame.length);
+    });
+    levels.sort((a, b) => a - b);
+    return levels[Math.floor(levels.length / 2)];
+  }, []);
+
+  return { listening, error, takeRecentAudio, ambientRms };
 }
