@@ -10,6 +10,21 @@ describe('stripWakePhrase', () => {
     expect(stripWakePhrase('Sage')).toBe('');
   });
 
+  it('knows the name by shape when Deepgram spells it oddly', () => {
+    // Heard for a pre-rolled "Hey Sage" on 17 September, and sent as messages.
+    expect(stripWakePhrase('acage.')).toBe('');
+    expect(stripWakePhrase('Usage.')).toBe('');
+    expect(stripWakePhrase('hazage any news')).toBe('any news');
+    expect(stripWakePhrase('Hey acage, what time is it')).toBe('what time is it');
+    expect(stripWakePhrase('Peace Sage.')).toBe('');
+    expect(stripWakePhrase('He said, tell me a joke')).toBe('tell me a joke');
+  });
+
+  it('does not take a short real word for the name', () => {
+    expect(stripWakePhrase('say hello to mom')).toBe('say hello to mom');
+    expect(stripWakePhrase('see you')).toBe('see you');
+  });
+
   it('leaves a transcript that is not the phrase alone', () => {
     expect(stripWakePhrase('what time is it')).toBe('what time is it');
     expect(stripWakePhrase('hey what is this')).toBe('hey what is this');

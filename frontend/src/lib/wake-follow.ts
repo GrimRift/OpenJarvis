@@ -23,6 +23,20 @@ const LEAD = new Set(['hey', 'hi', 'hay', 'he', 'a', 'ok', 'okay', 'yo', 'oh']);
 const NAME = new Set(['sage', 'stage', 'sayge', 'saige', 'sages', 'says', 'siege', 'seige']);
 
 /**
+ * The name by shape, for the spellings no list has: "acage", "usage",
+ * "hazage" (all heard for "hey sage" on 17 September). Up to three letters
+ * of lead, an s-sound, a vowel run, a soft tail -- and at least four
+ * letters, so "say" or "see" as the first word of a real question is not
+ * mistaken for it. Only ever applied to a turn opened by the wake word,
+ * where the phrase is what the audio starts with.
+ */
+const NAME_SHAPE = /^[a-z]{0,3}[scz][aeiy]+(?:[gjdnmzv]+e?|ch)?$/;
+
+function isNameToken(token: string): boolean {
+  return NAME.has(token) || (token.length >= 4 && NAME_SHAPE.test(token));
+}
+
+/**
  * Remove "hey sage" (or how it was heard) from the front of a transcript.
  * "Hey Sage, any news on AI?" -> "any news on AI?"; "Hey Sage." -> "".
  * A transcript that does not start with the phrase is returned as it is.
@@ -33,8 +47,10 @@ export function stripWakePhrase(transcript: string): string {
   const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
   let i = 0;
   if (i < tokens.length && LEAD.has(norm(tokens[i]))) i += 1;
-  if (i < tokens.length && NAME.has(norm(tokens[i]))) {
+  if (i < tokens.length && isNameToken(norm(tokens[i]))) {
     i += 1;
+    // "Peace Sage", "Peace in Sage": the name heard twice over.
+    if (i < tokens.length && isNameToken(norm(tokens[i]))) i += 1;
   } else {
     // No name: not the phrase (a bare "hey" is the user's own word).
     return text;
