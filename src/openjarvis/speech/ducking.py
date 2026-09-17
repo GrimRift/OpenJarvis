@@ -67,6 +67,27 @@ def _sessions() -> List[Tuple[str, Any]]:
     return found
 
 
+def media_peak() -> float:
+    """The loudest other app right now, 0-1; 0 when nothing is playing.
+
+    The wake word reads this at a detection: while a video or music is
+    audible, only the phrase spelt out confirms, not merely its shape --
+    a lyric or a line of dialogue ("you see?") has the shape too.
+    """
+    try:
+        from pycaw.pycaw import IAudioMeterInformation
+    except Exception:
+        return 0.0
+    loudest = 0.0
+    for _name, session in _sessions():
+        try:
+            meter = session._ctl.QueryInterface(IAudioMeterInformation)
+            loudest = max(loudest, float(meter.GetPeakValue()))
+        except Exception:
+            continue
+    return loudest
+
+
 def _set(session: Any, level: float) -> None:
     session.SimpleAudioVolume.SetMasterVolume(max(0.0, min(1.0, level)), None)
 
@@ -126,4 +147,4 @@ def ducked(
             logger.debug("Audio un-ducking failed", exc_info=True)
 
 
-__all__ = ["DEFAULT_FADE_MS", "DEFAULT_LEVEL", "ducked"]
+__all__ = ["DEFAULT_FADE_MS", "DEFAULT_LEVEL", "ducked", "media_peak"]

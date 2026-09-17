@@ -698,7 +698,11 @@ async def wake_word_stream(websocket: WebSocket):
     # phrase. Before a detection is announced, the last two seconds are
     # transcribed and must contain the words (speech/wake_word_verify.py).
     from openjarvis.speech.player import is_speaking
-    from openjarvis.speech.wake_word_verify import AudioRing, make_verifier
+    from openjarvis.speech.wake_word_verify import (
+        AudioRing,
+        make_verifier,
+        media_is_playing,
+    )
 
     verifier = make_verifier(
         getattr(websocket.app.state, "config", None),
@@ -727,7 +731,8 @@ async def wake_word_stream(websocket: WebSocket):
             if detector.is_detection(score):
                 verdict = None
                 if verifier is not None:
-                    verdict = await verifier.verify(ring.pcm())
+                    strict = await asyncio.to_thread(media_is_playing)
+                    verdict = await verifier.verify(ring.pcm(), strict=strict)
                 if verdict is not None and not verdict.confirmed:
                     await websocket.send_json(
                         {
@@ -735,6 +740,7 @@ async def wake_word_stream(websocket: WebSocket):
                             "score": score,
                             "heard": verdict.heard,
                             "ms": verdict.ms,
+                            "strict": verdict.strict,
                         }
                     )
                     ring.clear()
@@ -748,6 +754,7 @@ async def wake_word_stream(websocket: WebSocket):
                         "heard": verdict.heard if verdict is not None else "",
                         "note": verdict.note if verdict is not None else "",
                         "ms": verdict.ms if verdict is not None else 0,
+                        "strict": bool(verdict is not None and verdict.strict),
                     }
                 )
                 ring.clear()

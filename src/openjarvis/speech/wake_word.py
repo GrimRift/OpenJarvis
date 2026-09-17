@@ -30,7 +30,15 @@ SAMPLE_RATE = 16000
 # is 100% anywhere in 0.71-0.83, so the low threshold buys nothing and only
 # widens what can trip it. Back up to 0.79 for margin against audio unlike
 # anything in the training set.
-DEFAULT_THRESHOLD = 0.79
+#
+# Then (17 September) a detection stopped being the final word: every
+# firing is transcribed and must contain the phrase
+# (speech/wake_word_verify.py), and the first day of that showed noise
+# firings rejected fourteen times out of fourteen. With a second stage
+# that cheap and that reliable, the detector's job is recall, and the
+# margin above comes down: a firing costs ~200 ms of GPU, a miss costs
+# the user a repeat.
+DEFAULT_THRESHOLD = 0.65
 # How many consecutive 80ms frames must clear the threshold before a
 # detection counts — a single high-scoring frame from a noise transient is
 # common; a sustained ~160ms run of them is not.

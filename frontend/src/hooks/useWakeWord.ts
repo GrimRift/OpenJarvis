@@ -210,11 +210,16 @@ export function useWakeWord(
             heard: String(data.heard ?? ''),
             note: String(data.note ?? ''),
             ms: Number(data.ms ?? 0),
+            strict: Boolean(data.strict),
           });
           onDetectedRef.current();
         } else if (data.type === 'rejected') {
           const heard = String(data.heard ?? '');
-          voiceTrace('wakeword.rejected', { heard, ms: Number(data.ms ?? 0) });
+          voiceTrace('wakeword.rejected', {
+            heard,
+            ms: Number(data.ms ?? 0),
+            strict: Boolean(data.strict),
+          });
           onRejectedRef.current?.(heard);
         }
       } catch {

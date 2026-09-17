@@ -41,7 +41,7 @@ VERIFY_TIMEOUT_SECONDS = 1.5
 #: both faster and more accurate on this voice, so it went.
 VERIFY_MODES = ("local", "off")
 
-_HEY = {"hey", "hi", "hay", "he", "a", "eh", "ay", "ok", "okay", "hei", "hej", "yo"}
+_HEY = {"hey", "hi", "hay", "he", "a", "eh", "ay", "ok", "okay", "hei", "hej", "yo", "thanks"}
 _SAGE = {
     "sage",
     "sages",
@@ -69,10 +69,19 @@ _SAGE = {
 #: of the transcript: the detector fires as the phrase ends, so the phrase
 #: is the last thing in the two-second ring.
 #: The s may come out voiced ("hazage", "hazy") or as a soft c ("acid"),
-#: which is how Deepgram wrote the live clips of 16 September.
+#: which is how Deepgram wrote the live clips of 16 September. The lead
+#: must be "hey"-shaped -- h plus a vowel or two, a bare vowel, be, pe --
+#: since a lead of any four letters let "see you", "you see?" and "can you
+#: see?" through on the first day (a reminder's own echo, then; a video's
+#: line, next time).
 _PHONETIC_TAIL = re.compile(
-    r"[a-z]{1,4}[scz][aeiy]+(?:[gjdnmzv]+(?:e|s|es)?|ch|you|s|es)?$"
+    r"(?:h[aeiy]{1,2}|[aeiy]{1,2}|be|pe)[scz][aeiy]+"
+    r"(?:[gjdnmzv]+(?:e|s|es)?|ch|s|es|you)?$"
 )
+#: A bare vowel run after the s ("easy", "hazy"), or "you" after it ("hey,
+#: see you" -- three recordings), is the phrase only behind a lead with an
+#: h in it or "ea"; "i see" and "soon, see you" are not.
+_BARE_END = re.compile(r"(?:h[aeiy]{1,2}|ea)[scz][aeiy]+(?:you)?$")
 #: Letters of transcript the phonetic rule may look at, so a long sentence
 #: that happens to end in the shape is not mistaken for the phrase.
 _PHONETIC_LETTERS = 12
@@ -82,7 +91,7 @@ def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^a-z']+", text.lower()) if t]
 
 
-def heard_wake_phrase(text: str) -> bool:
+def heard_wake_phrase(text: str, *, strict: bool = False) -> bool:
     """Whether the transcript is "hey sage" as Whisper usually writes it.
 
     Two rules, either suffices. By words: a hey-word followed by a
@@ -90,7 +99,9 @@ def heard_wake_phrase(text: str) -> bool:
     the run-together letters end in the phrase's shape (see
     ``_PHONETIC_TAIL``). "sage" alone passes neither: the detector already
     required the whole phrase acoustically, and the decision was to hold
-    the transcript to the same standard.
+    the transcript to the same standard. ``strict`` drops the sound rule:
+    used while another app is audibly playing, when a lyric can have the
+    shape and the user, who knows there is music on, says the name clearly.
     """
     words = [w.rstrip("'s") if w.endswith("'s") else w for w in _tokens(text)]
     for i, word in enumerate(words):
@@ -99,8 +110,15 @@ def heard_wake_phrase(text: str) -> bool:
         for j in (i + 1, i + 2):
             if j < len(words) and words[j] in _SAGE:
                 return True
+    if strict:
+        return False
     letters = re.sub(r"[^a-z]", "", text.lower())[-_PHONETIC_LETTERS:]
-    return bool(_PHONETIC_TAIL.search(letters))
+    match = _PHONETIC_TAIL.search(letters)
+    if not match:
+        return False
+    if re.search(r"[scz][aeiy]+(?:you)?$", match.group(0)):
+        return bool(_BARE_END.search(letters))
+    return True
 
 
 #: Peak the clip is brought to before transcription. Whisper's VAD hears
@@ -144,6 +162,8 @@ class Verdict:
     note: str = ""
     #: How long the transcriber took, so slowness is measured, not felt.
     ms: int = 0
+    #: Whether another app was audibly playing, so only the words counted.
+    strict: bool = False
 
 
 class AudioRing:
@@ -192,7 +212,7 @@ class WakeWordVerifier:
         result = self._backend.transcribe(pcm_to_wav(normalise_level(pcm)), **kwargs)
         return str(getattr(result, "text", "") or "").strip()
 
-    async def verify(self, pcm: bytes) -> Verdict:
+    async def verify(self, pcm: bytes, *, strict: bool = False) -> Verdict:
         if self._backend is None:
             return Verdict(True, "", "no speech backend")
         if not pcm:
@@ -208,7 +228,9 @@ class WakeWordVerifier:
             logger.debug("Wake-word verification failed: %s", exc)
             return Verdict(True, "", f"verifier error: {exc}")
         ms = int((time.perf_counter() - started) * 1000)
-        verdict = Verdict(heard_wake_phrase(heard), heard, "", ms)
+        verdict = Verdict(
+            heard_wake_phrase(heard, strict=strict), heard, "", ms, strict
+        )
         keep_clip(pcm, verdict)
         return verdict
 
@@ -281,6 +303,20 @@ def warm_local_verifier(config: Any) -> None:
         logger.debug("Wake-word verifier warm-up failed: %s", exc)
 
 
+#: Another app peaking above this is "audibly playing"; 0.05 is well
+#: under speech but above meter noise on a silent session.
+MEDIA_PEAK_THRESHOLD = 0.05
+
+
+def media_is_playing() -> bool:
+    try:
+        from openjarvis.speech.ducking import media_peak
+
+        return media_peak() > MEDIA_PEAK_THRESHOLD
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def make_verifier(
     config: Any, backend: Any, mode: Optional[str] = None
 ) -> Optional[WakeWordVerifier]:
@@ -319,4 +355,5 @@ __all__ = [
     "normalise_level",
     "pcm_to_wav",
     "warm_local_verifier",
+    "media_is_playing",
 ]

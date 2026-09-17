@@ -165,3 +165,39 @@ streaming turn path) is untouched. The Settings choice is On / Off.
 1. After a day: does tiny.en, prompted with the phrase, ever write "Hey
    Sage." for something that was not? The Voice log and kept clips will
    say; if it does, drop the prompt (measured cost: unknown yet).
+
+
+## Day two (2026-09-17): what the log said, and three changes
+
+Overnight and morning trace: 14 noise firings (coughs, loud audio) came
+back `heard=""` and were rejected -- the second stage doing its job. Three
+firings were confirmed on the *shape* alone for "Class starting soon. See
+you" / "You see?" / "Can you see?": the reminder's own echo (impossible now
+that the microphone is deaf while the server speaks), but a video's line
+next time. Changes:
+
+- **The shape needs a hey-lead.** `_PHONETIC_TAIL` requires h+vowel, a bare
+  vowel, `be` or `pe` before the s; a bare-vowel or "you" tail needs an
+  h-lead or "ea". "see you", "I see", "can you see" fail; "hazage",
+  "easy", "hazy", "peace sage", "hey, see you" pass. Recordings 116/119.
+- **Media-aware strictness.** At a detection the server reads the other
+  apps' audio meters (`ducking.media_peak`, the same pycaw sessions the
+  ducking uses); if anything is audibly playing (peak > 0.05) only the
+  words confirm, not the shape -- a lyric can have the shape, and a user
+  with music on says the name clearly. `strict` rides on the verdict and
+  the trace.
+- **Threshold 0.79 → 0.65.** With a second stage that rejected noise 14/14,
+  the detector's job is recall; a firing costs ~200 ms of GPU, a miss costs
+  the user a repeat.
+
+## Recording session (planned, not done)
+
+Five minutes, through the existing `/v1/speech/wake-word-sample` capture,
+in the conditions the current set lacks: **far** (from the door), **quiet**
+(as if someone is asleep), **fast** ("heysage" as one word), **with the fan
+and a video playing**, and **negatives** of the same length in the same
+conditions (talking to someone else, the video alone). Then
+`train_custom_verifier` over the union with the natural sessions, held-out
+recall and rejection reported before the new `.pkl` replaces the old.
+Expected gain is recall at a distance and in noise -- the transcript stage
+already covers precision.
