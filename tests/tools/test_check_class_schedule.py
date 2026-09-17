@@ -215,3 +215,36 @@ def test_the_reminder_window_still_finds_an_imminent_class(tmp_path):
 
     upcoming = tool.execute(now=now).metadata["upcoming"]
     assert [c["subject_code"] for c in upcoming] == ["LATE33"]
+
+
+def test_full_day_can_leave_out_the_class_a_reminder_is_about_to_announce(tmp_path):
+    """The morning greeting and the 15-minute reminder both said the 9:40
+    class at 9:25 on 17 September. The greeting now asks for the day
+    without whatever starts inside the reminder's lead, and is told so."""
+    now = datetime(2026, 3, 13, 10, 45)  # EARLY1 at 11:00 is 15 minutes away
+    tool = _make_tool(tmp_path, _write_day(tmp_path, now.strftime("%A")))
+
+    result = tool.execute(now=now, full_day=True, skip_starting_within=20)
+
+    codes = {c["subject_code"] for c in result.metadata["classes"]}
+    assert codes == {"MID222", "LATE33"}
+    assert result.metadata["left_out"] == 1
+    assert "1 class(es) starting within 20 minutes left out" in result.content
+    assert "do not mention them" in result.content
+
+    # Without the option nothing changes.
+    plain = tool.execute(now=now, full_day=True)
+    assert len(plain.metadata["classes"]) == 3 and "left out" not in plain.content
+
+
+def test_leaving_out_the_only_class_still_says_so(tmp_path):
+    now = datetime(2026, 3, 13, 16, 50)  # only LATE33 at 17:00 is still ahead
+    tool = _make_tool(tmp_path, _write_day(tmp_path, now.strftime("%A")))
+
+    result = tool.execute(now=now, full_day=True, skip_starting_within=20)
+
+    assert {c["subject_code"] for c in result.metadata["classes"]} == {
+        "EARLY1",
+        "MID222",
+    }
+    assert result.metadata["left_out"] == 1

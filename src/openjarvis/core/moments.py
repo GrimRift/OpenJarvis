@@ -566,11 +566,22 @@ def _profile_excerpt(config_dir: Optional[Path], limit: int = 800) -> str:
     return text[:limit].strip()
 
 
-def _today_classes() -> str:
+#: A class starting this soon is the reminder's to announce (it fires at
+#: 15 and 5 minutes before), so a greeting composed now leaves it out.
+CLASS_REMINDER_LEAD_MINUTES = 20
+
+
+def _today_classes(now: Optional[float] = None) -> str:
     try:
+        from datetime import datetime
+
         from openjarvis.tools.check_class_schedule import CheckClassScheduleTool
 
-        result = CheckClassScheduleTool().execute(full_day=True)
+        result = CheckClassScheduleTool().execute(
+            full_day=True,
+            skip_starting_within=CLASS_REMINDER_LEAD_MINUTES,
+            now=datetime.fromtimestamp(now) if now is not None else None,
+        )
         return result.content if result.success else ""
     except Exception:
         return ""
@@ -737,7 +748,7 @@ def build_context(
             )
         except Exception:
             context["recent_days"] = ""
-        context["classes_today"] = _today_classes()
+        context["classes_today"] = _today_classes(now)
         context["calendar_today"] = _today_calendar(timezone_name, now)
     if kind in (MOMENT_GREETING, MOMENT_WELCOME_BACK):
         since = decision.absence_end

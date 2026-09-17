@@ -188,7 +188,8 @@ class CheckClassScheduleTool(BaseTool):
             )
 
         if params.get("full_day"):
-            return self._day_view(rows, now)
+            skip = params.get("skip_starting_within")
+            return self._day_view(rows, now, int(skip) if skip is not None else None)
 
         upcoming = self._find_upcoming(rows, now, lookahead_minutes)
 
@@ -219,15 +220,53 @@ class CheckClassScheduleTool(BaseTool):
             metadata={"upcoming": upcoming},
         )
 
-    def _day_view(self, rows: List[Dict[str, str]], now: datetime) -> ToolResult:
+    def _day_view(
+        self,
+        rows: List[Dict[str, str]],
+        now: datetime,
+        skip_starting_within: Optional[int] = None,
+    ) -> ToolResult:
+        """Today's classes; optionally without the ones about to start.
+
+        The morning greeting reads this. A class starting within the
+        reminder's lead is the reminder's to announce -- on 17 September the
+        greeting and the 15-minute reminder said the same 9:40 class in the
+        same breath -- so the greeting leaves such a class out and is told
+        that it did.
+        """
         classes = self._find_today(rows, now)
         day_name = now.strftime("%A")
+        left_out = 0
+        if skip_starting_within is not None:
+            kept = []
+            for c in classes:
+                soon = 0 <= c["minutes_until"] <= skip_starting_within
+                if soon:
+                    left_out += 1
+                else:
+                    kept.append(c)
+            classes = kept
+        note = (
+            f"\n({left_out} class(es) starting within {skip_starting_within} "
+            "minutes left out: a reminder announces those, do not mention them.)"
+            if left_out
+            else ""
+        )
         if not classes:
             return ToolResult(
                 tool_name="check_class_schedule",
-                content=f"No classes scheduled for today ({day_name}).",
+                content=(
+                    f"No other classes scheduled for today ({day_name}).{note}"
+                    if left_out
+                    else f"No classes scheduled for today ({day_name})."
+                ),
                 success=True,
-                metadata={"classes": [], "upcoming": [], "day": day_name},
+                metadata={
+                    "classes": [],
+                    "upcoming": [],
+                    "day": day_name,
+                    "left_out": left_out,
+                },
             )
 
         label = {
@@ -247,12 +286,14 @@ class CheckClassScheduleTool(BaseTool):
             content=(
                 f"{len(classes)} class(es) scheduled today ({day_name}):\n"
                 + "\n".join(lines)
+                + note
             ),
             success=True,
             metadata={
                 "classes": classes,
                 "upcoming": [c for c in classes if c["status"] == "upcoming"],
                 "day": day_name,
+                "left_out": left_out,
             },
         )
 
@@ -287,9 +328,7 @@ class CheckClassScheduleTool(BaseTool):
             start_time, end_time = parsed
             start_dt = datetime.combine(now.date(), start_time)
             minutes_until = (start_dt - now).total_seconds() / 60.0
-            end_dt = (
-                datetime.combine(now.date(), end_time) if end_time else None
-            )
+            end_dt = datetime.combine(now.date(), end_time) if end_time else None
             if minutes_until >= 0:
                 status = "upcoming"
             elif end_dt is None or now < end_dt:
