@@ -19,7 +19,15 @@ import {
   ingestDocument,
 } from '../../lib/api';
 import { playFiller, playGreeting, preloadGreetings } from '../../lib/greeting';
-import { PRE_ROLL_MS, continuesPastWakePhrase, greetingDelayMs, isOnlyWakePhrase, stripWakePhrase } from '../../lib/wake-follow';
+import {
+  GREETING_PAUSE_MS,
+  PAUSE_TURN_MS,
+  PRE_ROLL_MS,
+  continuesPastWakePhrase,
+  greetingDelayMs,
+  isOnlyWakePhrase,
+  stripWakePhrase,
+} from '../../lib/wake-follow';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
 import {
   type BargeVerdict,
@@ -1815,12 +1823,27 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           voiceTrace('wake.fastFollow', { sinceFiringMs });
           if (wakeWordGreetingEnabled) {
             clearGreetingTimer();
-            // Counted from the end of the phrase, which the server says
-            // was `sinceFiringMs` ago; the user's silence started then.
-            greetingTimerRef.current = setTimeout(() => {
+            // The pause is a fact about the microphone: a second with no
+            // sound at speech level since the phrase ended. Checked every
+            // 100 ms rather than decided by Deepgram's first partial, which
+            // arrived after a greeting had already talked over "tell me
+            // about". Silence began at the end of the phrase, which the
+            // server says was `sinceFiringMs` ago.
+            const phraseEndedAt = Date.now() - sinceFiringMs;
+            const quietSince = () => Math.max(phraseEndedAt, flux.lastSoundAt());
+            const check = () => {
               greetingTimerRef.current = null;
-              greetAfterPause('timer');
-            }, greetingDelayMs(sinceFiringMs));
+              if (!fastFollowRef.current.active || fastFollowRef.current.greeted) return;
+              const quietFor = Date.now() - quietSince();
+              if (quietFor >= GREETING_PAUSE_MS) {
+                greetAfterPause('timer');
+                return;
+              }
+              // Give up once a question is clearly under way.
+              if (Date.now() - phraseEndedAt > PAUSE_TURN_MS * 2) return;
+              greetingTimerRef.current = setTimeout(check, 100);
+            };
+            greetingTimerRef.current = setTimeout(check, greetingDelayMs(sinceFiringMs));
           }
           return;
         }

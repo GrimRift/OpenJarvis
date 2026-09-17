@@ -7,6 +7,16 @@ import { buildWsProtocols } from '../lib/useAgentEvents';
 // Same capture format the wake-word socket already uses, so the browser
 // needs no second audio path: 16-bit mono PCM at 16kHz.
 const TARGET_SAMPLE_RATE = 16000;
+// int16 RMS above which a frame is taken to carry speech rather than the
+// room: ordinary speech at the desk measures in the thousands, a fan in the
+// tens to low hundreds.
+const SPEECH_RMS = 350;
+
+function rms(pcm: Int16Array): number {
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+  return pcm.length ? Math.sqrt(sum / pcm.length) : 0;
+}
 // 50ms per frame. Small enough that end-of-turn isn't gated on a slow chunk,
 // large enough to avoid a send() per animation frame.
 const CHUNK_SAMPLES = 800;
@@ -487,6 +497,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         ctx.sampleRate,
       );
       for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
+      if (rms(pcm) >= SPEECH_RMS) lastSoundAtRef.current = Date.now();
 
       // Retain the turn's audio so a mid-turn Flux failure can still be
       // transcribed locally rather than silently losing the utterance.
@@ -543,6 +554,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   // Frames are dropped while this is set: a greeting clip playing into an
   // open turn would come back as the user's words.
   const holdUntilRef = useRef(0);
+  // When the microphone last carried sound at speech level. The pause
+  // greeting after the wake word is decided on this, not on Deepgram's
+  // first partial, which arrives later than the greeting could be needed.
+  const lastSoundAtRef = useRef(0);
+  const lastSoundAt = useCallback(() => lastSoundAtRef.current, []);
   const holdAudio = useCallback((promise: Promise<unknown>, tailMs = 250) => {
     holdUntilRef.current = Number.POSITIVE_INFINITY;
     const release = () => {
@@ -602,6 +618,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     beginTurn,
     endTurn,
     holdAudio,
+    lastSoundAt,
     connect,
     disconnect,
     takeFallbackAudio,
