@@ -266,6 +266,7 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.close_media  # noqa: F401
     import openjarvis.tools.memory_tools  # noqa: F401
 except ImportError:
     pass

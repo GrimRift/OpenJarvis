@@ -91,11 +91,12 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
         ),
     },
     "media": {
-        "tools": {"spotify_control", "open_app"},
+        "tools": {"spotify_control", "open_app", "close_media"},
         "pattern": re.compile(
             r"\b(spotify|music|song|songs|track|tracks|album|artist|"
             r"playlist|play|playing|pause|resume|skip|next|previous|"
             r"volume|listen|listening|open|launch|start|run|app|apps|"
+            r"close|quit|youtube|netflix|video|"
             r"application|notepad|obsidian|browser|window)\b",
             re.IGNORECASE,
         ),

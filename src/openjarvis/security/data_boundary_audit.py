@@ -261,6 +261,8 @@ LOCAL_ACCESS_TOOLS = {
     "forget",
     "recall",
     "restore_memory",
+    # Closes browser tabs by site and quits the Spotify app; sends nothing.
+    "close_media",
     # Reads the user's class schedule from a local file; no egress of its own.
     "check_class_schedule",
     # Reads file *names* across every fixed drive — no contents, but the paths
