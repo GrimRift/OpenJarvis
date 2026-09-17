@@ -14,7 +14,10 @@ import {
   isCloseDiagramCommand,
   mayBecomeCloseDiagramCommand,
 } from '../../lib/diagram';
-import { useDiagramPresenter } from '../../lib/diagram-presenter';
+import {
+  openDiagramFromAnswer,
+  useDiagramPresenter,
+} from '../../lib/diagram-presenter';
 import type { ChatRequest } from '../../lib/sse';
 import {
   fetchSavings,
@@ -1238,9 +1241,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // Spoken text is prepared, displayed text is not: code blocks and
         // link targets are unlistenable, and a very long answer traps the
         // listener with no way to skim.
+        // Opened from the answer, not from the chat bubble: the Voice page
+        // draws its own transcript and has no bubble to open it from.
+        openDiagramFromAnswer(assistantMsg.id, accumulatedContent);
         const spokenContent = speakableText(accumulatedContent);
         spokenTextRef.current = spokenContent;
-        // Feeds the open diagram's "which step is being said" highlight.
         useDiagramPresenter.getState().noteSpoken(spokenContent);
         speakStreaming(spokenContent, ttsVoice)
           .then((spoke) => {
@@ -1350,12 +1355,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         content: transcript,
         timestamp: Date.now(),
       });
+      const ultraAssistantId = generateId();
       addMessage(convId, {
-        id: generateId(),
+        id: ultraAssistantId,
         role: 'assistant',
         content: answer,
         timestamp: Date.now(),
       });
+      openDiagramFromAnswer(ultraAssistantId, answer);
 
       // Same ordering as the streamed path: claim playback before the TTS
       // round trip, or the wake word re-arms into the gap and false-triggers

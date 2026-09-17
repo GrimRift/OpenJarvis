@@ -229,3 +229,30 @@ describe('the close command against what Deepgram really sent', () => {
     expect(isCloseDiagramCommand('the diagram shows how water enters')).toBe(false);
   });
 });
+
+describe('finding the diagram inside an answer', () => {
+  const answer = [
+    'I work as a local-first assistant named Sage.',
+    '',
+    '```sage-diagram',
+    '{"shape":"flow","title":"How Sage works","nodes":[',
+    '{"label":"Understand request","icon":"eye"},',
+    '{"label":"Choose capability","icon":"gear"}]}',
+    '```',
+    '',
+    'A few examples follow.',
+  ].join('\n');
+
+  it('pulls the block out of a real answer', async () => {
+    const { diagramSourceIn } = await import('./diagram-presenter');
+    const source = diagramSourceIn(answer);
+    expect(source).toBeTruthy();
+    expect(parseDiagram(source!)?.title).toBe('How Sage works');
+  });
+
+  it('finds nothing in an ordinary answer, or a half-streamed block', async () => {
+    const { diagramSourceIn } = await import('./diagram-presenter');
+    expect(diagramSourceIn('Just prose, no diagram.')).toBeNull();
+    expect(diagramSourceIn('```sage-diagram\n{"shape":"flow"')).toBeNull();
+  });
+});

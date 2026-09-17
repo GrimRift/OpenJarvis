@@ -7,7 +7,7 @@
  */
 
 import { create } from 'zustand';
-import type { Diagram } from './diagram';
+import { type Diagram, parseDiagram } from './diagram';
 
 interface DiagramPresenterState {
   current: Diagram | null;
@@ -50,4 +50,30 @@ export const useDiagramPresenter = create<DiagramPresenterState>((set, get) => (
 /** A stable key for a diagram, so the same one is never auto-shown twice. */
 export function diagramKey(messageId: string, source: string): string {
   return `${messageId}:${source.length}`;
+}
+
+const BLOCK = /```sage-diagram\s*([\s\S]*?)```/;
+
+/** The diagram inside an answer, if it holds a finished one. */
+export function diagramSourceIn(content: string): string | null {
+  const found = BLOCK.exec(content || '');
+  return found ? found[1].trim() : null;
+}
+
+/**
+ * Show the diagram an answer carries, wherever that answer is displayed.
+ *
+ * The chat bubble's card can open one because it renders the block, but the
+ * Voice page draws its own transcript and has no bubble -- so on Voice the
+ * diagram never appeared at all. Opening from the answer itself covers both
+ * surfaces; the `seen` key keeps the two routes from showing it twice.
+ */
+export function openDiagramFromAnswer(messageId: string, content: string): void {
+  const source = diagramSourceIn(content);
+  if (!source) return;
+  const state = useDiagramPresenter.getState();
+  const key = diagramKey(messageId, source);
+  if (!state.isNew(key)) return;
+  const diagram = parseDiagram(source);
+  if (diagram) state.open(key, diagram);
 }

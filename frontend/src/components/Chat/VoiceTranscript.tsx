@@ -7,6 +7,17 @@ import type { ChatMessage } from '../../types';
  * Floats over the right edge rather than sitting in the layout, so showing or
  * hiding it never moves the orb off the window's centre.
  */
+/**
+ * A diagram is drawn over the app, never read. This panel prints plain text,
+ * so without this the whole JSON block appeared in the transcript.
+ */
+function withoutDiagram(content: string): string {
+  return (content || '')
+    .replace(/```sage-diagram[\s\S]*?(?:```|$)/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function VoiceTranscript({ messages }: { messages: ChatMessage[] }) {
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -63,7 +74,7 @@ export function VoiceTranscript({ messages }: { messages: ChatMessage[] }) {
                     : 'var(--color-text-secondary)',
               }}
             >
-              {m.content}
+              {withoutDiagram(m.content)}
             </p>
           </div>
         ))}
