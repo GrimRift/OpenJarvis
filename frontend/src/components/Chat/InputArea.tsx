@@ -8,6 +8,7 @@ import {
   planAttachments,
   type AttachedImage,
 } from '../../lib/image-attach';
+import { apiFetch } from '../../lib/api';
 import { streamChat, streamResearch } from '../../lib/sse';
 import {
   diagramMode,
@@ -1682,6 +1683,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       fluxSilenceTimerRef.current = null;
       // Silent by design: nothing was said, so there is nothing to report.
       voiceTrace('silence.timer.close', { kind });
+      // The conversation is over: nothing was said in the window Sage left
+      // open. Let the server drop the speech connection it was holding for
+      // the next turn rather than leaving it open until its TTL.
+      void apiFetch('/v1/speech/conversation-ended', { method: 'POST' }).catch(
+        () => {},
+      );
       flux.endTurn();
       clearFluxSilenceTimer();
       setFluxTurnActive(false);

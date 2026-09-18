@@ -27,6 +27,12 @@ class Activity:
     last_reply_end_at: Optional[float] = None
     tts_streams: int = 0
     flux_transmitting: bool = False
+    #: Whether the web interface has been open at any point since the server
+    #: started. Sage autostarts with Windows, so without this it began making
+    #: unprompted remarks into an empty room -- the user was elsewhere and had
+    #: never opened the page. It says nothing about the window being open NOW:
+    #: once seen, Sage may speak with the page closed.
+    ui_seen: bool = False
 
     @property
     def sage_mid_turn(self) -> bool:
@@ -39,6 +45,11 @@ _state = Activity()
 def note_user_turn(now: Optional[float] = None) -> None:
     with _lock:
         _state.last_user_turn_at = now if now is not None else time.time()
+
+
+def note_ui_seen() -> None:
+    with _lock:
+        _state.ui_seen = True
 
 
 def tts_begin() -> None:
@@ -64,6 +75,7 @@ def snapshot() -> Activity:
             last_reply_end_at=_state.last_reply_end_at,
             tts_streams=_state.tts_streams,
             flux_transmitting=_state.flux_transmitting,
+            ui_seen=_state.ui_seen,
         )
 
 

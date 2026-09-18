@@ -1274,6 +1274,16 @@ async def put_volume(request: Request):
     return volumes.to_dict()
 
 
+@speech_router.post("/conversation-ended")
+async def speech_conversation_ended():
+    """The listening window closed with nothing said: the conversation is
+    over, so release the Cartesia socket held open for its next turn."""
+    from openjarvis.speech.cartesia_tts import drop_warm_connection
+
+    await drop_warm_connection()
+    return {"released": True}
+
+
 @speech_router.get("/keyterms")
 async def get_keyterms():
     """The words Deepgram is told to expect (speech/keyterms.py).
@@ -1533,6 +1543,12 @@ async def presence_moments(request: Request, since: float = 0):
     ``since`` (epoch seconds) narrows the history to newer entries, so the
     web UI can add only what it has not shown yet.
     """
+    # The page polls this constantly, so it is the honest signal that a
+    # window has been open. Sage autostarts with Windows and used to begin
+    # making remarks into an empty room before anyone had opened it.
+    from openjarvis.core import activity as _activity
+
+    _activity.note_ui_seen()
     engine = getattr(request.app.state, "moment_engine", None)
     if engine is None:
         return {"running": False, "snoozed_today": False, "watches": [], "history": []}

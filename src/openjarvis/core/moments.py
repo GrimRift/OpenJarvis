@@ -76,7 +76,14 @@ SKIP = "SKIP"
 
 # Follow-up: one short line if a prompt goes unanswered this long, then let
 # it go. Fixed and rotating -- instant, free, never wrong.
-FOLLOW_UP_AFTER_SECONDS = 60
+#: A prompt nobody answered used to get a second line after a minute --
+#: "Only if you feel like it, sir." -- about something the user had already
+#: passed on by saying nothing. Kept, because a real conversation sometimes
+#: needs it, but made rare: a longer wait, and at most one in a working day.
+FOLLOW_UP_AFTER_SECONDS = 150
+
+#: Hours between follow-ups, whatever else happens.
+FOLLOW_UP_MIN_GAP_SECONDS = 6 * 3600
 FOLLOW_UP_LINES = (
     "No rush, sir.",
     "Only if you feel like it, sir.",
@@ -153,6 +160,8 @@ class MomentsState:
     # whether the single follow-up has been said.
     pending_prompt_at: Optional[float] = None
     pending_followed_up: bool = False
+    # When the last follow-up was spoken, so they stay rare across days.
+    last_follow_up_at: Optional[float] = None
     # Prompts in a row that went unanswered, and the back-off it earned.
     unanswered_streak: int = 0
     backoff_until: Optional[float] = None
@@ -180,6 +189,7 @@ class MomentsState:
             "last_initiative_at": self.last_initiative_at,
             "pending_prompt_at": self.pending_prompt_at,
             "pending_followed_up": self.pending_followed_up,
+            "last_follow_up_at": self.last_follow_up_at,
             "unanswered_streak": self.unanswered_streak,
             "backoff_until": self.backoff_until,
             "held_line": self.held_line,
@@ -213,6 +223,7 @@ def load_state(config_dir: Optional[Path] = None) -> MomentsState:
         "last_unprompted_at",
         "last_initiative_at",
         "pending_prompt_at",
+        "last_follow_up_at",
         "backoff_until",
         "held_at",
     ):
@@ -505,7 +516,11 @@ def follow_up_due(state: MomentsState, activity: Optional[Any], now: float) -> s
         return "answered"
     waited = now - state.pending_prompt_at
     if not state.pending_followed_up:
-        return "follow-up" if waited >= FOLLOW_UP_AFTER_SECONDS else ""
+        if waited < FOLLOW_UP_AFTER_SECONDS:
+            return ""
+        since = now - (state.last_follow_up_at or 0.0)
+        # Too soon after the last one: give up quietly instead of nudging.
+        return "follow-up" if since >= FOLLOW_UP_MIN_GAP_SECONDS else "give-up"
     return "give-up" if waited >= 2 * FOLLOW_UP_AFTER_SECONDS else ""
 
 
@@ -523,6 +538,12 @@ def initiative_holdback(
     decline once asked."""
     if settings.initiative_mode == "off":
         return "initiative is off"
+    # Sage autostarts with Windows. Before the page has been opened even
+    # once, the user may be nowhere near it -- speaking then is talking to an
+    # empty room. Once seen, this never holds again: Sage may speak with the
+    # window closed, which is the point of speaking aloud.
+    if activity is not None and not getattr(activity, "ui_seen", True):
+        return "the interface has not been opened yet"
     if state.pending_prompt_at is not None:
         return "waiting on an answer"
     if state.held_line:
@@ -1651,6 +1672,7 @@ class MomentEngine:
             return True
         if outcome == "follow-up":
             state.pending_followed_up = True
+            state.last_follow_up_at = now
             last = next(
                 (h.text for h in reversed(state.history) if h.detail == "follow-up"),
                 None,

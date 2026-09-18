@@ -19,6 +19,7 @@ from openjarvis.core.activity import Activity
 from openjarvis.core.moments import (
     DAILY_CAPS,
     FALLBACK_LINES,
+    FOLLOW_UP_AFTER_SECONDS,
     FOLLOW_UP_LINES,
     MOMENT_GREETING,
     MOMENT_INITIATIVE,
@@ -70,7 +71,8 @@ class _Rig:
         self.initiative_line = ""
         self.initiative_contexts: List[dict] = []
         self.busy: List[str] = []
-        self.activity = Activity()
+        # These tests simulate a live session; the page has been opened.
+        self.activity = Activity(ui_seen=True)
         save_settings(settings or PresenceSettings(enabled=True), tmp_path)
         self.monitor = PresenceMonitor(
             config_dir=tmp_path,
@@ -675,7 +677,7 @@ class TestInitiative:
     def test_a_recent_chat_turn_is_not_a_lull(self, tmp_path) -> None:
         rig = self._settled(tmp_path)
         rig.initiative_line = "Anything I can do, sir?"
-        rig.activity = Activity(last_user_turn_at=_at(13, 5))
+        rig.activity = Activity(last_user_turn_at=_at(13, 5), ui_seen=True)
         assert rig.tick(_at(13, 8)) == []
         assert [r.kind for r in rig.tick(_at(13, 11))] == [MOMENT_INITIATIVE]
 
@@ -730,6 +732,35 @@ class TestInitiative:
         assert context["allowed_categories"] == "contextual, useful"
 
 
+class TestWaitingForTheInterface:
+    """Sage autostarts with Windows. Before the page has been opened once,
+    the user may be nowhere near it -- on 18 September it made a remark and
+    then followed it up while the window had never been opened."""
+
+    def test_nothing_unprompted_until_the_page_has_been_opened(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        rig.activity = Activity(ui_seen=False)
+        rig.tick(_at(13), idle=1.0)
+        rig.spoken.clear()
+        rig.initiative_line = "Sir, some water perhaps?"
+        assert rig.tick(_at(13, 6)) == []
+        assert rig.spoken == []
+        assert rig.engine.snapshot()["last_reason"] == (
+            "the interface has not been opened yet"
+        )
+
+    def test_once_opened_it_speaks_even_with_the_window_closed(self, tmp_path) -> None:
+        # The gate is about startup, not about the window being open now.
+        rig = _Rig(tmp_path)
+        rig.activity = Activity(ui_seen=False)
+        rig.tick(_at(13), idle=1.0)
+        rig.spoken.clear()
+        rig.initiative_line = "Sir, some water perhaps?"
+        assert rig.tick(_at(13, 6)) == []
+        rig.activity = Activity(ui_seen=True)
+        assert [r.kind for r in rig.tick(_at(13, 12))] == [MOMENT_INITIATIVE]
+
+
 class TestFollowUp:
     def _prompted(self, tmp_path):
         rig = _Rig(tmp_path)
@@ -741,7 +772,7 @@ class TestFollowUp:
 
     def test_an_answer_within_the_window_closes_the_prompt(self, tmp_path) -> None:
         rig = self._prompted(tmp_path)
-        rig.activity = Activity(last_user_turn_at=_at(13, 6) + 30)
+        rig.activity = Activity(last_user_turn_at=_at(13, 6) + 30, ui_seen=True)
         rig.tick(_at(13, 7))
         assert rig.spoken == ["How is the paper going, sir?"]  # no follow-up
         assert rig.engine.history()[-1].detail == "answered"
@@ -749,29 +780,51 @@ class TestFollowUp:
 
     def test_one_follow_up_then_let_go(self, tmp_path) -> None:
         rig = self._prompted(tmp_path)
-        assert rig.tick(_at(13, 6) + 30) == []
-        rig.tick(_at(13, 7))  # 60 s: the follow-up
+        # A minute of silence is no longer a cue to speak again.
+        assert rig.tick(_at(13, 7)) == []
+        assert len(rig.spoken) == 1
+        rig.tick(_at(13, 6) + FOLLOW_UP_AFTER_SECONDS)
         assert len(rig.spoken) == 2 and rig.spoken[1] in FOLLOW_UP_LINES
-        rig.tick(_at(13, 7) + 30)
+        rig.tick(_at(13, 6) + FOLLOW_UP_AFTER_SECONDS + 30)
         assert len(rig.spoken) == 2
-        rig.tick(_at(13, 8))  # 120 s: given up
+        rig.tick(_at(13, 6) + 2 * FOLLOW_UP_AFTER_SECONDS)  # given up
         state = load_state(tmp_path)
         assert state.pending_prompt_at is None and state.unanswered_streak == 1
         assert rig.engine.snapshot()["last_reason"] != "waiting on an answer"
 
+    def test_a_second_unanswered_prompt_is_let_go_in_silence(self, tmp_path) -> None:
+        """The user's complaint: having said nothing once, they were asked
+        again -- "Only if you feel like it, sir." Follow-ups are kept for the
+        rare case, so the second one inside the day says nothing at all."""
+        rig = self._prompted(tmp_path)
+        rig.tick(_at(13, 6) + FOLLOW_UP_AFTER_SECONDS)
+        assert len(rig.spoken) == 2  # the one follow-up of the day
+        rig.tick(_at(13, 6) + 2 * FOLLOW_UP_AFTER_SECONDS)
+
+        # Later the same session -- near enough that nothing counts as a
+        # return, far enough that initiative may speak again.
+        rig.initiative_line = "Sir, some water perhaps?"
+        assert [r.kind for r in rig.tick(_at(13, 18))] == [MOMENT_INITIATIVE]
+        spoken_before = len(rig.spoken)
+        rig.tick(_at(13, 18) + FOLLOW_UP_AFTER_SECONDS + 5)
+        # Let go without a word, rather than nudged a second time.
+        assert len(rig.spoken) == spoken_before
+        assert load_state(tmp_path).pending_prompt_at is None
+
     def test_ignored_twice_doubles_the_cooldown(self, tmp_path) -> None:
         rig = self._prompted(tmp_path)
-        rig.tick(_at(13, 7))
-        rig.tick(_at(13, 8))
+        rig.tick(_at(13, 6) + FOLLOW_UP_AFTER_SECONDS)
+        rig.tick(_at(13, 6) + 2 * FOLLOW_UP_AFTER_SECONDS)
         assert [r.kind for r in rig.tick(_at(13, 18))] == [MOMENT_INITIATIVE]
-        rig.tick(_at(13, 19))
-        rig.tick(_at(13, 20))
+        # The second prompt of the day is let go in silence, at the same
+        # point the follow-up would have been due.
+        rig.tick(_at(13, 18) + FOLLOW_UP_AFTER_SECONDS + 5)
         assert load_state(tmp_path).unanswered_streak == 2
         assert rig.tick(_at(13, 30)) == []  # would have been due; cooldown doubled
         assert rig.engine.snapshot()["last_reason"] == "backing off"
         assert [r.kind for r in rig.tick(_at(13, 39))] == [MOMENT_INITIATIVE]
         # An answer resets it.
-        rig.activity = Activity(last_user_turn_at=_at(13, 39) + 10)
+        rig.activity = Activity(last_user_turn_at=_at(13, 39) + 10, ui_seen=True)
         rig.tick(_at(13, 40))
         assert load_state(tmp_path).unanswered_streak == 0
 
@@ -811,7 +864,7 @@ class TestHeldLine:
 
         def compose(context: dict) -> str:
             # While the writer works, the user starts talking.
-            rig.activity = Activity(last_user_turn_at=rig.now + 3)
+            rig.activity = Activity(last_user_turn_at=rig.now + 3, ui_seen=True)
             return "How is the paper, sir?"
 
         rig.engine._initiative_composer = compose
@@ -825,7 +878,9 @@ class TestHeldLine:
         rig.engine._state.held_line = "How is the paper, sir?"
         rig.engine._state.held_at = _at(13, 6)
         rig.activity = Activity(
-            last_user_turn_at=_at(13, 6) + 5, last_reply_end_at=_at(13, 6) + 12
+            last_user_turn_at=_at(13, 6) + 5,
+            last_reply_end_at=_at(13, 6) + 12,
+            ui_seen=True,
         )
         assert rig.tick(_at(13, 6) + 20) == []  # reply ended 8 s ago
         said = rig.tick(_at(13, 6) + 35)
@@ -879,7 +934,7 @@ class TestPhase3:
         rig.tick(_at(13), idle=1.0)
         rig.initiative_line = "[useful] Water, sir."
         rig.tick(_at(13, 6))
-        rig.activity = Activity(last_user_turn_at=_at(13, 7))
+        rig.activity = Activity(last_user_turn_at=_at(13, 7), ui_seen=True)
         rig.tick(_at(13, 8))
         rig.initiative_line = "[contextual] And the paper, sir?"
         rig.tick(_at(13, 20))
