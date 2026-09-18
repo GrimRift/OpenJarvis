@@ -3,12 +3,14 @@ import {
   MAX_GAIN,
   MAX_TOTAL_GAIN,
   SILENCE_RMS,
+  adaptFloor,
   TARGET_RMS,
   WAKE_MAX_GAIN,
   applyGain,
   nextGain,
   speechThreshold,
   totalGain,
+  trackNoise,
 } from './mic-gain';
 
 describe('nextGain', () => {
@@ -148,5 +150,41 @@ describe('speechThreshold', () => {
   it('survives nonsense', () => {
     expect(speechThreshold(Number.NaN, 4, FLOOR, CEILING)).toBe(FLOOR / 4);
     expect(speechThreshold(-5, 0, FLOOR, CEILING)).toBe(FLOOR);
+  });
+});
+
+describe('the room level this stream actually hears', () => {
+  it('settles on the floor, not on the speech above it', () => {
+    // The laptop's fan holds 433 beside the built-in mic; a sentence on top
+    // of it must not drag the estimate up to speech.
+    let noise = 0;
+    for (let i = 0; i < 400; i++) noise = trackNoise(noise, 433);
+    expect(noise).toBeCloseTo(433, 0);
+    for (let i = 0; i < 60; i++) noise = trackNoise(noise, 1800);
+    expect(noise).toBeLessThan(800);
+    // And a pause pulls it straight back down.
+    for (let i = 0; i < 60; i++) noise = trackNoise(noise, 433);
+    expect(noise).toBeCloseTo(433, 0);
+  });
+
+  it('drops quickly when the fan stops', () => {
+    let noise = 433;
+    for (let i = 0; i < 80; i++) noise = trackNoise(noise, 20);
+    expect(noise).toBeLessThan(60);
+  });
+
+  it('keeps the fan from driving the gain', () => {
+    // 120 was the old fixed guard and sits far below this room.
+    expect(adaptFloor(433)).toBeGreaterThan(433);
+    expect(adaptFloor(433)).toBeCloseTo(693, 0);
+    // A genuinely quiet room still uses the fixed guard.
+    expect(adaptFloor(10)).toBe(SILENCE_RMS);
+  });
+
+  it('a fan-level frame no longer moves the gain', () => {
+    const guard = adaptFloor(433);
+    expect(nextGain(3, 433, { silence: guard })).toBe(3);
+    // Real speech above it still does.
+    expect(nextGain(1, 1800, { silence: guard })).toBeGreaterThan(1);
   });
 });

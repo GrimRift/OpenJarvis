@@ -3,7 +3,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import type { FluxWord } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
-import { applyGain, nextGain, speechThreshold, totalGain } from '../lib/mic-gain';
+import {
+  adaptFloor,
+  applyGain,
+  nextGain,
+  speechThreshold,
+  totalGain,
+  trackNoise,
+} from '../lib/mic-gain';
 
 // Same capture format the wake-word socket already uses, so the browser
 // needs no second audio path: 16-bit mono PCM at 16kHz.
@@ -278,6 +285,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const autoGainRef = useRef(1);
   /** The gain actually applied to the last frame, automatic times slider. */
   const gainRef = useRef(1);
+  /** This stream's own measured room level. */
+  const noiseRef = useRef(0);
   const manualGainRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingRef = useRef<number[]>([]);
@@ -436,7 +445,12 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         audio: {
           channelCount: 1,
           echoCancellation: true,
-          noiseSuppression: false,
+          // On for this stream only. The laptop's fan sits beside its
+          // built-in microphone and holds a steady 433 RMS, which no amount
+          // of gain can separate from speech -- gain lifts both. The wake
+          // word keeps raw audio: its threshold was tuned on unsuppressed
+          // frames, and a detector is cheaper to re-tune than to re-train.
+          noiseSuppression: true,
           autoGainControl: false,
         },
       });
@@ -508,7 +522,14 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // Deepgram gets the boosted frame: the laptop's own microphone at
       // arm's length arrives far under the level a desk mic gives, and the
       // stream is opened with autoGainControl off on purpose.
-      autoGainRef.current = nextGain(autoGainRef.current, rms(raw));
+      const level = rms(raw);
+      // This stream measures its own room level rather than borrowing the
+      // wake word's: with noise suppression on here and off there, a floor
+      // imported from that stream describes a different signal entirely.
+      noiseRef.current = trackNoise(noiseRef.current, level);
+      autoGainRef.current = nextGain(autoGainRef.current, level, {
+        silence: adaptFloor(noiseRef.current),
+      });
       const gain = totalGain(autoGainRef.current, manualGainRef.current);
       gainRef.current = gain;
       const pcm = applyGain(raw, gain);
@@ -516,7 +537,9 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // Silence is judged on the RAW frame against a raw threshold (see
       // setSpeechLevel). Judging the boosted frame meant the threshold had
       // to be scaled too, and that pinned it at the ceiling.
-      if (rms(raw) >= speechRmsRef.current) lastSoundAtRef.current = Date.now();
+      if (level >= speechThreshold(noiseRef.current, gain, SPEECH_RMS_FLOOR, SPEECH_RMS_CEILING)) {
+        lastSoundAtRef.current = Date.now();
+      }
       for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
 
       // Retain the turn's audio so a mid-turn Flux failure can still be
@@ -590,9 +613,19 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const speechRmsRef = useRef(SPEECH_RMS_FLOOR);
   /** Set the speech level for the room: four times its ambient RMS, within
    * the floor and the ceiling. */
+  /**
+   * Seed this stream's room level from the wake word's measurement.
+   *
+   * Only a seed now: the frames themselves are the authority, because the
+   * two streams no longer carry the same signal (noise suppression is on
+   * here and off there). Before a turn has any frames it is the only
+   * estimate available, and an opening word is better judged against a
+   * stale number than against zero.
+   */
   const setSpeechLevel = useCallback((ambientRms: number) => {
+    if (noiseRef.current <= 0 && ambientRms > 0) noiseRef.current = ambientRms;
     speechRmsRef.current = speechThreshold(
-      ambientRms,
+      noiseRef.current,
       gainRef.current,
       SPEECH_RMS_FLOOR,
       SPEECH_RMS_CEILING,

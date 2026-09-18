@@ -107,3 +107,30 @@ export function speechThreshold(
   const applied = Number.isFinite(gain) && gain > 1 ? gain : 1;
   return Math.min(ceiling, Math.max(floor / applied, ambient * 4));
 }
+
+/**
+ * A running estimate of the room's own noise, from the frames themselves.
+ *
+ * Measured on this machine: the laptop's fan sits inches from the built-in
+ * microphone and holds a steady RMS of 433 with nobody speaking, where a desk
+ * mic across the room reads near zero. Any fixed idea of "quiet" is therefore
+ * wrong on one machine or the other, and a floor imported from a DIFFERENT
+ * audio stream (the wake word's, which has no noise suppression) is wrong
+ * whenever the two streams are processed differently.
+ *
+ * Falls quickly and rises slowly, so a pause in speech pulls the estimate
+ * down to the true floor while a long sentence cannot drag it up to speech.
+ */
+export function trackNoise(current: number, rms: number): number {
+  if (!Number.isFinite(rms) || rms < 0) return current;
+  if (!Number.isFinite(current) || current <= 0) return rms;
+  const rate = rms < current ? 0.2 : 0.004;
+  return current + (rms - current) * rate;
+}
+
+/** Frames merely at room level must not drive the gain (the fan is not a
+ * voice), so the adapt guard sits just above the measured floor. */
+export function adaptFloor(noise: number): number {
+  const room = Number.isFinite(noise) && noise > 0 ? noise : 0;
+  return Math.max(SILENCE_RMS, room * 1.6);
+}
