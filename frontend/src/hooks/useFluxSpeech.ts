@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import type { FluxWord } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
-import { applyGain, nextGain, totalGain } from '../lib/mic-gain';
+import { applyGain, nextGain, speechThreshold, totalGain } from '../lib/mic-gain';
 
 // Same capture format the wake-word socket already uses, so the browser
 // needs no second audio path: 16-bit mono PCM at 16kHz.
@@ -513,12 +513,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       gainRef.current = gain;
       const pcm = applyGain(raw, gain);
 
-      // Silence is judged on the BOOSTED frame, against a threshold raised
-      // by the same gain (see setSpeechLevel). SPEECH_RMS_FLOOR is an
-      // absolute number: on the raw scale it means something different for
-      // every microphone, and on a quiet laptop mic speech itself can sit
-      // under it -- which would fire the pause greeting mid-sentence.
-      if (rms(pcm) >= speechRmsRef.current) lastSoundAtRef.current = Date.now();
+      // Silence is judged on the RAW frame against a raw threshold (see
+      // setSpeechLevel). Judging the boosted frame meant the threshold had
+      // to be scaled too, and that pinned it at the ceiling.
+      if (rms(raw) >= speechRmsRef.current) lastSoundAtRef.current = Date.now();
       for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
 
       // Retain the turn's audio so a mid-turn Flux failure can still be
@@ -593,12 +591,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   /** Set the speech level for the room: four times its ambient RMS, within
    * the floor and the ceiling. */
   const setSpeechLevel = useCallback((ambientRms: number) => {
-    // The room level arrives raw, from the wake word's ring; the frames it
-    // is compared against are boosted, so it is lifted by the same gain.
-    // Without this a quiet microphone's speech never clears the floor.
-    speechRmsRef.current = Math.min(
+    speechRmsRef.current = speechThreshold(
+      ambientRms,
+      gainRef.current,
+      SPEECH_RMS_FLOOR,
       SPEECH_RMS_CEILING,
-      Math.max(SPEECH_RMS_FLOOR, ambientRms * gainRef.current * 4),
     );
     return speechRmsRef.current;
   }, []);

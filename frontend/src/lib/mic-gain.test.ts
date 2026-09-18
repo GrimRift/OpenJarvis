@@ -7,6 +7,7 @@ import {
   WAKE_MAX_GAIN,
   applyGain,
   nextGain,
+  speechThreshold,
   totalGain,
 } from './mic-gain';
 
@@ -115,5 +116,37 @@ describe('what a real microphone gets', () => {
     const fan = applyGain(Int16Array.from([70, -70]), gain);
     const voice = applyGain(Int16Array.from([380, -380]), gain);
     expect(Math.abs(fan[0]) * 3).toBeLessThan(Math.abs(voice[0]));
+  });
+});
+
+describe('speechThreshold', () => {
+  const FLOOR = 350;
+  const CEILING = 6000;
+
+  it('never pins at the ceiling because of the gain', () => {
+    // 18 September: the threshold was ambient x gain x 4, which at 16x gain
+    // clamped to 6000 while boosted speech only reaches about 2200. Every
+    // turn logged speechRms=6000 and Sage heard a silent room.
+    expect(speechThreshold(40, 16, FLOOR, CEILING)).toBeLessThan(2200);
+    expect(speechThreshold(150, 16, FLOOR, CEILING)).toBeLessThan(CEILING);
+  });
+
+  it('admits quiet speech on a boosted microphone', () => {
+    // Laptop mic: room tone 40, speech 400 raw. The floor alone (350) would
+    // have swallowed that speech, so it is divided by the gain.
+    const threshold = speechThreshold(40, 16, FLOOR, CEILING);
+    expect(400).toBeGreaterThan(threshold);
+    expect(40).toBeLessThan(threshold);
+  });
+
+  it('leaves a desk microphone exactly as it was', () => {
+    // Unboosted, the floor still rules a quiet room.
+    expect(speechThreshold(80, 1, FLOOR, CEILING)).toBe(FLOOR);
+    expect(speechThreshold(500, 1, FLOOR, CEILING)).toBe(2000);
+  });
+
+  it('survives nonsense', () => {
+    expect(speechThreshold(Number.NaN, 4, FLOOR, CEILING)).toBe(FLOOR / 4);
+    expect(speechThreshold(-5, 0, FLOOR, CEILING)).toBe(FLOOR);
   });
 });

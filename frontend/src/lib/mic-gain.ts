@@ -86,3 +86,24 @@ export function totalGain(automatic: number, manual: number): number {
 function clamp(value: number, low: number, high: number): number {
   return value < low ? low : value > high ? high : value;
 }
+
+/**
+ * The level a frame must reach to count as someone speaking.
+ *
+ * Compared against RAW frames, so the room level needs no gain applied. The
+ * FLOOR does: it was chosen for desk-mic levels, and on a boosted quiet
+ * microphone it sat above the very speech it exists to admit. Scaling the
+ * ambient term instead pinned the threshold at the ceiling -- measured
+ * `speechRms=6000` on every turn, against boosted speech of about 2200, so
+ * Sage heard a permanently silent room after the wake word.
+ */
+export function speechThreshold(
+  ambientRms: number,
+  gain: number,
+  floor: number,
+  ceiling: number,
+): number {
+  const ambient = Number.isFinite(ambientRms) && ambientRms > 0 ? ambientRms : 0;
+  const applied = Number.isFinite(gain) && gain > 1 ? gain : 1;
+  return Math.min(ceiling, Math.max(floor / applied, ambient * 4));
+}
