@@ -43,6 +43,10 @@ _TOKEN_PATH = str(DEFAULT_CONFIG_DIR / "connectors" / "gmail.json")
 #: answer needs the gist, not every footer.
 _FULL_TEXT_LIMIT = 6000
 
+#: How many OR-matches to rank when the exact search finds nothing. Enough to
+#: catch the right message, few enough to stay one quick batch of fetches.
+_LOOSE_CANDIDATES = 12
+
 #: Headers are all a summary needs. ``format=full`` pulls every body down —
 #: the connector uses it for syncing, which is a different job from a peek.
 _HEADERS = ("From", "Subject", "Date")
@@ -158,17 +162,77 @@ def body_text(message: Dict[str, Any]) -> str:
     return text.strip()
 
 
+#: Words that identify nothing on their own.
+_NOISE = {
+    "the", "a", "an", "and", "or", "of", "in", "on", "for", "to", "from",
+    "about", "my", "me", "that", "this", "it", "email", "mail", "message",
+    "gmail", "with", "was", "is", "are", "tell", "more", "recent",
+}
+
+
+def query_words(query: str) -> List[str]:
+    """The words worth searching on, lower-cased, order kept."""
+    seen: List[str] = []
+    for word in re.findall(r"[A-Za-z0-9']+", (query or "").lower()):
+        if len(word) < 3 or word in _NOISE or word in seen:
+            continue
+        seen.append(word)
+    return seen
+
+
+def score_match(haystack: str, words: List[str]) -> int:
+    """How many of *words* appear in *haystack* (a subject/sender/snippet)."""
+    text = haystack.lower()
+    return sum(1 for word in words if word in text)
+
+
 def search_messages(token: str, query: str, count: int) -> List[str]:
     """Message ids matching *query*, newest first, across the whole mailbox.
 
     Not limited to the inbox or to recent mail: the point of a search is to
     reach the message the user is asking about, which has usually scrolled
     past whatever the last listing showed.
+
+    Gmail ANDs every word and does NOT stem, so one word remembered slightly
+    wrong finds nothing at all -- "decreased API usage" matched none of a
+    message titled "recent decreases in your OpenAI API usage", and Sage
+    concluded the message had never existed. When the exact search misses,
+    the words are ORed and the candidates ranked by how many of them they
+    actually contain.
     """
     from openjarvis.connectors.gmail import _gmail_api_list_messages
 
     listing = _gmail_api_list_messages(token, query=query)
-    return _ids(listing, count)
+    ids = _ids(listing, count)
+    if ids:
+        return ids
+
+    words = query_words(query)
+    if len(words) < 2:
+        return []
+    loose = _gmail_api_list_messages(token, query="{" + " ".join(words) + "}")
+    candidates = _ids(loose, _LOOSE_CANDIDATES)
+    if not candidates:
+        return []
+
+    with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
+        fetched = list(pool.map(lambda i: _metadata_message(token, i), candidates))
+
+    ranked = []
+    for message in fetched:
+        headers = (message.get("payload") or {}).get("headers") or []
+        haystack = " ".join(
+            [
+                _header(headers, "From"),
+                _header(headers, "Subject"),
+                message.get("snippet") or "",
+            ]
+        )
+        ranked.append((score_match(haystack, words), message.get("id")))
+    # Gmail returned these newest first; a stable sort keeps that order
+    # within an equal score, so the most recent good match wins.
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return [mid for score, mid in ranked if score and mid][:count]
 
 
 def read_one(token: str, query: str) -> Optional[Dict[str, Any]]:

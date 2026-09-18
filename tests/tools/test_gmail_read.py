@@ -276,3 +276,44 @@ class TestReadingOneMessage:
         result = tool.execute(query="something not there")
         assert result.success and result.metadata["found"] is False
         assert "does not mean an earlier summary was wrong" in result.content
+
+
+class TestASearchThatMissesByOneWord:
+    """Gmail ANDs every word and does not stem. "decreased API usage" found
+    nothing in a mailbox holding "recent decreases in your OpenAI API usage",
+    which is how Sage came to believe the message had never existed."""
+
+    def test_noise_words_are_not_searched_on(self):
+        from openjarvis.tools.gmail_read import query_words
+
+        assert query_words("tell me more about the OpenAI email") == ["openai"]
+        assert query_words("decreased API usage") == ["decreased", "api", "usage"]
+        # Repeats collapse, order is kept.
+        assert query_words("survey survey openai") == ["survey", "openai"]
+
+    def test_scoring_prefers_the_message_matching_more_words(self):
+        from openjarvis.tools.gmail_read import score_match
+
+        words = ["decreased", "api", "usage"]
+        survey = "OpenAI | Help us understand recent decreases in your API usage"
+        pricing = "OpenAI | New: lower GPT pricing"
+        assert score_match(survey, words) == 2
+        assert score_match(pricing, words) == 0
+        assert score_match(survey, words) > score_match(pricing, words)
+
+    def test_one_word_queries_do_not_fall_back(self, monkeypatch):
+        """ORing a single word is the same search again; it would only cost a
+        round trip to fail twice."""
+        from openjarvis.tools import gmail_read
+
+        calls = []
+
+        def _listing(token, query):
+            calls.append(query)
+            return {}
+
+        monkeypatch.setattr(
+            "openjarvis.connectors.gmail._gmail_api_list_messages", _listing
+        )
+        assert gmail_read.search_messages("t", "openai", 1) == []
+        assert calls == ["openai"]
