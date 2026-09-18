@@ -1269,6 +1269,44 @@ async def put_volume(request: Request):
     return volumes.to_dict()
 
 
+@speech_router.get("/keyterms")
+async def get_keyterms():
+    """The words Deepgram is told to expect (speech/keyterms.py).
+
+    Returns the user's own list separately from the built-ins and what was
+    read out of the class schedule, so Settings can show what is already
+    covered without inviting the user to retype it.
+    """
+    from openjarvis.speech import keyterms
+
+    return {
+        "terms": keyterms.load_user_terms(),
+        "built_in": list(keyterms.BUILT_IN),
+        "harvested": keyterms.from_class_schedule(),
+        "max_terms": keyterms.MAX_TERMS,
+        "min_length": keyterms.MIN_LENGTH,
+    }
+
+
+@speech_router.put("/keyterms")
+async def put_keyterms(request: Request):
+    from openjarvis.speech import keyterms
+
+    body = await request.json()
+    terms = body.get("terms") if isinstance(body, dict) else body
+    if not isinstance(terms, list):
+        raise HTTPException(status_code=400, detail="Expected {'terms': [...]}")
+    if len(terms) > keyterms.MAX_TERMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {keyterms.MAX_TERMS} terms",
+        )
+    # Cleaning, not rejecting: a word too short to boost is dropped with the
+    # rest kept, and the response shows what was actually stored.
+    saved = keyterms.save_user_terms([str(term) for term in terms])
+    return {"terms": saved}
+
+
 @speech_router.get("/health")
 async def speech_health(request: Request):
     """Check if a speech backend is available."""

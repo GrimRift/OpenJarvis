@@ -19,7 +19,7 @@ import os
 import socket
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 from urllib.parse import urlencode, urlparse
 
 logger = logging.getLogger(__name__)
@@ -153,8 +153,10 @@ def validate_thresholds(
         )
 
 
-#: Words Deepgram should favour: the assistant's name, said in every turn
-#: that starts with the wake word.
+#: The floor: whatever else is boosted, the name always is. The full list
+#: (places, apps, the user's own words, the class schedule's instructors)
+#: comes from ``speech.keyterms`` and is passed in by the caller, so this
+#: module stays free of config and file reads.
 KEYTERMS = ("Sage", "Hey Sage")
 
 
@@ -164,6 +166,7 @@ def build_url(
     eot_threshold: float,
     eager_eot_threshold: Optional[float],
     eot_timeout_ms: int,
+    keyterms: Optional[Sequence[str]] = None,
 ) -> str:
     """Compose the Flux socket URL. Eager is omitted entirely when disabled."""
     validate_thresholds(eot_threshold, eager_eot_threshold, eot_timeout_ms)
@@ -182,7 +185,13 @@ def build_url(
     # "Usage" -- Deepgram has never heard of Sage. The same boost is what
     # made the wake-word verifier spell the phrase reliably.
     query = urlencode(params)
-    for term in KEYTERMS:
+    terms = list(keyterms) if keyterms else list(KEYTERMS)
+    # The name is not negotiable: a user list long enough to hit the cap must
+    # not be able to push the wake word out of the boost.
+    for required in KEYTERMS:
+        if not any(required.lower() == term.lower() for term in terms):
+            terms.insert(0, required)
+    for term in terms:
         query += "&" + urlencode({"keyterm": term})
     return f"{FLUX_URL}?{query}"
 
@@ -351,12 +360,24 @@ class FluxSession:
         eager_eot_threshold: Optional[float] = None,
         eot_timeout_ms: int = 5000,
         key: Optional[str] = None,
+        keyterms: Optional[Sequence[str]] = None,
     ) -> None:
+        if keyterms is None:
+            # Read here rather than at import: the list is edited in Settings
+            # and must be current when a socket opens, not when Python loaded.
+            try:
+                from openjarvis.speech.keyterms import all_terms
+
+                keyterms = all_terms()
+            except Exception:
+                logger.debug("Keyterm list unavailable; using the name alone")
+                keyterms = None
         self._url = build_url(
             model=model,
             eot_threshold=eot_threshold,
             eager_eot_threshold=eager_eot_threshold,
             eot_timeout_ms=eot_timeout_ms,
+            keyterms=keyterms,
         )
         self._key = key if key is not None else api_key()
         self._ws: Any = None

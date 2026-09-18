@@ -22,6 +22,7 @@ import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, type ThemeMode, ty
 import { VOICE_PROFILES } from '../lib/voice-profiles';
 import type { BargeMode } from '../lib/barge-in';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
+import { fetchKeyterms, parseTerms, saveKeyterms, type Keyterms } from '../lib/keyterms';
 
 const VOLUME_ROWS: Array<[keyof Volumes, string, string]> = [
   ['master', 'Master', 'everything Sage says or plays'],
@@ -974,6 +975,10 @@ export function SettingsPage() {
           </Section>
 
           {/* Speech */}
+          <Section title="Words to listen for">
+            <KeytermEditor showSaved={showSaved} />
+          </Section>
+
           <Section title="Speech">
             <SettingRow label="Sage voice" description="Used for voice replies, morning-digest playback, and wake-word greetings">
               <select
@@ -1462,6 +1467,88 @@ export function SettingsPage() {
           </Section>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Words Deepgram should expect to hear.
+ *
+ * Shown as plain lines rather than chips because the user is pasting names
+ * and places, and a chip editor turns a paste of five names into five
+ * separate gestures. What Sage already covers is listed underneath, greyed,
+ * so nobody retypes "Quezon" or their own instructors.
+ */
+function KeytermEditor({ showSaved }: { showSaved: () => void }) {
+  const [data, setData] = useState<Keyterms | null>(null);
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetchKeyterms()
+      .then((loaded) => {
+        setData(loaded);
+        setText(loaded.terms.join('\n'));
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  const save = useCallback(() => {
+    setSaving(true);
+    setError('');
+    saveKeyterms(parseTerms(text))
+      .then((saved) => {
+        setText(saved.join('\n'));
+        setData((prev) => (prev ? { ...prev, terms: saved } : prev));
+        showSaved();
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setSaving(false));
+  }, [text, showSaved]);
+
+  const covered = data ? [...data.built_in, ...data.harvested] : [];
+
+  return (
+    <div className="flex flex-col gap-3 py-3">
+      <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+        Names, places and phrases Sage should expect. Without them Deepgram
+        heard “Hey Sage” as “addition”. One per line
+        {data ? `, at least ${data.min_length} letters, up to ${data.max_terms} in total` : ''}.
+      </div>
+      <textarea
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        rows={6}
+        spellCheck={false}
+        placeholder={'Revilloza\nCalamba\nkumusta'}
+        className="w-full rounded-lg px-3 py-2 text-sm font-mono"
+        style={{
+          background: 'var(--color-input-bg)',
+          color: 'var(--color-text)',
+          border: '1px solid var(--color-input-border)',
+          resize: 'vertical',
+        }}
+      />
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !data}
+          className="px-4 py-2 rounded-lg text-sm font-medium cursor-pointer disabled:opacity-50"
+          style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}
+        >
+          {saving ? 'Saving…' : 'Save words'}
+        </button>
+        {error ? (
+          <span className="text-xs" style={{ color: 'var(--color-error)' }}>{error}</span>
+        ) : null}
+      </div>
+      {covered.length > 0 ? (
+        <div className="text-xs leading-relaxed" style={{ color: 'var(--color-text-tertiary)' }}>
+          Already covered: {covered.join(' · ')}
+        </div>
+      ) : null}
     </div>
   );
 }
