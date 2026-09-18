@@ -1192,6 +1192,27 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // the Flux turn remains active while generation/TTS is pending, and the
       // streaming hook marks audioPlaying only when Cartesia announces the
       // first real PCM. This keeps the orb truthful without re-arming the mic.
+      // A diagram shows itself only when Sage is about to say it aloud. With
+      // replies muted, or a typed reply that is not spoken, it stays a card
+      // in the chat waiting to be clicked -- nothing leaps over the screen
+      // for an answer the user is reading. Decided here, above the branches,
+      // because the Voice page speaks through the incremental path and the
+      // chat through the batch one, and both must open it.
+      const replyWillBeSpoken =
+        Boolean(incrementalSpeechResult) ||
+        (!userStopped &&
+          voiceRepliesEnabled &&
+          shouldSynthesizeReplyAudio(
+            wasVoice,
+            content,
+            Boolean(audio),
+            accumulatedContent,
+            speakTypedReplies,
+          ));
+      if (replyWillBeSpoken) {
+        openDiagramFromAnswer(assistantMsg.id, accumulatedContent);
+      }
+
       if (incrementalSpeechResult) {
         incrementalSpeechResult
           .then((outcome) => {
@@ -1241,9 +1262,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // Spoken text is prepared, displayed text is not: code blocks and
         // link targets are unlistenable, and a very long answer traps the
         // listener with no way to skim.
-        // Opened from the answer, not from the chat bubble: the Voice page
-        // draws its own transcript and has no bubble to open it from.
-        openDiagramFromAnswer(assistantMsg.id, accumulatedContent);
         const spokenContent = speakableText(accumulatedContent);
         spokenTextRef.current = spokenContent;
         useDiagramPresenter.getState().noteSpoken(spokenContent);
@@ -1362,7 +1380,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         content: answer,
         timestamp: Date.now(),
       });
-      openDiagramFromAnswer(ultraAssistantId, answer);
 
       // Same ordering as the streamed path: claim playback before the TTS
       // round trip, or the wake word re-arms into the gap and false-triggers
@@ -1374,6 +1391,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // when Flux Ultra is on. It also ignored voiceRepliesEnabled, so muting
       // Sage did not mute this.
       if (wasVoice && answer && voiceRepliesEnabled) {
+        // Same rule as the streamed path: it shows itself only because it is
+        // about to be spoken.
+        openDiagramFromAnswer(ultraAssistantId, answer);
         const playbackOwner = `reply-request-${generateId()}`;
         const releasePlayback = () =>
           useAppStore.getState().setAudioPlayback(playbackOwner, false);

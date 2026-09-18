@@ -57,7 +57,7 @@ function CodeBlockPre({ children, messageId, isLive, ...props }: any) {
   // the UI, and showing it raw would read worse than the text sketch it
   // replaced. A half-streamed block simply renders nothing yet.
   if (lang === 'sage-diagram') {
-    return <DiagramCard source={code} messageId={messageId ?? ''} isLive={isLive} />;
+    return <DiagramCard source={code} messageId={messageId ?? ''} />;
   }
 
   const handleCopy = () => {

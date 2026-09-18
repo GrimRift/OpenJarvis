@@ -5,7 +5,7 @@
  * Sage used to print into a code block, and reopens the full drawing.
  */
 
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { parseDiagram } from '../../lib/diagram';
 import { diagramKey, useDiagramPresenter } from '../../lib/diagram-presenter';
 import { useAppStore } from '../../lib/store';
@@ -16,25 +16,18 @@ const ACCENT = '#0891b2';
 interface Props {
   source: string;
   messageId: string;
-  /** This message is the one being answered right now. */
-  isLive?: boolean;
 }
 
-export function DiagramCard({ source, messageId, isLive }: Props) {
+export function DiagramCard({ source, messageId }: Props) {
   const diagram = useMemo(() => parseDiagram(source), [source]);
   const settings = useAppStore((s) => s.settings);
   const open = useDiagramPresenter((s) => s.open);
-  const isNew = useDiagramPresenter((s) => s.isNew);
   const key = diagramKey(messageId, source);
 
-  // Shown full-screen as it arrives -- but only for the answer being given
-  // now, and only once, so scrolling back through the history is quiet.
-  useEffect(() => {
-    if (!diagram || !isLive || !settings.diagramsEnabled) return;
-    if (!isNew(key)) return;
-    open(key, diagram);
-  }, [diagram, isLive, settings.diagramsEnabled, key, isNew, open]);
-
+  // The card never opens itself. A diagram appears over the screen only when
+  // Sage is about to speak it (InputArea decides that, because it is the only
+  // place that knows whether this reply will be read aloud); an answer the
+  // user is simply reading leaves a card here to click.
   if (!diagram || !settings.diagramsEnabled) return null;
 
   const steps = diagram.nodes.slice(0, 6);

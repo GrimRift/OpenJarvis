@@ -637,3 +637,32 @@ describe('the pause greeting after the wake word is never decided by Deepgram', 
     expect(offenders).toEqual([]);
   });
 });
+
+describe('a diagram shows itself only when Sage is about to speak it', () => {
+  /**
+   * The card used to open the overlay on mount, which meant a silent typed
+   * answer threw a full-screen diagram over the page the user was reading.
+   * Only the answer path knows whether a reply will be read aloud, so that is
+   * the only place allowed to open one; the card just offers a button.
+   */
+  it('the card never opens itself', () => {
+    const file = join(SRC, 'components', 'Diagram', 'DiagramCard.tsx');
+    const text = readFileSync(file, 'utf8');
+    expect(/useEffect/.test(text), 'DiagramCard must not open on mount').toBe(false);
+    expect(/openDiagramFromAnswer/.test(text)).toBe(false);
+  });
+
+  it('every auto-open sits behind a check that the reply is spoken', () => {
+    const text = readFileSync(join(SRC, 'components', 'Chat', 'InputArea.tsx'), 'utf8');
+    const lines = text.split('\n');
+    const offenders: number[] = [];
+    lines.forEach((line, i) => {
+      if (!line.includes('openDiagramFromAnswer(')) return;
+      // The guard is either the explicit flag or the voice-reply branch, and
+      // sits within a few lines above the call.
+      const before = lines.slice(Math.max(0, i - 6), i).join('\n');
+      if (!/replyWillBeSpoken|voiceRepliesEnabled/.test(before)) offenders.push(i + 1);
+    });
+    expect(offenders, 'opened a diagram without checking it will be spoken').toEqual([]);
+  });
+});
