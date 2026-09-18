@@ -1552,6 +1552,43 @@ traps added, the last for the class reminder that woke Sage through a
 fail-open timeout (fixed: timeout rejects, 2 s echo tail with a detector
 reset, no pre-roll on an unverified firing).
 
+### 2026-09-18: diagrams, and four things the traces caught
+
+**Sage draws now.** A `sage-diagram` fenced block of JSON, rendered over
+the dimmed app (`lib/diagram.ts`, `components/Diagram/`), in three shapes:
+`flow`, `parts` (a thing and what it is made of -- a materials list is not
+a chain of steps) and `comparison`, which is a grid of up to four columns
+against four to six rows. Colour is rationed to two marks: amber for what
+sets a process off, purple for where the new thing forms, the accent for
+the step being spoken. The step highlight only lights on a keyword
+belonging to ONE box, so an ambiguous moment leaves it dark rather than
+lighting the wrong one. Two Settings switches: whether Sage may draw at
+all (off keeps the instruction out of the prompt entirely), and whether it
+decides for itself or waits to be asked. It shows itself ONLY when the
+reply will be spoken; otherwise it is a card in the chat to click.
+"Close the diagram" said aloud closes it without interrupting Sage.
+
+**Volume, ads, video, Gmail, STT** -- each written up as a trap in
+AGENTS.md: 100% now plays 20% louder through a limiter; `skip_ad` clicks
+YouTube's Skip with a real mouse event (a scripted `.click()` is ignored);
+a stalled video heals itself in the page; `gmail_read` takes a query and
+reads one message in full, `gmail_open` puts it on screen; Deepgram is
+told 44 terms to expect, from built-ins, the class schedule and a list
+the user edits in Settings.
+
+**Four bugs found by reading traces rather than guessing**: Sage cut its
+own answer off (one token, "11:00" -> "1100"); "addition." reached the
+chat as a message (the greeting was better evidence than the clock);
+closing a diagram by voice left the microphone deaf for twelve seconds;
+and a real OpenAI email was "corrected" into a fabricated one because
+Gmail does not stem. Every one is pinned with the real transcript.
+
+### Verification pass 5 (2026-09-18)
+
+Full python suite and frontend green apart from the documented set; ruff
+clean on `src/` and `tests/`; production build succeeds; `git diff
+--check` clean. Nine traps added to AGENTS.md.
+
 ### Open
 
 - Live with M37 for a day: does Gentle feel like company or interruption;
@@ -1565,4 +1602,14 @@ reset, no pre-roll on an unverified firing).
   detaches; "skip the ad" covers the rest. If that gets annoying, a
   whole-video watcher (light session, `Page.click` on the Skip button)
   is a small addition on top -- user parked it 2026-09-17.
+- Diagrams: a day of real use. Watch for one drawn where it was not wanted
+  (the automatic switch is the escape hatch), a `fact` that is invented
+  rather than known, and whether the comparison grid holds up past three
+  columns on a laptop screen.
+- The media self-healer has never been seen firing on a real wedge --
+  `window.__sageMediaHeals` and a "sage: media stalled" console line are
+  the evidence if it happens.
+- Keyterms: the list is boosted blind. If a boosted word starts appearing
+  where it was not said, that is the cost showing, and the offender comes
+  out of Settings.
 - M33 (self-improvement) is next by recommendation; M29 (mobile) after.

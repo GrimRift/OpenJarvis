@@ -389,6 +389,47 @@ component works:
   (conftest patched a `doctor_cmd` attribute M34 removed) and hid seven
   real pre-existing failures underneath. A whole directory erroring is a
   fixture problem, not a test problem; look at the conftest first.
+- **Gmail ANDs every word and does not stem.** Measured against the real
+  mailbox: "decreases API usage" finds the message, "decreased API usage"
+  finds nothing at all. A model writes the tense the user said, so the one
+  wording asked for is the one that fails. `gmail_read` falls back to an OR
+  of the distinctive words, ranked by how many each candidate contains.
+  **A search that misses is never evidence the message did not exist** --
+  Sage once "corrected" a true summary with a fabricated email because of
+  this; the tool now says so in its own miss message.
+- **A tool that lists things must hand back a handle to them.** `gmail_read`
+  returned sender/subject/snippet and threw the message ids away, so no
+  follow-up could re-read anything it had just named. Listing without an id
+  is what forces the model to guess.
+- **Punctuation inside a word is a token boundary, not noise.** `echoTokens`
+  stripped it, so "11:00" became "1100" and could never match a heard
+  "eleven" -- one missed token put an echo match at 7 of 13 where 8 were
+  needed, and Sage cut its own answer off and sent it back as a question.
+  Apostrophes are the exception: they vanish, or "won't" becomes "won"+"t".
+- **Barge-in judges every partial, so a spoken UI command must be caught
+  before it.** "close the" reaches the cutting threshold before "diagram"
+  arrives; asking for the overlay to go would interrupt the answer on its
+  way to asking it not to. While a diagram is open, a partial that could
+  still become the command is left unjudged (`mayBecomeCloseDiagramCommand`).
+- **Deepgram inserts words.** "Close to the diagram" for "close the
+  diagram". Any phrase matcher over a live transcript must tolerate a
+  stranger in the middle; the length cap is what keeps it honest.
+- **The greeting is better evidence than the clock.** "addition." was sent
+  as a message because the turn ended 1849 ms in, 49 ms past the debris
+  window. But the pause greeting had already played, which only happens
+  after a second of microphone silence -- so the user demonstrably said
+  nothing, whatever the clock said.
+- **`spokenTextRef = ...` must sit immediately before `speakStreaming`.**
+  An invariant enforces the adjacency, and it caught a diagram call slipped
+  between them. That closeness is what lets barge-in tell Sage's own voice
+  from the user's.
+- **The Voice page mounts InputArea but draws its own transcript.** Anything
+  hung off the chat bubble (the diagram card) simply does not exist there,
+  and raw markdown lands in the panel as text. Features that must work on
+  both surfaces belong in the shared answer path.
+- **A comparison of three things needs three columns.** The first diagram
+  shape had two sides, so "Vios / Civic" shared a heading and the result
+  read thinner than the markdown table the same answer already had.
 - **Never set a DevTools emulation on a page the user will watch.** The
   `prefers-color-scheme` emulation Sage used for dark mode put the page on
   a slow render path -- a 60 fps video played at about 5, measured with
