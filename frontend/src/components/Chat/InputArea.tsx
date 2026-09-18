@@ -1502,6 +1502,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       ) {
         useDiagramPresenter.getState().close();
         diagramCommandTurnRef.current = null;
+        // Keep the microphone open. Returning bare left the Flux turn hanging
+        // until its silence timer expired, so after dismissing a picture Sage
+        // went deaf for twelve seconds -- the user only closed a diagram,
+        // they did not end the conversation.
+        voiceTrace('diagram.closedKeepListening');
+        flux.beginTurn();
+        armFluxSilenceTimer('followUp');
         return;
       }
 
@@ -1509,7 +1516,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (fastFollowRef.current.active) {
         clearGreetingTimer();
         const elapsed = Date.now() - fastFollowRef.current.startedAt;
-        if (isOnlyWakePhrase(spoken, elapsed)) {
+        if (isOnlyWakePhrase(spoken, elapsed, fastFollowRef.current.greeted)) {
           // "Hey Sage." and then nothing: the user paused. Greet now and
           // keep listening for the question.
           if (!fastFollowRef.current.greeted && wakeWordGreetingEnabled) {

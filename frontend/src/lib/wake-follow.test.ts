@@ -74,3 +74,21 @@ describe('the pause', () => {
     expect(continuesPastWakePhrase('Hey Sage any')).toBe(true);
   });
 });
+
+describe('a word that arrives after Sage has already greeted', () => {
+  it('is the phrase misheard, however late and however spelt', async () => {
+    const { isOnlyWakePhrase: only, PAUSE_TURN_MS } = await import('./wake-follow');
+    // 18 September: "Hey Sage" came back as "addition." and the turn ended
+    // 1849 ms in -- 49 ms past the window -- so it was sent as a message.
+    // The greeting had already played, which means the room was silent.
+    expect(only('addition.', 1849, true)).toBe(true);
+    expect(only('addition.', 1849, false)).toBe(false);
+    expect(only('Usage.', PAUSE_TURN_MS + 4000, true)).toBe(true);
+  });
+
+  it('still never swallows a real question', async () => {
+    const { isOnlyWakePhrase: only } = await import('./wake-follow');
+    expect(only('what time is it', 900, true)).toBe(false);
+    expect(only('any news on AI', 400, true)).toBe(false);
+  });
+});

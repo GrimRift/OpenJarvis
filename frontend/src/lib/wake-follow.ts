@@ -121,10 +121,20 @@ export function stripWakePhrase(transcript: string): string {
  * fragment of the phrase any way it likes -- a turn that ended within
  * PAUSE_TURN_MS of the wake word holding no more than two tokens.
  */
-export function isOnlyWakePhrase(transcript: string, elapsedMs = Infinity): boolean {
+export function isOnlyWakePhrase(
+  transcript: string,
+  elapsedMs = Infinity,
+  greetedAlready = false,
+): boolean {
   const text = transcript.trim();
   if (text === '') return false;
   if (stripWakePhrase(text) === '') return true;
   const tokens = text.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t));
-  return elapsedMs < PAUSE_TURN_MS && tokens.length <= PAUSE_TURN_MAX_TOKENS;
+  if (tokens.length > PAUSE_TURN_MAX_TOKENS) return false;
+  // Once Sage has greeted, the microphone has already been quiet for a
+  // second since the wake word -- the user said nothing. So a stray word
+  // arriving in that turn is the phrase misheard, whatever it was spelt as.
+  // "addition." was sent as a message because it landed 1849 ms in, 49 ms
+  // past the window; the greeting is the better evidence than the clock.
+  return greetedAlready || elapsedMs < PAUSE_TURN_MS;
 }
