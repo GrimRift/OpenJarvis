@@ -282,6 +282,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const messages = useAppStore((s) => s.messages);
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   const diagramsEnabled = useAppStore((s) => s.settings.diagramsEnabled);
+  const micBoost = useAppStore((s) => s.settings.micBoost);
   const diagramsAutomatic = useAppStore((s) => s.settings.diagramsAutomatic);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const wakeWordFastFollow = useAppStore((s) => s.settings.wakeWordFastFollow);
@@ -1486,6 +1487,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  // The slider rides on top of the automatic gain, and must reach the audio
+  // path even when the microphone is already open.
+  useEffect(() => {
+    flux.setMicBoost(micBoost);
+    // flux is stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micBoost]);
 
   const handleFluxEndOfTurn = useCallback(
     async (transcript: string, turnIndex: number, speculativeAnswer?: string) => {

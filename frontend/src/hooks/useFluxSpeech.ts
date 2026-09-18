@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import type { FluxWord } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
+import { applyGain, nextGain, totalGain } from '../lib/mic-gain';
 
 // Same capture format the wake-word socket already uses, so the browser
 // needs no second audio path: 16-bit mono PCM at 16kHz.
@@ -273,6 +274,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const silentGainRef = useRef<GainNode | null>(null);
+  /** Adaptive microphone gain, and the Settings slider on top of it. */
+  const autoGainRef = useRef(1);
+  /** The gain actually applied to the last frame, automatic times slider. */
+  const gainRef = useRef(1);
+  const manualGainRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingRef = useRef<number[]>([]);
 
@@ -495,12 +501,25 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       if (wsRef.current?.readyState !== WebSocket.OPEN) return;
       if (Date.now() < holdUntilRef.current) return;
 
-      const pcm = downsample(
+      const raw = downsample(
         event.inputBuffer.getChannelData(0),
         ctx.sampleRate,
       );
-      for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
+      // Deepgram gets the boosted frame: the laptop's own microphone at
+      // arm's length arrives far under the level a desk mic gives, and the
+      // stream is opened with autoGainControl off on purpose.
+      autoGainRef.current = nextGain(autoGainRef.current, rms(raw));
+      const gain = totalGain(autoGainRef.current, manualGainRef.current);
+      gainRef.current = gain;
+      const pcm = applyGain(raw, gain);
+
+      // Silence is judged on the BOOSTED frame, against a threshold raised
+      // by the same gain (see setSpeechLevel). SPEECH_RMS_FLOOR is an
+      // absolute number: on the raw scale it means something different for
+      // every microphone, and on a quiet laptop mic speech itself can sit
+      // under it -- which would fire the pause greeting mid-sentence.
       if (rms(pcm) >= speechRmsRef.current) lastSoundAtRef.current = Date.now();
+      for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
 
       // Retain the turn's audio so a mid-turn Flux failure can still be
       // transcribed locally rather than silently losing the utterance.
@@ -543,10 +562,18 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // Audio from before this moment -- the wake phrase and the first words
     // after it -- goes first, so the turn starts where the user did.
     if (preRoll && preRoll.length && wsRef.current?.readyState === WebSocket.OPEN) {
-      for (let i = 0; i < preRoll.length; i++) fallbackRef.current.push(preRoll[i]);
-      for (let at = 0; at + CHUNK_SAMPLES <= preRoll.length; at += CHUNK_SAMPLES) {
+      // The ring the pre-roll comes from holds raw frames (the wake word
+      // boosts only what it sends to the detector), so this takes the full
+      // gain -- otherwise the wake phrase arrives quieter than the words
+      // after it and Deepgram spells it badly.
+      const lifted = applyGain(
+        preRoll,
+        totalGain(autoGainRef.current, manualGainRef.current),
+      );
+      for (let i = 0; i < lifted.length; i++) fallbackRef.current.push(lifted[i]);
+      for (let at = 0; at + CHUNK_SAMPLES <= lifted.length; at += CHUNK_SAMPLES) {
         try {
-          wsRef.current.send(preRoll.slice(at, at + CHUNK_SAMPLES).buffer);
+          wsRef.current.send(lifted.slice(at, at + CHUNK_SAMPLES).buffer);
         } catch {
           break;
         }
@@ -566,11 +593,18 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   /** Set the speech level for the room: four times its ambient RMS, within
    * the floor and the ceiling. */
   const setSpeechLevel = useCallback((ambientRms: number) => {
+    // The room level arrives raw, from the wake word's ring; the frames it
+    // is compared against are boosted, so it is lifted by the same gain.
+    // Without this a quiet microphone's speech never clears the floor.
     speechRmsRef.current = Math.min(
       SPEECH_RMS_CEILING,
-      Math.max(SPEECH_RMS_FLOOR, ambientRms * 4),
+      Math.max(SPEECH_RMS_FLOOR, ambientRms * gainRef.current * 4),
     );
     return speechRmsRef.current;
+  }, []);
+  /** The Settings slider, multiplied into the automatic gain. */
+  const setMicBoost = useCallback((boost: number) => {
+    manualGainRef.current = Number.isFinite(boost) && boost > 0 ? boost : 1;
   }, []);
   const holdAudio = useCallback((promise: Promise<unknown>, tailMs = 250) => {
     holdUntilRef.current = Number.POSITIVE_INFINITY;
@@ -633,6 +667,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     holdAudio,
     lastSoundAt,
     setSpeechLevel,
+    setMicBoost,
     connect,
     disconnect,
     takeFallbackAudio,

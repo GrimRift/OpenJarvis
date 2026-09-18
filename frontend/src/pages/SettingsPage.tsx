@@ -975,6 +975,38 @@ export function SettingsPage() {
           </Section>
 
           {/* Speech */}
+          <Section title="Microphone">
+            <SettingRow
+              label="Extra boost"
+              description={
+                settings.micBoost > 1
+                  ? `${settings.micBoost.toFixed(1)}x on top of the automatic level. Sage already matches a quiet microphone up to a ceiling on its own; add to this only when you are far from a laptop mic and still not heard.`
+                  : 'Sage matches a quiet microphone to a usable level on its own. Add extra only if you are far from a laptop mic and still not heard — it lifts room noise too.'
+              }
+            >
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  aria-label="Extra microphone boost"
+                  min={1}
+                  max={4}
+                  step={0.5}
+                  value={settings.micBoost}
+                  onChange={(event) => {
+                    updateSettings({ micBoost: Number(event.target.value) });
+                    showSaved();
+                  }}
+                />
+                <span
+                  className="text-xs font-mono w-10 text-right"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                >
+                  {settings.micBoost.toFixed(1)}x
+                </span>
+              </div>
+            </SettingRow>
+          </Section>
+
           <Section title="Words to listen for">
             <KeytermEditor showSaved={showSaved} />
           </Section>

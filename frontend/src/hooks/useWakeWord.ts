@@ -1,4 +1,5 @@
 import { voiceTrace } from '../lib/voice-trace';
+import { WAKE_MAX_GAIN, applyGain, nextGain } from '../lib/mic-gain';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import { buildWsProtocols } from '../lib/useAgentEvents';
@@ -79,6 +80,12 @@ function buildWakeWordWsUrl(verify: string): string {
  */
 export const MIN_FRAME_RMS = 40;
 
+function frameRms(frame: number[]): number {
+  let sum = 0;
+  for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+  return Math.sqrt(sum / frame.length);
+}
+
 export function carriesSound(frame: number[]): boolean {
   let sum = 0;
   for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
@@ -124,6 +131,8 @@ export function useWakeWord(
   // opened after the wake word can start from the phrase itself rather
   // than from the moment the greeting ended (lib/wake-follow.ts).
   const recentFramesRef = useRef<Int16Array[]>([]);
+  /** Gentle adaptive gain for what the detector hears. */
+  const wakeGainRef = useRef(1);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The server answers every submitted 80 ms frame. If those replies stop,
@@ -391,7 +400,17 @@ export function useWakeWord(
           const recent = recentFramesRef.current;
           recent.push(frame);
           if (recent.length > RECENT_FRAMES) recent.splice(0, recent.length - RECENT_FRAMES);
-          if (carriesSound(chunk)) ws.send(frame.buffer);
+          // The dead-mic guard still judges the RAW frame -- that floor is
+          // what ended a class of false trigger, and boosting first would
+          // lift room tone over it. What the detector *hears* is boosted,
+          // gently: its threshold was tuned on unboosted audio, so range
+          // here is bought with false fires.
+          if (carriesSound(chunk)) {
+            wakeGainRef.current = nextGain(wakeGainRef.current, frameRms(chunk), {
+              max: WAKE_MAX_GAIN,
+            });
+            ws.send(applyGain(frame, wakeGainRef.current).buffer);
+          }
         }
       };
 
