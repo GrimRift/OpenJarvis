@@ -181,3 +181,65 @@ describe('isStopCommand', () => {
     }
   });
 });
+
+describe('Sage interrupting itself (18 September trace)', () => {
+  // Sage said this, and heard it back through the speakers, garbled.
+  const SAID =
+    'Sir, if you need to be in Quezon Province by 11:00 AM, you should leave ' +
+    'as early as possible—ideally around 5:00–6:00 AM, depending on your exact ' +
+    'destination and traffic. But if 11:00 AM is your departure time, leave at ' +
+    '11:00 AM—I would shower and finish preparing by about 10:15 AM so you can ' +
+    'depart without rushing.';
+
+  // Exactly what the trace recorded, confidences included.
+  const HEARD = [
+    ['So', 1.0], ['if', 1.0], ['you', 1.0], ['need', 1.0], ['to', 1.0],
+    ['be', 1.0], ['in', 0.91], ['case', 0.92], ['on', 0.98], ['those', 0.78],
+    ['by', 0.92], ['eleven', 1.0], ['o', 1.0],
+  ].map(([word, confidence]) => ({ word, confidence })) as any;
+
+  it('is recognised as an echo, not as the user talking', () => {
+    expect(isEchoOf(HEARD, SAID)).toBe(true);
+  });
+
+  it('and so is never allowed to cut the reply off', () => {
+    const verdict = judge(HEARD, SAID, 'conservative');
+    expect(verdict.decision).toBe('reject');
+    expect(verdict.reason).toBe('echo');
+  });
+
+  it('a clock time is two numbers, not one long one', () => {
+    // "11:00" collapsed to "1100", so the heard "eleven" -> "11" could never
+    // line up with it; that single miss is what put the match under the bar.
+    expect(echoTokens('11:00')).toEqual(['11', '00']);
+    // Apostrophes still vanish rather than splitting the word in two.
+    expect(echoTokens("won't")).toEqual(['wont']);
+  });
+});
+
+describe('the verbatim-run rule does not deafen Sage', () => {
+  const SAID = 'The train leaves at nine and arrives in Manila before noon.';
+
+  it('a real interruption is still a cut', () => {
+    const words = ['no', 'wait', 'I', 'meant', 'the', 'bus', 'instead'].map(
+      (word) => ({ word, confidence: 1 }),
+    );
+    expect(isEchoOf(words as any, SAID)).toBe(false);
+  });
+
+  it('quoting a few of Sage words inside a real question is still heard', () => {
+    // Three of these are Sage's, but they are a short run inside a longer
+    // question, so neither the run rule nor the share rule fires.
+    const words = 'arrives in Manila but when does it come back'
+      .split(' ')
+      .map((word) => ({ word, confidence: 1 }));
+    expect(isEchoOf(words as any, SAID)).toBe(false);
+  });
+
+  it('but a whole sentence handed back is echo however it is garbled', () => {
+    const words = 'the train leaves at nine and arrives in Manilla'
+      .split(' ')
+      .map((word) => ({ word, confidence: 1 }));
+    expect(isEchoOf(words as any, SAID)).toBe(true);
+  });
+});

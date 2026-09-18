@@ -140,12 +140,43 @@ function stem(word: string): string {
  * apostrophe dropped, number words made numerals, and inflections stemmed.
  */
 export function echoTokens(word: string): string[] {
-  return word
-    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2')
-    .split(/\s+/)
-    .map((part) => part.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ''))
-    .filter(Boolean)
-    .map((part) => NUMBER_WORDS[part] ?? stem(part));
+  return (
+    word
+      .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2')
+      // Apostrophes vanish rather than split: "won't" is one word, and
+      // splitting it gave "won" + "t", which matched nothing.
+      .replace(/['’]/g, '')
+      // Every other punctuation mark SEPARATES. Stripping it instead turned
+      // "11:00" into "1100", so Sage saying "eleven" could never line up with
+      // its own "11:00" -- one missed token, and hearing itself back read as
+      // the user talking (18 September: Sage cut its own answer off).
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(Boolean)
+      .map((part) => part.toLowerCase())
+      .map((part) => NUMBER_WORDS[part] ?? stem(part))
+  );
+}
+
+/** A verbatim run this long is Sage's own sentence, not a coincidence. */
+export const ECHO_RUN = 5;
+
+/** Whether the heard words contain a run of ECHO_RUN consecutive said words. */
+function hasVerbatimRun(heard: readonly string[], said: readonly string[]): boolean {
+  if (heard.length < ECHO_RUN) return false;
+  for (let start = 0; start + ECHO_RUN <= heard.length; start++) {
+    const run = heard.slice(start, start + ECHO_RUN);
+    for (let at = 0; at + ECHO_RUN <= said.length; at++) {
+      let same = true;
+      for (let k = 0; k < ECHO_RUN; k++) {
+        if (said[at + k] !== run[k]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -162,6 +193,10 @@ export function isEchoOf(words: readonly FluxWord[], spokenText: string): boolea
   if (heard.length === 0) return false;
   const said = spokenText.split(/\s+/).flatMap(echoTokens);
   if (said.length === 0) return false;
+  // Six words of Sage's own sentence came back in order and it still counted
+  // as the user, because two garbled words put the share a single token under
+  // the bar. A long verbatim run settles it on its own.
+  if (hasVerbatimRun(heard, said)) return true;
   const needed = Math.max(1, Math.ceil(heard.length * ECHO_MATCH_SHARE));
   // From each place Sage's text could start, walk the heard words and
   // count how many land in order within the gap.
