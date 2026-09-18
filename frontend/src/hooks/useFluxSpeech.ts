@@ -289,6 +289,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const gainRef = useRef(1);
   /** This stream's own measured room level. */
   const noiseRef = useRef(0);
+  /** Whether Sage's own voice is playing right now. */
+  const speakingRef = useRef(false);
   const manualGainRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingRef = useRef<number[]>([]);
@@ -524,14 +526,23 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // arm's length arrives far under the level a desk mic gives, and the
       // stream is opened with autoGainControl off on purpose.
       const level = rms(raw);
-      // This stream measures its own room level rather than borrowing the
-      // wake word's: with noise suppression on here and off there, a floor
-      // imported from that stream describes a different signal entirely.
-      noiseRef.current = trackNoise(noiseRef.current, level);
-      autoGainRef.current = nextGain(autoGainRef.current, level, {
-        silence: adaptFloor(noiseRef.current),
-      });
-      const gain = totalGain(autoGainRef.current, manualGainRef.current);
+      // While Sage is speaking, most of what this microphone hears is Sage.
+      // Boosting it amplified the reply leaking back through the speakers
+      // until Deepgram transcribed it confidently -- "contributed to twelve
+      // to sixteen" for its own "contributing to 26%" -- and barge-in cut
+      // the answer as if the user had spoken. Neither the gain nor the room
+      // estimate may move while that is the dominant sound; the audio is
+      // still SENT at its true level, so a real interruption still lands.
+      const sageSpeaking = speakingRef.current;
+      if (!sageSpeaking) {
+        noiseRef.current = trackNoise(noiseRef.current, level);
+        autoGainRef.current = nextGain(autoGainRef.current, level, {
+          silence: adaptFloor(noiseRef.current),
+        });
+      }
+      const gain = sageSpeaking
+        ? 1
+        : totalGain(autoGainRef.current, manualGainRef.current);
       gainRef.current = gain;
       const pcm = applyGain(raw, gain);
 
@@ -633,6 +644,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     );
     return speechRmsRef.current;
   }, []);
+  /** Sage's voice is playing, so the microphone is mostly hearing Sage. */
+  const setSageSpeaking = useCallback((speaking: boolean) => {
+    speakingRef.current = speaking;
+  }, []);
   /** The Settings slider, multiplied into the automatic gain. */
   const setMicBoost = useCallback((boost: number) => {
     manualGainRef.current = Number.isFinite(boost) && boost > 0 ? boost : 1;
@@ -699,6 +714,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     lastSoundAt,
     setSpeechLevel,
     setMicBoost,
+    setSageSpeaking,
     connect,
     disconnect,
     takeFallbackAudio,

@@ -2036,6 +2036,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const continuousConversationEnabled = useAppStore((s) => s.settings.continuousConversationEnabled);
   const wakeWordVerify = useAppStore((s) => s.settings.wakeWordVerify);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
+
+  // While Sage speaks, the microphone is mostly hearing Sage; the gain must
+  // not amplify the reply leaking back through the speakers.
+  useEffect(() => {
+    flux.setSageSpeaking(audioPlaying);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioPlaying]);
+
   const wasAudioPlayingRef = useRef(false);
 
   // Stays false for a beat after audio stops playing, before the

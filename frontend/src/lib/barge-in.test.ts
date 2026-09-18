@@ -243,3 +243,13 @@ describe('the verbatim-run rule does not deafen Sage', () => {
     expect(isEchoOf(words as any, SAID)).toBe(true);
   });
 });
+
+describe('Sage hearing its own numbers back (18 September trace)', () => {
+  it('normalises every number word, not just the first twelve', () => {
+    // "twelve" became 12 while "sixteen" stayed a word, so a misheard
+    // number could never line up with what Sage actually said.
+    expect(echoTokens('sixteen')).toEqual(['16']);
+    expect(echoTokens('twenty')).toEqual(['20']);
+    expect(echoTokens('twelve')).toEqual(['12']);
+  });
+});

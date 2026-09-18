@@ -116,9 +116,17 @@ export const ECHO_MATCH_SHARE = 0.6;
 /** Consecutive matches may be this many of Sage's words apart. */
 const ECHO_MAX_GAP = 2;
 
+// Stopping at twelve made the table inconsistent with itself: hearing Sage's
+// own "26%" back as "twelve to sixteen", "twelve" normalised to a digit and
+// "sixteen" did not, so neither could line up with anything. The rest of the
+// teens and the tens cost nothing and close that gap.
 const NUMBER_WORDS: Record<string, string> = {
   zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6',
   seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12',
+  thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16',
+  seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20',
+  thirty: '30', forty: '40', fifty: '50', sixty: '60', seventy: '70',
+  eighty: '80', ninety: '90',
 };
 
 /** "changing", "changed", "changes", "change" all compare equal. */
