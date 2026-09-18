@@ -1585,9 +1585,26 @@ Gmail does not stem. Every one is pinned with the real transcript.
 
 ### Verification pass 5 (2026-09-18)
 
-Full python suite and frontend green apart from the documented set; ruff
-clean on `src/` and `tests/`; production build succeeds; `git diff
---check` clean. Nine traps added to AGENTS.md.
+**9,274 passed, 39 failed, 65 skipped, 4 errors** (23 min); frontend
+374/374; 32 architecture invariants; ruff clean on `src/` and `tests/`;
+tsc clean; production build succeeds; `git diff --check` clean; CI green
+on `1b001606`, the last commit carrying code (the docs commit after it is
+`paths-ignore`d).
+
+None of the 39 are in anything today touched. The ones not previously
+named were settled rather than assumed: a worktree at `f66b13f8`, the
+commit before the day's first, runs the same files to **20 failed, 370
+passed, 4 errors -- identical on both trees**. AGENTS.md now lists them,
+and the worktree comparison as the cheap way to ask "did I break this?".
+
+Nine traps added to AGENTS.md.
+
+**Unexplained:** Sage stopped during the suite run. It was healthy
+immediately before, the error log shows a clean exit with no traceback,
+and no test could be pinned to it -- the daemon tests patch `_read_pid`,
+the media tests monkeypatch the kill path, nothing runs the stop script.
+Restarted mid-suite and it stayed up for the rest, which argues against
+the suite being the cause. Worth a second look if it recurs.
 
 ### Open
 

@@ -157,6 +157,23 @@ have failed since at least 2 September; until 17 September the whole
 `tests/install` directory errored in its conftest instead (it patched a
 `doctor_cmd.DEFAULT_CONFIG_PATH` that M34 removed), which hid them. Not in CI.
 
+Verified pre-existing on 2026-09-18 by running the same files in a git
+worktree at the commit before that day's work: `tests/evals/core/
+test_config_split_parsing.py` (5), `tests/traces/test_store_fts.py` (4
+errors), `tests/telemetry/` (5: phase energy, derived metrics, batch
+throughput), `tests/pearl/test_model_converter.py` (2),
+`tests/sandbox/test_mount_security.py`, `tests/recipes/test_compose.py`,
+`tests/learning/test_trial_runner.py`, `test_device_selection.py`,
+`tests/deployment/test_packaging.py`, `tests/evals/test_display.py`,
+`tests/bench/test_throughput.py` -- **20 failed, 370 passed, 4 errors on
+both trees, identical**. That worktree comparison is the cheap way to
+settle "did I break this?": `git worktree add <tmp> <base>` and run only
+the failing files in both, rather than re-running 9,000 tests.
+
+Whole-run totals for reference: 2026-09-18 gave **9,274 passed, 39 failed,
+65 skipped, 4 errors** in 23 minutes. A number near that is the healthy
+shape; a jump in failures is worth the worktree check.
+
 `ruff check src/ tests/` is clean as of 2026-09-04 and is enforced by CI, so
 lint the whole thing, not just your own files. The 12 remaining repo-wide
 errors are all in `examples/twitter_bot/slack_preview.py`, which upstream's
