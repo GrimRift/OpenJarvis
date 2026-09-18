@@ -203,6 +203,8 @@ BROWSER_TOOLS = {
     "outlook_read",
     "web_open",
     "youtube_play",
+    # Opens one Gmail message in the user's logged-in browser.
+    "gmail_open",
     # Clicks YouTube's own Skip button in the user's browser.
     "skip_ad",
     "browser_click",

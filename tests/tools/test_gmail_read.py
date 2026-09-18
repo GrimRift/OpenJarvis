@@ -204,3 +204,75 @@ class TestBothMailboxesAgree:
         from openjarvis.tools import opera_control
 
         assert gmail_read.RECENT_DAYS is opera_control.RECENT_DAYS
+
+
+class TestReadingOneMessage:
+    """A listing gives a preview; a follow-up question needs the message.
+
+    On 18 September Sage summarised a real OpenAI survey email, was asked
+    about it, could not search for it -- the tool only took a count -- and
+    "corrected" itself by describing a different email that did not exist.
+    """
+
+    def test_a_body_is_read_out_of_the_mime_tree(self):
+        import base64
+
+        from openjarvis.tools.gmail_read import body_text
+
+        def part(mime, text):
+            data = base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+            return {"mimeType": mime, "body": {"data": data}}
+
+        nested = {
+            "payload": {
+                "mimeType": "multipart/alternative",
+                "parts": [
+                    part("text/html", "<p>Hi <b>you</b></p>"),
+                    part("text/plain", "Hello there"),
+                ],
+            }
+        }
+        # Plain text wins over the HTML twin.
+        assert body_text(nested) == "Hello there"
+
+    def test_html_only_mail_is_stripped_to_text(self):
+        import base64
+
+        from openjarvis.tools.gmail_read import body_text
+
+        data = base64.urlsafe_b64encode(b"<p>Take <b>the</b> survey</p>").decode()
+        message = {"payload": {"mimeType": "text/html", "body": {"data": data}}}
+        assert body_text(message) == "Take the survey"
+
+    def test_an_empty_message_falls_back_to_its_snippet(self):
+        from openjarvis.tools.gmail_read import body_text
+
+        assert body_text({"snippet": "just a snippet", "payload": {}}) == (
+            "just a snippet"
+        )
+
+    def test_the_url_opens_the_message_not_the_inbox(self):
+        from openjarvis.tools.gmail_read import message_url
+
+        # `#all/` rather than `#inbox/`: an archived message is not in the
+        # inbox view and would open on an empty page.
+        assert message_url("1a0ab9a1") == (
+            "https://mail.google.com/mail/u/0/#all/1a0ab9a1"
+        )
+
+    def test_a_miss_never_calls_the_earlier_answer_wrong(self, monkeypatch, tmp_path):
+        """The bug was not the missed search, it was concluding from it that
+        the message had never existed."""
+        from openjarvis.tools.gmail_read import GmailReadTool
+
+        token = tmp_path / "gmail.json"
+        token.write_text("{}", encoding="utf-8")
+        tool = GmailReadTool()
+        tool._token_path = str(token)
+        monkeypatch.setattr(
+            "openjarvis.connectors.google_auth.call_with_refresh",
+            lambda fn, path: None,
+        )
+        result = tool.execute(query="something not there")
+        assert result.success and result.metadata["found"] is False
+        assert "does not mean an earlier summary was wrong" in result.content
