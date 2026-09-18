@@ -30,6 +30,19 @@ export const WAKE_MAX_GAIN = 3;
 /** Everything above the automatic gain, from the Settings slider. */
 export const MAX_TOTAL_GAIN = 16;
 
+/**
+ * The most the microphone is boosted while Sage's own voice is playing.
+ *
+ * Gain cannot tell the user from Sage leaking through the speakers -- it
+ * lifts both -- so this is a compromise with two failures on either side.
+ * At full gain Sage's own reply came back transcribed at 0.96-1.00
+ * confidence and barge-in cut the answer as if someone had spoken; at unity
+ * nothing amplifies the user either, and interrupting from a normal distance
+ * stopped working. Three carries a voice across a desk while leaving the
+ * leakage far below where the recogniser commits to words.
+ */
+export const SPEAKING_MAX_GAIN = 3;
+
 /** Coming down is urgent (it prevents clipping); going up is not. */
 const FALL = 0.34;
 const RISE = 0.06;

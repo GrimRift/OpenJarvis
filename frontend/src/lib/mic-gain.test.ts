@@ -3,6 +3,7 @@ import {
   MAX_GAIN,
   MAX_TOTAL_GAIN,
   SILENCE_RMS,
+  SPEAKING_MAX_GAIN,
   adaptFloor,
   TARGET_RMS,
   WAKE_MAX_GAIN,
@@ -186,5 +187,22 @@ describe('the room level this stream actually hears', () => {
     expect(nextGain(3, 433, { silence: guard })).toBe(3);
     // Real speech above it still does.
     expect(nextGain(1, 1800, { silence: guard })).toBeGreaterThan(1);
+  });
+});
+
+describe('the gain while Sage is speaking', () => {
+  it('is capped, not switched off', () => {
+    // Unity made Sage stop interrupting itself and made the user unable to
+    // interrupt at all; full gain did the reverse. Three is the compromise.
+    const wanted = totalGain(8, 2); // what a quiet room would otherwise use
+    expect(wanted).toBeGreaterThan(SPEAKING_MAX_GAIN);
+    expect(Math.min(wanted, SPEAKING_MAX_GAIN)).toBe(SPEAKING_MAX_GAIN);
+    expect(SPEAKING_MAX_GAIN).toBeGreaterThan(1);
+  });
+
+  it('never raises a gain that was already lower', () => {
+    // Close to the mic the automatic gain is near 1; speaking must not
+    // push it up to 3 and start amplifying the leakage.
+    expect(Math.min(totalGain(1, 1), SPEAKING_MAX_GAIN)).toBe(1);
   });
 });

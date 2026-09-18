@@ -4,6 +4,7 @@ import { getBase } from '../lib/api';
 import type { FluxWord } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
 import {
+  SPEAKING_MAX_GAIN,
   adaptFloor,
   applyGain,
   nextGain,
@@ -535,14 +536,15 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // still SENT at its true level, so a real interruption still lands.
       const sageSpeaking = speakingRef.current;
       if (!sageSpeaking) {
+        // Sage's own voice is not the room, and must not teach the gain
+        // what "loud" means -- so neither estimate moves while it plays.
         noiseRef.current = trackNoise(noiseRef.current, level);
         autoGainRef.current = nextGain(autoGainRef.current, level, {
           silence: adaptFloor(noiseRef.current),
         });
       }
-      const gain = sageSpeaking
-        ? 1
-        : totalGain(autoGainRef.current, manualGainRef.current);
+      const wanted = totalGain(autoGainRef.current, manualGainRef.current);
+      const gain = sageSpeaking ? Math.min(wanted, SPEAKING_MAX_GAIN) : wanted;
       gainRef.current = gain;
       const pcm = applyGain(raw, gain);
 
