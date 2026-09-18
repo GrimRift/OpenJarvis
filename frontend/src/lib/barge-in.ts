@@ -229,6 +229,55 @@ export function isEchoOf(words: readonly FluxWord[], spokenText: string): boolea
   return false;
 }
 
+/**
+ * How much of what was heard also appears in what Sage just said.
+ *
+ * Deliberately weaker than `isEchoOf`: no order, no gap, stop words dropped.
+ * It answers a different question. `isEchoOf` guards CUTTING a reply, where
+ * being wrong costs one interruption. This guards SENDING the words on as a
+ * new question, where being wrong cost a runaway loop -- Sage heard its own
+ * answer, replied to it, heard that, and kept going for four turns.
+ *
+ * The asymmetry is the point: cutting wrongly is cheap and recoverable,
+ * answering your own echo is neither.
+ */
+export function echoOverlap(words: readonly FluxWord[], spokenText: string): number {
+  const heard = words
+    .flatMap((w) => echoTokens(w.word))
+    .filter((t) => t.length >= 4 && !ECHO_COMMON.has(t));
+  if (heard.length === 0) return 0;
+  const said = new Set(spokenText.split(/\s+/).flatMap(echoTokens));
+  const hits = heard.filter((token) => said.has(token)).length;
+  return hits / heard.length;
+}
+
+/** Words too ordinary for their presence in both texts to mean anything. */
+const ECHO_COMMON = new Set([
+  'that', 'this', 'with', 'from', 'what', 'when', 'would', 'could', 'have',
+  'they', 'them', 'your', 'about', 'there', 'their', 'then', 'than', 'been',
+  'will', 'just', 'like', 'know', 'want', 'make', 'more', 'some', 'also',
+]);
+
+/** Share of distinctive words that must reappear before a turn is treated as
+ * Sage's own voice rather than a question. */
+export const ECHO_SEND_SHARE = 0.34;
+
+/**
+ * Whether a turn heard while Sage was speaking should be ANSWERED.
+ *
+ * Only consulted for turns that arrived over Sage's own voice; a turn the
+ * user opened themselves is never judged this way.
+ */
+export function isLoopedBack(words: readonly FluxWord[], spokenText: string): boolean {
+  if (!spokenText) return false;
+  const distinctive = words
+    .flatMap((w) => echoTokens(w.word))
+    .filter((t) => t.length >= 4 && !ECHO_COMMON.has(t));
+  // One shared word is a coincidence; two is Sage reading its own sentence.
+  if (distinctive.length < 2) return false;
+  return echoOverlap(words, spokenText) >= ECHO_SEND_SHARE;
+}
+
 /** One token said over and over is the recogniser stuttering, not a person. */
 export function isGarbled(words: readonly FluxWord[]): boolean {
   const heard = words.map((w) => normalise(w.word)).filter(Boolean);

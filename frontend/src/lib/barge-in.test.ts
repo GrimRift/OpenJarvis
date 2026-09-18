@@ -7,6 +7,7 @@ import {
   isEchoOf,
   isEchoTurn,
   isGarbled,
+  isLoopedBack,
   isStopCommand,
   judge,
   shouldInterrupt,
@@ -251,5 +252,37 @@ describe('Sage hearing its own numbers back (18 September trace)', () => {
     expect(echoTokens('sixteen')).toEqual(['16']);
     expect(echoTokens('twenty')).toEqual(['20']);
     expect(echoTokens('twelve')).toEqual(['12']);
+  });
+});
+
+describe('Sage answering its own voice (the 18 September loop)', () => {
+  // One question produced four replies: each echo of Sage's answer was sent
+  // back as the next question.
+  const REPLY_1 =
+    'Assimilation means integrating new information into the current ' +
+    'conversation or, when appropriate, durable memory. Social connection is ' +
+    'not human emotion or consciousness. I model conversational signals.';
+  const REPLY_2 =
+    'Conflict teaches a system to distinguish between different opinions and ' +
+    'genuine hostility, boundaries and rejection, correction and personal attack.';
+
+  const words = (text: string) =>
+    text.split(/\s+/).map((word) => ({ word, confidence: 1 })) as any;
+
+  it('recognises the echoes that became questions', () => {
+    expect(isLoopedBack(words('including assimilation itself Social Connect'), REPLY_1)).toBe(true);
+    expect(isLoopedBack(words('conflict that would be important'), REPLY_2)).toBe(true);
+  });
+
+  it('still lets a real follow-up through', () => {
+    // The user picking up Sage's topic in their own words is not an echo.
+    expect(isLoopedBack(words('can you give me an example'), REPLY_1)).toBe(false);
+    expect(isLoopedBack(words('no I meant the other thing'), REPLY_2)).toBe(false);
+    // Nor is a short interjection, however much it overlaps.
+    expect(isLoopedBack(words('conflict'), REPLY_2)).toBe(false);
+  });
+
+  it('never fires without something to compare against', () => {
+    expect(isLoopedBack(words('anything at all'), '')).toBe(false);
   });
 });

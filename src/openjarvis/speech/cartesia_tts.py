@@ -212,10 +212,16 @@ class CartesiaTTSContext:
         """
         return self._flushes
 
+    #: Whether this turn was handed an already-open socket. Read by the
+    #: route's timing log: "slow to start" is answered by which of the two
+    #: happened, not by guessing.
+    used_warm: bool = False
+
     async def __aenter__(self) -> "CartesiaTTSContext":
         # A socket warmed during this conversation, if one is waiting: it is
         # the handshake that made the voice late, not the audio.
         warm = _take_warm()
+        self.used_warm = warm is not None
         self._socket = warm or await _connect(self._api_key)
         if warm is not None:
             # Warmth carries through the conversation: this turn used the

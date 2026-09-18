@@ -10,6 +10,7 @@ import {
 } from '../../lib/image-attach';
 import { apiFetch } from '../../lib/api';
 import { streamChat, streamResearch } from '../../lib/sse';
+import type { FluxWord } from '../../lib/barge-in';
 import {
   diagramMode,
   isCloseDiagramCommand,
@@ -45,6 +46,7 @@ import {
   describeVerdict,
   INTERRUPTED_MARK,
   isEchoTurn,
+  isLoopedBack,
   isStopCommand,
   judge,
 } from '../../lib/barge-in';
@@ -226,6 +228,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // that this turn cut the reply, which is what separates the user's
   // end-of-turn from an echo's.
   const bargeListeningRef = useRef(false);
+  const lastBargeWordsRef = useRef<FluxWord[]>([]);
   /** The Flux turn that was only "close the diagram", so it never becomes a
    * message and never counts as an interruption. */
   const diagramCommandTurnRef = useRef<number | null>(null);
@@ -1603,6 +1606,27 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       bargeTriggeredRef.current = false;
 
       if (!spoken) {
+        // Deepgram ended the turn with nothing in it. The microphone closes
+        // here with no message and no error, which is exactly what "it just
+        // stopped" looks like from the outside -- so it says so now.
+        voiceTrace('turn.empty', { turn: turnIndex, wasBargeIn });
+        setFluxTurnActive(false);
+        return;
+      }
+      // Sage's own answer, heard back and about to be asked as a question.
+      // On 18 September this ran away: one question produced four replies,
+      // each one an answer to the garbled tail of the last. Only turns that
+      // arrived over Sage's own voice are judged this way -- a turn the user
+      // opened is never discarded.
+      if (wasBargeIn && isLoopedBack(lastBargeWordsRef.current, spokenTextRef.current)) {
+        voiceTrace('barge.loopGuard', {
+          heard: spoken.slice(0, 60),
+          spokenChars: spokenTextRef.current.length,
+        });
+        useAppStore.getState().addLogEntry({
+          timestamp: Date.now(), level: 'info', category: 'voice',
+          message: `Ignored Sage's own voice heard back: "${spoken.slice(0, 60)}"`,
+        });
         setFluxTurnActive(false);
         return;
       }
@@ -1781,6 +1805,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       ) {
         return;
       }
+      // Kept for the loop guard at end of turn: these are the words that
+      // cut the reply, judged then against what Sage was saying.
+      lastBargeWordsRef.current = words;
       const verdict = judge(words, spokenTextRef.current, settings.bargeInMode);
       bargeVerdictRef.current = verdict;
       if (verdict.decision !== 'cut') return;
