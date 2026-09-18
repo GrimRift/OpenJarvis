@@ -284,6 +284,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   const diagramsEnabled = useAppStore((s) => s.settings.diagramsEnabled);
   const micBoost = useAppStore((s) => s.settings.micBoost);
+  const noiseSuppression = useAppStore((s) => s.settings.noiseSuppression);
   const diagramsAutomatic = useAppStore((s) => s.settings.diagramsAutomatic);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const wakeWordFastFollow = useAppStore((s) => s.settings.wakeWordFastFollow);
@@ -1699,6 +1700,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const flux = useFluxSpeech({
     enabled: fluxActive,
     eager: fluxEagerEnabled,
+    suppressNoise: noiseSuppression !== 'off',
     model: selectedModel,
     onEndOfTurn: handleFluxEndOfTurn,
     onSessionReady: () => {
@@ -2204,6 +2206,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           : 'Ignored a wake-word-like sound: no words in it',
       }),
     wakeWordVerify,
+    noiseSuppression === 'all',
   );
   takeRecentAudioRef.current = takeRecentAudio;
   ambientRmsRef.current = ambientRms;

@@ -99,6 +99,15 @@ export function useWakeWord(
   onRejected?: (heard: string) => void,
   /** Whether a transcript confirms a firing: 'local' | 'off'. */
   verify: string = 'local',
+  /**
+   * Let the browser strip steady background noise before the detector.
+   *
+   * OFF by default and for good reason: with suppression and AGC on, the
+   * classifier's scores for ambient noise, keyboard clicks and real speech
+   * all converged into the same 0.4-0.6 band -- it could no longer tell
+   * them apart. Worth trying only where the room itself is the problem.
+   */
+  suppressNoise: boolean = false,
 ) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +142,8 @@ export function useWakeWord(
   const recentFramesRef = useRef<Int16Array[]>([]);
   /** Gentle adaptive gain for what the detector hears. */
   const wakeGainRef = useRef(1);
+  const suppressNoiseRef = useRef(suppressNoise);
+  suppressNoiseRef.current = suppressNoise;
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The server answers every submitted 80 ms frame. If those replies stop,
@@ -316,7 +327,7 @@ export function useWakeWord(
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: false,
+          noiseSuppression: suppressNoiseRef.current,
           autoGainControl: false,
           channelCount: 1,
         },
@@ -441,7 +452,7 @@ export function useWakeWord(
     // The verifier choice is part of the socket URL, so a change rebuilds
     // the listener the same way enabling does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, verify]);
+  }, [enabled, verify, suppressNoise]);
 
   useEffect(() => {
     if (!enabled) return;

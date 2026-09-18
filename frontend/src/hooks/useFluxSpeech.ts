@@ -70,6 +70,8 @@ export interface UseFluxSpeechOptions {
   enabled: boolean;
   /** Ultra mode — ask the server for speculative EagerEndOfTurn events. */
   eager: boolean;
+  /** Let the browser strip steady background noise. Default true. */
+  suppressNoise?: boolean;
   /**
    * A new Deepgram session is connected. Turn indices restart at 0, so any
    * per-turn bookkeeping the caller keeps must restart too.
@@ -258,7 +260,7 @@ function downsample(input: Float32Array, fromRate: number): Int16Array {
  * Sage is speaking.
  */
 export function useFluxSpeech(options: UseFluxSpeechOptions) {
-  const { enabled, eager, model } = options;
+  const { enabled, eager, model, suppressNoise } = options;
   // Read at connect time, never a dependency of the connect effect. Making it
   // one tore the socket down whenever the selected model changed -- and
   // `setCloudModelAvailable` changes it on load. A reconnect mid-turn means
@@ -445,12 +447,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         audio: {
           channelCount: 1,
           echoCancellation: true,
-          // On for this stream only. The laptop's fan sits beside its
-          // built-in microphone and holds a steady 433 RMS, which no amount
-          // of gain can separate from speech -- gain lifts both. The wake
-          // word keeps raw audio: its threshold was tuned on unsuppressed
-          // frames, and a detector is cheaper to re-tune than to re-train.
-          noiseSuppression: true,
+          // The laptop's fan sits beside its built-in microphone and holds
+          // a steady 433 RMS, which no amount of gain can separate from
+          // speech -- gain lifts both. Off only if the user asks for raw
+          // audio (Settings -> Microphone).
+          noiseSuppression: optsRef.current.suppressNoise !== false,
           autoGainControl: false,
         },
       });
@@ -687,7 +688,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // connect/teardown are stable; re-running on `eager` is intended, since
     // the flag is part of the socket URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, eager]);
+  }, [enabled, eager, suppressNoise]);
 
   return {
     status,

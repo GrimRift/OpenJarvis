@@ -262,6 +262,9 @@ interface Settings {
    * For a laptop mic across the room when the automatic ceiling is not
    * enough on its own. */
   micBoost: number;
+  /** Where the browser strips steady background noise:
+   * 'conversation' (default), 'all' (also the wake word) or 'off'. */
+  noiseSuppression: 'conversation' | 'all' | 'off';
   diagramsEnabled: boolean;
   /** Sage decides when a diagram helps. Off means it draws one only when
    * asked ("show me how", "illustrate that"). */
@@ -317,6 +320,7 @@ function loadSettings(): Settings {
     wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,
     wakeWordFastFollow: true,
     micBoost: 1,
+    noiseSuppression: 'conversation',
     diagramsEnabled: true,
     diagramsAutomatic: true,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,

@@ -666,3 +666,24 @@ describe('a diagram shows itself only when Sage is about to speak it', () => {
     expect(offenders, 'opened a diagram without checking it will be spoken').toEqual([]);
   });
 });
+
+describe('the microphone streams honour the noise setting', () => {
+  /**
+   * Suppression is fixed when getUserMedia opens the stream, so a setting
+   * that does not appear in the reconnect dependencies would silently do
+   * nothing until the next restart -- which reads as "the toggle is broken".
+   */
+  it('each stream reopens when the setting changes', () => {
+    const flux = readFileSync(join(SRC, 'hooks', 'useFluxSpeech.ts'), 'utf8');
+    expect(flux).toMatch(/\}, \[enabled, eager, suppressNoise\]\)/);
+    const wake = readFileSync(join(SRC, 'hooks', 'useWakeWord.ts'), 'utf8');
+    expect(wake).toMatch(/\}, \[enabled, verify, suppressNoise\]\)/);
+  });
+
+  it('the wake word defaults to raw audio', () => {
+    // Its classifier was trained on unprocessed audio: with suppression on,
+    // noise, keyboard clicks and speech all scored 0.4-0.6 in testing.
+    const wake = readFileSync(join(SRC, 'hooks', 'useWakeWord.ts'), 'utf8');
+    expect(wake).toMatch(/suppressNoise: boolean = false/);
+  });
+});

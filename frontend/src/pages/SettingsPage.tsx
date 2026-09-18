@@ -977,6 +977,34 @@ export function SettingsPage() {
           {/* Speech */}
           <Section title="Microphone">
             <SettingRow
+              label="Remove background noise"
+              description={
+                settings.noiseSuppression === 'all'
+                  ? 'Everything, including the wake word. Try this when the room itself is the problem — a laptop fan beside the mic. Be aware the wake word may fire less reliably: its detector was trained on raw audio, and with suppression on, noise, keyboard clicks and speech scored alike in testing.'
+                  : settings.noiseSuppression === 'off'
+                    ? 'Off — Sage hears the room exactly as the microphone does.'
+                    : 'Steady noise like a fan is stripped from what you say to Sage. The wake word still hears raw audio, which is what its detector was tuned on.'
+              }
+            >
+              <select
+                aria-label="Remove background noise"
+                value={settings.noiseSuppression}
+                onChange={(event) => {
+                  updateSettings({
+                    noiseSuppression: event.target
+                      .value as typeof settings.noiseSuppression,
+                  });
+                  showSaved();
+                }}
+                className="px-2 py-1 rounded-lg text-sm"
+                style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+              >
+                <option value="conversation">What I say to Sage</option>
+                <option value="all">Everything, wake word too</option>
+                <option value="off">Off</option>
+              </select>
+            </SettingRow>
+            <SettingRow
               label="Extra boost"
               description={
                 settings.micBoost > 1
