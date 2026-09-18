@@ -105,7 +105,11 @@ interface NodeProps {
 export function DiagramBox({ node, index, active, accent, width = 300 }: NodeProps) {
   const mark = markColour(node.mark);
   const iconColour = active ? '#06232b' : (mark ?? '#a1a1aa');
-  const tileBg = active ? accent : mark ? tint(mark, 0.14) : 'rgba(255,255,255,0.06)';
+  const tileBg = active ? accent : mark ? tint(mark, 0.14) : 'rgba(255,255,255,0.08)';
+  // A dark fill of its own rather than a white film over the blurred page:
+  // at 3.5% white the text sat on whatever happened to be behind it and was
+  // hard to read. Still see-through, so the box has not become a card.
+  const panel = 'rgba(9, 9, 11, 0.62)';
 
   return (
     <div
@@ -114,7 +118,11 @@ export function DiagramBox({ node, index, active, accent, width = 300 }: NodePro
         boxSizing: 'border-box',
         padding: '15px 16px',
         borderRadius: 15,
-        background: active ? tint(accent, 0.12) : 'rgba(255,255,255,0.035)',
+        // The accent wash sits ON the dark panel, so an active box reads as
+        // lit rather than as a hole in the page.
+        background: active
+          ? `linear-gradient(${tint(accent, 0.2)}, ${tint(accent, 0.2)}), ${panel}`
+          : panel,
         border: `1px solid ${active ? accent : 'rgba(255,255,255,0.10)'}`,
         boxShadow: active ? `0 12px 38px ${tint(accent, 0.22)}` : 'none',
         display: 'flex',
@@ -148,6 +156,18 @@ export function DiagramBox({ node, index, active, accent, width = 300 }: NodePro
         </div>
         {node.note ? (
           <div style={{ fontSize: 12.5, lineHeight: 1.45, color: active ? '#d4d4d8' : '#a1a1aa' }}>{node.note}</div>
+        ) : null}
+        {node.fact ? (
+          <div
+            style={{
+              fontSize: 11.5,
+              fontWeight: 600,
+              letterSpacing: '0.01em',
+              color: mark ?? (active ? accent : '#8b8b93'),
+            }}
+          >
+            {node.fact}
+          </div>
         ) : null}
       </div>
     </div>

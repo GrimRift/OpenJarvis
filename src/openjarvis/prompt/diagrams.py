@@ -12,7 +12,10 @@ Three shapes, because the questions are not all the same shape:
 * ``parts`` -- a thing and what it is made of: the materials in concrete.
   A list of ingredients is not a chain of steps, and drawing it as one reads
   as nonsense.
-* ``comparison`` -- two options side by side: a refractor against a reflector.
+* ``comparison`` -- a grid: up to four things weighed across the dimensions
+  that decide between them. Two columns was not enough -- asked to compare
+  three cars it crushed two into one heading, and the result read thinner
+  than the table the same answer already had in the chat.
 
 Colour carries meaning here, so the model may mark at most two nodes. The
 user's rule, in their words: not everything needs a colour.
@@ -71,15 +74,44 @@ The object:
 * `nodes` -- 3 to 8 of them. `label` is two or three words. `note` is one
   short sentence, under about nine words; leave it out if it would only
   repeat the label.
+* `fact` -- a few words of hard detail: a quantity, a size, a duration, a
+  spec. "2.0L gasoline", "about 40% by volume", "300 mm wafer", "5 seconds".
+  Include one on every box you actually know a figure for -- it is what
+  makes the diagram worth more than the labels alone. Omit it rather than
+  invent a number you are unsure of.
 * `subject` -- REQUIRED for `parts` only: the thing being made ("Concrete").
-* `sides` -- REQUIRED for `comparison` only: two short headings
-  (`["Refractor", "Reflector"]`), and every node carries `"side": 0` or
-  `"side": 1`.
+
 * `mark` -- OPTIONAL, and at most two nodes in the whole diagram may carry
   one. `"trigger"` is what sets the process off or where the user decides;
   `"result"` is where the new thing comes into being. Marking everything
   makes the marks meaningless, so mark nothing unless it earns it.
 * `icon` -- OPTIONAL, one of: {icons}.
+
+A `comparison` is a GRID, not boxes, and carries `columns` and `rows`
+instead of `nodes`:
+
+```{language}
+{{
+  "shape": "comparison",
+  "title": "Mazda3 versus Vios and Civic",
+  "columns": ["Mazda3", "Toyota Vios", "Honda Civic"],
+  "rows": [
+    {{"label": "Driving feel",
+     "cells": ["Most refined", "Comfortable, not sporty", "Sporty, stable"]}},
+    {{"label": "Running cost",
+     "cells": ["Moderate", "Cheapest to keep", "Turbo adds cost"],
+     "mark": "trigger"}}
+  ]
+}}
+```
+
+* `columns` -- 2 to 4 things being weighed up. THREE things get three
+  columns; never crush two of them into one heading.
+* `rows` -- 4 to 6 dimensions that actually decide the question, each with
+  one cell per column, 3 to 6 words each. Pick the rows that separate the
+  options; a row where every cell says the same thing is wasted.
+* `mark` on a row highlights the dimension that decides it, same two-mark
+  budget.
 
 Keep it to what the diagram can carry: a diagram with eleven boxes is a list,
 so pick the steps that matter and say the rest in prose.

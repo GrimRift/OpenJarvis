@@ -8,10 +8,10 @@
  * user (their choice, so a typed answer is never snatched away mid-read).
  */
 
-import { useEffect, useMemo } from 'react';
-import type { Diagram } from '../../lib/diagram';
+import { Fragment, useEffect, useMemo } from 'react';
+import type { Diagram, DiagramRow } from '../../lib/diagram';
 import { activeNodeIndex, rowEndsOn } from '../../lib/diagram';
-import { Arrow, DiagramBox, Legend, RESULT, tint } from './DiagramParts';
+import { Arrow, DiagramBox, Legend, RESULT, markColour, tint } from './DiagramParts';
 
 const ACCENT = '#22d3ee';
 /** Wide enough for three boxes and their arrows before wrapping. */
@@ -186,27 +186,8 @@ export function DiagramOverlay({ diagram, spoken, speaking, wasSpoken, onClose }
           </div>
         ) : null}
 
-        {diagram.shape === 'comparison' && diagram.sides ? (
-          <div style={{ display: 'flex', gap: 34, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'center' }}>
-            {[0, 1].map((side) => (
-              <div key={side} style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#e4e4e7', paddingBottom: 2 }}>
-                  {diagram.sides?.[side]}
-                </div>
-                {placed
-                  .filter(({ node }) => (node.side ?? 0) === side)
-                  .map(({ node, index }) => (
-                    <DiagramBox
-                      key={index}
-                      node={node}
-                      active={index === active}
-                      accent={ACCENT}
-                      width={286}
-                    />
-                  ))}
-              </div>
-            ))}
-          </div>
+        {diagram.shape === 'comparison' && diagram.columns && diagram.rows ? (
+          <ComparisonGrid columns={diagram.columns} rows={diagram.rows} />
         ) : null}
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 11, marginTop: 2 }}>
@@ -265,6 +246,93 @@ export function DiagramOverlay({ diagram, spoken, speaking, wasSpoken, onClose }
           <path d="M18 6 6 18" /><path d="m6 6 12 12" />
         </svg>
       </button>
+    </div>
+  );
+}
+
+/**
+ * A comparison as the grid it actually is.
+ *
+ * The first version gave each point its own card in one of two columns, and
+ * three cars had to share a heading ("Vios / Civic") -- which is what made it
+ * read as thinner than the table in the chat. Rows are the dimensions that
+ * matter, columns the things being weighed; a cell is a few words, so the
+ * whole thing is still a glance rather than a document.
+ */
+function ComparisonGrid({ columns, rows }: { columns: string[]; rows: DiagramRow[] }) {
+  const template = `minmax(120px, 0.8fr) repeat(${columns.length}, minmax(140px, 1fr))`;
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: template,
+        maxWidth: Math.min(1180, 260 + columns.length * 260),
+        width: '100%',
+        borderRadius: 16,
+        overflow: 'hidden',
+        border: '1px solid rgba(255,255,255,0.12)',
+        background: 'rgba(9, 9, 11, 0.62)',
+      }}
+    >
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.12)' }} />
+      {columns.map((column) => (
+        <div
+          key={column}
+          style={{
+            padding: '12px 16px',
+            borderBottom: '1px solid rgba(255,255,255,0.12)',
+            borderLeft: '1px solid rgba(255,255,255,0.08)',
+            fontSize: 14.5,
+            fontWeight: 600,
+            letterSpacing: '-0.01em',
+          }}
+        >
+          {column}
+        </div>
+      ))}
+
+      {rows.map((row, r) => {
+        const mark = markColour(row.mark);
+        const last = r === rows.length - 1;
+        const edge = last ? 'none' : '1px solid rgba(255,255,255,0.07)';
+        return (
+          <Fragment key={row.label}>
+            <div
+              style={{
+                padding: '11px 16px',
+                borderBottom: edge,
+                fontSize: 13,
+                fontWeight: 600,
+                color: mark ?? '#e4e4e7',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+              }}
+            >
+              {mark ? (
+                <span style={{ width: 6, height: 6, borderRadius: 999, background: mark, flexShrink: 0 }} />
+              ) : null}
+              {row.label}
+            </div>
+            {row.cells.map((cell, c) => (
+              <div
+                key={c}
+                style={{
+                  padding: '11px 16px',
+                  borderBottom: edge,
+                  borderLeft: '1px solid rgba(255,255,255,0.08)',
+                  fontSize: 12.5,
+                  lineHeight: 1.45,
+                  color: '#c4c4c8',
+                  background: mark ? tint(mark, 0.06) : 'transparent',
+                }}
+              >
+                {cell || '—'}
+              </div>
+            ))}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }

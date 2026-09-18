@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_MARKS, MAX_NODES, activeNodeIndex, parseDiagram } from './diagram';
+import {
+  MAX_COLUMNS,
+  MAX_MARKS,
+  MAX_NODES,
+  MAX_ROWS,
+  activeNodeIndex,
+  parseDiagram,
+} from './diagram';
 
 const flow = JSON.stringify({
   shape: 'flow',
@@ -56,19 +63,18 @@ describe('parseDiagram', () => {
   });
 
   it('falls back to a flow when parts or comparison are incomplete', () => {
-    // "Parts of nothing" and a one-sided comparison are flows that
+    // "Parts of nothing" and a comparison with no grid are flows that
     // mislabelled themselves; the content is still worth drawing.
     const parts = parseDiagram('{"shape":"parts","title":"T","nodes":[{"label":"Cement"},{"label":"Sand"}]}');
     expect(parts?.shape).toBe('flow');
-    const lopsided = parseDiagram(
+    const noGrid = parseDiagram(
       JSON.stringify({
         shape: 'comparison',
         title: 'T',
-        sides: ['Refractor', 'Reflector'],
-        nodes: [{ label: 'Lens', side: 0 }, { label: 'Glass', side: 0 }],
+        nodes: [{ label: 'Lens' }, { label: 'Mirror' }],
       }),
     );
-    expect(lopsided?.shape).toBe('flow');
+    expect(noGrid?.shape).toBe('flow');
   });
 
   it('keeps a whole parts and comparison diagram', () => {
@@ -81,16 +87,6 @@ describe('parseDiagram', () => {
       }),
     );
     expect([parts?.shape, parts?.subject]).toEqual(['parts', 'Concrete']);
-    const vs = parseDiagram(
-      JSON.stringify({
-        shape: 'comparison',
-        title: 'Two telescopes',
-        sides: ['Refractor', 'Reflector'],
-        nodes: [{ label: 'Uses a lens', side: 0 }, { label: 'Uses a mirror', side: 1 }],
-      }),
-    );
-    expect(vs?.sides).toEqual(['Refractor', 'Reflector']);
-    expect(vs?.nodes[1].side).toBe(1);
   });
 });
 
@@ -123,31 +119,101 @@ describe('what the model really sent', () => {
   // Captured live on 18 September. A comparison names the same row on both
   // sides, which is why nothing downstream may identify a node by its label.
   const real = JSON.stringify({
-    shape: 'comparison',
-    title: 'Refractor versus reflector telescopes',
-    sides: ['Refractor', 'Reflector'],
+    shape: 'flow',
+    title: 'How Sage handles a request',
     nodes: [
-      { label: 'Light gathering', note: 'Uses a front lens.', icon: 'eye', side: 0 },
-      { label: 'Light gathering', note: 'Uses a curved mirror.', icon: 'eye', side: 1 },
-      { label: 'Image quality', note: 'Sharp, high-contrast views.', icon: 'crystal', side: 0 },
-      { label: 'Image quality', note: 'Excellent light gathering.', icon: 'spark', side: 1 },
+      { label: 'Understand request', note: 'I identify your goal.', icon: 'eye' },
+      { label: 'Choose capability', note: 'I select the tool needed.', icon: 'gear' },
+      { label: 'Verify result', note: 'I check whether it worked.', icon: 'check' },
     ],
   });
 
-  it('survives duplicated labels across the two sides', () => {
+  it('keeps every node and its note', () => {
     const d = parseDiagram(real);
-    expect(d?.shape).toBe('comparison');
-    expect(d?.nodes).toHaveLength(4);
-    expect(d?.nodes.filter((n) => n.side === 1)).toHaveLength(2);
-    // Same label, different notes: the pair must both survive.
+    expect(d?.shape).toBe('flow');
+    expect(d?.nodes).toHaveLength(3);
     expect(d?.nodes[0].note).not.toBe(d?.nodes[1].note);
   });
 
-  it('cannot be identified by label, so the highlight declines', () => {
+  it('declines to light a step when nothing identifies one', () => {
     const d = parseDiagram(real)!;
-    // Every distinguishing word is shared between the two sides, so there is
-    // no confident answer and nothing should light up.
-    expect(activeNodeIndex('light gathering matters most', d.nodes)).toBe(-1);
+    expect(activeNodeIndex('let me walk you through it', d.nodes)).toBe(-1);
+  });
+});
+
+describe('a comparison is a grid', () => {
+  const cars = JSON.stringify({
+    shape: 'comparison',
+    title: 'Mazda3 versus Vios and Civic',
+    columns: ['Mazda3', 'Toyota Vios', 'Honda Civic'],
+    rows: [
+      { label: 'Driving feel', cells: ['Most refined', 'Comfortable', 'Sporty'] },
+      { label: 'Running cost', cells: ['Moderate', 'Cheapest', 'Moderate'], mark: 'trigger' },
+      { label: 'Space', cells: ['Rear seat tight', 'Smaller cabin', 'Most spacious'] },
+    ],
+  });
+
+  it('holds three things compared, not two', () => {
+    // Three cars in two columns is what made the first version read thin:
+    // "Vios / Civic" had to share a heading.
+    const d = parseDiagram(cars);
+    expect(d?.shape).toBe('comparison');
+    expect(d?.columns).toEqual(['Mazda3', 'Toyota Vios', 'Honda Civic']);
+    expect(d?.rows).toHaveLength(3);
+    expect(d?.rows?.[1].mark).toBe('trigger');
+  });
+
+  it('pads and trims every row to the column count', () => {
+    const ragged = parseDiagram(
+      JSON.stringify({
+        shape: 'comparison',
+        title: 'T',
+        columns: ['A', 'B'],
+        rows: [
+          { label: 'Short', cells: ['only one'] },
+          { label: 'Long', cells: ['a', 'b', 'c', 'd'] },
+        ],
+      }),
+    );
+    // A ragged row would shift the whole grid sideways.
+    expect(ragged?.rows?.map((r) => r.cells.length)).toEqual([2, 2]);
+    expect(ragged?.rows?.[0].cells[1]).toBe('');
+  });
+
+  it('caps the columns and the rows', () => {
+    const huge = parseDiagram(
+      JSON.stringify({
+        shape: 'comparison',
+        title: 'T',
+        columns: ['a', 'b', 'c', 'd', 'e', 'f'],
+        rows: Array.from({ length: 12 }, (_, i) => ({
+          label: `Row ${i}`,
+          cells: ['x', 'y', 'z', 'w', 'v', 'u'],
+        })),
+      }),
+    );
+    expect(huge?.columns).toHaveLength(MAX_COLUMNS);
+    expect(huge?.rows).toHaveLength(MAX_ROWS);
+  });
+
+  it('needs two columns and two rows to be a grid at all', () => {
+    const thin = parseDiagram(
+      JSON.stringify({
+        shape: 'comparison',
+        title: 'T',
+        columns: ['Only one'],
+        rows: [{ label: 'A', cells: ['x'] }],
+        nodes: [{ label: 'One' }, { label: 'Two' }],
+      }),
+    );
+    expect(thin?.shape).toBe('flow');
+  });
+
+  it('carries a short fact on a box', () => {
+    const d = parseDiagram(
+      '{"title":"T","nodes":[{"label":"Engine","fact":"2.0L gasoline"},{"label":"Body"}]}',
+    );
+    expect(d?.nodes[0].fact).toBe('2.0L gasoline');
   });
 });
 

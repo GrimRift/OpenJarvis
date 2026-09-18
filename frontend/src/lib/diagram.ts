@@ -14,21 +14,37 @@ export type DiagramMark = 'trigger' | 'result';
 export interface DiagramNode {
   label: string;
   note?: string;
+  /** A few words of hard detail: "2.0L gasoline", "about 5 years". */
+  fact?: string;
   mark?: DiagramMark;
   icon?: string;
-  side?: 0 | 1;
+}
+
+/** One line of a comparison: what is being compared, then one cell each. */
+export interface DiagramRow {
+  label: string;
+  cells: string[];
+  mark?: DiagramMark;
 }
 
 export interface Diagram {
   shape: DiagramShape;
   title: string;
   subject?: string;
-  sides?: [string, string];
+  /** comparison: the things being weighed against each other. */
+  columns?: string[];
+  /** comparison: one row per dimension that matters. */
+  rows?: DiagramRow[];
   nodes: DiagramNode[];
 }
 
 /** Beyond this a diagram is a list wearing boxes; the prose says the rest. */
 export const MAX_NODES = 8;
+/** Three cars did not fit in two columns, which is what made a comparison
+ * read as thin: "Vios / Civic" was crushed into one side. */
+export const MAX_COLUMNS = 4;
+/** Enough dimensions to be worth reading, few enough to stay a glance. */
+export const MAX_ROWS = 6;
 /** Colour only means something while it is rare (the user's rule). */
 export const MAX_MARKS = 2;
 
@@ -57,6 +73,12 @@ export function parseDiagram(source: string): Diagram | null {
     ? (data.shape as DiagramShape)
     : 'flow';
   const title = text(data.title, 90);
+  // A comparison carries a grid instead of boxes, so it is read first and
+  // does not need `nodes` at all.
+  if (shape === 'comparison') {
+    const grid = readGrid(data, title);
+    if (grid) return grid;
+  }
   if (!Array.isArray(data.nodes)) return null;
 
   let marks = 0;
@@ -72,13 +94,14 @@ export function parseDiagram(source: string): Diagram | null {
     if (note && note.toLowerCase() !== label.toLowerCase()) node.note = note;
     const icon = text(item.icon, 20).toLowerCase();
     if (icon) node.icon = icon;
+    const fact = text(item.fact, 40);
+    if (fact) node.fact = fact;
     // Marks past the cap are dropped rather than the diagram rejected: the
     // shape is still right, it was only over-coloured.
     if (MARKS.includes(item.mark as DiagramMark) && marks < MAX_MARKS) {
       node.mark = item.mark as DiagramMark;
       marks += 1;
     }
-    node.side = item.side === 1 ? 1 : 0;
     nodes.push(node);
     if (nodes.length >= MAX_NODES) break;
   }
@@ -93,19 +116,52 @@ export function parseDiagram(source: string): Diagram | null {
     diagram.subject = subject;
   }
 
-  if (shape === 'comparison') {
-    const sides = Array.isArray(data.sides) ? data.sides : [];
-    const left = text(sides[0], 28);
-    const right = text(sides[1], 28);
-    if (!left || !right) return { ...diagram, shape: 'flow' };
-    diagram.sides = [left, right];
-    // Both columns must actually have something in them.
-    if (!nodes.some((n) => n.side === 0) || !nodes.some((n) => n.side === 1)) {
-      return { shape: 'flow', title, nodes };
-    }
-  }
+  // A comparison whose grid could not be read is still worth drawing as the
+  // points it made, so it falls back rather than vanishing.
+  if (shape === 'comparison') return { ...diagram, shape: 'flow' };
 
   return diagram;
+}
+
+/**
+ * The grid of a comparison: columns are the things weighed up, rows the
+ * dimensions that matter.
+ *
+ * Three cars into two columns is what made the first version read as thin --
+ * "Vios / Civic" ended up sharing a heading. Up to four columns now, and a
+ * row is padded or trimmed to match them so a short row cannot shift the
+ * grid sideways.
+ */
+function readGrid(data: Record<string, unknown>, title: string): Diagram | null {
+  if (!title) return null;
+  const rawColumns = Array.isArray(data.columns) ? data.columns : [];
+  const columns = rawColumns
+    .map((column) => text(column, 28))
+    .filter(Boolean)
+    .slice(0, MAX_COLUMNS);
+  if (columns.length < 2) return null;
+
+  const rawRows = Array.isArray(data.rows) ? data.rows : [];
+  let marks = 0;
+  const rows: DiagramRow[] = [];
+  for (const entry of rawRows) {
+    if (!entry || typeof entry !== 'object') continue;
+    const item = entry as Record<string, unknown>;
+    const label = text(item.label, 28);
+    const rawCells = Array.isArray(item.cells) ? item.cells : [];
+    if (!label || rawCells.length === 0) continue;
+    const cells = columns.map((_, i) => text(rawCells[i], 48));
+    const row: DiagramRow = { label, cells };
+    if (MARKS.includes(item.mark as DiagramMark) && marks < MAX_MARKS) {
+      row.mark = item.mark as DiagramMark;
+      marks += 1;
+    }
+    rows.push(row);
+    if (rows.length >= MAX_ROWS) break;
+  }
+  if (rows.length < 2) return null;
+
+  return { shape: 'comparison', title, columns, rows, nodes: [] };
 }
 
 /** Words too common to identify anything. */
