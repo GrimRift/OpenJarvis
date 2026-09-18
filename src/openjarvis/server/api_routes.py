@@ -773,6 +773,11 @@ async def wake_word_stream(websocket: WebSocket):
                     ring.clear()
                     await asyncio.to_thread(detector.reset)
                     continue
+                # The conversation has started, so open the Cartesia socket
+                # now rather than when the reply is ready to speak: the
+                # handshake was most of the ~1 s of silence before Sage's
+                # voice began. Fire-and-forget -- warming never fails a turn.
+                _warm_speech_connection()
                 await websocket.send_json(
                     {
                         "type": "detected",
@@ -1776,3 +1781,23 @@ __all__ = [
     "feedback_router",
     "optimize_router",
 ]
+
+
+def _warm_speech_connection() -> None:
+    """Open a Cartesia socket ahead of the reply, if speech is configured.
+
+    Scoped to a voice conversation by where it is called from: a wake word
+    starts one, and ``tts_stream_routes`` drops it when the turn is done, so
+    nothing is held open while Sage is idle.
+    """
+    import os
+
+    key = os.environ.get("CARTESIA_API_KEY")
+    if not key:
+        return
+    try:
+        from openjarvis.speech.cartesia_tts import warm_connection
+
+        asyncio.get_running_loop().create_task(warm_connection(key))
+    except Exception:
+        logger.debug("Could not warm the speech connection", exc_info=True)

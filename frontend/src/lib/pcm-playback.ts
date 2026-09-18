@@ -15,11 +15,23 @@ export function decodePcmF32(buffer: ArrayBuffer): Float32Array {
 }
 
 /**
+ * How much audio to get ahead by before the first chunk plays.
+ *
+ * The 4.3x figure below no longer holds: measured 18 September, Cartesia
+ * delivers at 1.5-1.9x realtime, so the lead builds at only about half a
+ * second per second played. Starting the first chunk 20 ms out left no
+ * cushion at all, and any hesitation early in a reply became an audible
+ * gap. A third of a second of prebuffer costs that much once, at the start,
+ * and buys back roughly a second of tolerance by the middle of a sentence.
+ */
+export const FIRST_CHUNK_LEAD = 0.34;
+
+/**
  * When the next chunk should start.
  *
- * Generation runs ~4.3x faster than playback, so `scheduledUntil` is normally
- * ahead of the clock and chunks queue back to back. It falls behind only on
- * the first chunk or after a stall, and then playing immediately is right —
+ * Generation outruns playback, so `scheduledUntil` is normally ahead of the
+ * clock and chunks queue back to back. It falls behind only on the first
+ * chunk or after a stall, and then playing as soon as possible is right —
  * scheduling in the past makes Web Audio drop the buffer silently.
  */
 export function nextStartTime(

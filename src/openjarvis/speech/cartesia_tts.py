@@ -6,9 +6,13 @@ Requires CARTESIA_API_KEY environment variable or config.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import json
+import logging
 import os
+import time
 from types import TracebackType
 from typing import Any, AsyncIterator, List
 from uuid import uuid4
@@ -24,8 +28,92 @@ from openjarvis.speech.voice_profiles import (
     DEFAULT_VOICE,
 )
 
+logger = logging.getLogger(__name__)
+
 _CARTESIA_API_BASE = "https://api.cartesia.ai"
 _CARTESIA_WEBSOCKET_URL = "wss://api.cartesia.ai/tts/websocket"
+
+#: A spoken reply used to open a brand new websocket to Cartesia, and the
+#: TLS handshake alone measured 0.59 s of the ~1 s before any audio could
+#: start (18 September; Cartesia's edge is 9 ms away, so this is handshake
+#: cost, not distance). During a voice conversation one socket is opened
+#: ahead of time and handed to the next turn.
+#:
+#: Parked rather than pooled: a Cartesia socket carries one turn's context
+#: and is closed with it, so what is reused is the *connection*, once.
+_warm_socket: Any = None
+_warm_opened_at: float = 0.0
+
+#: Past this a parked socket is assumed stale and is replaced. Cartesia ends
+#: idle connections on its own schedule, and a socket that died quietly costs
+#: a failed turn, which is worse than the handshake it saved.
+WARM_TTL_SECONDS = 120.0
+
+
+def _warm_is_fresh() -> bool:
+    if _warm_socket is None:
+        return False
+    if time.monotonic() - _warm_opened_at > WARM_TTL_SECONDS:
+        return False
+    # `state` is OPEN(1) while usable; websockets sets it on close.
+    closed = getattr(_warm_socket, "close_code", None) is not None
+    return not closed
+
+
+async def warm_connection(api_key: str) -> bool:
+    """Open a socket now so the next spoken turn does not pay for one.
+
+    Safe to call repeatedly: a fresh parked socket is kept as it is. Returns
+    whether a usable socket is parked afterwards. Never raises -- warming is
+    an optimisation, and a failure here must not cost a reply.
+    """
+    global _warm_socket, _warm_opened_at
+    if _warm_is_fresh():
+        return True
+    await drop_warm_connection()
+    try:
+        _warm_socket = await _connect(api_key)
+        _warm_opened_at = time.monotonic()
+        return True
+    except Exception:
+        logger.debug("Cartesia warm-up failed; turns will connect on demand")
+        _warm_socket = None
+        return False
+
+
+async def drop_warm_connection() -> None:
+    """Close the parked socket, if any. Called when a conversation ends."""
+    global _warm_socket
+    socket, _warm_socket = _warm_socket, None
+    if socket is not None:
+        with contextlib.suppress(Exception):
+            await socket.close()
+
+
+def _take_warm() -> Any:
+    """Hand the parked socket to a turn, or None."""
+    global _warm_socket
+    if not _warm_is_fresh():
+        return None
+    socket, _warm_socket = _warm_socket, None
+    return socket
+
+
+async def _connect(api_key: str) -> Any:
+    return await websockets.connect(
+        _CARTESIA_WEBSOCKET_URL,
+        additional_headers={
+            "X-API-Key": api_key,
+            "Cartesia-Version": CARTESIA_API_VERSION,
+        },
+        open_timeout=10,
+        close_timeout=5,
+        ping_interval=20,
+        ping_timeout=20,
+        max_size=1_048_576,
+        max_queue=16,
+        write_limit=32_768,
+    )
 
 
 def _cartesia_synthesize(
@@ -125,20 +213,19 @@ class CartesiaTTSContext:
         return self._flushes
 
     async def __aenter__(self) -> "CartesiaTTSContext":
-        self._socket = await websockets.connect(
-            _CARTESIA_WEBSOCKET_URL,
-            additional_headers={
-                "X-API-Key": self._api_key,
-                "Cartesia-Version": CARTESIA_API_VERSION,
-            },
-            open_timeout=10,
-            close_timeout=5,
-            ping_interval=20,
-            ping_timeout=20,
-            max_size=1_048_576,
-            max_queue=16,
-            write_limit=32_768,
-        )
+        # A socket warmed during this conversation, if one is waiting: it is
+        # the handshake that made the voice late, not the audio.
+        warm = _take_warm()
+        self._socket = warm or await _connect(self._api_key)
+        if warm is not None:
+            # Warmth carries through the conversation: this turn used the
+            # parked socket, so open the next one now rather than making the
+            # user's follow-up pay the handshake again. A conversation that
+            # ends simply leaves one socket to expire on its TTL.
+            with contextlib.suppress(RuntimeError):
+                asyncio.get_running_loop().create_task(
+                    warm_connection(self._api_key)
+                )
         return self
 
     async def __aexit__(

@@ -6,6 +6,7 @@ import {
   chunkDuration,
   decodePcmF32,
   interpretTtsMessage,
+  FIRST_CHUNK_LEAD,
   nextStartTime,
   outputTailDelayMs,
   PlaybackGeneration,
@@ -46,6 +47,8 @@ export function useStreamingTts() {
   const resultRef = useRef<ActiveResult | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const scheduledUntilRef = useRef(0);
+  /** Whether this playback has scheduled its first chunk yet. */
+  const startedRef = useRef(false);
   const sampleRateRef = useRef(24000);
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const completionTimerRef = useRef<number | null>(null);
@@ -261,6 +264,7 @@ export function useStreamingTts() {
             }
             sampleRateRef.current = message.sampleRate;
             scheduledUntilRef.current = 0;
+      startedRef.current = false;
             started = true;
             if (shouldShowSpeakingState(message)) setPlaying(true);
             settleOutcome('spoken');
@@ -290,7 +294,14 @@ export function useStreamingTts() {
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(gainRef.current ?? ctx.destination);
-        const startAt = nextStartTime(ctx.currentTime, scheduledUntilRef.current);
+        // The first chunk of a reply starts a third of a second out, so the
+        // queue has something in hand before the speakers ask for it.
+        const startAt = nextStartTime(
+          ctx.currentTime,
+          scheduledUntilRef.current,
+          startedRef.current ? undefined : FIRST_CHUNK_LEAD,
+        );
+        startedRef.current = true;
         source.start(startAt);
         scheduledUntilRef.current = startAt + chunkDuration(samples.length, rate);
         sourcesRef.current.push(source);
