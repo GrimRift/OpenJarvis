@@ -165,3 +165,38 @@ class TestAwkwardPrivateValues:
     def test_a_long_plain_word_is_not_mistaken_for_an_identifier(self):
         text = "a" * 5001
         assert to_spoken_text(text) == text
+
+
+class TestDashesAreHeardAsPauses:
+    """A dash is punctuation to the eye and a hazard to the ear.
+
+    From a real reply on 18 September: "Project Management–Drafting" and
+    "relax—preferably". Read aloud, an en dash between words gives no gap at
+    all, so the two words run together as one.
+    """
+
+    def test_a_dash_between_words_becomes_a_pause(self):
+        assert to_spoken_text("Project Management–Drafting") == (
+            "Project Management, Drafting"
+        )
+        assert to_spoken_text("relax—preferably somewhere dry") == (
+            "relax, preferably somewhere dry"
+        )
+        assert to_spoken_text("wait — what?") == "wait, what?"
+
+    def test_a_range_of_numbers_is_left_alone(self):
+        # "2023, 2024" would be heard as two separate years.
+        assert to_spoken_text("the 2023-2024 term") == "the 2023-2024 term"
+        assert to_spoken_text("pages 10–12") == "pages 10–12"
+
+    def test_the_whole_reply_reads_cleanly(self):
+        spoken = to_spoken_text(
+            "What's up, Sir? You've got one urgent item: **Account Activation "
+            "for Construction Methods and Project Management–Drafting**, due "
+            "**today at 11:59 PM**."
+        )
+        assert "**" not in spoken
+        assert "–" not in spoken and "—" not in spoken
+        assert "Management, Drafting" in spoken
+        # And nothing was duplicated on the way through.
+        assert spoken.lower().count("sir") == 1

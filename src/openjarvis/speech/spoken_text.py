@@ -287,6 +287,12 @@ def _looks_like_file_path(value: str) -> bool:
     )
 
 
+#: A dash used as punctuation between words, spaced or not. A dash between
+#: digits is deliberately not matched: "2023-2024" is a range, and a comma
+#: there would be read as two separate years.
+_SPEECH_DASH = re.compile(r"(?<=[^\W\d_])\s*[–—]+\s*(?=[^\W\d_])")
+
+
 def to_spoken_text(markdown: str) -> str:
     """Create speech-only prose without changing the source chat reply."""
     if not markdown:
@@ -388,6 +394,13 @@ def to_spoken_text(markdown: str) -> str:
     # Applied after the line rules so a bullet's "*" is already gone and
     # cannot be mistaken for the opening of an emphasis span.
     text = _EMPHASIS.sub(r"\2", text)
+
+    # Dashes are punctuation to the eye and a hazard to the ear. An en dash
+    # wedged between words ("Management–Drafting") is read with no gap at
+    # all, so the two run together as one word; an em dash mid-sentence
+    # ("relax—preferably") gets no pause either. A comma is the pause a
+    # reader hears in both.
+    text = _SPEECH_DASH.sub(", ", text)
 
     text = _BLANK_RUN.sub("\n\n", text)
     text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
