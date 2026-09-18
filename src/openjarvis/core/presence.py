@@ -256,6 +256,38 @@ def foreground_title() -> Optional[str]:
 # -- Decision ----------------------------------------------------------------
 
 
+def seconds_since_sage(now: Optional[float] = None) -> Optional[float]:
+    """How long since the user last said something to Sage, or Sage replied.
+
+    Both halves count: listening to a long answer is being present just as
+    much as asking the question was.
+    """
+    try:
+        from openjarvis.core import activity
+
+        state = activity.snapshot()
+    except Exception:
+        return None
+    marks = [t for t in (state.last_user_turn_at, state.last_reply_end_at) if t]
+    if not marks:
+        return None
+    return max(0.0, (now if now is not None else time.time()) - max(marks))
+
+
+def combined_idle(
+    input_idle: Optional[float], sage_idle: Optional[float]
+) -> Optional[float]:
+    """The shorter of the two: whichever happened more recently is the truth.
+
+    Talking to Sage is input, even though Windows does not see it, so the
+    desk is only empty when BOTH have been quiet.
+    """
+    known = [v for v in (input_idle, sage_idle) if v is not None]
+    if not known:
+        return None
+    return min(known)
+
+
 def decide_state(idle: Optional[float], threshold_seconds: int) -> str:
     """Pure: idle time in, state out. Unknown idle time is not 'away'.
 
@@ -303,6 +335,12 @@ class PresenceMonitor:
 
     config_dir: Optional[Path] = None
     idle_sensor: Callable[[], Optional[float]] = idle_seconds
+    #: Seconds since the user last dealt with Sage, or None. Windows counts
+    #: only keyboard and mouse, so a spoken conversation reads as an empty
+    #: desk: twenty minutes of talking and the orb said AWAY.
+    interaction_sensor: Callable[[], Optional[float]] = staticmethod(
+        lambda: seconds_since_sage()
+    )
     foreground_sensor: Callable[[], Optional[str]] = foreground_title
     clock: Callable[[], float] = time.time
 
@@ -343,7 +381,7 @@ class PresenceMonitor:
                 self._checked_at = now
                 snapshot = self._snapshot(settings)
             else:
-                idle = self.idle_sensor()
+                idle = combined_idle(self.idle_sensor(), self.interaction_sensor())
                 state = decide_state(idle, settings.idle_threshold_seconds)
                 if state == STATE_UNKNOWN:
                     reason = "idle time could not be read"

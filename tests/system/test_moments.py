@@ -969,3 +969,28 @@ class TestPhase3:
             settings.initiative_mode == "off"
             and settings.initiative_idle_seconds == 240
         )
+
+
+class TestTalkingToSageIsBeingPresent:
+    """Twenty minutes of spoken conversation and the orb said AWAY: Windows
+    counts keyboard and mouse, and a voice conversation touches neither."""
+
+    def test_a_spoken_turn_keeps_the_desk_occupied(self, tmp_path) -> None:
+        from openjarvis.core.presence import combined_idle, decide_state
+
+        # Windows says nobody has touched anything for eight minutes.
+        assert decide_state(480, 300) == STATE_AWAY
+        # But Sage was spoken to twelve seconds ago.
+        assert decide_state(combined_idle(480, 12), 300) == STATE_PRESENT
+
+    def test_a_genuinely_empty_desk_is_still_away(self, tmp_path) -> None:
+        from openjarvis.core.presence import combined_idle, decide_state
+
+        # Both quiet: really gone.
+        assert decide_state(combined_idle(480, 900), 300) == STATE_AWAY
+
+    def test_an_unreadable_sensor_does_not_invent_presence(self) -> None:
+        from openjarvis.core.presence import combined_idle, decide_state
+
+        assert combined_idle(None, None) is None
+        assert decide_state(None, 300) == "unknown"
