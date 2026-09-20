@@ -144,7 +144,10 @@ class SystemPromptBuilder:
                     "call the tool for it. A similar request earlier in this "
                     "conversation does not count: repeat the tool call. Never "
                     "say an action is done unless you called its tool in this "
-                    "turn and it succeeded.)"
+                    "turn and it succeeded. Call the tool straight away, with "
+                    "no sentence before it: text written in the same turn as "
+                    "a tool call is thrown away, and aloud it is read over "
+                    "the real answer.)"
                 ),
                 source="tool_use_reminder",
                 cache_segment="dynamic_suffix",

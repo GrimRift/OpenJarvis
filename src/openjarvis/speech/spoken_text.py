@@ -200,6 +200,20 @@ def _safe_final_text(text: str) -> str:
     return text
 
 
+_SPEAKABLE = re.compile(r"[^\W_]", re.UNICODE)
+
+
+def _is_speakable(text: str) -> bool:
+    """Whether a segment carries speech rather than leftover punctuation.
+
+    A delta boundary can land so that a segment holds nothing but the
+    sentence-ending mark ("Closed, Sir. " then "."). Cartesia reads that lone
+    mark aloud -- the user heard "Sir dot" after a sentence that ended
+    cleanly in the transcript.
+    """
+    return bool(_SPEAKABLE.search(text))
+
+
 class SpokenTextStream:
     """Buffer raw model deltas and release only stable sanitized speech."""
 
@@ -225,7 +239,7 @@ class SpokenTextStream:
             raw = self._pending[consumed:boundary].strip()
             consumed = boundary
             spoken = to_spoken_text(raw)
-            if spoken:
+            if spoken and _is_speakable(spoken):
                 segments.append(spoken)
         if consumed:
             self._pending = self._pending[consumed:].lstrip()
@@ -240,7 +254,7 @@ class SpokenTextStream:
         raw = _safe_final_text(self._pending).strip()
         self._pending = ""
         spoken = to_spoken_text(raw)
-        return [spoken] if spoken else []
+        return [spoken] if spoken and _is_speakable(spoken) else []
 
 
 def _flatten_table_row(line: str) -> str:

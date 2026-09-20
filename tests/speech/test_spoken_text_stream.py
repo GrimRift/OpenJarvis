@@ -93,3 +93,23 @@ def test_pending_raw_text_is_bounded() -> None:
 
     with pytest.raises(SpokenTextOverflow):
         stream.push("x" * 33)
+
+
+def test_a_segment_of_only_punctuation_is_never_spoken() -> None:
+    # "All YouTube tabs are closed, Sir." arrived with its full stop in a
+    # delta of its own; the lone mark became its own segment and Cartesia
+    # read it aloud, so the user heard "Sir dot".
+    stream = SpokenTextStream()
+
+    assert stream.push("All YouTube tabs are closed, Sir. ") == [
+        "All YouTube tabs are closed, Sir."
+    ]
+    assert stream.push(".") == []
+    assert stream.finish() == []
+
+
+def test_a_reply_made_entirely_of_punctuation_says_nothing() -> None:
+    stream = SpokenTextStream()
+
+    assert stream.push(" ... ") == []
+    assert stream.finish() == []
