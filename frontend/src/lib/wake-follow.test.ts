@@ -91,4 +91,23 @@ describe('a word that arrives after Sage has already greeted', () => {
     expect(only('what time is it', 900, true)).toBe(false);
     expect(only('any news on AI', 400, true)).toBe(false);
   });
+
+  it('does not swallow a two-word answer to the greeting', async () => {
+    const { isOnlyWakePhrase: only, PAUSE_TURN_MS } = await import('./wake-follow');
+    // "Yes, Sir?" is a question, and the answer to it is often two words.
+    // Every one of these did nothing at all, while the same thing said in
+    // three words went through.
+    for (const said of ["what's up", 'hello there', 'never mind', 'go on', 'thank you']) {
+      expect(only(said, PAUSE_TURN_MS + 4000, true), said).toBe(false);
+    }
+  });
+
+  it('past the greeting the clock no longer matters', async () => {
+    const { isOnlyWakePhrase: only } = await import('./wake-follow');
+    // A short answer that happens to land inside the pause window is still
+    // an answer: the greeting already proved the user had stopped.
+    expect(only("what's up", 400, true)).toBe(false);
+    // Before the greeting the clock is still the evidence there is.
+    expect(only("what's up", 400, false)).toBe(true);
+  });
 });

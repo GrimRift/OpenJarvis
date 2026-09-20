@@ -189,7 +189,7 @@ def test_full_day_on_a_free_day_says_so(tmp_path):
     result = tool.execute(now=other_day, full_day=True)
 
     assert result.metadata["classes"] == []
-    assert "No classes scheduled for today" in result.content
+    assert "No classes scheduled today" in result.content
 
 
 def test_the_reminder_window_still_excludes_a_started_class(tmp_path):
@@ -248,3 +248,72 @@ def test_leaving_out_the_only_class_still_says_so(tmp_path):
         "MID222",
     }
     assert result.metadata["left_out"] == 1
+
+
+def test_tomorrow_reads_tomorrows_row_not_todays(tmp_path):
+    # 20 September 2026 was a Sunday with nothing on it. Asked "what is my
+    # class for tomorrow?", the tool could only answer for today and
+    # returned nothing, so Sage reported no class when Monday had one.
+    sunday = datetime(2026, 9, 20, 14, 0)
+    assert sunday.strftime("%A") == "Sunday"
+    schedule = _write_schedule(tmp_path, "Monday", "09:40AM–11:00AM")
+    tool = _make_tool(tmp_path, schedule)
+
+    today = tool.execute(now=sunday, full_day=True)
+    assert today.metadata["classes"] == []
+
+    result = tool.execute(now=sunday, full_day=True, day="tomorrow")
+
+    assert result.success is True
+    assert len(result.metadata["classes"]) == 1
+    assert result.metadata["classes"][0]["subject_code"] == "CS101"
+    assert result.metadata["day"] == "Monday"
+    assert result.metadata["date"] == "2026-09-21"
+    assert "Monday" in result.content
+
+
+def test_a_weekday_name_means_the_next_one_today_included(tmp_path):
+    from openjarvis.tools.check_class_schedule import _resolve_day
+
+    monday = datetime(2026, 9, 21, 12, 0)
+    assert _resolve_day(monday, "Monday").isoformat() == "2026-09-21"
+    assert _resolve_day(monday, "friday").isoformat() == "2026-09-25"
+    assert _resolve_day(monday, "tomorrow").isoformat() == "2026-09-22"
+    assert _resolve_day(monday, "today").isoformat() == "2026-09-21"
+    assert _resolve_day(monday, None).isoformat() == "2026-09-21"
+    assert _resolve_day(monday, "2026-12-01").isoformat() == "2026-12-01"
+
+
+def test_a_day_that_is_not_a_day_fails_loudly(tmp_path):
+    schedule = _write_schedule(tmp_path, "Monday")
+    tool = _make_tool(tmp_path, schedule)
+
+    result = tool.execute(now=datetime(2026, 9, 20, 14, 0), day="next semester")
+
+    assert result.success is False
+    assert "not a day" in result.content
+
+
+def test_the_narrow_reminder_window_is_unchanged_without_a_day(tmp_path):
+    # notify_class_schedule depends on this mode; the day argument must be
+    # invisible when it is not passed.
+    now = datetime(2026, 3, 10, 9, 50)
+    schedule = _write_schedule(tmp_path, now.strftime("%A"))
+    tool = _make_tool(tmp_path, schedule)
+
+    result = tool.execute(now=now, lookahead_minutes=15)
+
+    assert len(result.metadata["upcoming"]) == 1
+
+
+def test_a_future_day_reports_its_classes_as_upcoming(tmp_path):
+    # minutes_until is measured from now, so a class on a later date is
+    # never "already finished" however late in the day it is asked about.
+    sunday = datetime(2026, 9, 20, 23, 30)
+    schedule = _write_schedule(tmp_path, "Monday", "09:40AM–11:00AM")
+    tool = _make_tool(tmp_path, schedule)
+
+    result = tool.execute(now=sunday, full_day=True, day="tomorrow")
+
+    assert result.metadata["classes"][0]["status"] == "upcoming"
+    assert len(result.metadata["upcoming"]) == 1

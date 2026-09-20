@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import date as dt_date
+from datetime import datetime, timedelta
 from datetime import time as dt_time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -104,6 +105,54 @@ def _parse_subjects_table(text: str) -> List[Dict[str, str]]:
     return rows
 
 
+_WEEKDAYS = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
+
+
+class UnknownDay(ValueError):
+    """The `day` argument named something that is not a day."""
+
+
+def _resolve_day(now: datetime, day: Optional[str]) -> dt_date:
+    """Turn "tomorrow" or "Monday" into the date it means.
+
+    Without this the tool could only ever answer for today, so "what is my
+    class for tomorrow" was answered with today's rows -- on Sunday 20
+    September that was an empty list, and Sage reported no class when Monday
+    had one.
+
+    A weekday name means the NEXT such day, today included: asking on Monday
+    for "Monday" means today, not a week out.
+    """
+    if day is None:
+        return now.date()
+    text = day.strip().lower()
+    if text in ("", "today"):
+        return now.date()
+    if text == "tomorrow":
+        return now.date() + timedelta(days=1)
+    if text == "yesterday":
+        return now.date() - timedelta(days=1)
+    for index, name in enumerate(_WEEKDAYS):
+        if text in (name.lower(), name.lower()[:3]):
+            ahead = (index - now.weekday()) % 7
+            return now.date() + timedelta(days=ahead)
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise UnknownDay(
+            f"'{day}' is not a day. Use today, tomorrow, a weekday name, "
+            "or YYYY-MM-DD."
+        ) from exc
+
+
 @ToolRegistry.register("check_class_schedule")
 class CheckClassScheduleTool(BaseTool):
     """Check the user's class schedule note for classes starting soon."""
@@ -133,17 +182,31 @@ class CheckClassScheduleTool(BaseTool):
                 "as such. A larger lookahead_minutes does not help — classes "
                 "that already started are excluded in this mode at any "
                 "lookahead.\n"
+                "Both modes answer for ONE day, `day`, which defaults to "
+                "today. For any question about another day — 'tomorrow', "
+                "'Monday', 'this Friday' — pass it; the tool cannot infer "
+                "it, and left out it silently answers about today instead.\n"
                 "Read-only: calling this never suppresses a later reminder."
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    "day": {
+                        "type": "string",
+                        "description": (
+                            "Which day to read: 'today' (default), "
+                            "'tomorrow', a weekday name such as 'Monday' "
+                            "(meaning the next one, today included), or a "
+                            "YYYY-MM-DD date."
+                        ),
+                        "default": "today",
+                    },
                     "full_day": {
                         "type": "boolean",
                         "description": (
-                            "True for today's whole schedule, including "
+                            "True for the whole day's schedule, including "
                             "classes already in progress or finished. Use "
-                            "this for any question about today rather than "
+                            "this for any question about a day rather than "
                             "about the next few minutes."
                         ),
                         "default": False,
@@ -187,11 +250,22 @@ class CheckClassScheduleTool(BaseTool):
                 success=False,
             )
 
+        try:
+            target = _resolve_day(now, params.get("day"))
+        except UnknownDay as exc:
+            return ToolResult(
+                tool_name="check_class_schedule",
+                content=str(exc),
+                success=False,
+            )
+
         if params.get("full_day"):
             skip = params.get("skip_starting_within")
-            return self._day_view(rows, now, int(skip) if skip is not None else None)
+            return self._day_view(
+                rows, now, int(skip) if skip is not None else None, target
+            )
 
-        upcoming = self._find_upcoming(rows, now, lookahead_minutes)
+        upcoming = self._find_upcoming(rows, now, lookahead_minutes, target)
 
         if not upcoming:
             return ToolResult(
@@ -225,6 +299,7 @@ class CheckClassScheduleTool(BaseTool):
         rows: List[Dict[str, str]],
         now: datetime,
         skip_starting_within: Optional[int] = None,
+        target: Optional[dt_date] = None,
     ) -> ToolResult:
         """Today's classes; optionally without the ones about to start.
 
@@ -234,8 +309,10 @@ class CheckClassScheduleTool(BaseTool):
         same breath -- so the greeting leaves such a class out and is told
         that it did.
         """
-        classes = self._find_today(rows, now)
-        day_name = now.strftime("%A")
+        day = target or now.date()
+        classes = self._find_today(rows, now, day)
+        day_name = day.strftime("%A")
+        when = "today" if day == now.date() else f"on {day_name}"
         left_out = 0
         if skip_starting_within is not None:
             kept = []
@@ -256,15 +333,18 @@ class CheckClassScheduleTool(BaseTool):
             return ToolResult(
                 tool_name="check_class_schedule",
                 content=(
-                    f"No other classes scheduled for today ({day_name}).{note}"
+                    f"No other classes scheduled {when} "
+                    f"({day_name}, {day.isoformat()}).{note}"
                     if left_out
-                    else f"No classes scheduled for today ({day_name})."
+                    else f"No classes scheduled {when} "
+                    f"({day_name}, {day.isoformat()})."
                 ),
                 success=True,
                 metadata={
                     "classes": [],
                     "upcoming": [],
                     "day": day_name,
+                    "date": day.isoformat(),
                     "left_out": left_out,
                 },
             )
@@ -284,7 +364,8 @@ class CheckClassScheduleTool(BaseTool):
         return ToolResult(
             tool_name="check_class_schedule",
             content=(
-                f"{len(classes)} class(es) scheduled today ({day_name}):\n"
+                f"{len(classes)} class(es) scheduled {when} "
+                f"({day_name}, {day.isoformat()}):\n"
                 + "\n".join(lines)
                 + note
             ),
@@ -293,23 +374,31 @@ class CheckClassScheduleTool(BaseTool):
                 "classes": classes,
                 "upcoming": [c for c in classes if c["status"] == "upcoming"],
                 "day": day_name,
+                "date": day.isoformat(),
                 "left_out": left_out,
             },
         )
 
     @staticmethod
     def _find_upcoming(
-        rows: List[Dict[str, str]], now: datetime, lookahead_minutes: int
+        rows: List[Dict[str, str]],
+        now: datetime,
+        lookahead_minutes: int,
+        target: Optional[dt_date] = None,
     ) -> List[Dict[str, Any]]:
         found: List[Dict[str, Any]] = []
-        for item in CheckClassScheduleTool._find_today(rows, now):
+        for item in CheckClassScheduleTool._find_today(rows, now, target):
             if 0 <= item["minutes_until"] <= lookahead_minutes:
                 found.append({k: v for k, v in item.items() if k != "status"})
         return found
 
     @staticmethod
-    def _find_today(rows: List[Dict[str, str]], now: datetime) -> List[Dict[str, Any]]:
-        """Every class scheduled today, in start order, each with a status.
+    def _find_today(
+        rows: List[Dict[str, str]],
+        now: datetime,
+        target: Optional[dt_date] = None,
+    ) -> List[Dict[str, Any]]:
+        """Every class scheduled on `target` (default today), in start order.
 
         A class that has already begun is still on today's schedule. Filtering
         it out is right for "is something starting soon" and wrong for "what do
@@ -317,7 +406,8 @@ class CheckClassScheduleTool(BaseTool):
         to report "no classes scheduled for today" at 17:05 with three on the
         note and one in session.
         """
-        today_name = now.strftime("%A")
+        day = target or now.date()
+        today_name = day.strftime("%A")
         found: List[Dict[str, Any]] = []
         for row in rows:
             if row.get("Day", "").strip() != today_name:
@@ -326,9 +416,9 @@ class CheckClassScheduleTool(BaseTool):
             if parsed is None:
                 continue
             start_time, end_time = parsed
-            start_dt = datetime.combine(now.date(), start_time)
+            start_dt = datetime.combine(day, start_time)
             minutes_until = (start_dt - now).total_seconds() / 60.0
-            end_dt = datetime.combine(now.date(), end_time) if end_time else None
+            end_dt = datetime.combine(day, end_time) if end_time else None
             if minutes_until >= 0:
                 status = "upcoming"
             elif end_dt is None or now < end_dt:

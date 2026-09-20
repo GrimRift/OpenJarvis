@@ -136,5 +136,12 @@ export function isOnlyWakePhrase(
   // arriving in that turn is the phrase misheard, whatever it was spelt as.
   // "addition." was sent as a message because it landed 1849 ms in, 49 ms
   // past the window; the greeting is the better evidence than the clock.
-  return greetedAlready || elapsedMs < PAUSE_TURN_MS;
+  //
+  // ONE stray word, though, not two: the greeting asked a question, and the
+  // answer to it is often short. Two tokens were being discarded whole, so
+  // "what's up" after "Yes, Sir?" did nothing at all while "what is up",
+  // three tokens, went through. Past the greeting the clock means nothing
+  // either -- the user is answering, however long they took.
+  if (greetedAlready) return tokens.length <= 1;
+  return elapsedMs < PAUSE_TURN_MS;
 }
