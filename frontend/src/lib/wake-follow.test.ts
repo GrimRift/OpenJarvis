@@ -107,7 +107,18 @@ describe('a word that arrives after Sage has already greeted', () => {
     // A short answer that happens to land inside the pause window is still
     // an answer: the greeting already proved the user had stopped.
     expect(only("what's up", 400, true)).toBe(false);
-    // Before the greeting the clock is still the evidence there is.
-    expect(only("what's up", 400, false)).toBe(true);
+  });
+
+  it('a two-word turn that begins like a request is one, even inside the window', async () => {
+    const { isOnlyWakePhrase: only } = await import('./wake-follow');
+    // Eager end-of-turn closes "Hey Sage" alone, then "what's up" arrives
+    // as its own turn a second later -- inside the window, two tokens.
+    expect(only("what's up", 900, false)).toBe(false);
+    expect(only('Whats up?', 900, false)).toBe(false);
+    expect(only('open Obsidian', 900, false)).toBe(false);
+    // Phrase debris still is the phrase: neither token starts a request.
+    expect(only('ACG age', 900, false)).toBe(true);
+    expect(only('his age', 900, false)).toBe(true);
+    expect(only('yes', 900, false)).toBe(true);
   });
 });

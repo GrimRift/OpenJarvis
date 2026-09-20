@@ -143,5 +143,11 @@ export function isOnlyWakePhrase(
   // three tokens, went through. Past the greeting the clock means nothing
   // either -- the user is answering, however long they took.
   if (greetedAlready) return tokens.length <= 1;
-  return elapsedMs < PAUSE_TURN_MS;
+  if (elapsedMs >= PAUSE_TURN_MS) return false;
+  // Inside the window a lone token is still the phrase however spelt, but
+  // two tokens that BEGIN like a request are one. Eager end-of-turn can
+  // close "Hey Sage" on its own and hand "what's up" over as the next turn
+  // a second later; that is the question, not "ACG age".
+  const first = tokens[0].toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  return tokens.length === 1 || !STARTERS.has(first);
 }
