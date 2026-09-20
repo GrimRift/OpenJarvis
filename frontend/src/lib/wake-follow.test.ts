@@ -120,5 +120,29 @@ describe('a word that arrives after Sage has already greeted', () => {
     expect(only('ACG age', 900, false)).toBe(true);
     expect(only('his age', 900, false)).toBe(true);
     expect(only('yes', 900, false)).toBe(true);
+    // And after the greeting, two non-request words are the phrase too.
+    expect(only('Eight inch.', 3000, true)).toBe(true);
+    expect(only("what's up", 3000, true)).toBe(false);
+  });
+});
+
+describe('the phrase as a sentence of its own', () => {
+  it('is dropped from the front of the request', () => {
+    // 20 September: "Hey Sage" was heard as "Eight inch." and sent on as
+    // part of the message.
+    expect(stripWakePhrase('Eight inch. Give me my daily briefing.')).toBe('Give me my daily briefing.');
+    expect(stripWakePhrase('Usage. any news?')).toBe('any news?');
+  });
+
+  it('never eats a short first sentence that is a request', () => {
+    expect(stripWakePhrase("What's up. Anything new?")).toBe("What's up. Anything new?");
+    expect(stripWakePhrase('Yes. Give me my briefing.')).toBe('Yes. Give me my briefing.');
+    expect(stripWakePhrase('Open Obsidian. Then play music.')).toBe('Open Obsidian. Then play music.');
+  });
+
+  it('leaves a turn that is only that sentence alone', () => {
+    // isOnlyWakePhrase decides that case; stripping it here would return
+    // an empty string and greet twice.
+    expect(stripWakePhrase('Eight inch.')).toBe('Eight inch.');
   });
 });

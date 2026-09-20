@@ -108,11 +108,32 @@ export function stripWakePhrase(transcript: string): string {
     i = 1;
     if (i < tokens.length && isDebris(norm(tokens[i]))) i += 1;
   } else {
-    // No name: not the phrase (a bare "hey" is the user's own word).
-    return text;
+    // No name, but Deepgram closed a sentence after one or two words that
+    // begin no request: "Eight inch. Give me my daily briefing." (heard 20
+    // September). In a turn the wake word opened, that first sentence is
+    // the phrase in some spelling no shape can predict.
+    const lead = leadingNonRequestSentence(tokens);
+    if (lead === 0) return text;
+    i = lead;
   }
   const rest = tokens.slice(i).join(' ').replace(/^[\s,.;:!?—-]+/, '');
   return rest.trim();
+}
+
+/**
+ * How many leading tokens form a sentence of at most two words, ended by a
+ * full stop, of which none starts a request -- or 0 when the turn does not
+ * begin that way. Only ever applied to a turn the wake word opened.
+ */
+function leadingNonRequestSentence(tokens: readonly string[]): number {
+  const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  for (let n = 1; n <= 2 && n < tokens.length; n++) {
+    if (!/[.!?]$/.test(tokens[n - 1])) continue;
+    const words = tokens.slice(0, n).map(norm);
+    if (words.some((w) => STARTERS.has(w))) return 0;
+    return n;
+  }
+  return 0;
 }
 
 /**
@@ -142,12 +163,11 @@ export function isOnlyWakePhrase(
   // "what's up" after "Yes, Sir?" did nothing at all while "what is up",
   // three tokens, went through. Past the greeting the clock means nothing
   // either -- the user is answering, however long they took.
-  if (greetedAlready) return tokens.length <= 1;
-  if (elapsedMs >= PAUSE_TURN_MS) return false;
-  // Inside the window a lone token is still the phrase however spelt, but
-  // two tokens that BEGIN like a request are one. Eager end-of-turn can
-  // close "Hey Sage" on its own and hand "what's up" over as the next turn
-  // a second later; that is the question, not "ACG age".
+  // Two tokens that BEGIN like a request are one, greeted or not. Eager
+  // end-of-turn can close "Hey Sage" on its own and hand "what's up" over
+  // as the next turn a second later; and after "Yes, Sir?" the answer is
+  // often two words. "ACG age" and "Eight inch" begin no request.
   const first = tokens[0].toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
-  return tokens.length === 1 || !STARTERS.has(first);
+  if (tokens.length === 2 && STARTERS.has(first)) return false;
+  return greetedAlready || elapsedMs < PAUSE_TURN_MS;
 }
