@@ -49,9 +49,12 @@ class TestKeyContainment:
             assert "api_key" not in names, ast.dump(call)[:200]
 
     def test_missing_key_reports_an_error_the_client_can_recover_from(self):
+        # The verdict follows the first message, because that message names
+        # the provider; a local provider needs no key at all.
         client = TestClient(_app())
         with patch.dict("os.environ", {"CARTESIA_API_KEY": ""}, clear=False):
             with client.websocket_connect("/v1/speech/tts-stream") as ws:
+                ws.send_json({"type": "begin", "voice_id": "v"})
                 msg = ws.receive_json()
         assert msg["type"] == "error"
         # The reason names the variable, never its value.
@@ -326,3 +329,95 @@ class TestASpokenReplySurvivesAnIdleContext:
         assert first.sent[0] in second.sent, (
             "the unspoken transcript was dropped rather than re-sent"
         )
+
+
+class TestProviderSelection:
+    """``begin`` picks the engine; the browser protocol is the same for both."""
+
+    def test_chatterbox_needs_no_cartesia_key(self):
+        class Context:
+            flushes = 0
+
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return None
+
+            async def send_text(self, _t):
+                pass
+
+            async def finish(self):
+                pass
+
+            async def cancel(self):
+                pass
+
+            async def receive_audio(self):
+                yield bytes(16)
+                self.flushes += 1
+
+        client = TestClient(_app())
+        with (
+            patch.dict("os.environ", {"CARTESIA_API_KEY": ""}, clear=False),
+            patch("openjarvis.speech.chatterbox_tts.ChatterboxContext", Context),
+        ):
+            with client.websocket_connect("/v1/speech/tts-stream") as ws:
+                ws.send_json(
+                    {
+                        "type": "begin",
+                        "voice_id": "chatterbox:jarvis",
+                        "provider": "chatterbox",
+                    }
+                )
+                assert ws.receive_json()["type"] == "ready"
+                ws.send_json({"type": "text", "delta": "Hello there. "})
+                ws.send_json({"type": "finish"})
+                start = ws.receive_json()
+                assert start["type"] == "start"
+                assert start["sample_rate"] == 24000
+                assert start["encoding"] == "pcm_f32le"
+                heard = 0
+                while True:
+                    message = ws.receive()
+                    if message.get("bytes"):
+                        heard += 1
+                        continue
+                    import json as _json
+
+                    if _json.loads(message["text"])["type"] == "done":
+                        break
+                assert heard >= 1
+
+    def test_a_sidecar_that_cannot_open_is_reported_before_audio(self):
+        class Failing:
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def __aenter__(self):
+                raise RuntimeError("voice sidecar environment not found")
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        client = TestClient(_app())
+        with patch("openjarvis.speech.chatterbox_tts.ChatterboxContext", Failing):
+            with client.websocket_connect("/v1/speech/tts-stream") as ws:
+                ws.send_json({"type": "begin", "provider": "chatterbox"})
+                msg = ws.receive_json()
+        assert msg["type"] == "error"
+        assert msg["started"] is False
+        assert "sidecar" in msg["reason"]
+
+    def test_the_server_default_applies_when_the_client_names_none(self):
+        from openjarvis.server.tts_stream_routes import _resolve_provider
+
+        cfg = JarvisConfig()
+        assert _resolve_provider(cfg, None) == "cartesia"
+        cfg.speech.tts_provider = "chatterbox"
+        assert _resolve_provider(cfg, None) == "chatterbox"
+        assert _resolve_provider(cfg, "cartesia") == "cartesia"
+        assert _resolve_provider(cfg, "kokoro") == "chatterbox"

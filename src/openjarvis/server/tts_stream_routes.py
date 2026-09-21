@@ -7,6 +7,11 @@ speaking while the rest is still being generated.
 
 The Cartesia key stays server-side, exactly as the Flux proxy does — the
 browser talks only to this endpoint.
+
+Two providers speak the same protocol to the browser: Cartesia (cloud) and
+Chatterbox (a local sidecar, see ``speech/chatterbox_tts``). ``begin``
+names one; the server's ``[speech] tts_provider`` is the default. Both
+deliver ``pcm_f32le`` at 24 kHz, so the player is none the wiser.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from openjarvis.speech.cartesia_tts import (
     STREAM_SAMPLE_RATE,
     CartesiaTTSContext,
 )
+from openjarvis.speech.providers import default_tts_provider
 from openjarvis.speech.spoken_text import (
     SpokenTextOverflow,
     SpokenTextStream,
@@ -50,6 +56,34 @@ MAX_PENDING_SEGMENTS = 8
 
 class _ClientCancelled(Exception):
     pass
+
+
+PROVIDER_CARTESIA = "cartesia"
+PROVIDER_CHATTERBOX = "chatterbox"
+PROVIDERS = (PROVIDER_CARTESIA, PROVIDER_CHATTERBOX)
+
+
+def _resolve_provider(config: Any, requested: Any) -> str:
+    value = str(requested or "").strip().lower()
+    if value in PROVIDERS:
+        return value
+    default = default_tts_provider(getattr(config, "speech", None))
+    return default if default in PROVIDERS else PROVIDER_CARTESIA
+
+
+def _open_context(provider: str, config: Any, api_key: str, request: dict) -> Any:
+    """A fresh streaming context for *provider*; both share one contract."""
+    voice = _resolve_voice(config, request.get("voice_id", ""))
+    if provider == PROVIDER_CHATTERBOX:
+        from openjarvis.speech.chatterbox_tts import ChatterboxContext
+
+        return ChatterboxContext(getattr(config, "speech", None), voice)
+    return CartesiaTTSContext(
+        api_key,
+        voice,
+        speed=_resolve_speed(config, request.get("speed")),
+        volume=_resolve_volume(config, request.get("volume")),
+    )
 
 
 def _resolve_voice(config: Any, requested: str) -> str:
@@ -104,26 +138,42 @@ async def tts_stream(websocket: WebSocket) -> None:
 
     await websocket.accept(subprotocol=subprotocol)
 
-    api_key = os.environ.get("CARTESIA_API_KEY", "")
-    if not api_key:
-        # Reported rather than closed silently: the client falls back to the
-        # batch endpoint on this message, so the user still hears the reply.
-        await websocket.send_json(
-            {"type": "error", "reason": "CARTESIA_API_KEY not set"}
-        )
-        await websocket.close(code=CLOSE_UNAVAILABLE)
-        return
-
     config = getattr(websocket.app.state, "config", None)
+    api_key = os.environ.get("CARTESIA_API_KEY", "")
 
     try:
         request = await websocket.receive_json()
+        provider = _resolve_provider(config, request.get("provider"))
+        if provider == PROVIDER_CARTESIA and not api_key:
+            # Reported rather than closed silently: the client falls back to
+            # the batch endpoint on this message, so the user still hears
+            # the reply.
+            await websocket.send_json(
+                {"type": "error", "reason": "CARTESIA_API_KEY not set"}
+            )
+            await websocket.close(code=CLOSE_UNAVAILABLE)
+            return
+
         if request.get("type") == "begin":
             # Initiative (M37) must not start a conversation over a reply
             # being spoken; this is the one place the server sees one.
             activity.tts_begin()
             try:
-                await _stream_incremental_turn(websocket, config, api_key, request)
+                await _stream_incremental_turn(
+                    websocket, config, api_key, request, provider=provider
+                )
+            except (WebSocketDisconnect, _ClientCancelled):
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # Opening the context failed (typically the local sidecar is
+                # not up). Said out loud so the browser takes its batch path
+                # rather than reading a bare close as a network fault.
+                logger.warning("TTS stream could not open %s: %s", provider, exc)
+                with contextlib.suppress(Exception):
+                    await websocket.send_json(
+                        {"type": "error", "reason": str(exc), "started": False}
+                    )
+                    await websocket.close(code=CLOSE_UNAVAILABLE)
             finally:
                 activity.tts_end()
             return
@@ -146,10 +196,13 @@ async def tts_stream(websocket: WebSocket) -> None:
 
             activity.tts_begin()
             try:
-                await _speak(websocket, config, api_key, text, request)
+                await _speak(
+                    websocket, config, api_key, text, request, provider=provider
+                )
             finally:
                 activity.tts_end()
             request = await websocket.receive_json()
+            provider = _resolve_provider(config, request.get("provider"))
     except WebSocketDisconnect:
         return
     except Exception:  # noqa: BLE001
@@ -184,8 +237,10 @@ async def _stream_incremental_turn(
     config: Any,
     api_key: str,
     begin: dict,
+    *,
+    provider: str = PROVIDER_CARTESIA,
 ) -> None:
-    """Buffer model deltas into safe speech on one Cartesia context."""
+    """Buffer model deltas into safe speech on one streaming context."""
     segment_queue: asyncio.Queue[tuple[str, bool] | None] = asyncio.Queue(
         maxsize=MAX_PENDING_SEGMENTS
     )
@@ -196,12 +251,7 @@ async def _stream_incremental_turn(
     inputs_finished = False
     tasks: list[asyncio.Task[Any]] = []
 
-    context = CartesiaTTSContext(
-        api_key,
-        _resolve_voice(config, begin.get("voice_id", "")),
-        speed=_resolve_speed(config, begin.get("speed")),
-        volume=_resolve_volume(config, begin.get("volume")),
-    )
+    context = _open_context(provider, config, api_key, begin)
 
     # ``context`` stays the object the `async with` will close. The live one
     # can be replaced mid-turn when Cartesia times out an idle context, so
@@ -224,13 +274,8 @@ async def _stream_incremental_turn(
     # closed", the whole turn lost).
     finish_consumed = False
 
-    def _fresh_context() -> CartesiaTTSContext:
-        return CartesiaTTSContext(
-            api_key,
-            _resolve_voice(config, begin.get("voice_id", "")),
-            speed=_resolve_speed(config, begin.get("speed")),
-            volume=_resolve_volume(config, begin.get("volume")),
-        )
+    def _fresh_context() -> Any:
+        return _open_context(provider, config, api_key, begin)
 
     async with context:
         await websocket.send_json(
@@ -404,29 +449,43 @@ async def _stream_incremental_turn(
                 await current.cancel()
 
 
+async def _whole_utterance(
+    provider: str, config: Any, api_key: str, text: str, request: dict
+):
+    """One utterance as a PCM stream, whichever provider."""
+    if provider == PROVIDER_CHATTERBOX:
+        context = _open_context(provider, config, api_key, request)
+        async with context:
+            await context.send_text(text)
+            await context.finish()
+            async for chunk in context.receive_audio():
+                yield chunk
+        return
+    from openjarvis.speech.cartesia_tts import astream_pcm
+
+    async for chunk in astream_pcm(
+        api_key,
+        text,
+        _resolve_voice(config, request.get("voice_id", "")),
+        speed=_resolve_speed(config, request.get("speed")),
+        volume=_resolve_volume(config, request.get("volume")),
+    ):
+        yield chunk
+
+
 async def _speak(
     websocket: WebSocket,
     config: Any,
     api_key: str,
     text: str,
     request: dict,
+    *,
+    provider: str = PROVIDER_CARTESIA,
 ) -> None:
     """Stream one utterance. Errors before the first chunk are recoverable."""
-    from openjarvis.speech.cartesia_tts import (
-        STREAM_ENCODING,
-        STREAM_SAMPLE_RATE,
-        astream_pcm,
-    )
-
     started = False
     try:
-        stream = astream_pcm(
-            api_key,
-            text,
-            _resolve_voice(config, request.get("voice_id", "")),
-            speed=_resolve_speed(config, request.get("speed")),
-            volume=_resolve_volume(config, request.get("volume")),
-        )
+        stream = _whole_utterance(provider, config, api_key, text, request)
         async for chunk in stream:
             if not started:
                 started = True

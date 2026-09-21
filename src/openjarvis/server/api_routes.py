@@ -1353,14 +1353,14 @@ async def speech_health(request: Request):
     # The key itself is never included — only whether one is present.
     flux_available = False
     flux_reason = ""
+    cfg = getattr(request.app.state, "config", None)
+    speech_cfg = getattr(cfg, "speech", None) if cfg else None
     try:
         from openjarvis.server.flux_routes import (  # noqa: PLC0415
             _unavailable_reason,
         )
         from openjarvis.speech import flux as _flux  # noqa: PLC0415
 
-        cfg = getattr(request.app.state, "config", None)
-        speech_cfg = getattr(cfg, "speech", None) if cfg else None
         # Capability, not choice: whether Flux *could* run. Gating this on the
         # client's own toggle would make the Settings switch impossible to
         # turn on, since it would report unavailable until already enabled.
@@ -1373,6 +1373,16 @@ async def speech_health(request: Request):
         logger.debug("Flux availability check failed", exc_info=True)
         flux_reason = "Flux support is not installed"
 
+    # Every provider, STT and TTS, in one shape; the flat flux_* fields
+    # above stay for clients that predate provider selection.
+    providers: dict = {}
+    try:
+        from openjarvis.speech.providers import speech_providers  # noqa: PLC0415
+
+        providers = speech_providers(speech_cfg)
+    except Exception:
+        logger.debug("Speech provider status failed", exc_info=True)
+
     return {
         "available": available,
         "backend": backend.backend_id,
@@ -1380,6 +1390,7 @@ async def speech_health(request: Request):
         "flux_available": flux_available,
         **({"flux_reason": flux_reason} if flux_reason else {}),
         **({"reason": reason} if reason else {}),
+        **providers,
     }
 
 

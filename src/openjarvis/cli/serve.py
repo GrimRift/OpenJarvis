@@ -572,6 +572,22 @@ def serve(
     except Exception as exc:
         logger.debug("Speech backend discovery failed: %s", exc)
 
+    # Local voice providers. Parakeet loads on first use inside this process;
+    # the Chatterbox sidecar is a separate process that starts now when it
+    # is the configured voice (otherwise on the first request for it) and
+    # stops with the server, so a restart never leaves one holding the GPU.
+    try:
+        import atexit
+
+        from openjarvis.speech import chatterbox_sidecar
+
+        chatterbox_sidecar.start_if_selected(config)
+        atexit.register(chatterbox_sidecar.stop)
+        if str(getattr(config.speech, "tts_provider", "")).lower() == "chatterbox":
+            console.print("  Voice: [cyan]Chatterbox sidecar starting[/cyan]")
+    except Exception as exc:
+        logger.debug("Voice sidecar setup failed: %s", exc)
+
     # Set up wake-word detector (optional — no-op until a trained model path
     # is set in config.toml's [speech] wake_word_model)
     wake_word_detector = None
