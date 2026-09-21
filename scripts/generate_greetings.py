@@ -61,9 +61,20 @@ def main() -> int:
         choices=["all", *(profile.name.casefold() for profile in VOICE_PROFILES)],
         default="all",
     )
+    # The local Chatterbox voice gets its own clip set, keyed by its
+    # chatterbox:<name> id, so a conversation in that voice is greeted in it
+    # too. Needs the sidecar running or startable:
+    #   generate_greetings.py --backend chatterbox --local-voice jarvis
+    parser.add_argument(
+        "--backend", choices=["cartesia", "chatterbox"], default="cartesia"
+    )
+    parser.add_argument("--local-voice", default="jarvis", help="chatterbox voice name")
     args = parser.parse_args()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     tool = TextToSpeechTool()
+
+    if args.backend == "chatterbox":
+        return _render_local(tool, args.local_voice)
 
     manifest_path = OUT_DIR / "manifest.json"
     if args.voice != "all" and manifest_path.exists():
@@ -108,7 +119,9 @@ def main() -> int:
                 dest = voice_dir / f"{slug}-{delivery['version']}{src.suffix}"
                 shutil.copyfile(src, dest)
                 clips.append(f"greetings/{profile_key}/{dest.name}")
-                print(f"{profile.name} {text!r} -> {dest} ({dest.stat().st_size} bytes)")
+                print(
+                    f"{profile.name} {text!r} -> {dest} ({dest.stat().st_size} bytes)"
+                )
             rendered[kind] = clips
         voices[profile.voice_id] = rendered["greetings"]
         fillers[profile.voice_id] = rendered["fillers"]
@@ -116,6 +129,39 @@ def main() -> int:
 
     # The frontend reads this rather than hardcoding filenames, so adding a
     # variant here is the only change needed to put it in rotation.
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {manifest_path}")
+    return 0
+
+
+def _render_local(tool: TextToSpeechTool, name: str) -> int:
+    """Clips for one local voice, added to the existing manifest."""
+    voice_id = f"chatterbox:{name}"
+    manifest_path = OUT_DIR / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    voice_dir = OUT_DIR / f"{name}-local"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    rendered: dict[str, list[str]] = {}
+    for kind, lines in (
+        ("greetings", GREETINGS),
+        ("fillers", FILLERS),
+        ("fillers_again", FILLERS_AGAIN),
+    ):
+        clips = []
+        for slug, text in lines:
+            result = tool.execute(text=text, voice_id=voice_id, backend="chatterbox")
+            if not result.success:
+                print(f"FAILED {voice_id} {slug!r}: {result.content}")
+                return 1
+            src = Path(result.metadata["audio_path"])
+            dest = voice_dir / f"{slug}-nano{src.suffix}"
+            shutil.copyfile(src, dest)
+            clips.append(f"greetings/{voice_dir.name}/{dest.name}")
+            print(f"{voice_id} {text!r} -> {dest} ({dest.stat().st_size} bytes)")
+        rendered[kind] = clips
+    manifest["voices"][voice_id] = rendered["greetings"]
+    manifest.setdefault("fillers", {})[voice_id] = rendered["fillers"]
+    manifest.setdefault("fillers_again", {})[voice_id] = rendered["fillers_again"]
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {manifest_path}")
     return 0

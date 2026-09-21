@@ -10,6 +10,11 @@
       "greetings/frieren/hello-sir-sonic36-content.mp3",
       "greetings/frieren/yes-sir-sonic36-content.mp3",
       "greetings/frieren/sir-sonic36-content.mp3"
+    ],
+    "chatterbox:jarvis": [
+      "greetings/jarvis-local/hello-sir-nano.wav",
+      "greetings/jarvis-local/yes-sir-nano.wav",
+      "greetings/jarvis-local/sir-nano.wav"
     ]
   },
   "fillers": {
@@ -24,6 +29,12 @@
       "greetings/frieren/checking-sonic36-content.mp3",
       "greetings/frieren/let-me-look-sonic36-content.mp3",
       "greetings/frieren/working-on-it-sonic36-content.mp3"
+    ],
+    "chatterbox:jarvis": [
+      "greetings/jarvis-local/one-moment-nano.wav",
+      "greetings/jarvis-local/checking-nano.wav",
+      "greetings/jarvis-local/let-me-look-nano.wav",
+      "greetings/jarvis-local/working-on-it-nano.wav"
     ]
   },
   "fillers_again": {
@@ -34,6 +45,10 @@
     "e23c9ecf-e002-4f7a-8e39-13d18d09923f": [
       "greetings/frieren/still-working-sonic36-content.mp3",
       "greetings/frieren/almost-there-sonic36-content.mp3"
+    ],
+    "chatterbox:jarvis": [
+      "greetings/jarvis-local/still-working-nano.wav",
+      "greetings/jarvis-local/almost-there-nano.wav"
     ]
   }
 }

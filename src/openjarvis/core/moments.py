@@ -1164,17 +1164,17 @@ def chime_now() -> bool:
 def speak_aloud(text: str) -> bool:
     """Synthesise with the configured voice and play through the speakers."""
     from openjarvis.core.config import load_config
-    from openjarvis.speech.cartesia_tts import CartesiaTTSBackend
     from openjarvis.speech.ducking import ducked
     from openjarvis.speech.player import play_file
+    from openjarvis.speech.providers import server_tts_backend, server_voice_id
     from openjarvis.speech.spoken_text import to_spoken_text
 
     spoken = to_spoken_text(text) or text
     config = load_config()
     speech = getattr(config, "speech", None)
-    result = CartesiaTTSBackend().synthesize(
+    result = server_tts_backend(speech).synthesize(
         spoken,
-        voice_id=getattr(speech, "voice_id", "") or "",
+        voice_id=server_voice_id(speech),
         speed=float(getattr(speech, "voice_speed", 1.0) or 1.0),
         volume=float(getattr(speech, "voice_volume", 1.0) or 1.0),
     )

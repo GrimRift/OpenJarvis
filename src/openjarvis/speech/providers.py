@@ -94,7 +94,34 @@ def default_tts_provider(speech_cfg: Any) -> str:
     return (value or "cartesia").strip().lower()
 
 
+def server_tts_backend(speech_cfg: Any):
+    """The backend instance for server-side speech (moments, Waze, the
+    digest): the configured provider, from the registry. Every such caller
+    used to construct CartesiaTTSBackend directly, which is how a chosen
+    local voice would have been silently ignored everywhere but the chat."""
+    import openjarvis.speech  # noqa: F401 - registers the backends
+    from openjarvis.core.registry import TTSRegistry
+
+    key = default_tts_provider(speech_cfg)
+    if not TTSRegistry.contains(key):
+        key = "cartesia"
+    backend_cls = TTSRegistry.get(key)
+    if key == "chatterbox":
+        return backend_cls(speech_cfg)
+    return backend_cls()
+
+
+def server_voice_id(speech_cfg: Any) -> str:
+    """The voice server-side speech uses for the configured provider."""
+    if default_tts_provider(speech_cfg) == "chatterbox":
+        name = str(getattr(speech_cfg, "chatterbox_voice", "jarvis") or "jarvis")
+        return f"chatterbox:{name}"
+    return str(getattr(speech_cfg, "voice_id", "") or "")
+
+
 __all__ = [
+    "server_tts_backend",
+    "server_voice_id",
     "cartesia_status",
     "chatterbox_status",
     "default_tts_provider",

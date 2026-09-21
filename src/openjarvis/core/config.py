@@ -1562,6 +1562,8 @@ class SpeechConfig:
     wake_word_verify: str = "local"
     # The small model for "local" verification, separate from `model`
     # above: a two-second yes/no does not need the transcription model.
+    # "parakeet" reuses the local streaming model instead (no second
+    # Whisper), measured with scripts/wake_word_verify_compare.py.
     wake_word_verify_model: str = "tiny.en"
     # Primes Whisper's decoder toward expected vocabulary — otherwise it has
     # no way to know "Sage" (the assistant's name) is even a likely word,

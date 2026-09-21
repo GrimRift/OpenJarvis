@@ -391,14 +391,115 @@ def _check_tts_credentials() -> CheckResult:
             f"Key present for {provider or 'the configured provider'}",
             section=SECTION_VOICE,
         )
+    if provider == "chatterbox":
+        return CheckResult(
+            "Speech synthesis key",
+            "ok",
+            "Not needed: the local Chatterbox voice is configured",
+            section=SECTION_VOICE,
+        )
     return CheckResult(
         "Speech synthesis key",
         "warn",
         "No synthesis key in the environment",
         details=(
-            "Sage will fall back to a local voice. Set the provider key in the "
-            "Sage user environment and restart through the Start menu shortcut."
+            "Spoken replies will fail unless the local Chatterbox voice is "
+            "selected. Set the provider key in the Sage user environment and "
+            "restart through the Start menu shortcut."
         ),
+        section=SECTION_VOICE,
+    )
+
+
+def _check_parakeet() -> CheckResult:
+    """Whether the local streaming transcriber could run, and on what."""
+    config = _get_config()
+    speech_cfg = getattr(config, "speech", None)
+    try:
+        from openjarvis.speech.providers import parakeet_status
+
+        status = parakeet_status(speech_cfg)
+    except Exception as exc:
+        return CheckResult(
+            "Parakeet (local STT)",
+            "warn",
+            f"Status failed: {exc}",
+            section=SECTION_VOICE,
+        )
+    if not status.get("available"):
+        return CheckResult(
+            "Parakeet (local STT)",
+            "warn",
+            status.get("reason") or "unavailable",
+            details=(
+                "The model files download on first use into "
+                f"{status.get('model_dir') or 'the data directory'}."
+            ),
+            section=SECTION_VOICE,
+        )
+    device = status.get("device")
+    wanted = status.get("requested_device")
+    if status.get("loaded") and wanted == "cuda" and device != "cuda":
+        return CheckResult(
+            "Parakeet (local STT)",
+            "warn",
+            f"Running on {device}; CUDA was requested",
+            details=(
+                "onnxruntime's CUDA provider did not initialise "
+                "(CUDA 13 runtime + cuDNN 9 needed)."
+            ),
+            section=SECTION_VOICE,
+        )
+    where = f"loaded on {device}" if status.get("loaded") else f"ready ({wanted})"
+    return CheckResult("Parakeet (local STT)", "ok", where, section=SECTION_VOICE)
+
+
+def _check_chatterbox() -> CheckResult:
+    """Whether the local voice sidecar is installed, running and loaded."""
+    config = _get_config()
+    speech_cfg = getattr(config, "speech", None)
+    try:
+        from openjarvis.speech.providers import chatterbox_status
+
+        status = chatterbox_status(speech_cfg)
+    except Exception as exc:
+        return CheckResult(
+            "Chatterbox (local voice)",
+            "warn",
+            f"Status failed: {exc}",
+            section=SECTION_VOICE,
+        )
+    selected = (
+        str(getattr(speech_cfg, "tts_provider", "") or "").lower() == "chatterbox"
+    )
+    if not status.get("available"):
+        return CheckResult(
+            "Chatterbox (local voice)",
+            "warn" if selected else "ok",
+            status.get("reason") or "unavailable",
+            details=(
+                "Run scripts/setup_voice_sidecar.ps1 to build the sidecar environment."
+            ),
+            section=SECTION_VOICE,
+        )
+    if not status.get("model_loaded"):
+        return CheckResult(
+            "Chatterbox (local voice)",
+            "warn" if selected else "ok",
+            status.get("reason") or "sidecar not running (starts on first use)",
+            section=SECTION_VOICE,
+        )
+    if not status.get("voice_ready"):
+        return CheckResult(
+            "Chatterbox (local voice)",
+            "warn",
+            status.get("reason") or "no reference recording",
+            section=SECTION_VOICE,
+        )
+    return CheckResult(
+        "Chatterbox (local voice)",
+        "ok",
+        f"loaded on {status.get('device')}, voice {status.get('voice')!r}",
         section=SECTION_VOICE,
     )
 
@@ -2313,6 +2414,8 @@ def run_health_checks(*, live: bool = False, app_state: Any = None) -> HealthRep
     checks.append(_check_wake_word())
     checks.append(_check_tts_credentials())
     checks.append(_check_flux_streaming())
+    checks.append(_check_parakeet())
+    checks.append(_check_chatterbox())
     checks.append(_check_speech_device())
 
     checks.extend(_check_engines(live))

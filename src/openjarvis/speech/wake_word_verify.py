@@ -322,6 +322,24 @@ def local_verifier_backend(config: Any) -> Any:
     with _LOCAL_LOCK:
         if _LOCAL_MODEL is not None and _LOCAL_MODEL_KEY == key:
             return _LOCAL_MODEL
+        if key[0] == "parakeet":
+            # Reuse the streaming model rather than load a second Whisper.
+            # Off by default: it has no phrase prompt, so its spellings of
+            # the name lean on heard_wake_phrase's phonetic rules. Measure
+            # with scripts/wake_word_verify_compare.py before switching.
+            from openjarvis.speech import parakeet
+            from openjarvis.speech.parakeet.batch import ParakeetBatchTranscriber
+
+            engine = parakeet.load_engine(
+                parakeet.weights.model_dir(
+                    getattr(speech, "parakeet_model_dir", "") or ""
+                ),
+                device=str(getattr(speech, "parakeet_device", "cuda") or "cuda"),
+                quant=str(getattr(speech, "parakeet_quant", "") or ""),
+            )
+            _LOCAL_MODEL = ParakeetBatchTranscriber(engine)
+            _LOCAL_MODEL_KEY = key
+            return _LOCAL_MODEL
         from openjarvis.speech.faster_whisper import FasterWhisperBackend
 
         _LOCAL_MODEL = FasterWhisperBackend(

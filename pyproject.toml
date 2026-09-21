@@ -149,6 +149,11 @@ speech = ["faster-whisper>=1.0"]
 speech_gpu = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12"]
 wake_word = ["openwakeword>=0.6"]
 speech-deepgram = ["deepgram-sdk>=3.0"]
+# NVIDIA Parakeet Realtime EOU on onnxruntime. The GPU build needs the CUDA
+# 13 runtime (nvidia-cuda-runtime, nvidia-cublas, nvidia-cudnn-cu13); CPU
+# works with plain onnxruntime. Chatterbox (local TTS) is NOT here: it runs
+# in its own environment, see scripts/setup_voice_sidecar.ps1.
+speech-parakeet = ["onnxruntime>=1.22", "tokenizers>=0.20", "scipy>=1.10"]
 eval-wandb = ["wandb>=0.17"]
 eval-sheets = ["gspread>=6.0", "google-auth>=2.0"]
 mining-pearl-cpu = [
