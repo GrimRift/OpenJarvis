@@ -1593,6 +1593,38 @@ class SpeechConfig:
     # Deepgram range 500-60000. Forces EndOfTurn after this much silence.
     flux_eot_timeout_ms: int = 5000
 
+    # --- NVIDIA Parakeet Realtime EOU (local streaming STT) ----------------
+    # Same shape as Flux: the server may forbid it, the browser chooses it.
+    parakeet_enabled: bool = True
+    # "cuda" or "cpu". CUDA needs onnxruntime-gpu and the CUDA 13 runtime;
+    # if the provider fails to initialise the engine falls back to CPU and
+    # reports which it got. CPU decodes a 160 ms chunk in ~40 ms here.
+    parakeet_device: str = "cuda"
+    # "" or "uint8" (a locally quantised copy, CPU only).
+    parakeet_quant: str = ""
+    # The model's own <EOU> fires only when what follows speech is nearly
+    # silent; in an ordinary room it usually does not, so a turn ends when
+    # no new word has been heard for this long. Tokens appear only on
+    # speech, so noise cannot hold a turn open. Lower is snappier and
+    # splits more sentences at pauses (the browser merges those).
+    parakeet_eot_timeout_ms: int = 900
+    # Empty = <data dir>/models/parakeet-realtime-eou.
+    parakeet_model_dir: str = ""
+
+    # --- Speech output provider ---------------------------------------------
+    # "cartesia" (cloud) or "chatterbox" (local sidecar). The browser's
+    # Settings choice is sent with every streaming request and wins; this
+    # is what server-side voices (moments, Waze, digest, greetings) use and
+    # what an older client gets.
+    tts_provider: str = "cartesia"
+    # The local voice: a name under <data dir>/voices, holding the reference
+    # recording, its cached conditioning, and voice.json with the tuning.
+    chatterbox_voice: str = "jarvis"
+    chatterbox_device: str = "cuda"
+    chatterbox_sidecar_port: int = 8791
+    # Empty = <data dir>/voice-env (the sidecar's own Python environment).
+    chatterbox_env_dir: str = ""
+
 
 @dataclass(slots=True)
 class OptimizeConfig:

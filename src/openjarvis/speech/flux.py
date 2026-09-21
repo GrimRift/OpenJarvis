@@ -18,7 +18,6 @@ import logging
 import os
 import socket
 import time
-from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 from urllib.parse import urlencode, urlparse
 
@@ -38,67 +37,20 @@ EOT_TIMEOUT_MS_RANGE = (500, 60000)
 SAMPLE_RATE = 16000
 ENCODING = "linear16"
 
-# Server event names, from the Flux reference. Kept as constants because a
-# typo in one of these silently means "turn never ends".
-EVENT_START_OF_TURN = "StartOfTurn"
-EVENT_UPDATE = "Update"
-EVENT_EAGER_END_OF_TURN = "EagerEndOfTurn"
-EVENT_TURN_RESUMED = "TurnResumed"
-EVENT_END_OF_TURN = "EndOfTurn"
+# The event vocabulary lives in ``turn_events`` so a second provider can
+# speak it; re-exported here because this module named them first.
+from openjarvis.speech.turn_events import (  # noqa: E402
+    EVENT_EAGER_END_OF_TURN,
+    EVENT_END_OF_TURN,
+    EVENT_START_OF_TURN,
+    EVENT_TURN_RESUMED,
+    EVENT_UPDATE,
+    TurnEvent,
+)
 
 
 class FluxConfigError(ValueError):
     """Raised when threshold settings would be rejected by Deepgram."""
-
-
-@dataclass
-class TurnEvent:
-    """One ``TurnInfo`` message, normalised.
-
-    ``turn_index`` is the identity everything downstream keys on: speculative
-    work started for one turn must never be released against another.
-    """
-
-    event: str
-    turn_index: int
-    transcript: str = ""
-    end_of_turn_confidence: float = 0.0
-    audio_window_start: float = 0.0
-    audio_window_end: float = 0.0
-    words: List[Dict[str, Any]] = field(default_factory=list)
-    raw: Dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_final(self) -> bool:
-        return self.event == EVENT_END_OF_TURN
-
-    @property
-    def is_speculative(self) -> bool:
-        return self.event == EVENT_EAGER_END_OF_TURN
-
-    @property
-    def cancels_speculation(self) -> bool:
-        return self.event == EVENT_TURN_RESUMED
-
-    @classmethod
-    def from_message(cls, data: Dict[str, Any]) -> "TurnEvent":
-        def _f(key: str) -> float:
-            # Deepgram sends these as strings ("0.85"), not numbers.
-            try:
-                return float(data.get(key) or 0.0)
-            except (TypeError, ValueError):
-                return 0.0
-
-        return cls(
-            event=str(data.get("event") or ""),
-            turn_index=int(data.get("turn_index") or 0),
-            transcript=str(data.get("transcript") or ""),
-            end_of_turn_confidence=_f("end_of_turn_confidence"),
-            audio_window_start=_f("audio_window_start"),
-            audio_window_end=_f("audio_window_end"),
-            words=list(data.get("words") or []),
-            raw=data,
-        )
 
 
 def api_key() -> str:

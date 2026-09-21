@@ -239,11 +239,15 @@ class TestRouteRegistration:
 
 
 class TestSpeculationIsServerSide:
-    """Speculative text must never cross the wire before confirmation."""
+    """Speculative text must never cross the wire before confirmation.
+
+    The relay is shared by every streaming provider (``_relay_turns``); the
+    invariants below are about that relay, wherever the socket came from.
+    """
 
     def test_speculative_answer_is_only_ever_attached_to_a_final_event(self):
         """Only the EndOfTurn branch may add the key."""
-        tree = ast.parse(inspect.getsource(flux_routes.flux_stream))
+        tree = ast.parse(inspect.getsource(flux_routes._relay_turns))
         assigns = [
             node
             for node in ast.walk(tree)
@@ -273,17 +277,17 @@ class TestSpeculationIsServerSide:
         assert all(id(a) in guarded for a in assigns)
 
     def test_release_is_called_with_the_confirmed_turn_and_transcript(self):
-        source = inspect.getsource(flux_routes.flux_stream)
+        source = inspect.getsource(flux_routes._relay_turns)
         assert "speculator.release(event.turn_index, event.transcript)" in source
 
     def test_turn_resumed_cancels_before_anything_else(self):
-        source = inspect.getsource(flux_routes.flux_stream)
+        source = inspect.getsource(flux_routes._relay_turns)
         assert "if event.cancels_speculation:" in source
         assert "cancel_speculation()" in source
 
     def test_speculation_requires_the_eager_threshold_to_be_active(self):
         """Standard mode must never start a speculative generation."""
-        source = inspect.getsource(flux_routes.flux_stream)
+        source = inspect.getsource(flux_routes._relay_turns)
         assert "event.is_speculative and eager_threshold is not None" in source
 
     def test_generation_uses_the_tool_disabled_helper(self):
@@ -292,7 +296,7 @@ class TestSpeculationIsServerSide:
         The helper is handed to ``asyncio.to_thread`` rather than called
         directly, so it appears as a referenced name, not a call target.
         """
-        tree = ast.parse(inspect.getsource(flux_routes.flux_stream))
+        tree = ast.parse(inspect.getsource(flux_routes._relay_turns))
         names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
         assert "generate_speculative" in names
 
@@ -594,3 +598,104 @@ class TestWordConfidencesReachTheBrowser:
             {"word": "stop", "confidence": 0.93},
             {"word": "7", "confidence": 0.5},
         ]
+
+
+class TestParakeetProvider:
+    """The same socket serves the local provider; the browser sees no change."""
+
+    def test_the_provider_query_selects_parakeet_and_fails_closed(self, tmp_path):
+        cfg = _enabled_config(parakeet_model_dir=str(tmp_path))
+        client = TestClient(_app(cfg))
+        with client.websocket_connect("/v1/speech/flux?provider=parakeet") as ws:
+            message = ws.receive_json()
+        assert message["type"] == "FluxUnavailable"
+        assert "model files missing" in message["reason"]
+        assert "encoder.onnx" in message["reason"]
+
+    def test_the_server_kill_switch_is_honoured(self, tmp_path):
+        cfg = _enabled_config(parakeet_model_dir=str(tmp_path), parakeet_enabled=False)
+        client = TestClient(_app(cfg))
+        with client.websocket_connect("/v1/speech/flux?provider=parakeet") as ws:
+            message = ws.receive_json()
+        assert message["type"] == "FluxUnavailable"
+        assert "parakeet_enabled" in message["reason"]
+
+    def test_parakeet_never_touches_deepgram(self, tmp_path):
+        """No key, no network: the local provider must not consult Flux."""
+        cfg = _enabled_config(parakeet_model_dir=str(tmp_path))
+        client = TestClient(_app(cfg))
+        with patch.dict("os.environ", {"DEEPGRAM_API_KEY": ""}):
+            with patch("openjarvis.speech.flux.FluxSession.connect") as connect:
+                with client.websocket_connect(
+                    "/v1/speech/flux?provider=parakeet"
+                ) as ws:
+                    message = ws.receive_json()
+        assert message["type"] == "FluxUnavailable"
+        assert "DEEPGRAM" not in message["reason"]
+        connect.assert_not_called()
+
+    def test_a_loaded_engine_relays_turns_with_the_flux_vocabulary(self, tmp_path):
+        """Words with confidences reach the browser exactly as Flux's do."""
+        from openjarvis.speech.parakeet.config import ParakeetConfig
+        from openjarvis.speech.parakeet.decoder import Step, Token
+        from openjarvis.speech.parakeet.session import ParakeetEngine
+
+        class Decoder:
+            calls = 0
+
+            def feed(self, block):
+                Decoder.calls += 1
+                if Decoder.calls == 1:
+                    return Step(tokens=[Token("▁what", 0.9, 0), Token("'s", 0.85, 0)])
+                if Decoder.calls == 2:
+                    return Step(tokens=[Token("▁up", 0.7, 1)], end_of_utterance=True)
+                return Step(tokens=[])
+
+            def reset_utterance(self):
+                pass
+
+        class Engine(ParakeetEngine):
+            def __init__(self):
+                self.config = ParakeetConfig()
+
+            device = "cpu"
+
+            def new_decoder(self):
+                return Decoder()
+
+        cfg = _enabled_config(parakeet_model_dir=str(tmp_path))
+        client = TestClient(_app(cfg))
+        with patch("openjarvis.speech.parakeet.unavailable_reason", return_value=None):
+            with patch("openjarvis.speech.parakeet.load_engine", return_value=Engine()):
+                with client.websocket_connect(
+                    "/v1/speech/flux?provider=parakeet"
+                ) as ws:
+                    ready = ws.receive_json()
+                    assert ready == {
+                        "type": "FluxReady",
+                        "eager": False,
+                        "provider": "parakeet",
+                        "device": "cpu",
+                    }
+                    for _ in range(8):
+                        ws.send_bytes(bytes(1600))  # 50 ms of silence
+                    events = []
+                    while True:
+                        event = ws.receive_json()
+                        events.append(event)
+                        if event["event"] == "EndOfTurn":
+                            break
+        assert [e["event"] for e in events] == [
+            "StartOfTurn",
+            "Update",
+            "Update",
+            "EndOfTurn",
+        ]
+        final = events[-1]
+        assert final["type"] == "TurnInfo"
+        assert final["transcript"] == "what's up"
+        assert final["words"] == [
+            {"word": "what's", "confidence": 0.85},
+            {"word": "up", "confidence": 0.7},
+        ]
+        assert "speculative_answer" not in final

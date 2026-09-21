@@ -57,6 +57,9 @@ CLOSE_UNAVAILABLE = 1011
 #: before precisely because the resolver will not offer one.
 CONNECT_ATTEMPTS = 2
 
+PROVIDER_FLUX = "flux"
+PROVIDER_PARAKEET = "parakeet"
+
 #: How long to stop trying Deepgram after every attempt has failed.
 #:
 #: Deliberately short. The cooldown exists only to stop a burst of turns each
@@ -121,6 +124,15 @@ async def flux_stream(websocket: WebSocket) -> None:
 
     config = getattr(websocket.app.state, "config", None)
     speech_cfg = getattr(config, "speech", None) if config else None
+
+    # The same socket carries either provider. Everything after the session
+    # is opened -- audio pump, event relay, speculation, error surfacing --
+    # is shared, so the browser's turn handling never learns which one it
+    # is talking to.
+    provider = (websocket.query_params.get("provider") or PROVIDER_FLUX).lower()
+    if provider == PROVIDER_PARAKEET:
+        await _parakeet_stream(websocket, subprotocol, config, speech_cfg)
+        return
 
     if not flux.is_available() or not getattr(speech_cfg, "flux_enabled", True):
         # Accept then close with a reason, so the client can show "Flux
@@ -216,11 +228,96 @@ async def flux_stream(websocket: WebSocket) -> None:
     # surfaced as an unhandled ASGI exception in the server log.
     try:
         await websocket.send_json(
-            {"type": "FluxReady", "eager": eager_threshold is not None}
+            {
+                "type": "FluxReady",
+                "eager": eager_threshold is not None,
+                "provider": PROVIDER_FLUX,
+            }
         )
     except WebSocketDisconnect:
         await session.close()
         return
+
+    await _relay_turns(
+        websocket,
+        session,
+        config=config,
+        eager_threshold=eager_threshold,
+        speculation_model=speculation_model,
+    )
+
+
+async def _parakeet_stream(
+    websocket: WebSocket, subprotocol: Any, config: Any, speech_cfg: Any
+) -> None:
+    """The local provider: same handshake and messages, no network."""
+    from openjarvis.speech import parakeet
+
+    model_dir = parakeet.weights.model_dir(
+        getattr(speech_cfg, "parakeet_model_dir", "")
+    )
+    quant = str(getattr(speech_cfg, "parakeet_quant", "") or "")
+    reason: Optional[str] = None
+    if not getattr(speech_cfg, "parakeet_enabled", True):
+        reason = "Parakeet is disabled on the server ([speech] parakeet_enabled)"
+    else:
+        reason = parakeet.unavailable_reason(model_dir=model_dir, quant=quant)
+    if reason:
+        await websocket.accept(subprotocol=subprotocol)
+        await websocket.send_json({"type": "FluxUnavailable", "reason": reason})
+        await websocket.close(code=CLOSE_UNAVAILABLE)
+        return
+
+    await websocket.accept(subprotocol=subprotocol)
+    try:
+        engine = await asyncio.to_thread(
+            parakeet.load_engine,
+            model_dir,
+            device=str(getattr(speech_cfg, "parakeet_device", "cuda") or "cuda"),
+            quant=quant,
+        )
+    except Exception as exc:
+        logger.warning("Parakeet failed to load: %s", exc)
+        with contextlib.suppress(Exception):
+            await websocket.send_json(
+                {"type": "FluxUnavailable", "reason": f"Parakeet failed to load: {exc}"}
+            )
+            await websocket.close(code=CLOSE_UNAVAILABLE)
+        return
+
+    session = parakeet.ParakeetSession(
+        engine,
+        eot_timeout_ms=int(getattr(speech_cfg, "parakeet_eot_timeout_ms", 900)),
+    )
+    try:
+        await websocket.send_json(
+            {
+                "type": "FluxReady",
+                "eager": False,
+                "provider": PROVIDER_PARAKEET,
+                "device": engine.device,
+            }
+        )
+    except WebSocketDisconnect:
+        await session.close()
+        return
+
+    # No eager threshold: Parakeet never emits EagerEndOfTurn, and passing
+    # None keeps the speculation branch of the relay inert by construction.
+    await _relay_turns(
+        websocket, session, config=config, eager_threshold=None, speculation_model=""
+    )
+
+
+async def _relay_turns(
+    websocket: WebSocket,
+    session: Any,
+    *,
+    config: Any,
+    eager_threshold: Optional[float],
+    speculation_model: str,
+) -> None:
+    """Pump audio in and turn events out until either side stops."""
 
     async def pump_audio() -> None:
         """Browser -> Deepgram. Ends when the client stops or disconnects."""
