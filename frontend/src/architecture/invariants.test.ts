@@ -675,7 +675,9 @@ describe('the microphone streams honour the noise setting', () => {
    */
   it('each stream reopens when the setting changes', () => {
     const flux = readFileSync(join(SRC, 'hooks', 'useFluxSpeech.ts'), 'utf8');
-    expect(flux).toMatch(/\}, \[enabled, eager, suppressNoise\]\)/);
+    // `provider` joined the list with Parakeet: the engine behind the
+    // socket is fixed at connect time exactly as suppression is.
+    expect(flux).toMatch(/\}, \[enabled, eager, suppressNoise, provider\]\)/);
     const wake = readFileSync(join(SRC, 'hooks', 'useWakeWord.ts'), 'utf8');
     expect(wake).toMatch(/\}, \[enabled, verify, suppressNoise\]\)/);
   });

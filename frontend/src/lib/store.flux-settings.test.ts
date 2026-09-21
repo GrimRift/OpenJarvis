@@ -92,3 +92,40 @@ describe('Flux settings', () => {
     expect(settings.speechEnabled).toBe(true);
   });
 });
+
+describe('speech providers', () => {
+  it('reads settings saved before providers existed as their Flux choice', async () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ fluxEnabled: true, fluxEagerEnabled: true }));
+    const useAppStore = await loadStore();
+    const { settings } = useAppStore.getState();
+    expect(settings.sttProvider).toBe('flux');
+    expect(settings.ttsProvider).toBe('cartesia');
+    expect(settings.fluxEnabled).toBe(true);
+    expect(settings.fluxEagerEnabled).toBe(true);
+  });
+
+  it('parakeet uses the streaming socket but never speculates', async () => {
+    const useAppStore = await loadStore();
+    useAppStore.getState().updateSettings({ sttProvider: 'parakeet', fluxEagerEnabled: true });
+    const { settings } = useAppStore.getState();
+    expect(settings.fluxEnabled).toBe(true);
+    expect(settings.fluxEagerEnabled).toBe(false);
+  });
+
+  it('choosing whisper switches streaming off, and back on keeps the last provider', async () => {
+    const useAppStore = await loadStore();
+    useAppStore.getState().updateSettings({ sttProvider: 'parakeet' });
+    useAppStore.getState().updateSettings({ fluxEnabled: false });
+    expect(useAppStore.getState().settings.sttProvider).toBe('whisper');
+    useAppStore.getState().updateSettings({ fluxEnabled: true });
+    expect(useAppStore.getState().settings.sttProvider).toBe('flux');
+  });
+
+  it('rejects an unknown provider from storage', async () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ sttProvider: 'nemo', ttsProvider: 'kokoro' }));
+    const useAppStore = await loadStore();
+    const { settings } = useAppStore.getState();
+    expect(settings.sttProvider).toBe('whisper');
+    expect(settings.ttsProvider).toBe('cartesia');
+  });
+});

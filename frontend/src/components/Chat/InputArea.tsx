@@ -310,10 +310,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }
   };
   const fluxEnabled = useAppStore((s) => s.settings.fluxEnabled);
+  const sttProvider = useAppStore((s) => s.settings.sttProvider);
   const voiceRepliesEnabled = useAppStore((s) => s.settings.voiceRepliesEnabled);
   const speakTypedReplies = useAppStore((s) => s.settings.speakTypedReplies);
   const ttsVoiceId = useAppStore((s) => s.settings.ttsVoiceId);
-  const ttsVoice = getVoiceProfile(ttsVoiceId);
+  const ttsProvider = useAppStore((s) => s.settings.ttsProvider);
+  const ttsVoice = getVoiceProfile(ttsVoiceId, ttsProvider);
   const fluxEagerEnabled = useAppStore((s) => s.settings.fluxEagerEnabled);
   // Flux replaces the local silence timer as the end-of-turn decision.
   // Declared here because handleMicClick, defined well above the Flux
@@ -1234,6 +1236,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               voice_id: ttsVoice.id,
               speed: ttsVoice.speed,
               volume: ttsVoice.volume,
+              backend: ttsVoice.provider,
             }).then((meta) => {
               updateLastAssistant(
                 convId,
@@ -1282,6 +1285,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               voice_id: ttsVoice.id,
               speed: ttsVoice.speed,
               volume: ttsVoice.volume,
+              backend: ttsVoice.provider,
             }).then((meta) => {
               updateLastAssistant(
                 convId,
@@ -1416,6 +1420,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               voice_id: ttsVoice.id,
               speed: ttsVoice.speed,
               volume: ttsVoice.volume,
+              backend: ttsVoice.provider,
             }).then((meta) => {
               updateLastAssistant(
                 convId,
@@ -1724,6 +1729,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const flux = useFluxSpeech({
     enabled: fluxActive,
     eager: fluxEagerEnabled,
+    provider: sttProvider === 'parakeet' ? 'parakeet' : 'flux',
     suppressNoise: noiseSuppression !== 'off',
     model: selectedModel,
     onEndOfTurn: handleFluxEndOfTurn,

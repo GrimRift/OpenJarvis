@@ -19,7 +19,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, type ThemeMode, type WakeWordVerify } from '../lib/store';
-import { VOICE_PROFILES } from '../lib/voice-profiles';
+import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import type { BargeMode } from '../lib/barge-in';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
 import { fetchKeyterms, parseTerms, saveKeyterms, type Keyterms } from '../lib/keyterms';
@@ -53,6 +53,7 @@ import {
   type MomentsSnapshot,
   type InferenceSource,
   type PresenceSettings,
+  type SpeechHealth,
 } from '../lib/api';
 import { isAutoUpdateDisabled, setAutoUpdateDisabled } from '../components/Desktop/UpdateChecker';
 
@@ -283,6 +284,8 @@ export function SettingsPage() {
   const [wakeWordAvailable, setWakeWordAvailable] = useState<boolean | null>(null);
   const [fluxAvailable, setFluxAvailable] = useState<boolean | null>(null);
   const [fluxReason, setFluxReason] = useState<string>('');
+  const [speechHealth, setSpeechHealth] = useState<SpeechHealth | null>(null);
+  const [speechChecking, setSpeechChecking] = useState(true);
   const [saved, setSaved] = useState(false);
   const [volumes, setVolumes] = useState<Volumes | null>(null);
   const [volumeError, setVolumeError] = useState<string | null>(null);
@@ -474,38 +477,51 @@ export function SettingsPage() {
     }
   }, [srcKind, customHost, customModel, customEngine, customKey]);
 
-  useEffect(() => {
-    checkHealth().then(setHealthy);
+  const refreshSpeechHealth = useCallback(() => {
+    setSpeechChecking(true);
     fetchSpeechHealth()
       .then((h) => {
+        setSpeechHealth(h);
         setSpeechBackendAvailable(h.available);
         setWakeWordAvailable(!!h.wake_word_available);
         setFluxAvailable(!!h.flux_available);
         setFluxReason(h.flux_reason || '');
       })
       .catch(() => {
+        setSpeechHealth(null);
         setSpeechBackendAvailable(false);
         setWakeWordAvailable(false);
         setFluxAvailable(false);
         setFluxReason('server unreachable');
-      });
+      })
+      .finally(() => setSpeechChecking(false));
+  }, []);
+
+  useEffect(() => {
+    checkHealth().then(setHealthy);
+    refreshSpeechHealth();
     getMemoryStats()
       .then(setMemoryStats)
       .catch(() => setMemoryStats(null));
-  }, []);
+  }, [refreshSpeechHealth]);
 
   // Which of the three voice modes is actually in effect. Flux enabled but
   // unavailable reports the fallback rather than claiming the chosen mode.
+  const parakeetAvailable = speechHealth?.stt?.parakeet?.available ?? null;
   const voiceModeLabel =
-    !settings.fluxEnabled
+    settings.sttProvider === 'whisper'
       ? 'Local (faster-whisper)'
-      : fluxAvailable === false
-        ? 'Local — Flux unavailable, using fallback'
-        : fluxAvailable === null
-          ? 'Checking…'
-          : settings.fluxEagerEnabled
-            ? 'Flux Ultra (speculative)'
-            : 'Flux Standard';
+      : settings.sttProvider === 'parakeet'
+        ? parakeetAvailable === false
+          ? 'Local — Parakeet unavailable, using Whisper fallback'
+          : 'Parakeet (local streaming)'
+        : fluxAvailable === false
+          ? 'Local — Flux unavailable, using fallback'
+          : fluxAvailable === null
+            ? 'Checking…'
+            : settings.fluxEagerEnabled
+              ? 'Flux Ultra (speculative)'
+              : 'Flux Standard';
 
   const showSaved = () => {
     setSaved(true);
@@ -1040,28 +1056,14 @@ export function SettingsPage() {
           </Section>
 
           <Section title="Speech">
-            <SettingRow label="Sage voice" description="Used for voice replies, morning-digest playback, and wake-word greetings">
-              <select
-                aria-label="Sage voice"
-                value={settings.ttsVoiceId}
-                onChange={(event) => {
-                  updateSettings({ ttsVoiceId: event.target.value });
-                  showSaved();
-                }}
-                className="px-3 py-2 rounded-lg text-sm cursor-pointer"
-                style={{
-                  background: 'var(--color-bg-tertiary)',
-                  color: 'var(--color-text-primary)',
-                  border: '1px solid var(--color-border)',
-                }}
-              >
-                {VOICE_PROFILES.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </option>
-                ))}
-              </select>
-            </SettingRow>
+            <VoiceProviders
+              health={speechHealth}
+              checking={speechChecking}
+              onRefresh={refreshSpeechHealth}
+              onSaved={showSaved}
+              Row={SettingRow}
+              Switch={Switch}
+            />
             <SettingRow label="Speech-to-Text" description="Enable microphone input for voice dictation">
               <button
                 onClick={() => { updateSettings({ speechEnabled: !settings.speechEnabled }); showSaved(); }}
@@ -1255,57 +1257,22 @@ export function SettingsPage() {
                   </button>
                 </SettingRow>
                 <SettingRow
-                  label="Deepgram Flux cloud speech-to-text"
-                  description={
-                    fluxAvailable === false
-                      ? `Unavailable — ${fluxReason || 'not configured on the server'}. Using local transcription.`
-                      : 'Stream speech to Deepgram and let the model decide when your turn ended, instead of waiting for a fixed pause. Local transcription stays the fallback.'
-                  }
-                >
-                  <button
-                    disabled={fluxAvailable === false}
-                    onClick={() => {
-                      const next = !settings.fluxEnabled;
-                      // Ultra depends on Flux, so turning Flux off must turn
-                      // speculation off with it.
-                      updateSettings({
-                        fluxEnabled: next,
-                        ...(next ? {} : { fluxEagerEnabled: false }),
-                      });
-                      showSaved();
-                    }}
-                    className="relative w-11 h-6 rounded-full transition-colors"
-                    style={{
-                      background: settings.fluxEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
-                      cursor: fluxAvailable === false ? 'not-allowed' : 'pointer',
-                      opacity: fluxAvailable === false ? 0.5 : 1,
-                    }}
-                  >
-                    <span
-                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
-                      style={{
-                        transform: settings.fluxEnabled ? 'translateX(20px)' : 'translateX(0)',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-                      }}
-                    />
-                  </button>
-                </SettingRow>
-                <SettingRow
                   label="Ultra-low-latency voice"
                   description="Start answering before Deepgram confirms you finished, and discard that work if you keep talking. Speculative answers are never spoken, shown, or allowed to run tools before confirmation. May start extra cloud LLM requests that are thrown away, increasing usage."
                 >
                   <button
-                    disabled={!settings.fluxEnabled || fluxAvailable === false}
+                    disabled={settings.sttProvider !== 'flux' || fluxAvailable === false}
                     onClick={() => {
-                      if (!settings.fluxEnabled) return;
+                      // Speculation is Flux's; Parakeet has no eager end of turn.
+                      if (settings.sttProvider !== 'flux') return;
                       updateSettings({ fluxEagerEnabled: !settings.fluxEagerEnabled });
                       showSaved();
                     }}
                     className="relative w-11 h-6 rounded-full transition-colors"
                     style={{
                       background: settings.fluxEagerEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',
-                      cursor: !settings.fluxEnabled || fluxAvailable === false ? 'not-allowed' : 'pointer',
-                      opacity: !settings.fluxEnabled || fluxAvailable === false ? 0.5 : 1,
+                      cursor: settings.sttProvider !== 'flux' || fluxAvailable === false ? 'not-allowed' : 'pointer',
+                      opacity: settings.sttProvider !== 'flux' || fluxAvailable === false ? 0.5 : 1,
                     }}
                   >
                     <span

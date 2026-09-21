@@ -1152,6 +1152,67 @@ async def save_wake_word_sample(request: Request):
 _SYNTHESIZED_AUDIO: Dict[str, str] = {}
 
 
+@speech_router.get("/voices")
+async def list_speech_voices(request: Request):
+    """Every voice either provider can speak with.
+
+    Cartesia's profiles are fixed in the frontend; the local voices are
+    whatever reference recordings exist, so those come from the server.
+    """
+    from openjarvis.speech import chatterbox_tts
+    from openjarvis.speech.providers import default_tts_provider
+
+    cfg = getattr(request.app.state, "config", None)
+    speech_cfg = getattr(cfg, "speech", None) if cfg else None
+    local = await asyncio.to_thread(chatterbox_tts.list_voices, speech_cfg)
+    return {
+        "default_provider": default_tts_provider(speech_cfg),
+        "chatterbox": local,
+    }
+
+
+@speech_router.post("/voices/{name}")
+async def upload_speech_voice(name: str, request: Request):
+    """Store a reference recording as local voice *name* (multipart ``file``)."""
+    from openjarvis.speech import chatterbox_tts
+
+    safe = "".join(c for c in name.lower() if c.isalnum() or c in "-_")
+    if not safe:
+        raise HTTPException(status_code=400, detail="Invalid voice name")
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="Missing file")
+    data = await upload.read()
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Recording larger than 50 MB")
+    cfg = getattr(request.app.state, "config", None)
+    speech_cfg = getattr(cfg, "speech", None) if cfg else None
+    try:
+        info = await asyncio.to_thread(
+            chatterbox_tts.upload_voice,
+            speech_cfg,
+            safe,
+            getattr(upload, "filename", "") or "reference.wav",
+            data,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return info
+
+
+@speech_router.delete("/voices/{name}")
+async def delete_speech_voice(name: str, request: Request):
+    from openjarvis.speech import chatterbox_tts
+
+    safe = "".join(c for c in name.lower() if c.isalnum() or c in "-_")
+    if not safe:
+        raise HTTPException(status_code=400, detail="Invalid voice name")
+    cfg = getattr(request.app.state, "config", None)
+    speech_cfg = getattr(cfg, "speech", None) if cfg else None
+    return await asyncio.to_thread(chatterbox_tts.delete_voice, speech_cfg, safe)
+
+
 @speech_router.post("/synthesize")
 async def synthesize_speech(request: Request):
     """Synthesize text to speech and return a URL to fetch the audio from."""
@@ -1165,14 +1226,27 @@ async def synthesize_speech(request: Request):
     if not text:
         raise HTTPException(status_code=400, detail="Missing text")
 
+    from openjarvis.speech.chatterbox_tts import is_chatterbox_voice_id
+    from openjarvis.speech.providers import default_tts_provider
     from openjarvis.tools.text_to_speech import TextToSpeechTool
+
+    voice_id = str(body.get("voice_id", "") or "")
+    backend = str(body.get("backend") or "").strip().lower()
+    if not backend:
+        # A local voice id names its engine; otherwise the server's default.
+        cfg = getattr(request.app.state, "config", None)
+        backend = (
+            "chatterbox"
+            if is_chatterbox_voice_id(voice_id)
+            else default_tts_provider(getattr(cfg, "speech", None))
+        )
 
     tool = TextToSpeechTool()
     result = await asyncio.to_thread(
         tool.execute,
         text=text,
-        voice_id=body.get("voice_id", ""),
-        backend=body.get("backend", "cartesia"),
+        voice_id=voice_id,
+        backend=backend,
         speed=body.get("speed", 1.0),
         volume=body.get("volume", 1.0),
     )
@@ -1190,7 +1264,9 @@ async def get_synthesized_audio(token: str):
     path = _SYNTHESIZED_AUDIO.get(token)
     if not path or not Path(path).exists():
         raise HTTPException(status_code=404, detail="Audio not found")
-    return FileResponse(path, media_type="audio/mpeg")
+    # The local voice writes WAV; a wrong MIME type here plays as silence.
+    media = "audio/wav" if path.lower().endswith(".wav") else "audio/mpeg"
+    return FileResponse(path, media_type=media)
 
 
 @speech_router.post("/trace")

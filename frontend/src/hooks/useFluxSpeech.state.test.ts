@@ -265,3 +265,21 @@ describe('turnSurvivesStatus', () => {
     expect(turnSurvivesStatus('connecting')).toBe(false);
   });
 });
+
+describe('the socket URL names the provider', () => {
+  it('flux is the default and the only one that may speculate', async () => {
+    const { buildFluxWsUrl } = await import('./useFluxSpeech');
+    const g = globalThis as unknown as { window?: { location: { origin: string } } };
+    const saved = g.window;
+    g.window = { location: { origin: 'http://localhost:8000' } };
+    try {
+      expect(buildFluxWsUrl(true, 'm')).toBe('ws://localhost:8000/v1/speech/flux?eager=1&model=m');
+      expect(buildFluxWsUrl(true, 'm', 'flux')).toContain('eager=1');
+      const parakeet = buildFluxWsUrl(true, 'm', 'parakeet');
+      expect(parakeet).toContain('provider=parakeet');
+      expect(parakeet).not.toContain('eager');
+    } finally {
+      g.window = saved;
+    }
+  });
+});

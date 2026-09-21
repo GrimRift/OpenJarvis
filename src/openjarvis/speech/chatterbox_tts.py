@@ -233,6 +233,78 @@ def _transcode(wav: bytes, output_format: str) -> tuple[bytes, str]:
         return wav, "wav"
 
 
+def list_voices(speech_cfg: Any) -> Dict[str, Any]:
+    """Voices with their metadata, from the sidecar when it is up."""
+    health = sidecar.fetch_health(speech_cfg)
+    if health:
+        try:
+            return _http_json(sidecar.base_url(speech_cfg) + "/voices", timeout=5.0)
+        except Exception:
+            logger.debug("sidecar /voices failed", exc_info=True)
+    names = _voice_names_from_disk()
+    return {
+        "default": str(
+            getattr(speech_cfg, "chatterbox_voice", DEFAULT_VOICE) or DEFAULT_VOICE
+        ),
+        "current": None,
+        "voices": [
+            {"name": n, "has_reference": True, "has_conditioning": False} for n in names
+        ],
+    }
+
+
+def upload_voice(
+    speech_cfg: Any, name: str, filename: str, data: bytes
+) -> Dict[str, Any]:
+    """Hand a reference recording to the sidecar, which converts it, stores
+    it under the voices directory and conditions the model on it."""
+    health = sidecar.process().ensure_started(
+        speech_cfg, wait=sidecar.START_TIMEOUT_SECONDS
+    )
+    if not health:
+        raise RuntimeError(sidecar.process().last_error or "voice sidecar unavailable")
+    boundary = "----SageVoiceUpload"
+    safe_name = (filename or "reference.wav").replace('"', "")
+    crlf = "\r\n"
+    head = (
+        f"--{boundary}{crlf}"
+        f'Content-Disposition: form-data; name="file"; filename="{safe_name}"{crlf}'
+        f"Content-Type: application/octet-stream{crlf}{crlf}"
+    )
+    tail = f"{crlf}--{boundary}--{crlf}"
+    body = head.encode("utf-8") + data + tail.encode("utf-8")
+    try:
+        return _http_json(
+            f"{sidecar.base_url(speech_cfg)}/voices/{name}",
+            method="POST",
+            body=body,
+            timeout=180.0,
+            content_type=f"multipart/form-data; boundary={boundary}",
+        )
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"voice sidecar refused the recording: {detail}") from exc
+
+
+def delete_voice(speech_cfg: Any, name: str) -> Dict[str, Any]:
+    if sidecar.fetch_health(speech_cfg):
+        try:
+            return _http_json(
+                f"{sidecar.base_url(speech_cfg)}/voices/{name}",
+                method="DELETE",
+                timeout=10.0,
+            )
+        except Exception:
+            logger.debug("sidecar delete failed; removing on disk", exc_info=True)
+    import shutil
+
+    folder = sidecar.voices_dir() / name
+    if folder.exists():
+        shutil.rmtree(folder)
+        return {"removed": True}
+    return {"removed": False}
+
+
 class ChatterboxContext:
     """One reply's streaming session with the sidecar.
 
@@ -349,6 +421,9 @@ class ChatterboxContext:
 
 
 __all__ = [
+    "delete_voice",
+    "list_voices",
+    "upload_voice",
     "STREAM_ENCODING",
     "STREAM_SAMPLE_RATE",
     "VOICE_ID_PREFIX",

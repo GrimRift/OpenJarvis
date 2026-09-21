@@ -247,6 +247,9 @@ export function useStreamingTts() {
             voice_id: voice.id,
             speed: voice.speed,
             volume: voice.volume,
+            // Which engine synthesises this reply; the audio protocol back
+            // is the same for both.
+            provider: voice.provider,
           }),
         );
       };

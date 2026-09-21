@@ -3,6 +3,30 @@ import { DEFAULT_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
 import { type BargeMode, BARGE_MODES, DEFAULT_BARGE_MODE } from './barge-in';
 
 export type WakeWordVerify = 'local' | 'off';
+// Streaming transcription: Deepgram Flux (cloud), NVIDIA Parakeet (local),
+// or none -- 'whisper' is the push-to-talk faster-whisper path that was the
+// default before either existed and remains the fallback for both.
+export type SttProvider = 'flux' | 'parakeet' | 'whisper';
+export const STT_PROVIDERS: readonly SttProvider[] = ['flux', 'parakeet', 'whisper'];
+export type TtsProvider = 'cartesia' | 'chatterbox';
+export const TTS_PROVIDERS: readonly TtsProvider[] = ['cartesia', 'chatterbox'];
+
+/** Keep the provider choice and the older flags telling one story. */
+export function normaliseSpeechProviders<T extends {
+  sttProvider: SttProvider;
+  fluxEnabled: boolean;
+  fluxEagerEnabled: boolean;
+}>(settings: T): T {
+  // `fluxEnabled` predates providers and still gates the streaming socket
+  // in InputArea; both streaming providers use that socket.
+  const fluxEnabled = settings.sttProvider !== 'whisper';
+  // Ultra is Flux's speculation. Parakeet has no eager end of turn, and a
+  // stored combination with eager on and streaming off must not
+  // resurrect it.
+  const fluxEagerEnabled =
+    settings.sttProvider === 'flux' ? settings.fluxEagerEnabled : false;
+  return { ...settings, fluxEnabled, fluxEagerEnabled };
+}
 export const WAKE_WORD_VERIFY_MODES: readonly WakeWordVerify[] = ['local', 'off'];
 export const LISTEN_SECONDS_MIN = 3;
 export const LISTEN_SECONDS_MAX = 30;
@@ -285,8 +309,10 @@ interface Settings {
   /** How sure the words must be before they cut (lib/barge-in.ts). */
   bargeInMode: BargeMode;
   ttsVoiceId: string;
-  // Deepgram Flux streaming transcription. Off by default: local
-  // faster-whisper stays the default and the fallback.
+  sttProvider: SttProvider;
+  ttsProvider: TtsProvider;
+  // Derived from sttProvider (see normaliseSpeechProviders): true for any
+  // streaming provider. Kept because it gates the streaming socket.
   fluxEnabled: boolean;
   // Speculative EagerEndOfTurn work. Dependent on fluxEnabled, and separately
   // opt-in because it can start extra cloud LLM generations that are
@@ -325,6 +351,8 @@ function loadSettings(): Settings {
     diagramsAutomatic: true,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
     ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
+    sttProvider: 'whisper',
+    ttsProvider: 'cartesia',
     fluxEnabled: false,
     fluxEagerEnabled: false,
   };
@@ -354,11 +382,14 @@ function loadSettings(): Settings {
         DEFAULT_LISTEN_SECONDS,
       ),
     };
-    // Ultra depends on Flux. A stored combination with eager on and Flux off
-    // (settings edited by hand, or Flux switched off while eager stayed set)
-    // must not resurrect speculation.
-    if (!merged.fluxEnabled) merged.fluxEagerEnabled = false;
-    return merged;
+    // Settings saved before providers existed carry only fluxEnabled.
+    if (!STT_PROVIDERS.includes(parsed.sttProvider)) {
+      merged.sttProvider = parsed.fluxEnabled ? 'flux' : 'whisper';
+    }
+    if (!TTS_PROVIDERS.includes(parsed.ttsProvider)) {
+      merged.ttsProvider = defaults.ttsProvider;
+    }
+    return normaliseSpeechProviders(merged);
   } catch {
     return defaults;
   }
@@ -889,7 +920,18 @@ export const useAppStore = create<AppState>((set, get) => {
     // ── Settings ───────────────────────────────────────────────────
 
     updateSettings: (partial: Partial<Settings>) => {
-      const updated = { ...get().settings, ...partial };
+      const current = get().settings;
+      const next = { ...current, ...partial };
+      // Older callers toggle fluxEnabled directly; read that as a provider
+      // choice so the two never disagree.
+      if ('fluxEnabled' in partial && !('sttProvider' in partial)) {
+        next.sttProvider = partial.fluxEnabled
+          ? current.sttProvider === 'whisper'
+            ? 'flux'
+            : current.sttProvider
+          : 'whisper';
+      }
+      const updated = normaliseSpeechProviders(next);
       saveSettings(updated);
       set({ settings: updated });
     },

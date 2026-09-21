@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_LOCAL_VOICE_PROFILE,
   DEFAULT_VOICE_PROFILE,
   getVoiceProfile,
+  isKnownVoiceId,
+  profilesFor,
   VOICE_PROFILES,
 } from './voice-profiles';
 
@@ -13,6 +16,7 @@ describe('Sage voice profiles', () => {
       name: 'Jarvis',
       speed: 1,
       volume: 1.9,
+      provider: 'cartesia',
     });
   });
 
@@ -27,5 +31,29 @@ describe('Sage voice profiles', () => {
 
   it('fails closed to Jarvis for a stale stored voice', () => {
     expect(getVoiceProfile('removed-voice')).toBe(DEFAULT_VOICE_PROFILE);
+  });
+
+  it('resolves a voice for the engine in force, never the other one', () => {
+    // A stored Cartesia voice under the local engine speaks the local
+    // default, and vice versa: the engine decides, the id only picks
+    // among that engine's voices.
+    expect(getVoiceProfile(DEFAULT_VOICE_PROFILE.id, 'chatterbox')).toBe(DEFAULT_LOCAL_VOICE_PROFILE);
+    expect(getVoiceProfile('chatterbox:jarvis', 'cartesia')).toBe(DEFAULT_VOICE_PROFILE);
+    expect(getVoiceProfile('chatterbox:jarvis', 'chatterbox').provider).toBe('chatterbox');
+    // Any named local voice the server reports is acceptable.
+    const custom = getVoiceProfile('chatterbox:butler', 'chatterbox');
+    expect(custom).toMatchObject({ id: 'chatterbox:butler', provider: 'chatterbox', name: 'Butler (local)' });
+    expect(isKnownVoiceId('chatterbox:butler')).toBe(true);
+    expect(isKnownVoiceId('chatterbox:')).toBe(false);
+  });
+
+  it('lists only the voices the chosen engine can speak', () => {
+    expect(profilesFor('cartesia').every((p) => p.provider === 'cartesia')).toBe(true);
+    expect(profilesFor('chatterbox', ['jarvis', 'butler']).map((p) => p.id)).toEqual([
+      'chatterbox:jarvis',
+      'chatterbox:butler',
+    ]);
+    // With nothing reported yet the default local voice is still offered.
+    expect(profilesFor('chatterbox').map((p) => p.id)).toEqual(['chatterbox:jarvis']);
   });
 });

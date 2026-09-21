@@ -66,11 +66,19 @@ export interface FluxTurn {
   confidence: number;
 }
 
+export type StreamingSttProvider = 'flux' | 'parakeet';
+
 export interface UseFluxSpeechOptions {
-  /** Flux mode is selected and should hold a session open. */
+  /** A streaming provider is selected and should hold a session open. */
   enabled: boolean;
   /** Ultra mode — ask the server for speculative EagerEndOfTurn events. */
   eager: boolean;
+  /**
+   * Which engine the server should run behind the socket. The messages are
+   * the same either way; Parakeet just never sends the eager events.
+   * Default 'flux'.
+   */
+  provider?: StreamingSttProvider;
   /** Let the browser strip steady background noise. Default true. */
   suppressNoise?: boolean;
   /**
@@ -225,12 +233,19 @@ export function interpretFluxMessage(
   }
 }
 
-export function buildFluxWsUrl(eager: boolean, model?: string): string {
+export function buildFluxWsUrl(
+  eager: boolean,
+  model?: string,
+  provider: StreamingSttProvider = 'flux',
+): string {
   const base = getBase();
   const url = new URL('/v1/speech/flux', base || window.location.origin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  if (eager) url.searchParams.set('eager', '1');
+  // Eager is Flux's speculation; asking Parakeet for it would only make
+  // the server report a mode it cannot honour.
+  if (eager && provider === 'flux') url.searchParams.set('eager', '1');
   if (model) url.searchParams.set('model', model);
+  if (provider !== 'flux') url.searchParams.set('provider', provider);
   return url.toString();
 }
 
@@ -262,6 +277,7 @@ function downsample(input: Float32Array, fromRate: number): Int16Array {
  */
 export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const { enabled, eager, model, suppressNoise } = options;
+  const provider: StreamingSttProvider = options.provider ?? 'flux';
   // Read at connect time, never a dependency of the connect effect. Making it
   // one tore the socket down whenever the selected model changed -- and
   // `setCloudModelAvailable` changes it on load. A reconnect mid-turn means
@@ -471,7 +487,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     }
     streamRef.current = stream;
 
-    const ws = new WebSocket(buildFluxWsUrl(eager, modelRef.current), buildWsProtocols());
+    const ws = new WebSocket(
+      buildFluxWsUrl(eager, modelRef.current, provider),
+      buildWsProtocols(),
+    );
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
@@ -705,7 +724,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // connect/teardown are stable; re-running on `eager` is intended, since
     // the flag is part of the socket URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, eager, suppressNoise]);
+  }, [enabled, eager, suppressNoise, provider]);
 
   return {
     status,

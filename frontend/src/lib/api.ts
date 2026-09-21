@@ -327,6 +327,23 @@ export interface TranscriptionResult {
   duration_seconds: number;
 }
 
+export interface ProviderStatus {
+  available: boolean;
+  reason?: string;
+  /** Local engines: which device they run on, once loaded. */
+  device?: string | null;
+  requested_device?: string;
+  loaded?: boolean;
+  /** Chatterbox only. */
+  sidecar_running?: boolean;
+  model_loaded?: boolean;
+  voice?: string;
+  voice_ready?: boolean;
+  voices?: string[];
+  load_seconds?: number;
+  last_generation_seconds?: number;
+}
+
 export interface SpeechHealth {
   available: boolean;
   backend?: string;
@@ -336,6 +353,78 @@ export interface SpeechHealth {
   flux_available?: boolean;
   /** Why Flux is unavailable. Never contains the key itself. */
   flux_reason?: string;
+  /** Every provider, capability only (never the user's choice). */
+  stt?: { flux?: ProviderStatus; parakeet?: ProviderStatus };
+  tts?: { cartesia?: ProviderStatus; chatterbox?: ProviderStatus };
+}
+
+export interface LocalVoiceInfo {
+  name: string;
+  has_reference: boolean;
+  has_conditioning?: boolean;
+  reference_seconds?: number;
+  params?: Record<string, number>;
+}
+
+export interface SpeechVoices {
+  default_provider: string;
+  chatterbox: { default: string; current: string | null; voices: LocalVoiceInfo[] };
+}
+
+export async function fetchSpeechVoices(): Promise<SpeechVoices> {
+  const res = await apiFetch('/v1/speech/voices');
+  if (!res.ok) throw new Error(`Voices request failed: ${res.status}`);
+  return res.json();
+}
+
+export async function uploadSpeechVoice(name: string, file: File): Promise<LocalVoiceInfo> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await apiFetch(`/v1/speech/voices/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = typeof body.detail === 'string' ? body.detail : '';
+    } catch {
+      /* status-only message below */
+    }
+    throw new Error(detail || `Voice upload failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * A short clip in a voice, for the Settings "Test" button. Deliberately not
+ * `synthesizeSpeech`: that one is the batch fallback behind a streaming
+ * attempt, and the architecture test holds every caller to that order. A
+ * preview is not a reply.
+ */
+export async function previewVoice(text: string, options: SynthesizeOptions): Promise<SynthesizeResult> {
+  const res = await apiFetch(`/v1/speech/synthesize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, ...options }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = typeof body.detail === 'string' ? body.detail : '';
+    } catch {
+      /* status-only message below */
+    }
+    throw new Error(detail || `Voice preview failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteSpeechVoice(name: string): Promise<void> {
+  const res = await apiFetch(`/v1/speech/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Voice delete failed: ${res.status}`);
 }
 
 export async function transcribeAudio(audioBlob: Blob, filename = 'recording.webm'): Promise<TranscriptionResult> {
@@ -378,6 +467,8 @@ export interface SynthesizeOptions {
   voice_id: string;
   speed: number;
   volume: number;
+  /** 'cartesia' | 'chatterbox'; the server infers it from a chatterbox: id too. */
+  backend?: string;
 }
 
 export async function synthesizeSpeech(
