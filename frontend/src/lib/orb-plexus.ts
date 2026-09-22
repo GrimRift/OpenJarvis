@@ -63,7 +63,9 @@ export const PLEXUS_PATCHES: Record<OrbState, { base: number; swing: number; kic
   away: { base: 0.8, swing: 0.16, kick: 0, fall: 0.97 },
   idle: { base: 0.8, swing: 0.16, kick: 0, fall: 0.97 },
   listening: { base: 0.72, swing: 0.22, kick: 0.8, fall: 0.945 },
-  speaking: { base: 0.8, swing: 0.2, kick: 0.9, fall: 0.905 },
+  // Falls slower than the light can rise, or the target is gone before
+  // the patch reaches it and a syllable shows as a 14% nudge.
+  speaking: { base: 0.8, swing: 0.2, kick: 1.05, fall: 0.932 },
 };
 
 /** How deep the breath goes, per state. Idle holds still; a resting orb that
@@ -582,12 +584,23 @@ export function drawPlexus(
     }
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.lineWidth = 0.7 * Math.max(0.6, breath);
+    // Line width scales with the canvas, like everything else does. Held at
+    // a fixed 0.7 while the orb, the dots and the blur all grew with size,
+    // the web came out 27% thinner per unit area on the 764px Voice orb and
+    // 18% too thick on the 473px chat one -- the Voice page showed a field
+    // of dots with barely a line between them.
+    const idealWidth = 0.7 * sizeScale * Math.max(0.6, breath);
+    // Canvas renders a sub-pixel stroke by reducing its coverage, so below
+    // a pixel it fades instead of thinning. Draw it a pixel wide and take
+    // the difference out of the alpha, which is the same amount of light.
+    const drawWidth = Math.max(0.85, idealWidth);
+    const widthAlpha = idealWidth / drawWidth;
+    ctx.lineWidth = drawWidth;
     for (let b = 0; b < LINK_BANDS; b++) {
       const buf = bandBuffers[b];
       if (!buf.length) continue;
       ctx.strokeStyle = RAMP[Math.min(RAMP_STEPS - 1, 3 + b * 3)];
-      ctx.globalAlpha = ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA;
+      ctx.globalAlpha = ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha;
       ctx.beginPath();
       for (let i = 0; i < buf.length; i += 4) {
         ctx.moveTo(buf[i], buf[i + 1]);

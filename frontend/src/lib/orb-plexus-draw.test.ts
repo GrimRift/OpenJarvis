@@ -19,6 +19,8 @@ interface Recorded {
   lineSegments: number;
   alphas: number[];
   coords: number[];
+  /** alpha x width per stroked band: what a line actually puts on screen. */
+  inks: number[];
 }
 
 function stubContext(record: Recorded) {
@@ -38,7 +40,11 @@ function stubContext(record: Recorded) {
     arc: () => {},
     moveTo: (x: number, y: number) => { record.coords.push(x, y); },
     lineTo: (x: number, y: number) => { record.coords.push(x, y); record.lineSegments++; },
-    stroke: () => { record.strokes++; record.alphas.push(ctx.globalAlpha as number); },
+    stroke: () => {
+      record.strokes++;
+      record.alphas.push(ctx.globalAlpha as number);
+      record.inks.push((ctx.globalAlpha as number) * (ctx.lineWidth as number));
+    },
     fill: () => {},
     fillRect: (x: number, y: number) => {
       record.fills++;
@@ -58,13 +64,14 @@ let previousDocument: unknown;
 // One record, mutated in place. The renderer draws to offscreen surfaces it
 // creates itself and caches by size, so the contexts outlive any one test --
 // replacing the object would leave them writing into a discarded one.
-const shared: Recorded = { strokes: 0, fills: 0, lineSegments: 0, alphas: [], coords: [] };
+const shared: Recorded = { strokes: 0, fills: 0, lineSegments: 0, alphas: [], coords: [], inks: [] };
 function resetRecord() {
   shared.strokes = 0;
   shared.fills = 0;
   shared.lineSegments = 0;
   shared.alphas.length = 0;
   shared.coords.length = 0;
+  shared.inks.length = 0;
 }
 
 beforeEach(() => {
@@ -162,7 +169,31 @@ describe('a syllable swells rather than switching on', () => {
       drawPlexus(target, canvas, S, 'speaking', f, 1, 0.9);
       peak = Math.max(peak, Math.max(...S.lobes));
     }
-    expect(peak).toBeGreaterThan(before + 0.15);
+    expect(peak).toBeGreaterThan(before + 0.2);
     expect(firstFrame).toBeLessThan(peak - 0.05);
+  });
+});
+
+describe('the web keeps its weight at any canvas size', () => {
+  it('puts the same ink per unit area on a small orb as a large one', () => {
+    // Everything scales with the canvas -- the orb, the dots, the bloom --
+    // so the lines must too. Held at a fixed width they came out 27%
+    // thinner per unit area on the 764px Voice orb, which showed a field
+    // of dots with barely a line between them.
+    const inkDensity = (w: number) => {
+      resetRecord();
+      const target = stubContext(shared);
+      const canvas = { width: w, height: w } as HTMLCanvasElement;
+      const S = createPlexusState();
+      for (let f = 0; f < 20; f++) drawPlexus(target, canvas, S, 'listening', f, 1, 0);
+      // One stroke per band; its ink covers a length that scales with the
+      // orb, over an area that scales with its square.
+      const ink = shared.inks.reduce((a, b) => a + b, 0) * w;
+      return ink / (w * w);
+    };
+    const small = inkDensity(473);
+    const large = inkDensity(764);
+    expect(large).toBeGreaterThan(small * 0.75);
+    expect(large).toBeLessThan(small * 1.33);
   });
 });
