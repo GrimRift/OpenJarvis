@@ -136,7 +136,7 @@ describe('the body does not densify as it shrinks', () => {
     // Link reach is scaled by the orb's own size. Fixed in object space, a
     // contracted idle orb drew 20,780 lines against listening's 7,400 --
     // densest and slowest exactly where it should be calmest.
-    const small = run('idle', 120).record.lineSegments;
+    const small = run('away', 120).record.lineSegments;
     const large = run('listening', 120).record.lineSegments;
     expect(small).toBeLessThan(large * 1.6);
   });

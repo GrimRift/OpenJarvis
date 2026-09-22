@@ -11,15 +11,19 @@ import {
 } from './orb-plexus';
 
 describe('breathing', () => {
-  it('holds idle perfectly still', () => {
-    // A resting orb that keeps inflating reads as restless, not calm.
+  it('holds an unwatched orb perfectly still', () => {
+    // Nobody is there to see it; an orb that keeps inflating at an empty
+    // desk reads as restless, not resting.
     for (const t of [0, 40, 120, 199]) {
-      expect(breathScale('idle', t, 0)).toBe(1);
+      expect(breathScale('away', t, 0)).toBe(1);
     }
   });
 
   it('breathes standing by faintly and listening a little more', () => {
-    const swing = (state: 'away' | 'listening') => {
+    // "Standing by" is the idle state: Sage with nothing to do and someone
+    // there. It is the state a user sees nearly all the time, and it is the
+    // one that has to look alive.
+    const swing = (state: 'idle' | 'listening') => {
       let lo = Infinity;
       let hi = -Infinity;
       for (let t = 0; t < BREATH_PERIOD; t++) {
@@ -29,9 +33,9 @@ describe('breathing', () => {
       }
       return hi - lo;
     };
-    expect(swing('away')).toBeCloseTo(BREATH_DEPTH.away, 2);
+    expect(swing('idle')).toBeCloseTo(BREATH_DEPTH.idle, 2);
     expect(swing('listening')).toBeCloseTo(BREATH_DEPTH.listening, 2);
-    expect(swing('away')).toBeLessThan(swing('listening'));
+    expect(swing('idle')).toBeLessThan(swing('listening'));
   });
 });
 
@@ -39,7 +43,7 @@ describe('speaking follows the voice, not a cycle', () => {
   it('rests at standing-by size in a silence and reaches full on a word', () => {
     const rest = speakingScale(0) * PLEXUS_STATES.speaking.r;
     const full = speakingScale(1) * PLEXUS_STATES.speaking.r;
-    expect(rest).toBeCloseTo(PLEXUS_STATES.away.r, 5);
+    expect(rest).toBeCloseTo(PLEXUS_STATES.idle.r, 5);
     expect(full).toBeCloseTo(PLEXUS_STATES.speaking.r, 5);
   });
 
@@ -68,16 +72,16 @@ describe('a state is never dimmer than a calmer one', () => {
       const breath = state === 'speaking' ? speakingScale(0) : 1;
       return PLEXUS_STATES[state].bright * Math.pow(breath, 1.35) * PLEXUS_PATCHES[state].base;
     };
-    expect(level('idle')).toBeLessThan(level('away'));
-    expect(level('away')).toBeLessThan(level('listening'));
+    expect(level('away')).toBeLessThan(level('idle'));
+    expect(level('idle')).toBeLessThan(level('listening'));
     expect(level('listening')).toBeLessThan(level('speaking'));
   });
 });
 
 describe('sizes', () => {
-  it('grows as Sage engages, with idle the smallest', () => {
-    expect(PLEXUS_STATES.idle.r).toBeLessThan(PLEXUS_STATES.away.r);
-    expect(PLEXUS_STATES.away.r).toBeLessThan(PLEXUS_STATES.listening.r);
+  it('grows as Sage engages, with an empty desk the smallest', () => {
+    expect(PLEXUS_STATES.away.r).toBeLessThan(PLEXUS_STATES.idle.r);
+    expect(PLEXUS_STATES.idle.r).toBeLessThan(PLEXUS_STATES.listening.r);
     expect(PLEXUS_STATES.listening.r).toBeLessThan(PLEXUS_STATES.speaking.r);
   });
 });
