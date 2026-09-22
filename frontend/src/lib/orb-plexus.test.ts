@@ -88,6 +88,17 @@ describe('a state is never dimmer than a calmer one', () => {
   // canvas, which these tests do not have; it was measured in the browser.
 });
 
+describe('rotation', () => {
+  it('turns standing by slowly, but never stops it', () => {
+    // Seconds per full turn at 60 frames a second.
+    const period = (state: 'idle' | 'away' | 'listening') => (2 * Math.PI) / PLEXUS_STATES[state].spin / 60;
+    expect(period('idle')).toBeGreaterThan(60);
+    expect(period('idle')).toBeLessThan(120);
+    expect(period('away')).toBeGreaterThan(period('idle'));
+    expect(period('listening')).toBeLessThan(period('idle'));
+  });
+});
+
 describe('sizes', () => {
   it('grows as Sage engages, with an empty desk the smallest', () => {
     expect(PLEXUS_STATES.away.r).toBeLessThan(PLEXUS_STATES.idle.r);

@@ -44,10 +44,14 @@ export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
   // sees nearly all the time. It carries the preview's standing-by settings.
   // The preview's own "idle" button is a different thing: an orb with nobody
   // watching, which here is "away".
-  idle: { r: 0.8, flow: 0.55, spin: 0.003, bright: 0.97, links: 0.65 },
+  idle: { r: 0.8, flow: 0.55, spin: 0.0012, bright: 0.97, links: 0.65 },
+  // Spin is radians per 60Hz frame. Standing by turns once every 87s --
+  // slow enough to read as resting, never stopped; it was once every 35s,
+  // the same as an empty desk. Away turns slower still, once every 131s.
+  //
   // Nobody at the desk: smaller and dimmer, so sitting down is a visible
   // waking up.
-  away: { r: 0.65, flow: 0.55, spin: 0.003, bright: 0.68, links: 0.6 },
+  away: { r: 0.65, flow: 0.55, spin: 0.0008, bright: 0.68, links: 0.6 },
   // Only a little larger than standing by, and never as large as a speaking
   // orb at full voice.
   listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 1.12, links: 0.8 },
@@ -140,6 +144,15 @@ const DUST_TURN = 1;
  * haze      a very wide blur of the whole frame: the soft body of light the
  *           reference's web sits inside. It fills the orb, not the gaps
  *           between orbs -- at this radius it stays within the disc.
+ * rampTop   the highest point of the colour ramp any mark is drawn in. The
+ *           top of the ramp is pale and then white, and a mark reaches it by
+ *           being bright and near: speaking's lines land there far more
+ *           than listening's, so its peaks went pale (red over green 0.40
+ *           among its brightest pixels, against listening's 0.25) even with
+ *           the whitening switched off. It is additive clipping: stacked
+ *           turquoise saturates green and blue while red keeps climbing,
+ *           and the peak burns white. Capped at a colour with less red,
+ *           speaking's peaks saturate to cyan instead.
  * soft      a blur on the frame itself, in pixels at 764 (scaled with the
  *           canvas). At zero every line is a one-pixel hairline and every
  *           dot a hard square, which at full size reads as a sharp wire
@@ -154,6 +167,7 @@ export interface PlexusLook {
   soft: number;
   dots: number;
   haze: number;
+  rampTop: number;
 }
 
 export const PLEXUS_LOOK = {
@@ -166,19 +180,20 @@ export const PLEXUS_LOOK = {
   //   reference GIF     50  118  211   0.51   0.20  15,75,98
   //   standing by       52  133  212   0.40   0.18  14,75,97
   //   lab speaking      52  189  245   0.28   0.22  22,99,120
-  //   speaking          76  223  254   0.30   0.34  39,119,135
-  //   a pause in it     70  207  236   0.35   0.24  27,108,128
+  //   listening         51  189  225      -   0.22  18,82,100
+  //   speaking          74  212  232      -   0.21  26,118,138
   //
   // A screenshot of the version before scored sharpness 0.75 and
   // whiteness 0.61 -- half again as sharp as the reference and three times
   // as white; the one after it (soft 1, haze 0.8) was asked to be less
-  // blurry. Standing by now sits on the reference; speaking keeps its
-  // white-hot, electric lines.
+  // blurry. Standing by now sits on the reference. Speaking wears the same
+  // cyan as listening: among its brightest pixels red over green is 0.23,
+  // listening's 0.24 -- it was 0.40, its lit patches burning white.
   states: {
-    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5 },
-    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5 },
-    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35 },
-    speaking: { exposure: 1.1, curve: 0.9, white: 0.4, bloom: 0.85, glow: 2, soft: 0, dots: 0.8, haze: 0 },
+    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1 },
+    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1 },
+    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1 },
+    speaking: { exposure: 1.1, curve: 0.9, white: 0, bloom: 0.85, glow: 2, soft: 0, dots: 0.8, haze: 0, rampTop: 0.42 },
   } as Record<OrbState, PlexusLook>,
   /** Speaking's exposure at full voice; its own exposure above is the one in
    * a pause. The lit patches already brighten the body several times over
@@ -562,6 +577,7 @@ export function drawPlexus(
   S.look.soft = lerp(F.look.soft, want.soft, e);
   S.look.dots = lerp(F.look.dots, want.dots, e);
   S.look.haze = lerp(F.look.haze, want.haze, e);
+  S.look.rampTop = lerp(F.look.rampTop, want.rampTop, e);
 
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
@@ -625,6 +641,7 @@ export function drawPlexus(
 
   const sR = R * 0.8 * breath;
   const sizeScale = w / 560;
+  const rampTop = Math.round(Math.min(1, Math.max(0, S.look.rampTop)) * (RAMP_STEPS - 1));
   const damp = Math.pow(DAMP, dt);
   const cosY = Math.cos(S.spinY), sinY = Math.sin(S.spinY);
   const cosX = Math.cos(S.spinX), sinX = Math.sin(S.spinX);
@@ -766,7 +783,7 @@ export function drawPlexus(
     for (let b = 0; b < LINK_BANDS; b++) {
       const buf = bandBuffers[b];
       if (!buf.length) continue;
-      ctx.strokeStyle = RAMP[Math.min(RAMP_STEPS - 1, 3 + b * 3)];
+      ctx.strokeStyle = RAMP[Math.min(rampTop, 3 + b * 3)];
       ctx.globalAlpha = Math.min(1, ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha * S.look.exposure);
       ctx.beginPath();
       for (let i = 0; i < buf.length; i += 4) {
@@ -787,7 +804,7 @@ export function drawPlexus(
     const q = P[i];
     if (q.pa <= 0.02) continue;
     const u = 0.18 + q.pd * 0.74 + (q.node ? 0 : 0.06);
-    rampBuckets[Math.min(RAMP_STEPS - 1, (u * RAMP_STEPS) | 0)].push(q);
+    rampBuckets[Math.min(rampTop, (u * RAMP_STEPS) | 0)].push(q);
   }
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
