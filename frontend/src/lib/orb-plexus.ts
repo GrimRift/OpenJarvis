@@ -151,8 +151,9 @@ const DUST_TURN = 1;
  *           among its brightest pixels, against listening's 0.25) even with
  *           the whitening switched off. It is additive clipping: stacked
  *           turquoise saturates green and blue while red keeps climbing,
- *           and the peak burns white. Capped at a colour with less red,
- *           speaking's peaks saturate to cyan instead.
+ *           and the peak burns white. A cap works but dulls the state; the
+ *           'red' control below is how speaking avoids it.
+ * red       how much of the ramp's red is kept, 0..1. See RAMPS.
  * soft      a blur on the frame itself, in pixels at 764 (scaled with the
  *           canvas). At zero every line is a one-pixel hairline and every
  *           dot a hard square, which at full size reads as a sharp wire
@@ -168,6 +169,7 @@ export interface PlexusLook {
   dots: number;
   haze: number;
   rampTop: number;
+  red: number;
 }
 
 export const PLEXUS_LOOK = {
@@ -180,20 +182,24 @@ export const PLEXUS_LOOK = {
   //   reference GIF     50  118  211   0.51   0.20  15,75,98
   //   standing by       52  133  212   0.40   0.18  14,75,97
   //   lab speaking      52  189  245   0.28   0.22  22,99,120
-  //   listening         51  189  225      -   0.22  18,82,100
-  //   speaking          74  212  232      -   0.21  26,118,138
+  //   listening         60  183  224      -   0.21  20,91,111
+  //   speaking          97  212  236      -   0.18  26,143,158
   //
   // A screenshot of the version before scored sharpness 0.75 and
   // whiteness 0.61 -- half again as sharp as the reference and three times
   // as white; the one after it (soft 1, haze 0.8) was asked to be less
-  // blurry. Standing by now sits on the reference. Speaking wears the same
-  // cyan as listening: among its brightest pixels red over green is 0.23,
-  // listening's 0.24 -- it was 0.40, its lit patches burning white.
+  // blurry. Standing by now sits on the reference. Speaking outshines
+  // listening at every level but stays the same cyan: among its brightest
+  // pixels red over green is 0.20, listening's 0.24 -- it was 0.40, its lit
+  // patches burning white. Capping it at a deeper teal fixed the white but
+  // left it duller than listening; halving its red instead lets it run
+  // bright. It draws about 1,500 clearly visible dots to listening's 900;
+  // it drew 84, its exposure sinking under every word.
   states: {
-    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1 },
-    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1 },
-    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1 },
-    speaking: { exposure: 1.1, curve: 0.9, white: 0, bloom: 0.85, glow: 2, soft: 0, dots: 0.8, haze: 0, rampTop: 0.42 },
+    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1 },
+    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1 },
+    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1 },
+    speaking: { exposure: 1.3, curve: 0.9, white: 0, bloom: 0.85, glow: 2, soft: 0, dots: 1.15, haze: 0, rampTop: 1, red: 0.5 },
   } as Record<OrbState, PlexusLook>,
   /** Speaking's exposure at full voice; its own exposure above is the one in
    * a pause. The lit patches already brighten the body several times over
@@ -202,7 +208,7 @@ export const PLEXUS_LOOK = {
    * dimmest thing on screen exactly while Sage was talking; set for the
    * pauses, every word washed the orb out. It follows the voice envelope
    * between the two. */
-  speakingVoiced: 0.45,
+  speakingVoiced: 0.7,
   bloomRadius: 190,
   glowRadius: 420,
   hazeRadius: 60,
@@ -230,7 +236,7 @@ const RAMP_STOPS: Array<[number, number, number, number]> = [
 ];
 const RAMP_STEPS = 18;
 
-function buildRamp(): string[] {
+function buildRamp(red = 1): string[] {
   const ramp: string[] = [];
   for (let i = 0; i < RAMP_STEPS; i++) {
     const u = i / (RAMP_STEPS - 1);
@@ -240,14 +246,22 @@ function buildRamp(): string[] {
     const b = RAMP_STOPS[k + 1];
     const f = (u - a[0]) / (b[0] - a[0] || 1);
     ramp.push(
-      `rgb(${Math.round(a[1] + (b[1] - a[1]) * f)},${Math.round(a[2] + (b[2] - a[2]) * f)},${Math.round(
+      `rgb(${Math.round((a[1] + (b[1] - a[1]) * f) * red)},${Math.round(a[2] + (b[2] - a[2]) * f)},${Math.round(
         a[3] + (b[3] - a[3]) * f,
       )})`,
     );
   }
   return ramp;
 }
-const RAMP = buildRamp();
+/**
+ * The ramp at five strengths of red, chosen per state by the look's 'red'.
+ * Red is the only channel that turns stacked cyan white: where marks pile
+ * up, green and blue saturate and red alone keeps climbing. Taking it out
+ * lets a state be driven as bright as it likes and saturate to vivid cyan.
+ * Precomputed, since a colour string per mark is a CSS parse per mark.
+ */
+const RED_LEVELS = 4;
+const RAMPS = Array.from({ length: RED_LEVELS + 1 }, (_, k) => buildRamp(k / RED_LEVELS));
 
 interface Node {
   x: number; y: number; z: number;
@@ -578,6 +592,7 @@ export function drawPlexus(
   S.look.dots = lerp(F.look.dots, want.dots, e);
   S.look.haze = lerp(F.look.haze, want.haze, e);
   S.look.rampTop = lerp(F.look.rampTop, want.rampTop, e);
+  S.look.red = lerp(F.look.red, want.red, e);
 
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
@@ -642,6 +657,7 @@ export function drawPlexus(
   const sR = R * 0.8 * breath;
   const sizeScale = w / 560;
   const rampTop = Math.round(Math.min(1, Math.max(0, S.look.rampTop)) * (RAMP_STEPS - 1));
+  const ramp = RAMPS[Math.round(Math.min(1, Math.max(0, S.look.red)) * RED_LEVELS)];
   const damp = Math.pow(DAMP, dt);
   const cosY = Math.cos(S.spinY), sinY = Math.sin(S.spinY);
   const cosX = Math.cos(S.spinX), sinX = Math.sin(S.spinX);
@@ -783,7 +799,7 @@ export function drawPlexus(
     for (let b = 0; b < LINK_BANDS; b++) {
       const buf = bandBuffers[b];
       if (!buf.length) continue;
-      ctx.strokeStyle = RAMP[Math.min(rampTop, 3 + b * 3)];
+      ctx.strokeStyle = ramp[Math.min(rampTop, 3 + b * 3)];
       ctx.globalAlpha = Math.min(1, ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha * S.look.exposure);
       ctx.beginPath();
       for (let i = 0; i < buf.length; i += 4) {
@@ -811,7 +827,7 @@ export function drawPlexus(
   for (let i = 0; i < RAMP_STEPS; i++) {
     const bucket = rampBuckets[i];
     if (!bucket.length) continue;
-    ctx.fillStyle = RAMP[i];
+    ctx.fillStyle = ramp[i];
     for (let j = 0; j < bucket.length; j++) {
       const m = bucket[j];
       ctx.globalAlpha = m.pa;
