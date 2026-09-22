@@ -18,7 +18,7 @@ import {
   Brain,
   RefreshCw,
 } from 'lucide-react';
-import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, type ThemeMode, type WakeWordVerify } from '../lib/store';
+import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import type { BargeMode } from '../lib/barge-in';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
@@ -647,6 +647,27 @@ export function SettingsPage() {
                   );
                 })}
               </div>
+            </SettingRow>
+            <SettingRow
+              label="Orb"
+              description="The sphere Sage shows while it listens and speaks"
+            >
+              <select
+                value={settings.orbDesign}
+                onChange={(e) => {
+                  updateSettings({ orbDesign: e.target.value as OrbDesign });
+                  showSaved();
+                }}
+                className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+                style={{
+                  background: 'var(--color-bg-secondary)',
+                  color: 'var(--color-text)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                <option value="constellation">Constellation</option>
+                <option value="cloud">Particle cloud</option>
+              </select>
             </SettingRow>
             <SettingRow label="Font size">
               <select

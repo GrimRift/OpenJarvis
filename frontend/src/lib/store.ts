@@ -242,6 +242,8 @@ function saveConversations(store: ConversationStore): void {
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
+export type OrbDesign = 'constellation' | 'cloud';
+
 interface Settings {
   theme: ThemeMode;
   apiUrl: string;
@@ -250,6 +252,9 @@ interface Settings {
   // frontend (#266). Empty = no auth header (keyless local default).
   apiKey: string;
   fontSize: 'small' | 'default' | 'large';
+  /** Which orb Sage draws. 'constellation' is a particle shell webbed with
+   * lines and lit in patches; 'cloud' is the original particle cloud. */
+  orbDesign: OrbDesign;
   defaultModel: string;
   // Cloud is ~6x faster at Sage's real prompt sizes (11.7s vs 1.9s measured on
   // the same question at ~6,200 input tokens), so it is the default. Falls
@@ -326,6 +331,7 @@ function loadSettings(): Settings {
     apiUrl: '',
     apiKey: '',
     fontSize: 'default',
+    orbDesign: 'constellation',
     defaultModel: 'qwen3.5:4b',
     preferCloudModel: true,
     cloudModel: DEFAULT_CLOUD_MODEL,
@@ -382,6 +388,11 @@ function loadSettings(): Settings {
         DEFAULT_LISTEN_SECONDS,
       ),
     };
+    // Saved before the orb could be chosen: take the new default rather
+    // than leaving the key undefined and the canvas blank.
+    if (merged.orbDesign !== 'cloud' && merged.orbDesign !== 'constellation') {
+      merged.orbDesign = defaults.orbDesign;
+    }
     // Settings saved before providers existed carry only fluxEnabled.
     if (!STT_PROVIDERS.includes(parsed.sttProvider)) {
       merged.sttProvider = parsed.fluxEnabled ? 'flux' : 'whisper';

@@ -6,6 +6,12 @@ import {
   stepRotation,
 } from '../../lib/orb-motion';
 import { getSpeechLevel } from '../../lib/audio-level';
+import {
+  createPlexusState,
+  drawPlexus,
+  framesPerDraw,
+  type PlexusState,
+} from '../../lib/orb-plexus';
 import { resolveOrbState, type OrbState } from '../../lib/orb-state';
 import { useAppStore } from '../../lib/store';
 
@@ -85,12 +91,19 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
   const particlesRef = useRef<Particle[] | undefined>(undefined);
+  const plexusRef = useRef<PlexusState | undefined>(undefined);
   const rafRef = useRef<number | undefined>(undefined);
   const tRef = useRef(0);
   const angleRef = useRef(0);
   const scaleRef = useRef(1);
   const speedRef = useRef(SPEED_MAP.idle);
   const lastFrameRef = useRef(0);
+  const sinceDrawRef = useRef(0);
+  const design = useAppStore((s) => s.settings.orbDesign);
+  // Read at draw time: switching design mid-session must not tear the loop
+  // down, and the two renderers keep separate state of their own.
+  const designRef = useRef(design);
+  designRef.current = design;
 
   useEffect(() => {
     stateRef.current = state;
@@ -102,6 +115,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     particlesRef.current = makeParticles(particleCountFor(size));
+    plexusRef.current = createPlexusState();
 
     // Every motion term below is expressed per 60Hz frame, so without this
     // the orb's speed is whatever the display's refresh rate happens to be —
@@ -113,17 +127,38 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
       lastFrameRef.current = now;
       const dt = frameDelta(now, previous);
       tRef.current += dt;
-      drawOrb(
-        ctx,
-        canvas,
-        particlesRef.current!,
-        stateRef.current,
-        tRef,
-        angleRef,
-        scaleRef,
-        speedRef,
-        dt,
-      );
+      if (designRef.current === 'cloud') {
+        drawOrb(
+          ctx,
+          canvas,
+          particlesRef.current!,
+          stateRef.current,
+          tRef,
+          angleRef,
+          scaleRef,
+          speedRef,
+          dt,
+        );
+      } else {
+        // Idle and standing by redraw at half rate: nothing in them moves
+        // fast enough to tell, and it halves what the two states Sage
+        // spends most of its time in cost. The accumulated dt is handed to
+        // the draw, so the motion runs at the same speed either way.
+        sinceDrawRef.current += dt;
+        const every = framesPerDraw(stateRef.current);
+        if (sinceDrawRef.current >= every) {
+          drawPlexus(
+            ctx,
+            canvas,
+            plexusRef.current!,
+            stateRef.current,
+            tRef.current,
+            sinceDrawRef.current,
+            stateRef.current === 'speaking' ? getSpeechLevel() : 0,
+          );
+          sinceDrawRef.current = 0;
+        }
+      }
       rafRef.current = requestAnimationFrame(draw);
     };
     rafRef.current = requestAnimationFrame(draw);
