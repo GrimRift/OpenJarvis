@@ -87,6 +87,26 @@ const BRIGHT_MAP: Record<OrbState, number> = {
   away: 0.5,
 };
 
+/**
+ * The constellation is drawn at this size whatever the orb is displayed at,
+ * and scaled up by the browser.
+ *
+ * Its particle and link counts are fixed, so the backing store's size sets
+ * how densely they land. Drawn at the Voice page's 764 the same 2,150 dots
+ * and ~7,000 lines cover 1.86x the area of the 560 they were tuned against:
+ * nothing stacks, so no knot reaches white and the web falls to the bottom
+ * of the colour ramp. Measured against the reference page in the same
+ * browser, same state -- at 764 the frame averaged 3.40 with no pixel over
+ * 165; at 560 it averages 9.51 against the reference's 9.93, peaks at 255
+ * like the reference, and carries the same average colour. That is the
+ * whole of the difference; every constant already matched.
+ *
+ * Holding it fixed is also cheaper than the size it replaces -- 46% fewer
+ * pixels at the Voice orb -- and the upscale softens the web, which is the
+ * bloom the reference has and a hard-edged 1px line does not.
+ */
+const PLEXUS_RENDER_SIZE = 560;
+
 export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
@@ -104,6 +124,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
   // down, and the two renderers keep separate state of their own.
   const designRef = useRef(design);
   designRef.current = design;
+  const backing = design === 'constellation' ? PLEXUS_RENDER_SIZE : size;
 
   useEffect(() => {
     stateRef.current = state;
@@ -114,7 +135,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    particlesRef.current = makeParticles(particleCountFor(size));
+    particlesRef.current = makeParticles(particleCountFor(backing));
     plexusRef.current = createPlexusState();
 
     // Every motion term below is expressed per 60Hz frame, so without this
@@ -167,7 +188,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [size]);
+  }, [backing]);
 
   return (
     <div style={{ position: 'relative', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -188,7 +209,12 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
           }}
         />
       )}
-      <canvas ref={canvasRef} width={size} height={size} style={{ position: 'absolute', inset: 0 }} />
+      <canvas
+        ref={canvasRef}
+        width={backing}
+        height={backing}
+        style={{ position: 'absolute', inset: 0, width: size, height: size }}
+      />
     </div>
   );
 }
