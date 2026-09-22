@@ -44,6 +44,25 @@ def _no_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_voice_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Settings voice choice lives in the data directory; a test that
+    resolves a TTS provider must see a fresh default, not this machine's
+    (the route tests failed here the moment the real choice was
+    chatterbox)."""
+    from openjarvis.speech import voice_choice
+
+    monkeypatch.setattr(
+        voice_choice,
+        "load_choice",
+        lambda config_dir=None: (
+            voice_choice.VoiceChoice()
+            if config_dir is None
+            else voice_choice._load_choice_from(config_dir)
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _nobody_speaking() -> None:
     """Any test that plays sound leaves the server "speaking" for the echo
     tail (2 s), and the wake-word socket and Flux relay go deaf for it --

@@ -78,6 +78,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         by unauthenticated clients, so it is gated alongside ``/v1`` and
         ``/api``. ``/health`` stays open for liveness probes.
         """
+        # Synthesised clips are fetched by an <audio> element, which cannot
+        # send a header; with the key on, every batch-spoken reply and the
+        # Settings "Test" button 401ed in silence. The path already carries
+        # a 128-bit random, in-memory token that dies with the server, so
+        # the token is the credential.
+        if path.startswith("/v1/speech/audio/"):
+            return False
         return (
             path.startswith("/v1/")
             or path.startswith("/api/")

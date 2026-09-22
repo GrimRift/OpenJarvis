@@ -42,6 +42,14 @@ def _make_app(api_key: str) -> FastAPI:
     async def twilio_webhook():
         return {"status": "received"}
 
+    @app.get("/v1/speech/audio/{token}")
+    async def clip(token: str):
+        return {"token": token}
+
+    @app.get("/v1/speech/synthesize")
+    async def synth():
+        return {"ok": True}
+
     @app.get("/metrics")
     async def metrics():
         return {"requests": 0}
@@ -82,6 +90,13 @@ class TestAuthMiddleware:
     def test_webhooks_exempt(self, client):
         resp = client.post("/webhooks/twilio")
         assert resp.status_code == 200
+
+    def test_synthesised_clips_play_without_a_header(self, client):
+        # An <audio> element cannot send Authorization; the random token in
+        # the path is the credential. Everything else under /v1/speech stays
+        # gated.
+        assert client.get("/v1/speech/audio/0123456789abcdef").status_code == 200
+        assert client.get("/v1/speech/synthesize").status_code == 401
 
     def test_metrics_requires_auth(self, client):
         resp = client.get("/metrics")

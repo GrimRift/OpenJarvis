@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from openjarvis.core.config import DEFAULT_CONFIG_DIR
+from openjarvis.core.paths import get_config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +37,16 @@ class VoiceChoice:
 
 
 def choice_path(config_dir: Optional[Path] = None) -> Path:
-    return (config_dir or DEFAULT_CONFIG_DIR) / "voice_choice.json"
+    # get_config_dir honours OPENJARVIS_HOME, so tests never read this
+    # machine's real choice.
+    return (config_dir or get_config_dir()) / "voice_choice.json"
 
 
 def load_choice(config_dir: Optional[Path] = None) -> VoiceChoice:
+    return _load_choice_from(config_dir)
+
+
+def _load_choice_from(config_dir: Optional[Path]) -> VoiceChoice:
     try:
         data = json.loads(choice_path(config_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):

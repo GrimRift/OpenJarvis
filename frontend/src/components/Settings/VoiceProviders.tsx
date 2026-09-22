@@ -123,12 +123,19 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
   };
 
   const upload = async (file: File) => {
-    const name = window.prompt('Name for this voice (letters, digits, dashes):', currentLocal?.name || 'jarvis');
+    // Every recording becomes its own voice: an upload never replaces the
+    // one in use, so the old and the new can be compared in the picker.
+    const taken = new Set(localVoices.map((v) => v.name));
+    let suggested = 'jarvis';
+    for (let n = 2; taken.has(suggested); n++) suggested = `jarvis-${n}`;
+    const name = window.prompt('Name for this new voice (letters, digits, dashes):', suggested);
     if (!name) return;
+    const clean = name.trim().toLowerCase();
+    if (taken.has(clean) && !window.confirm(`Replace the recording of "${clean}"?`)) return;
     setBusy('upload');
     setError('');
     try {
-      const info = await uploadSpeechVoice(name.trim().toLowerCase(), file);
+      const info = await uploadSpeechVoice(clean, file);
       refreshVoices();
       updateSettings({ ttsProvider: 'chatterbox', ttsVoiceId: CHATTERBOX_VOICE_PREFIX + info.name });
       onSaved();
