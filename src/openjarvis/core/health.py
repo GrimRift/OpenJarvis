@@ -267,7 +267,10 @@ def _check_optional_deps() -> List[CheckResult]:
         ("torch", "pip install torch", "SFT/GRPO training", True),
         ("pynvml", "openjarvis[gpu-metrics]", "NVIDIA energy monitoring", has_nvidia),
         ("amdsmi", "openjarvis[energy-amd]", "AMD energy monitoring", not has_nvidia),
-        ("colbert", "openjarvis[memory-colbert]", "ColBERT memory backend", True),
+        # Not applicable rather than a warning: the local memory backend is
+        # the one in use, and a permanent "needs attention" for a package
+        # nobody wants installed hides the one that matters.
+        ("colbert", "openjarvis[memory-colbert]", "ColBERT memory backend", False),
         ("zeus", "openjarvis[energy-apple]", "Apple Silicon energy monitoring", is_mac),
     ]
     for pkg, install_hint, description, applicable in optional_packages:
@@ -276,7 +279,9 @@ def _check_optional_deps() -> List[CheckResult]:
                 CheckResult(
                     f"Optional: {description}",
                     "ok",
-                    "Not applicable on this machine",
+                    "Not in use"
+                    if pkg == "colbert"
+                    else "Not applicable on this machine",
                 )
             )
             continue
@@ -1544,6 +1549,16 @@ def _check_moments(app_state: Any = None) -> List[CheckResult]:
             )
         ]
     engine = getattr(app_state, "moment_engine", None) if app_state else None
+    if engine is None:
+        # The system_health tool runs inside the server but has no request,
+        # so no app.state; it reported "Not running" while the engine was
+        # speaking every morning. The engine registers itself at start.
+        try:
+            from openjarvis.core.moments import current_engine
+
+            engine = current_engine()
+        except Exception:
+            engine = None
     if engine is None:
         return [
             CheckResult(

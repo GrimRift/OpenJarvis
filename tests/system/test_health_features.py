@@ -141,3 +141,47 @@ class TestTelemetryInstrumentation:
     def test_no_engine_is_reported(self) -> None:
         results = _check_telemetry_recording(SimpleNamespace(engine=None))
         assert results[0].status == "warn"
+
+
+class TestMomentsWithoutAppState:
+    """The system_health tool runs inside the server but has no request,
+    so no app.state: it reported "Not running" while the engine was
+    speaking every morning. The engine registers itself at start."""
+
+    def _settings(self):
+        return SimpleNamespace(
+            enabled=True,
+            moments_enabled=True,
+            greeting_enabled=True,
+            welcome_back_enabled=True,
+            told_enabled=True,
+            initiative_mode="gentle",
+        )
+
+    def test_the_registered_engine_is_found_without_app_state(self):
+        from openjarvis.core.health import _check_moments
+
+        class Engine:
+            def snapshot(self):
+                return {"last": None, "kinds": [], "next_check_at": None}
+
+        with (
+            patch(
+                "openjarvis.core.presence.load_settings", return_value=self._settings()
+            ),
+            patch("openjarvis.core.moments.current_engine", return_value=Engine()),
+        ):
+            results = _check_moments(app_state=None)
+        assert results[0].message != "Not running"
+
+    def test_no_engine_anywhere_is_not_running(self):
+        from openjarvis.core.health import _check_moments
+
+        with (
+            patch(
+                "openjarvis.core.presence.load_settings", return_value=self._settings()
+            ),
+            patch("openjarvis.core.moments.current_engine", return_value=None),
+        ):
+            results = _check_moments(app_state=None)
+        assert results[0].message == "Not running"
