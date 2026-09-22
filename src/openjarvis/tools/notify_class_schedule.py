@@ -144,7 +144,10 @@ class NotifyClassScheduleTool(BaseTool):
                 f"{cls['start_time']} in {cls['room']} ({cls['mode']})"
             )
             try:
-                deliver("Class starting soon", message, duration="long")
+                # say=False: the toast text is spoken below in a shorter
+                # form; letting deliver() say it too announced every class
+                # twice.
+                deliver("Class starting soon", message, duration="long", say=False)
                 # Spoken after the toast, and only ever as an addition to it:
                 # a reminder the user has to be looking at the screen to
                 # catch is the one they miss. Silent under Do Not Disturb.

@@ -46,8 +46,14 @@ def _send_to_channel(title: str, message: str) -> bool:
     return bool(channel.send(destination, f"{title}\n\n{message}"))
 
 
-def deliver(title: str, message: str, *, duration: str = "short") -> List[str]:
+def deliver(
+    title: str, message: str, *, duration: str = "short", say: bool = True
+) -> List[str]:
     """Deliver a notification everywhere configured; return what succeeded.
+
+    ``say=False`` leaves the voice to the caller: the class reminder has its
+    own shorter spoken line, and saying the toast as well meant every class
+    was announced twice.
 
     A desktop toast is no use when the user is away from the machine, which
     is the moment a proactive notification matters most — so the channel is
@@ -77,11 +83,12 @@ def deliver(title: str, message: str, *, duration: str = "short") -> List[str]:
         # in the notification centre unseen -- a movie was exactly when one
         # went unnoticed -- and the voice is the only part of a reminder that
         # rule cannot silence. Only the manual DND toggle does.
-        try:
-            if speak(f"{title}. {message}"):
-                delivered.append("spoken")
-        except Exception:
-            logger.warning("Reminder could not be spoken", exc_info=True)
+        if say:
+            try:
+                if speak(f"{title}. {message}"):
+                    delivered.append("spoken")
+            except Exception:
+                logger.warning("Reminder could not be spoken", exc_info=True)
 
     try:
         if _send_to_channel(title, message):

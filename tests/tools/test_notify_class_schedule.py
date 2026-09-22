@@ -75,6 +75,9 @@ def test_a_prior_wide_lookahead_check_does_not_suppress_the_reminder(tmp_path):
         result = tool.execute(now=now, lookahead_minutes=15)
 
     assert deliver.call_count == 1
+    # The toast is not also spoken by deliver(): the tool says its own
+    # shorter line, and both together announced every class twice.
+    assert deliver.call_args.kwargs.get("say") is False
     assert result.metadata["notified"] is True
 
 
