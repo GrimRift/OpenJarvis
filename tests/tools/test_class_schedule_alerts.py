@@ -239,11 +239,13 @@ class TestTheVoiceIsActuallyAudible:
         raw = self._wav()
 
         class _Backend:
-            def synthesize(self, text, output_format="mp3"):
+            def synthesize(self, text, output_format="mp3", **_kwargs):
                 return type("R", (), {"audio": raw, "format": output_format})()
 
+        # The reminder voice resolves through the chosen provider now
+        # (Settings choice, then config), not CartesiaTTSBackend directly.
         monkeypatch.setattr(
-            "openjarvis.speech.cartesia_tts.CartesiaTTSBackend", _Backend
+            "openjarvis.speech.providers.server_tts_backend", lambda _cfg: _Backend()
         )
         monkeypatch.setattr(
             "openjarvis.core.paths.get_config_dir", lambda: tmp_path

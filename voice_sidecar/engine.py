@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -20,6 +21,8 @@ SAMPLE_RATE = 24000
 # Share of the card the allocator may hold: 0.3 of 8 GB is 2.4 GB, room for
 # fp32 weights plus one reply's activations, never the whole card.
 MEMORY_FRACTION = 0.3
+# Below this many characters the steadier short-text sampling applies.
+SHORT_TEXT_CHARS = 40
 REFERENCE_FILE = "reference.wav"
 CONDS_FILE = "conds.pt"
 PARAMS_FILE = "voice.json"
@@ -44,9 +47,11 @@ class VoiceParams:
     repetition_penalty: float = 1.2
     # Output level, RMS on the float scale. Chatterbox normalises the
     # reference, not what it generates, and a voice that drifts in volume
-    # between sentences is the first thing a listener notices.
-    target_rms: float = 0.09
-    peak_limit: float = 0.95
+    # between sentences is the first thing a listener notices. 0.16 is
+    # about -16 dBFS: 0.09 left moments and reminders (whose volumes were
+    # tuned against Cartesia's hotter clips) nearly inaudible.
+    target_rms: float = 0.16
+    peak_limit: float = 0.97
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VoiceParams":
@@ -268,6 +273,11 @@ class ChatterboxEngine:
             return np.zeros(0, dtype=np.float32)
         self.use_voice(voice)
         params = self.voices.params(voice)
+        if len(text) < SHORT_TEXT_CHARS:
+            # A short utterance has nowhere to run away to, so the steadier
+            # sampling that broke long inputs (see VoiceParams) is safe here
+            # and takes the wobble out of one- and two-word replies.
+            params = dataclasses.replace(params, temperature=0.45, top_k=200)
         started = time.monotonic()
         with self.lock, torch.inference_mode(), self._autocast():
             wav = self.model.generate(
@@ -324,10 +334,17 @@ def _level(audio: np.ndarray, params: VoiceParams) -> np.ndarray:
     if rms <= 1e-6:
         return audio
     gain = params.target_rms / rms
-    peak = float(np.max(np.abs(audio))) * gain
-    if peak > params.peak_limit:
-        gain *= params.peak_limit / peak
-    return (audio * gain).astype(np.float32)
+    # Never more than 4x: a near-silent fragment must not become noise.
+    scaled = audio.astype(np.float64) * min(gain, 4.0)
+    # Soft knee above `knee` rather than pulling the whole clip down for a
+    # few peaks: speech has a high crest factor, and a hard peak limit left
+    # the voice 6 dB under its target (measured -18 dBFS for a -16 target).
+    knee = 0.85
+    over = np.abs(scaled) > knee
+    if over.any():
+        excess = (np.abs(scaled[over]) - knee) / (1.0 - knee)
+        scaled[over] = np.sign(scaled[over]) * (knee + (1.0 - knee) * np.tanh(excess))
+    return np.clip(scaled, -params.peak_limit, params.peak_limit).astype(np.float32)
 
 
 def default_voices_dir() -> Path:

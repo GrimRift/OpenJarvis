@@ -134,6 +134,18 @@ def main() -> int:
     return 0
 
 
+# The local voice is zero-shot cloned, and one-word lines ("Sir.",
+# "Checking.") come out robotic: too little text for the model to settle a
+# cadence. Same slugs, a few more words each, so the clips stay in rotation.
+LOCAL_LINES = {
+    "sir": "Yes, sir?",
+    "checking": "Checking on that now, sir.",
+    "let-me-look": "Let me take a look, sir.",
+    "working-on-it": "Working on it now, sir.",
+    "almost-there": "Almost there, sir.",
+}
+
+
 def _render_local(tool: TextToSpeechTool, name: str) -> int:
     """Clips for one local voice, added to the existing manifest."""
     voice_id = f"chatterbox:{name}"
@@ -149,6 +161,7 @@ def _render_local(tool: TextToSpeechTool, name: str) -> int:
     ):
         clips = []
         for slug, text in lines:
+            text = LOCAL_LINES.get(slug, text)
             result = tool.execute(text=text, voice_id=voice_id, backend="chatterbox")
             if not result.success:
                 print(f"FAILED {voice_id} {slug!r}: {result.content}")

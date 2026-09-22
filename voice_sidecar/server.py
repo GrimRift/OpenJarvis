@@ -27,6 +27,9 @@ logger = logging.getLogger("voice_sidecar")
 # heard while the rest of its samples are still crossing the socket.
 CHUNK_SAMPLES = SAMPLE_RATE // 5  # 200 ms
 MAX_SEGMENT_CHARS = 1200
+# Segments shorter than this are merged with what follows (see the worker).
+SHORT_SEGMENT_CHARS = 28
+SHORT_SEGMENT_WAIT = 0.2
 
 
 def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
@@ -157,6 +160,21 @@ async def _stream_reply(
             my_generation, text = item  # type: ignore[misc]
             if my_generation != generation:
                 continue  # queued before a cancel
+            # A one- or two-word segment ("Sir.", "Checking.") comes out
+            # robotic on its own: too little text for the model to settle a
+            # cadence. If the next segment of the same reply is already here
+            # or arrives within a moment, say them together.
+            while len(text) < SHORT_SEGMENT_CHARS:
+                try:
+                    following = await asyncio.wait_for(
+                        segments.get(), timeout=SHORT_SEGMENT_WAIT
+                    )
+                except asyncio.TimeoutError:
+                    break
+                if following is None or following[0] != my_generation:
+                    await segments.put(following)  # not ours to merge
+                    break
+                text = f"{text.rstrip()} {following[1].lstrip()}"
             # A long sentence is generated in clause-sized pieces. Measured
             # 22 September: a 1.1 s opener followed by a 6.6 s sentence left
             # 650 ms of silence mid-reply, because the whole sentence had to

@@ -199,7 +199,9 @@ class TestListenersAreDeafWhileTheServerSpeaks:
 
         from openjarvis.server import flux_routes
 
-        source = inspect.getsource(flux_routes.flux_stream)
+        # The audio pump is shared by every streaming provider now
+        # (_relay_turns), so that is where the silence must be.
+        source = inspect.getsource(flux_routes._relay_turns)
         assert "if is_speaking():" in source and "bytes(len(data))" in source
 
     def test_wake_word_socket_suppresses_detections_while_speaking(self, monkeypatch):
