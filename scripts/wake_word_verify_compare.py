@@ -6,7 +6,7 @@ server uses -- ``WakeWordVerifier`` with ``heard_wake_phrase`` -- so the
 number reported is the number the wake word would see.
 
     .venv\\Scripts\\python.exe scripts\\wake_word_verify_compare.py
-    .venv\\Scripts\\python.exe scripts\\wake_word_verify_compare.py --verifiers tiny.en parakeet --limit 60
+    .venv\\Scripts\\python.exe scripts\\wake_word_verify_compare.py --verifiers tiny.en parakeet --limit 60  # noqa: E501
 
 Caveat that matters when reading the result: most positives here are the
 1.8 s ring at the moment the detector fired, which is mid-phrase. A verifier
@@ -78,7 +78,7 @@ def main() -> int:
     negatives = _clips(args.root, "negative", args.limit)
     print(f"{len(positives)} positives, {len(negatives)} negatives under {args.root}\n")
     print(
-        f"{'verifier':10s} {'accept+':>8s} {'accept-':>8s} {'p50 ms':>7s} {'p95 ms':>7s}  (loaded in)"
+        f"{'verifier':10s} {'accept+':>8s} {'accept-':>8s} {'p50 ms':>7s} {'p95 ms':>7s}  (loaded in)"  # noqa: E501
     )
     for name in args.verifiers:
         started = time.perf_counter()
@@ -91,8 +91,8 @@ def main() -> int:
         neg_hits, neg_ms, _ = asyncio.run(_run(verifier, negatives, args.strict))
         ms = pos_ms + neg_ms
         print(
-            f"{name:10s} {pos_hits:4d}/{len(positives):<3d} {neg_hits:4d}/{len(negatives):<3d}"
-            f" {statistics.median(ms):7.0f} {sorted(ms)[int(len(ms) * 0.95) - 1]:7.0f}  ({load_s:.1f}s)"
+            f"{name:10s} {pos_hits:4d}/{len(positives):<3d} {neg_hits:4d}/{len(negatives):<3d}"  # noqa: E501
+            f" {statistics.median(ms):7.0f} {sorted(ms)[int(len(ms) * 0.95) - 1]:7.0f}  ({load_s:.1f}s)"  # noqa: E501
         )
         sample = [h for h in pos_heard if h][:6]
         print(f"{'':10s} heard e.g. {sample}")

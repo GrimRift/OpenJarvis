@@ -8,7 +8,7 @@ deltas at a realistic rate and the time from ``begin`` to the first audio
 byte, and to ``done``, is reported.
 
     .venv\\Scripts\\python.exe scripts\\voice_latency_bench.py
-    .venv\\Scripts\\python.exe scripts\\voice_latency_bench.py --stt-wav path\\to\\question.wav --rounds 3
+    .venv\\Scripts\\python.exe scripts\\voice_latency_bench.py --stt-wav path\\to\\question.wav --rounds 3  # noqa: E501
 
 Needs a running server (the Start Menu "Sage" shortcut) and, for the
 local pair, the Parakeet weights and the Chatterbox sidecar environment.
@@ -30,12 +30,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 REPLY = [
     "Good evening, Sir. ",
-    "All YouTube tabs are closed, and tomorrow's schedule shows one class at nine forty. ",
+    "All YouTube tabs are closed, and tomorrow's schedule shows one class at nine forty. ",  # noqa: E501
     "Is there anything else you need?",
 ]
-DEFAULT_WAV = (
-    r"C:\AI\OpenJarvis-Data\wake_word_samples\live_debug\positive\live_1787499098274.wav"
-)
+DEFAULT_WAV = r"C:\AI\OpenJarvis-Data\wake_word_samples\live_debug\positive\live_1787499098274.wav"  # noqa: E501
 
 
 def _ws_url(base: str, path: str) -> str:
@@ -57,7 +55,9 @@ async def bench_stt(base: str, provider: str, pcm: bytes, key_hdr: dict) -> dict
     import websockets
 
     url = _ws_url(base, f"/v1/speech/flux?provider={provider}")
-    async with websockets.connect(url, subprotocols=_protocols() or None, additional_headers=key_hdr) as ws:
+    async with websockets.connect(
+        url, subprotocols=_protocols() or None, additional_headers=key_hdr
+    ) as ws:
         ready = json.loads(await ws.recv())
         if ready.get("type") != "FluxReady":
             return {"error": ready.get("reason") or ready}
@@ -81,7 +81,9 @@ async def bench_stt(base: str, provider: str, pcm: bytes, key_hdr: dict) -> dict
             await ws.send(pcm[i : i + frame])
             last_audio_at = time.perf_counter()
             # Real time: 50 ms per frame, minus what sending took.
-            await asyncio.sleep(max(0.0, started + (i // frame + 1) * 0.05 - time.perf_counter()))
+            await asyncio.sleep(
+                max(0.0, started + (i // frame + 1) * 0.05 - time.perf_counter())
+            )
         # Silence so the last turn can end.
         for _ in range(60):
             await ws.send(bytes(frame * 2))
@@ -93,7 +95,9 @@ async def bench_stt(base: str, provider: str, pcm: bytes, key_hdr: dict) -> dict
         return {"turns": 0, "last_turn_end_ms": None, "transcripts": []}
     return {
         "turns": len(finals),
-        "last_turn_end_ms": round((finals[-1][0] - last_audio_at) * 1000) if last_audio_at else None,
+        "last_turn_end_ms": round((finals[-1][0] - last_audio_at) * 1000)
+        if last_audio_at
+        else None,
         "transcripts": [t for _, t in finals],
     }
 
@@ -102,9 +106,24 @@ async def bench_tts(base: str, provider: str, voice_id: str, key_hdr: dict) -> d
     import websockets
 
     url = _ws_url(base, "/v1/speech/tts-stream")
-    async with websockets.connect(url, subprotocols=_protocols() or None, additional_headers=key_hdr, max_size=32 * 1024 * 1024) as ws:
+    async with websockets.connect(
+        url,
+        subprotocols=_protocols() or None,
+        additional_headers=key_hdr,
+        max_size=32 * 1024 * 1024,
+    ) as ws:
         t0 = time.perf_counter()
-        await ws.send(json.dumps({"type": "begin", "provider": provider, "voice_id": voice_id, "speed": 1.0, "volume": 1.9}))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "begin",
+                    "provider": provider,
+                    "voice_id": voice_id,
+                    "speed": 1.0,
+                    "volume": 1.9,
+                }
+            )
+        )
         ready = json.loads(await ws.recv())
         if ready.get("type") != "ready":
             return {"error": ready.get("reason") or ready}
@@ -139,10 +158,16 @@ async def bench_tts(base: str, provider: str, voice_id: str, key_hdr: dict) -> d
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base", default=os.environ.get("OPENJARVIS_BASE", "http://127.0.0.1:8000"))
+    parser.add_argument(
+        "--base", default=os.environ.get("OPENJARVIS_BASE", "http://127.0.0.1:8000")
+    )
     parser.add_argument("--stt-wav", default=DEFAULT_WAV)
-    parser.add_argument("--stt-seconds", type=float, default=6.0, help="how much of the wav to stream")
-    parser.add_argument("--stt-offset", type=float, default=38.0, help="where in the wav to start")
+    parser.add_argument(
+        "--stt-seconds", type=float, default=6.0, help="how much of the wav to stream"
+    )
+    parser.add_argument(
+        "--stt-offset", type=float, default=38.0, help="where in the wav to start"
+    )
     parser.add_argument("--rounds", type=int, default=2)
     parser.add_argument("--api-key", default=os.environ.get("OPENJARVIS_API_KEY", ""))
     args = parser.parse_args()
@@ -153,8 +178,12 @@ def main() -> int:
         w.setpos(int(args.stt_offset * 16000))
         pcm = w.readframes(int(args.stt_seconds * 16000))
 
-    print(f"server {args.base}; STT clip {args.stt_seconds:.0f}s from {Path(args.stt_wav).name}\n")
-    print(f"{'STT provider':14s} {'turns':>5s} {'end→final ms':>13s}  transcript (last)")
+    print(
+        f"server {args.base}; STT clip {args.stt_seconds:.0f}s from {Path(args.stt_wav).name}\n"  # noqa: E501
+    )
+    print(
+        f"{'STT provider':14s} {'turns':>5s} {'end→final ms':>13s}  transcript (last)"
+    )
     for provider in ("flux", "parakeet"):
         ends = []
         last = {}
@@ -167,10 +196,17 @@ def main() -> int:
             continue
         end = f"{statistics.median(ends):.0f}" if ends else "-"
         transcript = (last.get("transcripts") or ["-"])[-1]
-        print(f"{provider:14s} {last.get('turns', 0):5d} {end:>13s}  {transcript[:70]!r}")
+        print(
+            f"{provider:14s} {last.get('turns', 0):5d} {end:>13s}  {transcript[:70]!r}"
+        )
 
-    print(f"\n{'TTS provider':14s} {'first audio ms':>14s} {'done ms':>8s} {'audio s':>8s}")
-    for provider, voice in (("cartesia", "78a05d7d-268b-4a18-aad7-7a96902a95ee"), ("chatterbox", "chatterbox:jarvis")):
+    print(
+        f"\n{'TTS provider':14s} {'first audio ms':>14s} {'done ms':>8s} {'audio s':>8s}"  # noqa: E501
+    )
+    for provider, voice in (
+        ("cartesia", "78a05d7d-268b-4a18-aad7-7a96902a95ee"),
+        ("chatterbox", "chatterbox:jarvis"),
+    ):
         firsts, dones, secs = [], [], []
         last = {}
         for _ in range(args.rounds):
@@ -182,7 +218,9 @@ def main() -> int:
         if "error" in last or not firsts:
             print(f"{provider:14s} unavailable: {last.get('error', 'no audio')}")
             continue
-        print(f"{provider:14s} {statistics.median(firsts):14.0f} {statistics.median(dones):8.0f} {statistics.median(secs):8.1f}")
+        print(
+            f"{provider:14s} {statistics.median(firsts):14.0f} {statistics.median(dones):8.0f} {statistics.median(secs):8.1f}"  # noqa: E501
+        )
     return 0
 
 
