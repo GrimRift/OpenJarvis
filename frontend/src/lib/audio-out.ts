@@ -72,3 +72,47 @@ export function setBoostedVolume(el: HTMLMediaElement, channel: VolumeChannel): 
   el.volume = 1;
   if (ctx.state !== 'running') void ctx.resume().catch(() => {});
 }
+
+let keepAwake: { source: ConstantSourceNode; gain: GainNode } | null = null;
+
+/**
+ * Keep the output device open while the wake word is armed.
+ *
+ * Bluetooth earphones drop their audio link after a moment of silence and
+ * take 100-300 ms to bring it back, so the first syllable of a greeting
+ * clip, or of a reply, was lost on AirPods ("Hello, sir" arrived as "lo,
+ * sir"). A constant source at -100 dB into the same chain keeps the OS
+ * streaming, which keeps the link up, and is inaudible on anything.
+ * Wired outputs are unaffected either way.
+ */
+export function keepOutputAwake(on: boolean): void {
+  const ctx = outputContext();
+  if (!ctx) return;
+  if (!on) {
+    if (keepAwake) {
+      try {
+        keepAwake.source.stop();
+        keepAwake.source.disconnect();
+        keepAwake.gain.disconnect();
+      } catch {
+        /* already gone */
+      }
+      keepAwake = null;
+    }
+    return;
+  }
+  if (keepAwake) return;
+  try {
+    const source = ctx.createConstantSource();
+    source.offset.value = 1;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.00001;
+    source.connect(gain).connect(ctx.destination);
+    source.start();
+    keepAwake = { source, gain };
+  } catch {
+    keepAwake = null;
+    return;
+  }
+  if (ctx.state !== 'running') void ctx.resume().catch(() => {});
+}

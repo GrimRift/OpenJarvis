@@ -1,3 +1,4 @@
+import { keepOutputAwake } from '../lib/audio-out';
 import { voiceTrace } from '../lib/voice-trace';
 import { WAKE_MAX_GAIN, applyGain, nextGain } from '../lib/mic-gain';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -445,10 +446,17 @@ export function useWakeWord(
   useEffect(() => {
     if (enabled) {
       start();
+      // Bluetooth earphones sleep between clips and eat the first syllable
+      // waking up; an inaudible signal keeps the link open while armed.
+      keepOutputAwake(true);
     } else {
       stop();
+      keepOutputAwake(false);
     }
-    return stop;
+    return () => {
+      stop();
+      keepOutputAwake(false);
+    };
     // The verifier choice is part of the socket URL, so a change rebuilds
     // the listener the same way enabling does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
