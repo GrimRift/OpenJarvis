@@ -17,6 +17,9 @@ import numpy as np
 logger = logging.getLogger("voice_sidecar")
 
 SAMPLE_RATE = 24000
+# Share of the card the allocator may hold: 0.3 of 8 GB is 2.4 GB, room for
+# fp32 weights plus one reply's activations, never the whole card.
+MEMORY_FRACTION = 0.3
 REFERENCE_FILE = "reference.wav"
 CONDS_FILE = "conds.pt"
 PARAMS_FILE = "voice.json"
@@ -177,6 +180,13 @@ class ChatterboxEngine:
                 "CUDA requested but torch.cuda.is_available() is False; using CPU"
             )
             self.device = "cpu"
+        if self.device.startswith("cuda"):
+            # Measured 22 September: the process held 3.25 GB on an 8 GB card
+            # with 1.7 GB of weights, the rest being the caching allocator
+            # keeping every reply's peak activations. A hard fraction makes
+            # the allocator free its cache before growing, so the process
+            # stays near weights + context.
+            torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTION)
         self.model = ChatterboxTurboTTS.from_pretrained(device=self.device, nano=True)
         if self.precision == "fp16" and self.device.startswith("cuda"):
             # Halves the resident weights (2.2 GB -> 1.4 GB measured for the
@@ -283,9 +293,9 @@ class ChatterboxEngine:
                 audio = audio[: _budget_samples(text)]
         self.last_generation_seconds = round(time.monotonic() - started, 3)
         self.generations += 1
-        # Hand the allocator's cache back between replies: the activations
+        # Hand the allocator's cache back after every piece: the activations
         # of a long sentence otherwise stay reserved for the process life.
-        if self.device.startswith("cuda") and self.generations % 8 == 0:
+        if self.device.startswith("cuda"):
             torch.cuda.empty_cache()
         return _level(audio, params)
 

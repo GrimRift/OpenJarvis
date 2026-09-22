@@ -161,6 +161,9 @@ class SidecarProcess:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
         env["PYTHONIOENCODING"] = "utf-8"
+        # Fewer stranded blocks in the allocator between differently sized
+        # replies; without it the reserved pool only grows.
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         args = [
             str(exe),
             "-m",

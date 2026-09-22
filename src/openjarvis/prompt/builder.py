@@ -153,6 +153,24 @@ class SystemPromptBuilder:
                 cache_segment="dynamic_suffix",
             )
         )
+        # Observed 22 September: an engineering answer came back as raw
+        # LaTeX in \[ \] and \( \) delimiters, which the chat cannot render
+        # (only $ delimiters reach the math renderer) and the voice read as
+        # backslashes. The renderer and the voice now cope, but the model
+        # writing readable formulas in the first place is the better fix.
+        sections.append(
+            PromptSection(
+                name="math_style",
+                content=(
+                    "(Formulas: for simple ones write plain text that reads "
+                    "aloud, like F = m a or sum of forces = 0. When you need "
+                    "LaTeX, use $...$ for inline and $$...$$ for display, never "
+                    r"\[ \] or \( \). In a spoken reply, prefer words.)"
+                ),
+                source="math_style",
+                cache_segment="dynamic_suffix",
+            )
+        )
         return sections
 
     def _get_frozen_sections(self) -> list[PromptSection]:

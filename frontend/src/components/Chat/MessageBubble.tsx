@@ -5,6 +5,7 @@ import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import { normaliseMathDelimiters } from '../../lib/math-delimiters';
 import 'katex/dist/katex.min.css';
 import { Copy, Check, Paperclip } from 'lucide-react';
 import { imagesFor, documentsFor } from '../../lib/store';
@@ -141,7 +142,7 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
   // Escaped only for rendering. Copy must still yield "$200", not "\$200".
   const markdownContent = useMemo(
-    () => protectCurrencyFromMath(cleanContent),
+    () => normaliseMathDelimiters(protectCurrencyFromMath(cleanContent)),
     [cleanContent],
   );
   const linkPreview = useMemo(() => selectLinkPreview(message), [message]);

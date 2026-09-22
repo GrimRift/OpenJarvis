@@ -557,10 +557,15 @@ def serve(
             # on a daemon thread so startup does not block on it, and
             # `health()` is simply the existing method that forces the load.
             def _warm_speech(backend: object = speech_backend) -> None:
-                try:
-                    backend.health()  # type: ignore[attr-defined]
-                except Exception as exc:  # noqa: BLE001 — warmup is optional
-                    logger.debug("Speech warmup failed: %s", exc)
+                if getattr(config.speech, "warm_transcriber", True):
+                    try:
+                        backend.health()  # type: ignore[attr-defined]
+                    except Exception as exc:  # noqa: BLE001 — warmup is optional
+                        logger.debug("Speech warmup failed: %s", exc)
+                else:
+                    # [speech] warm_transcriber = false: the fallback model
+                    # loads on the first transcription that needs it.
+                    logger.info("Transcription model left unloaded until first use")
                 # The wake-word verifier's own small model, same reason.
                 from openjarvis.speech.wake_word_verify import warm_local_verifier
 

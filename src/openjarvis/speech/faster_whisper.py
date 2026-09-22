@@ -191,8 +191,18 @@ class FasterWhisperBackend(SpeechBackend):
             segments=segments,
         )
 
-    def health(self) -> bool:
-        """Check if model is loaded or loadable."""
+    def health(self, *, load: bool = True) -> bool:
+        """Check if model is loaded or loadable.
+
+        ``load=False`` answers without loading: whether the library is
+        present and no earlier load failed. The Settings page asks on every
+        visit, and forcing 1.5 GB onto the GPU for that defeated
+        ``[speech] warm_transcriber = false``.
+        """
+        if not load:
+            return WhisperModel is not None and (
+                self._model is not None or self._last_error is None
+            )
         try:
             self._ensure_model()
             return True

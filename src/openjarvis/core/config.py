@@ -1574,6 +1574,11 @@ class SpeechConfig:
     voice_speed: float = 1.0
     voice_volume: float = 1.9
 
+    # Load the transcription model at startup (True) or on first use. With
+    # a streaming engine selected the big model is only the fallback, and
+    # distil-large-v3.5 in fp16 holds ~1.5 GB of an 8 GB card doing nothing.
+    warm_transcriber: bool = True
+
     # --- Deepgram Flux streaming STT (opt-in cloud mode) ------------------
     # Server-side kill switch, not the user's choice. Whether Flux is *used*
     # is the client toggle (off by default, so faster-whisper stays the

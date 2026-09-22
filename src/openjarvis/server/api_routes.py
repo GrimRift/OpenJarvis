@@ -1439,7 +1439,12 @@ async def speech_health(request: Request):
             "wake_word_available": wake_word_available,
         }
     try:
-        available = backend.health()
+        # Never load the model for a status question: with the transcriber
+        # left lazy, this page visit would otherwise put it on the GPU.
+        try:
+            available = backend.health(load=False)
+        except TypeError:
+            available = backend.health()
         reason = None
     except Exception as exc:
         logger.exception("Speech health check failed")

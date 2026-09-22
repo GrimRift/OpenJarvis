@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import re
 
+from openjarvis.speech.spoken_math import speak_math
+
 # A row of only pipes, dashes, colons and spaces — the bar under a table's
 # header. Spoken aloud it is a long run of "dash".
 _TABLE_DIVIDER = re.compile(r"^\s*\|?[\s:|-]*\|[\s:|-]*$")
@@ -26,9 +28,7 @@ _INLINE_CODE = re.compile(r"`([^`]*)`")
 _IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)]*)\)")
 _BARE_URL = re.compile(r"(?i)\b(?:https?://|www\.)[^\s<>\"']+")
-_WINDOWS_PATH = re.compile(
-    r"(?<![\w])(?:[A-Za-z]:[\\/]+|\\{2,})[^\s<>\"|?*]+"
-)
+_WINDOWS_PATH = re.compile(r"(?<![\w])(?:[A-Za-z]:[\\/]+|\\{2,})[^\s<>\"|?*]+")
 _POSIX_PATH = re.compile(r"(?<![\w:])/(?:[^/\s<>\"']+/)+[^/\s<>\"']*")
 _RELATIVE_FILE_PATH = re.compile(
     r"(?<![\w./-])(?:\.{1,2}[\\/])?"
@@ -271,8 +271,10 @@ def _looks_like_identifier(value: str) -> bool:
     has_letter = any(char.isalpha() for char in value)
     has_digit = any(char.isdigit() for char in value)
     has_separator = any(char in "_-" for char in value)
-    is_long_hex = len(value) >= 16 and has_digit and all(
-        char in "0123456789abcdefABCDEF" for char in value
+    is_long_hex = (
+        len(value) >= 16
+        and has_digit
+        and all(char in "0123456789abcdefABCDEF" for char in value)
     )
     return is_long_hex or (
         has_letter and has_digit and (len(value) >= 20 or has_separator)
@@ -329,9 +331,7 @@ def to_spoken_text(markdown: str) -> str:
             hide_value("labeled_link", "")
         return label
 
-    def replace_bare_value(
-        match: re.Match[str], kind: str, replacement: str
-    ) -> str:
+    def replace_bare_value(match: re.Match[str], kind: str, replacement: str) -> str:
         _value, trailing = _split_trailing_punctuation(match.group(0))
         return hide_value(kind, replacement, trailing)
 
@@ -366,6 +366,10 @@ def to_spoken_text(markdown: str) -> str:
         return hide_value("sensitive", "an identifier")
 
     text = _FENCED_CODE.sub(" ", markdown)
+    # Formulas become words before anything else looks at them: the
+    # identifier and path rules below would otherwise read "\sum F_x" as an
+    # identifier to hide, and the dash rule would break "a - b".
+    text = speak_math(text)
     text = _IMAGE.sub(r"\1", text)
     text = _LINK.sub(replace_link, text)
     text = _INLINE_CODE.sub(replace_inline_code, text)

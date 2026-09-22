@@ -313,7 +313,13 @@ def _check_speech_backend() -> CheckResult:
                 section=SECTION_VOICE,
             )
 
-        if backend.health():
+        # Status only: loading 1.5 GB for a Health page visit defeats the
+        # lazy transcriber; a backend without the flag loads as before.
+        try:
+            healthy = backend.health(load=False)
+        except TypeError:
+            healthy = backend.health()
+        if healthy:
             return CheckResult(
                 "Speech backend",
                 "ok",
