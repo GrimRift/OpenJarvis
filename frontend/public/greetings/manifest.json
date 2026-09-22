@@ -16,10 +16,15 @@
       "greetings/jarvis-local/yes-sir-nano.wav",
       "greetings/jarvis-local/sir-nano.wav"
     ],
-    "chatterbox:jarvis-long": [
-      "greetings/jarvis-long-local/hello-sir-nano.wav",
-      "greetings/jarvis-long-local/yes-sir-nano.wav",
-      "greetings/jarvis-long-local/sir-nano.wav"
+    "chatterbox:jarvis-mix-a": [
+      "greetings/jarvis-mix-a-local/hello-sir-nano.wav",
+      "greetings/jarvis-mix-a-local/yes-sir-nano.wav",
+      "greetings/jarvis-mix-a-local/sir-nano.wav"
+    ],
+    "chatterbox:jarvis-mix-b": [
+      "greetings/jarvis-mix-b-local/hello-sir-nano.wav",
+      "greetings/jarvis-mix-b-local/yes-sir-nano.wav",
+      "greetings/jarvis-mix-b-local/sir-nano.wav"
     ]
   },
   "fillers": {
@@ -41,11 +46,17 @@
       "greetings/jarvis-local/let-me-look-nano.wav",
       "greetings/jarvis-local/working-on-it-nano.wav"
     ],
-    "chatterbox:jarvis-long": [
-      "greetings/jarvis-long-local/one-moment-nano.wav",
-      "greetings/jarvis-long-local/checking-nano.wav",
-      "greetings/jarvis-long-local/let-me-look-nano.wav",
-      "greetings/jarvis-long-local/working-on-it-nano.wav"
+    "chatterbox:jarvis-mix-a": [
+      "greetings/jarvis-mix-a-local/one-moment-nano.wav",
+      "greetings/jarvis-mix-a-local/checking-nano.wav",
+      "greetings/jarvis-mix-a-local/let-me-look-nano.wav",
+      "greetings/jarvis-mix-a-local/working-on-it-nano.wav"
+    ],
+    "chatterbox:jarvis-mix-b": [
+      "greetings/jarvis-mix-b-local/one-moment-nano.wav",
+      "greetings/jarvis-mix-b-local/checking-nano.wav",
+      "greetings/jarvis-mix-b-local/let-me-look-nano.wav",
+      "greetings/jarvis-mix-b-local/working-on-it-nano.wav"
     ]
   },
   "fillers_again": {
@@ -61,9 +72,13 @@
       "greetings/jarvis-local/still-working-nano.wav",
       "greetings/jarvis-local/almost-there-nano.wav"
     ],
-    "chatterbox:jarvis-long": [
-      "greetings/jarvis-long-local/still-working-nano.wav",
-      "greetings/jarvis-long-local/almost-there-nano.wav"
+    "chatterbox:jarvis-mix-a": [
+      "greetings/jarvis-mix-a-local/still-working-nano.wav",
+      "greetings/jarvis-mix-a-local/almost-there-nano.wav"
+    ],
+    "chatterbox:jarvis-mix-b": [
+      "greetings/jarvis-mix-b-local/still-working-nano.wav",
+      "greetings/jarvis-mix-b-local/almost-there-nano.wav"
     ]
   }
 }
