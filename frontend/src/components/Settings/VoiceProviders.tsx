@@ -37,6 +37,7 @@ function describe(status: ProviderStatus | undefined, checking: boolean): { ok: 
   if (!status.available) return { ok: false, text: status.reason || 'Unavailable' };
   const bits: string[] = [];
   if (status.model_loaded === false && status.sidecar_running === false) bits.push('starts on first use');
+  else if (status.model_loaded === false && status.sidecar_running) bits.push('starting…');
   else if (status.model_loaded) bits.push(`loaded on ${status.device ?? '?'}`);
   else if (status.loaded) bits.push(`loaded on ${status.device ?? '?'}`);
   else if (status.requested_device) bits.push(`ready (${status.requested_device})`);
@@ -80,6 +81,22 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
       .catch(() => setLocalVoices([]));
   };
   useEffect(refreshVoices, []);
+
+  // While the local voice is still loading (typically the first minute
+  // after a boot), poll so the row fills in without a manual refresh.
+  const chatterboxLoading =
+    settings.ttsProvider === 'chatterbox' &&
+    health?.tts?.chatterbox?.available === true &&
+    !health?.tts?.chatterbox?.model_loaded;
+  useEffect(() => {
+    if (!chatterboxLoading) return;
+    const timer = setInterval(() => {
+      onRefresh();
+      refreshVoices();
+    }, 5000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatterboxLoading]);
 
   const allLocal = settings.sttProvider === 'parakeet' && settings.ttsProvider === 'chatterbox';
   const voiceNames = localVoices.map((v) => v.name);

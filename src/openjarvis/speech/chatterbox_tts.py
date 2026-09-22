@@ -37,7 +37,9 @@ DEFAULT_VOICE = "jarvis"
 
 # How long a live reply may wait for a sidecar that is loading. Longer than
 # this and the browser's batch fallback is the better experience.
-STREAM_START_WAIT_SECONDS = 25.0
+# 25 s was not enough for a cold start after a reboot (disk cache empty),
+# and the batch fallback behind it then waits again from scratch.
+STREAM_START_WAIT_SECONDS = 45.0
 
 
 def voice_name(voice_id: str, fallback: str = DEFAULT_VOICE) -> str:
@@ -241,15 +243,35 @@ def list_voices(speech_cfg: Any) -> Dict[str, Any]:
             return _http_json(sidecar.base_url(speech_cfg) + "/voices", timeout=5.0)
         except Exception:
             logger.debug("sidecar /voices failed", exc_info=True)
-    names = _voice_names_from_disk()
+    # The sidecar is not up (typically still loading after a boot): answer
+    # from disk, with the same fields, so Settings shows the voice rather
+    # than "?" while it starts.
+    root = sidecar.voices_dir()
+    voices = []
+    for name in _voice_names_from_disk():
+        seconds = 0.0
+        try:
+            import wave
+
+            with wave.open(str(root / name / "reference.wav")) as w:
+                seconds = round(w.getnframes() / float(w.getframerate() or 1), 1)
+        except Exception:
+            pass
+        voices.append(
+            {
+                "name": name,
+                "has_reference": True,
+                "has_conditioning": (root / name / "conds.pt").exists(),
+                "reference_seconds": seconds,
+            }
+        )
     return {
         "default": str(
             getattr(speech_cfg, "chatterbox_voice", DEFAULT_VOICE) or DEFAULT_VOICE
         ),
         "current": None,
-        "voices": [
-            {"name": n, "has_reference": True, "has_conditioning": False} for n in names
-        ],
+        "sidecar_starting": sidecar.process().running(),
+        "voices": voices,
     }
 
 

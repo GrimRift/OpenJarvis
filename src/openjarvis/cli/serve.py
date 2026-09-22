@@ -583,7 +583,9 @@ def serve(
 
         chatterbox_sidecar.start_if_selected(config)
         atexit.register(chatterbox_sidecar.stop)
-        if str(getattr(config.speech, "tts_provider", "")).lower() == "chatterbox":
+        from openjarvis.speech.voice_choice import chosen_provider
+
+        if chosen_provider(config.speech) == "chatterbox":
             console.print("  Voice: [cyan]Chatterbox sidecar starting[/cyan]")
     except Exception as exc:
         logger.debug("Voice sidecar setup failed: %s", exc)
@@ -992,6 +994,7 @@ def serve(
                     # facts as they were; the clean-up then sees today's.
                     write_missing_episodes(system)
                     catch_up_hygiene(system)
+
             moment_engine = MomentEngine(presence_monitor, startup_hook=_catch_up)
             moment_engine.start()
             app.state.moment_engine = moment_engine

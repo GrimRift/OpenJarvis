@@ -288,7 +288,12 @@ def start_if_selected(config: Any) -> None:
     """Called at server start: bring the sidecar up when it is the
     configured provider, without holding the server's startup."""
     speech_cfg = getattr(config, "speech", None)
-    if str(getattr(speech_cfg, "tts_provider", "cartesia")).lower() != "chatterbox":
+    # The Settings choice (voice_choice.json), not only config.toml: after a
+    # reboot the sidecar was not started because config still said
+    # cartesia, so the first reply waited on a cold start and gave up.
+    from openjarvis.speech.voice_choice import chosen_provider
+
+    if chosen_provider(speech_cfg) != "chatterbox":
         return
     if install_reason(speech_cfg):
         logger.warning("Chatterbox selected but %s", install_reason(speech_cfg))
