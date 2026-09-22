@@ -1152,6 +1152,33 @@ async def save_wake_word_sample(request: Request):
 _SYNTHESIZED_AUDIO: Dict[str, str] = {}
 
 
+@speech_router.get("/voice-choice")
+async def get_voice_choice(request: Request):
+    """The voice engine the Settings page chose, as server-side speech
+    (moments, reminders) will use it."""
+    from openjarvis.speech.voice_choice import chosen_provider, chosen_voice_id
+
+    cfg = getattr(request.app.state, "config", None)
+    speech_cfg = getattr(cfg, "speech", None) if cfg else None
+    return {
+        "tts_provider": chosen_provider(speech_cfg),
+        "voice_id": chosen_voice_id(speech_cfg),
+    }
+
+
+@speech_router.put("/voice-choice")
+async def put_voice_choice(request: Request):
+    from openjarvis.speech.voice_choice import PROVIDERS, VoiceChoice, save_choice
+
+    body = await request.json()
+    provider = str(body.get("tts_provider") or "").strip().lower()
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unknown tts_provider")
+    voice_id = str(body.get("voice_id") or "").strip()[:200]
+    save_choice(VoiceChoice(tts_provider=provider, voice_id=voice_id))
+    return {"tts_provider": provider, "voice_id": voice_id}
+
+
 @speech_router.get("/voices")
 async def list_speech_voices(request: Request):
     """Every voice either provider can speak with.

@@ -422,6 +422,19 @@ export async function previewVoice(text: string, options: SynthesizeOptions): Pr
   return res.json();
 }
 
+/**
+ * Tell the server which voice engine was chosen, so what it speaks on its
+ * own (moments, reminders) uses the same voice as replies.
+ */
+export async function saveVoiceChoice(ttsProvider: string, voiceId: string): Promise<void> {
+  const res = await apiFetch('/v1/speech/voice-choice', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tts_provider: ttsProvider, voice_id: voiceId }),
+  });
+  if (!res.ok) throw new Error(`Voice choice save failed: ${res.status}`);
+}
+
 export async function deleteSpeechVoice(name: string): Promise<void> {
   const res = await apiFetch(`/v1/speech/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Voice delete failed: ${res.status}`);

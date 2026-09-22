@@ -4,6 +4,7 @@ import {
   deleteSpeechVoice,
   fetchSpeechVoices,
   previewVoice,
+  saveVoiceChoice,
   uploadSpeechVoice,
   type LocalVoiceInfo,
   type ProviderStatus,
@@ -85,6 +86,12 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
   const voiceProfiles = profilesFor(settings.ttsProvider, voiceNames);
   const currentVoice = getVoiceProfile(settings.ttsVoiceId, settings.ttsProvider);
   const currentLocal = localVoices.find((v) => CHATTERBOX_VOICE_PREFIX + v.name === currentVoice.id);
+
+  // Server-side speech (moments, reminders) cannot read localStorage, so
+  // the choice is mirrored to the server whenever it changes here.
+  useEffect(() => {
+    saveVoiceChoice(settings.ttsProvider, currentVoice.id).catch(() => {});
+  }, [settings.ttsProvider, currentVoice.id]);
 
   const setStt = (value: SttProvider) => {
     updateSettings({ sttProvider: value });

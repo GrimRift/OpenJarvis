@@ -239,18 +239,29 @@ def _voice_wav(text: str) -> Optional[str]:
     a 24kHz clip half again too fast.
     """
     try:
+        from openjarvis.core.config import load_config
         from openjarvis.core.paths import get_config_dir
-        from openjarvis.speech.cartesia_tts import CartesiaTTSBackend
+        from openjarvis.speech.providers import server_tts_backend, server_voice_id
 
-        result = CartesiaTTSBackend().synthesize(text, output_format="wav")
+        speech = getattr(load_config(), "speech", None)
+        result = server_tts_backend(speech).synthesize(
+            text, voice_id=server_voice_id(speech), output_format="wav"
+        )
         raw = result.audio
         rate = _wav_sample_rate(raw)
         start = raw.find(b"data")
         if rate is None or start < 0:
             return None
         payload = raw[start + 8 :]
-        count = len(payload) // 4
-        samples = struct.unpack(f"<{count}f", payload[: count * 4])
+        if _wav_bits(raw) == 16:
+            # The local voice writes ordinary 16-bit PCM.
+            count = len(payload) // 2
+            samples = [
+                v / 32768.0 for v in struct.unpack(f"<{count}h", payload[: count * 2])
+            ]
+        else:
+            count = len(payload) // 4
+            samples = struct.unpack(f"<{count}f", payload[: count * 4])
         samples = _normalised(samples)
         # The user's reminder volume (Settings): SoundPlayer has no level of
         # its own, so it goes into the samples. The boost rides on top; the
@@ -313,6 +324,16 @@ def _wav_sample_rate(raw: bytes) -> Optional[int]:
         return None
     try:
         return int(struct.unpack("<I", raw[marker + 12 : marker + 16])[0])
+    except struct.error:
+        return None
+
+
+def _wav_bits(raw: bytes) -> Optional[int]:
+    marker = raw.find(b"fmt ")
+    if marker < 0 or len(raw) < marker + 24:
+        return None
+    try:
+        return int(struct.unpack("<H", raw[marker + 22 : marker + 24])[0])
     except struct.error:
         return None
 

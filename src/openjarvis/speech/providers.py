@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +90,18 @@ def speech_providers(speech_cfg: Any) -> Dict[str, Dict[str, Dict[str, Any]]]:
 
 
 def default_tts_provider(speech_cfg: Any) -> str:
-    value: Optional[str] = getattr(speech_cfg, "tts_provider", None)
-    return (value or "cartesia").strip().lower()
+    """The provider in force for anything the server speaks on its own:
+    the Settings choice when the browser has made one, else config.toml."""
+    from openjarvis.speech.voice_choice import chosen_provider
+
+    return chosen_provider(speech_cfg)
 
 
 def server_tts_backend(speech_cfg: Any):
-    """The backend instance for server-side speech (moments, Waze, the
-    digest): the configured provider, from the registry. Every such caller
-    used to construct CartesiaTTSBackend directly, which is how a chosen
-    local voice would have been silently ignored everywhere but the chat."""
+    """The backend instance for server-side speech (moments, reminders, the
+    digest): the chosen provider, from the registry. Every such caller used
+    to construct CartesiaTTSBackend directly, which is how a chosen local
+    voice would have been silently ignored everywhere but the chat."""
     import openjarvis.speech  # noqa: F401 - registers the backends
     from openjarvis.core.registry import TTSRegistry
 
@@ -112,11 +115,10 @@ def server_tts_backend(speech_cfg: Any):
 
 
 def server_voice_id(speech_cfg: Any) -> str:
-    """The voice server-side speech uses for the configured provider."""
-    if default_tts_provider(speech_cfg) == "chatterbox":
-        name = str(getattr(speech_cfg, "chatterbox_voice", "jarvis") or "jarvis")
-        return f"chatterbox:{name}"
-    return str(getattr(speech_cfg, "voice_id", "") or "")
+    """The voice server-side speech uses, for the chosen provider."""
+    from openjarvis.speech.voice_choice import chosen_voice_id
+
+    return chosen_voice_id(speech_cfg)
 
 
 __all__ = [
