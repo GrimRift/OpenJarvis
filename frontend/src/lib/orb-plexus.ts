@@ -44,13 +44,13 @@ export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
   // sees nearly all the time. It carries the preview's standing-by settings.
   // The preview's own "idle" button is a different thing: an orb with nobody
   // watching, which here is "away".
-  idle: { r: 0.8, flow: 0.55, spin: 0.003, bright: 0.97, links: 0.9 },
+  idle: { r: 0.8, flow: 0.55, spin: 0.003, bright: 0.97, links: 0.65 },
   // Nobody at the desk: smaller and dimmer, so sitting down is a visible
   // waking up.
-  away: { r: 0.65, flow: 0.55, spin: 0.003, bright: 0.68, links: 0.85 },
+  away: { r: 0.65, flow: 0.55, spin: 0.003, bright: 0.68, links: 0.6 },
   // Only a little larger than standing by, and never as large as a speaking
   // orb at full voice.
-  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 1.12, links: 0.98 },
+  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 1.12, links: 0.8 },
   speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.45, links: 1.15 },
 };
 
@@ -115,34 +115,72 @@ const LOBES = 10;
 const LOBE_SHARP = 3;
 const DUST_TURN = 1;
 /**
- * How the finished frame is lit, after the marks are drawn.
+ * How the finished frame is lit, after the marks are drawn. Per state, and
+ * eased between states like everything else.
  *
- * base   the frame itself
- * curve  the frame squared, unblurred: contrast. A knot at 255 gains the
- *        full amount, a mid tone at 128 a quarter of it, the faint wash
- *        between the webs almost nothing -- so highlights climb toward white
- *        while the gaps stay dark, and it stays sharp because it is not
- *        blurred.
- * bloom  a wide, weak blur of the whole frame: the halo every line in the
- *        reference carries.
- * glow   a tighter blur of the squared frame: light spilling off the bright
- *        knots only, so it does not fog the gaps.
- * white  how far the contrast layer is drained of colour. Saturated cyan
- *        clips at a luminance of 201 however hard it is pushed; the
- *        reference's brightest knots reach 211-246 because they burn
- *        through to white. Draining only the squared layer whitens only
- *        the hottest cores, and the halo around them stays cyan.
+ * exposure  scales the marks as they are drawn -- every line's and dot's
+ *           alpha -- so the squared layers built from them carry it squared.
+ * curve     the frame squared, unblurred: contrast. A knot at full
+ *           brightness gains the full amount, a mid tone a quarter of it,
+ *           the faint wash between the webs almost nothing -- so highlights
+ *           climb while the gaps stay dark.
+ * white     how far the contrast layer is drained of colour. Saturated cyan
+ *           clips at a luminance of 201 however hard it is pushed; the
+ *           reference's brightest knots reach 211-246 by burning through to
+ *           white. That burn is the electric look on speaking's lines; on a
+ *           resting orb it turns the whole body pale.
+ * bloom     a wide, weak blur of the whole frame: the halo every line in
+ *           the reference carries, and what softens it.
+ * glow      a tighter blur of the squared frame: light spilling off the
+ *           bright knots only, so it does not fog the gaps.
+ * dots      how strongly the particles themselves are drawn. Every junction
+ *           dot is a hard point of light; at full strength a resting orb
+ *           reads as speckle, where the reference's dots barely show and its
+ *           lines carry the picture.
+ * haze      a very wide blur of the whole frame: the soft body of light the
+ *           reference's web sits inside. It fills the orb, not the gaps
+ *           between orbs -- at this radius it stays within the disc.
+ * soft      a blur on the frame itself, in pixels at 764 (scaled with the
+ *           canvas). At zero every line is a one-pixel hairline and every
+ *           dot a hard square, which at full size reads as a sharp wire
+ *           model rather than something glowing.
  */
+export interface PlexusLook {
+  exposure: number;
+  curve: number;
+  white: number;
+  bloom: number;
+  glow: number;
+  soft: number;
+  dots: number;
+  haze: number;
+}
+
 export const PLEXUS_LOOK = {
-  /** Per state, scales every layer: the frame and bloom by this, the two
-   * squared layers by its square, since they are the frame times itself.
-   * Scored inside the orb's disc against the reference clip and the lab
-   * page's speaking frame, luminance 0-255, over 240 frames per state:
-   * standing by lands at median 57 / p90 163 / p99 225 against the
-   * reference's 51 / 119 / 211 -- the same body, more contrast -- and
-   * speaking at 74 / 219 / 251 against the lab's 52 / 191 / 246. */
-  exposure: { idle: 1.7, away: 1.2, listening: 1.8, speaking: 1.1 } as Record<OrbState, number>,
-  /** Speaking's exposure at full voice; 'speaking' above is its exposure in
+  // Scored at 300px inside the orb's disc on the page's background colour
+  // (luminance 0-255; sharpness = mean |laplacian| over mean luminance;
+  // whiteness = red over green, since saturated cyan has no red), 240
+  // frames per state:
+  //
+  //                 median  p90  p99  sharp  white  colour
+  //   reference GIF     50  118  211   0.51   0.20  15,75,98
+  //   standing by       52  133  212   0.40   0.18  14,75,97
+  //   lab speaking      52  189  245   0.28   0.22  22,99,120
+  //   speaking          76  223  254   0.30   0.34  39,119,135
+  //   a pause in it     70  207  236   0.35   0.24  27,108,128
+  //
+  // A screenshot of the version before scored sharpness 0.75 and
+  // whiteness 0.61 -- half again as sharp as the reference and three times
+  // as white; the one after it (soft 1, haze 0.8) was asked to be less
+  // blurry. Standing by now sits on the reference; speaking keeps its
+  // white-hot, electric lines.
+  states: {
+    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5 },
+    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5 },
+    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35 },
+    speaking: { exposure: 1.1, curve: 0.9, white: 0.4, bloom: 0.85, glow: 2, soft: 0, dots: 0.8, haze: 0 },
+  } as Record<OrbState, PlexusLook>,
+  /** Speaking's exposure at full voice; its own exposure above is the one in
    * a pause. The lit patches already brighten the body several times over
    * on a word, so one fixed exposure had to choose: set for the words, a
    * pause mid-sentence scored median 37 against standing by's 53 -- the
@@ -150,14 +188,11 @@ export const PLEXUS_LOOK = {
    * pauses, every word washed the orb out. It follows the voice envelope
    * between the two. */
   speakingVoiced: 0.45,
-  base: 1,
-  curve: 0.9,
-  white: 1,
-  bloom: 0.85,
   bloomRadius: 190,
-  glow: 2,
   glowRadius: 420,
+  hazeRadius: 60,
 };
+
 /** Per 60Hz frame: a patch reaches most of a syllable's brightness in
  * about four frames. Instant is a blink; this is a voice. */
 const LOBE_ATTACK = 0.34;
@@ -213,6 +248,33 @@ interface Node {
   lobeA: number; lobeB: number; lobeW: number;
 }
 
+/** Everything a state change blends, captured as it was when the change
+ * began -- mid-morph too, so a second change starts from what is on screen
+ * rather than from either state's settings. */
+interface Morph {
+  radius: number; flow: number; bright: number; links: number;
+  look: PlexusLook; breath: number; spin: number;
+}
+
+/**
+ * How long a state change takes, in 60Hz frames, and its easing.
+ *
+ * Every parameter used to chase its new value on its own exponential: the
+ * biggest step on the very first frame, then a long crawl, each at its own
+ * rate. The size was worse -- the breathing and voice scale switched to the
+ * new state's outright, so standing by to speaking dropped the orb 17% in a
+ * single frame, and its brightness with it, since brightness follows size.
+ * And the tumble set its energy to full at once, quadrupling the spin in a
+ * frame. Now one morph carries all of it: it starts gently, moves most in
+ * the middle and settles, and every parameter is at the same point of it.
+ */
+export const MORPH_FRAMES = 66;
+export function easeMorph(x: number): number {
+  const u = Math.min(1, Math.max(0, x));
+  return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+}
+const lerp = (a: number, b: number, e: number) => a + (b - a) * e;
+
 export interface PlexusState {
   radius: number; flow: number; bright: number; links: number;
   pulse: number; lastSpeech: number; voiceEnv: number;
@@ -220,13 +282,15 @@ export interface PlexusState {
   lobeTargets: number[];
   lobeAxes: Array<[number, number, number]>;
   spinX: number; spinY: number; spinZ: number;
-  energy: number; lastState: OrbState;
+  lastState: OrbState;
+  /** Where the last state change started from, and how far through the
+   * morph to the new state it is (0..1). */
+  from: Morph; trans: number;
+  lastBreath: number; lastSpin: number;
   z: number; zVel: number; linkAge: number;
   particles: Node[];
   pairs: Int32Array; pairCount: number;
-  exposure: number;
-  /** The page colour behind the orb, as rgb. See the composite below. */
-  backdrop: [number, number, number] | null;
+  look: PlexusLook;
 }
 
 /** A syllable's onset, not its level: a steady push only inflates the body. */
@@ -255,11 +319,19 @@ export function breathScale(state: OrbState, t: number, voiceEnv: number): numbe
   return 1 - depth / 2 + (depth / 2) * Math.sin(t * ((2 * Math.PI) / BREATH_PERIOD));
 }
 
-/** Calm states redraw at half rate. Nothing in them moves fast enough to
- * tell, and it halves their cost. */
-export function framesPerDraw(state: OrbState): number {
-  return state === 'idle' || state === 'away' ? 2 : 1;
-}
+/**
+ * The shortest gap between draws, in milliseconds: every state is drawn at
+ * 60 frames a second or better, whatever the display runs at.
+ *
+ * Standing by and away used to redraw at half rate -- 30 a second -- to
+ * save their cost, and it showed. And the gate was "a whole 60Hz frame has
+ * passed", which on a 180Hz display is three frames of a third each: they
+ * sum to 0.9999..., so it waited a fourth. This is a floor with slack
+ * instead, and 11.8 is the one window that gives 60 or better on every
+ * common rate: 180Hz and 120Hz draw at 60, 165Hz at 82, 144Hz at 72, 240Hz
+ * at 80, 60Hz and 75Hz every frame. At 13 a 165Hz display fell to 55.
+ */
+export const MIN_DRAW_GAP_MS = 11.8;
 
 function makeParticles(): { particles: Node[]; axes: Array<[number, number, number]> } {
   const out: Node[] = [];
@@ -326,13 +398,21 @@ export function createPlexusState(): PlexusState {
   const built = makeParticles();
   const axes = built.axes;
   return {
-    radius: 1, flow: 0.55, bright: 0.53, links: 0.85, exposure: 1, backdrop: null,
+    radius: PLEXUS_STATES.idle.r, flow: PLEXUS_STATES.idle.flow, bright: PLEXUS_STATES.idle.bright,
+    links: PLEXUS_STATES.idle.links,
+    look: { ...PLEXUS_LOOK.states.idle },
     pulse: 0, lastSpeech: 0, voiceEnv: 0,
     lobes: new Array(LOBES).fill(0.8),
     lobeTargets: new Array(LOBES).fill(0.8),
     lobeAxes: axes,
     spinX: 0, spinY: 0, spinZ: 0,
-    energy: 0, lastState: 'idle',
+    lastState: 'idle',
+    from: {
+      radius: PLEXUS_STATES.idle.r, flow: PLEXUS_STATES.idle.flow, bright: PLEXUS_STATES.idle.bright,
+      links: PLEXUS_STATES.idle.links, look: { ...PLEXUS_LOOK.states.idle }, breath: 1,
+      spin: PLEXUS_STATES.idle.spin,
+    },
+    trans: 1, lastBreath: 1, lastSpin: PLEXUS_STATES.idle.spin,
     z: 0, zVel: 0, linkAge: 0,
     particles: built.particles,
     pairs: new Int32Array(64000),
@@ -452,16 +532,36 @@ export function drawPlexus(
   ctx.clearRect(0, 0, w, h);
 
   const cfg = PLEXUS_STATES[state];
-  S.radius = approach(S.radius, cfg.r, 0.02, dt);
-  S.flow = approach(S.flow, cfg.flow, 0.03, dt);
-  S.bright = approach(S.bright, cfg.bright, 0.02, dt);
+  if (state !== S.lastState) {
+    S.from = {
+      radius: S.radius, flow: S.flow, bright: S.bright, links: S.links,
+      look: { ...S.look }, breath: S.lastBreath, spin: S.lastSpin,
+    };
+    S.trans = 0;
+    S.lastState = state;
+  }
+  S.trans = Math.min(1, S.trans + dt / MORPH_FRAMES);
+  const e = easeMorph(S.trans);
+  const F = S.from;
+  S.radius = lerp(F.radius, cfg.r, e);
+  S.flow = lerp(F.flow, cfg.flow, e);
+  S.bright = lerp(F.bright, cfg.bright, e);
+  S.links = lerp(F.links, cfg.links, e);
+  const want = PLEXUS_LOOK.states[state];
+  // Speaking's exposure follows the voice; the morph blends toward that
+  // moving target, and once it lands it simply tracks it.
   const exposureTarget =
     state === 'speaking'
-      ? PLEXUS_LOOK.exposure.speaking +
-        (PLEXUS_LOOK.speakingVoiced - PLEXUS_LOOK.exposure.speaking) * S.voiceEnv
-      : PLEXUS_LOOK.exposure[state];
-  S.exposure = approach(S.exposure, exposureTarget, state === 'speaking' ? 0.08 : 0.02, dt);
-  S.links = approach(S.links, cfg.links, 0.02, dt);
+      ? want.exposure + (PLEXUS_LOOK.speakingVoiced - want.exposure) * S.voiceEnv
+      : want.exposure;
+  S.look.exposure = lerp(F.look.exposure, exposureTarget, e);
+  S.look.curve = lerp(F.look.curve, want.curve, e);
+  S.look.white = lerp(F.look.white, want.white, e);
+  S.look.bloom = lerp(F.look.bloom, want.bloom, e);
+  S.look.glow = lerp(F.look.glow, want.glow, e);
+  S.look.soft = lerp(F.look.soft, want.soft, e);
+  S.look.dots = lerp(F.look.dots, want.dots, e);
+  S.look.haze = lerp(F.look.haze, want.haze, e);
 
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
@@ -498,18 +598,22 @@ export function drawPlexus(
     S.lobeTargets[other] = Math.max(S.lobeTargets[other], patch.base + rise * patch.kick * 0.5);
   }
 
-  if (state !== S.lastState) { S.energy = 1; S.lastState = state; }
-  S.energy *= Math.pow(0.985, dt);
-  S.spinY += (cfg.spin + S.energy * 0.01) * dt;
-  if (S.energy > 0.05) {
-    S.spinX += S.energy * 0.009 * Math.sin(t * 0.09) * dt;
-    S.spinZ += S.energy * 0.006 * Math.cos(t * 0.07) * dt;
+  // The tumble rises and settles with the morph instead of starting at
+  // full: a state change is felt as the body turning, not a jolt.
+  const spin = lerp(F.spin, cfg.spin, e);
+  S.lastSpin = spin;
+  const tumble = S.trans < 1 ? Math.pow(Math.sin(Math.PI * S.trans), 2) : 0;
+  S.spinY += (spin + tumble * 0.006) * dt;
+  if (tumble > 0.01) {
+    S.spinX += tumble * 0.005 * Math.sin(t * 0.09) * dt;
+    S.spinZ += tumble * 0.0035 * Math.cos(t * 0.07) * dt;
   }
 
   const attack = speech > S.voiceEnv ? 0.22 : 0.035;
   S.voiceEnv += (speech - S.voiceEnv) * Math.min(1, attack * dt);
 
-  const breath = breathScale(state, t, S.voiceEnv);
+  const breath = lerp(S.from.breath, breathScale(state, t, S.voiceEnv), e);
+  S.lastBreath = breath;
   // A twentieth either way. It was 0.78 + 0.22*sin, a 1.8x swing inherited
   // from the cloud orb, which over time took the whole body down to nearly
   // nothing for seconds at a stretch.
@@ -596,7 +700,7 @@ export function drawPlexus(
     p.pd = Math.max(0, Math.min(1, (rz + 1) / 2));
     p.ps = p.size * persp * sizeScale * breath;
     p.reg = S.lobes[p.lobeA] * p.lobeW + S.lobes[p.lobeB] * (1 - p.lobeW);
-    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg);
+    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure);
   }
 
   const dCosY = Math.cos(S.spinY * DUST_TURN), dSinY = Math.sin(S.spinY * DUST_TURN);
@@ -612,7 +716,7 @@ export function drawPlexus(
     q.pd = Math.max(0, Math.min(1, (qz + 1) / 2));
     q.ps = q.size * qp * sizeScale * breath;
     q.reg = S.lobes[q.lobeA] * q.lobeW + S.lobes[q.lobeB] * (1 - q.lobeW);
-    q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * q.reg);
+    q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * q.reg * S.look.dots * S.look.exposure);
   }
 
   // Links first, so the particles sit on top of their own wiring.
@@ -663,7 +767,7 @@ export function drawPlexus(
       const buf = bandBuffers[b];
       if (!buf.length) continue;
       ctx.strokeStyle = RAMP[Math.min(RAMP_STEPS - 1, 3 + b * 3)];
-      ctx.globalAlpha = ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha;
+      ctx.globalAlpha = Math.min(1, ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha * S.look.exposure);
       ctx.beginPath();
       for (let i = 0; i < buf.length; i += 4) {
         ctx.moveTo(buf[i], buf[i + 1]);
@@ -705,101 +809,77 @@ export function drawPlexus(
   ctx.drawImage(edgeMask(w, h, 0.92), 0, 0);
   ctx.restore();
 
-  // The contrast and glow layers are the frame multiplied by itself, which
-  // only works on opaque colours: multiplying a partly transparent pixel by
-  // itself doubles it rather than squaring it. So they are built on black,
-  // and the finished frame is composed on the page's own background colour
-  // and faded out at the edge of its circle. Drawn onto black instead it is
-  // a dark square over the page; handed to the page with mix-blend-mode it
-  // is the same square, because the page isolates the orb's layer from
-  // what is behind it (plus-lighter drew nothing at all).
-  //
-  // On a light page, light added to the background is white on white. The
-  // orb keeps the plain frame there, drawn over the page as it always was.
-  const bd = S.backdrop;
-  if (bd && 0.2126 * bd[0] + 0.7152 * bd[1] + 0.0722 * bd[2] > 128) {
-    target.clearRect(0, 0, w, h);
-    target.drawImage(bufs.full, 0, 0);
-    return;
-  }
-  const L = PLEXUS_LOOK;
-  const E = S.exposure;
+  // Contrast without leaving the page. A mark's brightness here lives
+  // almost entirely in its alpha: every mark is drawn in a full-strength
+  // ramp colour at an alpha, and 'lighter' sums the alphas. So masking the
+  // frame by itself ('destination-in') gives alpha squared on the same
+  // colours -- the contrast curve -- and stays transparent wherever there
+  // is no light. The first version squared colours instead, which needs
+  // opaque layers: composed on black it was a dark square over the HUD
+  // grid; composed on the page's colour it was a dark circle, because the
+  // grid and gradient behind the orb are painted by a fixed backdrop the
+  // orb's stacking context cannot see, and no blend mode reaches it.
+  const L = S.look;
   const hw = bufs.half.width, hh = bufs.half.height;
-  const opaque = (c: CanvasRenderingContext2D, cw: number, ch: number) => {
+  const squareOf = (c: CanvasRenderingContext2D, src: HTMLCanvasElement, cw: number, ch: number) => {
     c.globalCompositeOperation = 'source-over';
     c.globalAlpha = 1;
     c.filter = 'none';
-    c.fillStyle = '#000';
-    c.fillRect(0, 0, cw, ch);
+    c.clearRect(0, 0, cw, ch);
+    c.drawImage(src, 0, 0, cw, ch);
+    c.globalCompositeOperation = 'destination-in';
+    c.drawImage(src, 0, 0, cw, ch);
+    c.globalCompositeOperation = 'source-over';
   };
 
-  opaque(bufs.hctx, hw, hh);
-  bufs.hctx.globalCompositeOperation = 'lighter';
-  bufs.hctx.drawImage(bufs.full, 0, 0, hw, hh);
   bufs.hctx.globalCompositeOperation = 'source-over';
+  bufs.hctx.globalAlpha = 1;
+  bufs.hctx.clearRect(0, 0, hw, hh);
+  bufs.hctx.drawImage(bufs.full, 0, 0, hw, hh);
+  squareOf(bufs.gctx, bufs.half, hw, hh);
+  if (L.curve > 0.01) squareOf(bufs.qctx, bufs.full, w, h);
 
-  // The frame squared, half size, for the glow.
-  opaque(bufs.gctx, hw, hh);
-  bufs.gctx.globalCompositeOperation = 'lighter';
-  bufs.gctx.drawImage(bufs.half, 0, 0);
-  bufs.gctx.globalCompositeOperation = 'multiply';
-  bufs.gctx.drawImage(bufs.half, 0, 0);
-  bufs.gctx.globalCompositeOperation = 'source-over';
-
-  // The frame squared, full size, for the contrast curve.
-  if (L.curve > 0) {
-    opaque(bufs.qctx, w, h);
-    bufs.qctx.globalCompositeOperation = 'lighter';
-    bufs.qctx.drawImage(bufs.full, 0, 0);
-    bufs.qctx.globalCompositeOperation = 'multiply';
-    bufs.qctx.drawImage(bufs.full, 0, 0);
-    bufs.qctx.globalCompositeOperation = 'source-over';
-  }
-
-  opaque(target, w, h);
-  if (bd) {
-    target.fillStyle = `rgb(${bd[0]},${bd[1]},${bd[2]})`;
-    target.fillRect(0, 0, w, h);
-  }
+  target.clearRect(0, 0, w, h);
   target.save();
   target.globalCompositeOperation = 'lighter';
   target.imageSmoothingEnabled = true;
-  // 'lighter' clamps at 1 per draw, so a gain above 1 is drawn in whole
-  // passes plus a remainder.
-  const add = (img: CanvasImageSource, gain: number, sw: number, sh: number) => {
+  // Exposure is applied to the marks as they are drawn, not here, so every
+  // layer below is added at a gain of about one or two. Applied to the
+  // finished frame it had to be drawn in repeated passes -- 'lighter'
+  // clamps at 1 per draw -- and standing by's glow, at exposure squared
+  // times two, re-ran its blur eighteen times a frame. The squared layers
+  // still carry exposure squared: they are built from the exposed frame.
+  const add = (img: CanvasImageSource, gain: number, sw: number, sh: number, filter: string) => {
+    target.filter = filter || 'none';
     let left = gain;
     while (left > 1e-3) {
       target.globalAlpha = Math.min(1, left);
       target.drawImage(img, 0, 0, sw, sh, 0, 0, w, h);
       left -= 1;
     }
+    target.filter = 'none';
   };
-  add(bufs.full, L.base * E, w, h);
-  if (L.curve > 0) {
-    if (L.white > 0) target.filter = `saturate(${Math.max(0, 1 - L.white).toFixed(2)})`;
-    add(bufs.sq, L.curve * E * E, w, h);
-    target.filter = 'none';
+  const soft = L.soft * (w / 764);
+  const canBlur = blurSupported(target);
+  const softFilter = canBlur && soft > 0.05 ? `blur(${soft.toFixed(2)}px)` : '';
+  add(bufs.full, 1, w, h, softFilter);
+  if (L.curve > 0.01) {
+    const drain = L.white > 0.01 ? `saturate(${Math.max(0, 1 - L.white).toFixed(2)})` : '';
+    add(bufs.sq, L.curve, w, h, [softFilter, drain].filter(Boolean).join(' '));
   }
-  if (blurSupported(target)) {
-    target.filter = `blur(${(w / L.bloomRadius).toFixed(1)}px)`;
-    add(bufs.half, L.bloom * E, hw, hh);
-    target.filter = `blur(${(w / L.glowRadius).toFixed(1)}px)`;
-    add(bufs.glow, L.glow * E * E, hw, hh);
-    target.filter = 'none';
+  if (canBlur) {
+    add(bufs.half, L.bloom, hw, hh, `blur(${(w / PLEXUS_LOOK.bloomRadius).toFixed(1)}px)`);
+    add(bufs.glow, L.glow, hw, hh, `blur(${(w / PLEXUS_LOOK.glowRadius).toFixed(1)}px)`);
+    if (L.haze > 0.01) {
+      add(bufs.half, L.haze, hw, hh, `blur(${(w / PLEXUS_LOOK.hazeRadius).toFixed(1)}px)`);
+    }
   } else {
     const sw = bufs.small.width, sh = bufs.small.height;
-    opaque(bufs.sctx, sw, sh);
-    bufs.sctx.globalCompositeOperation = 'lighter';
+    bufs.sctx.clearRect(0, 0, sw, sh);
     bufs.sctx.drawImage(bufs.half, 0, 0, sw, sh);
-    bufs.sctx.globalCompositeOperation = 'source-over';
-    add(bufs.small, L.bloom * E, sw, sh);
-    add(bufs.glow, L.glow * E * E, hw, hh);
+    add(bufs.small, L.bloom, sw, sh, '');
+    add(bufs.glow, L.glow, hw, hh, '');
   }
-  target.globalAlpha = 1;
-  // Wide and soft, so the edge of the painted background never reads as a
-  // circle against the page.
-  target.globalCompositeOperation = 'destination-in';
-  target.drawImage(edgeMask(w, h, 0.8), 0, 0);
   target.restore();
 }
 

@@ -200,31 +200,25 @@ describe('the web keeps its weight at any canvas size', () => {
 });
 
 describe('the orb sits on the page, not on a square', () => {
-  // The contrast and glow layers only work on opaque colour, so on a dark
-  // page the frame is composed on the page's own colour -- never on black,
-  // which drew a dark square over the HUD grid. On a light page, light
-  // added to the background is white on white, so it draws the plain frame
-  // over the page and paints nothing underneath.
-  const fillsOn = (backdrop: [number, number, number] | null) => {
+  it('never paints a background under itself', () => {
+    // Everything outside the light must stay transparent. Composed on black
+    // the orb was a dark square over the HUD grid; composed on the page's
+    // colour it was a dark circle, because the grid and gradient behind it
+    // are painted by a fixed backdrop the orb cannot see. So nothing may
+    // fill the visible canvas -- the light is only ever added to it.
     resetRecord();
     const target = stubContext(shared);
-    const fillRect = (target as unknown as { fillRect: (x: number, y: number) => void }).fillRect;
-    (target as unknown as { fillRect: (x: number, y: number) => void }).fillRect = (x, y) => {
-      shared.targetFills.push(String((target as unknown as { fillStyle: string }).fillStyle));
+    const t = target as unknown as { fillRect: (x: number, y: number) => void; fillStyle: string };
+    const fillRect = t.fillRect;
+    t.fillRect = (x, y) => {
+      shared.targetFills.push(String(t.fillStyle));
       fillRect(x, y);
     };
     const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
     const S = createPlexusState();
-    S.backdrop = backdrop;
-    drawPlexus(target, canvas, S, 'idle', 0, 1, 0);
-    return shared.targetFills;
-  };
-
-  it("paints the page's own colour under a dark page", () => {
-    expect(fillsOn([10, 10, 11])).toContain('rgb(10,10,11)');
-  });
-
-  it('paints nothing under a light page', () => {
-    expect(fillsOn([249, 249, 249])).toEqual([]);
+    for (const state of ['idle', 'speaking'] as OrbState[]) {
+      for (let f = 0; f < 4; f++) drawPlexus(target, canvas, S, state, f, 1, state === 'speaking' ? 0.6 : 0);
+    }
+    expect(shared.targetFills).toEqual([]);
   });
 });

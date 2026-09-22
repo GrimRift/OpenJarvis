@@ -9,7 +9,7 @@ import { getSpeechLevel } from '../../lib/audio-level';
 import {
   createPlexusState,
   drawPlexus,
-  framesPerDraw,
+  MIN_DRAW_GAP_MS,
   type PlexusState,
 } from '../../lib/orb-plexus';
 import { resolveOrbState, type OrbState } from '../../lib/orb-state';
@@ -99,7 +99,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
   const speedRef = useRef(SPEED_MAP.idle);
   const lastFrameRef = useRef(0);
   const sinceDrawRef = useRef(0);
-  const sinceBackdropRef = useRef(0);
+  const lastDrawRef = useRef(0);
   const design = useAppStore((s) => s.settings.orbDesign);
   // Read at draw time: switching design mid-session must not tear the loop
   // down, and the two renderers keep separate state of their own.
@@ -141,20 +141,11 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
           dt,
         );
       } else {
-        // Idle and standing by redraw at half rate: nothing in them moves
-        // fast enough to tell, and it halves what the two states Sage
-        // spends most of its time in cost. The accumulated dt is handed to
-        // the draw, so the motion runs at the same speed either way.
+        // Drawn at 60 a second or better, whatever the display's rate. The
+        // time since the last draw is handed over, so the motion runs at the
+        // same speed however often it is drawn.
         sinceDrawRef.current += dt;
-        sinceBackdropRef.current += dt;
-        // The orb paints the page's colour under itself (see drawPlexus), so
-        // it follows a theme switch. Once a second is plenty for that.
-        if (sinceBackdropRef.current >= 60 || !plexusRef.current!.backdrop) {
-          plexusRef.current!.backdrop = pageBackdrop();
-          sinceBackdropRef.current = 0;
-        }
-        const every = framesPerDraw(stateRef.current);
-        if (sinceDrawRef.current >= every) {
+        if (now - lastDrawRef.current >= MIN_DRAW_GAP_MS) {
           drawPlexus(
             ctx,
             canvas,
@@ -165,6 +156,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
             stateRef.current === 'speaking' ? getSpeechLevel() : 0,
           );
           sinceDrawRef.current = 0;
+          lastDrawRef.current = now;
         }
       }
       rafRef.current = requestAnimationFrame(draw);
@@ -199,12 +191,6 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
       <canvas ref={canvasRef} width={size} height={size} style={{ position: 'absolute', inset: 0 }} />
     </div>
   );
-}
-
-function pageBackdrop(): [number, number, number] | null {
-  const m = getComputedStyle(document.body).backgroundColor.match(/\d+(\.\d+)?/g);
-  if (!m || m.length < 3) return null;
-  return [Number(m[0]), Number(m[1]), Number(m[2])];
 }
 
 function drawOrb(
