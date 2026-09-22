@@ -15,6 +15,11 @@
       "greetings/jarvis-local/hello-sir-nano.wav",
       "greetings/jarvis-local/yes-sir-nano.wav",
       "greetings/jarvis-local/sir-nano.wav"
+    ],
+    "chatterbox:jarvis-long": [
+      "greetings/jarvis-long-local/hello-sir-nano.wav",
+      "greetings/jarvis-long-local/yes-sir-nano.wav",
+      "greetings/jarvis-long-local/sir-nano.wav"
     ]
   },
   "fillers": {
@@ -35,6 +40,12 @@
       "greetings/jarvis-local/checking-nano.wav",
       "greetings/jarvis-local/let-me-look-nano.wav",
       "greetings/jarvis-local/working-on-it-nano.wav"
+    ],
+    "chatterbox:jarvis-long": [
+      "greetings/jarvis-long-local/one-moment-nano.wav",
+      "greetings/jarvis-long-local/checking-nano.wav",
+      "greetings/jarvis-long-local/let-me-look-nano.wav",
+      "greetings/jarvis-long-local/working-on-it-nano.wav"
     ]
   },
   "fillers_again": {
@@ -49,6 +60,10 @@
     "chatterbox:jarvis": [
       "greetings/jarvis-local/still-working-nano.wav",
       "greetings/jarvis-local/almost-there-nano.wav"
+    ],
+    "chatterbox:jarvis-long": [
+      "greetings/jarvis-long-local/still-working-nano.wav",
+      "greetings/jarvis-long-local/almost-there-nano.wav"
     ]
   }
 }

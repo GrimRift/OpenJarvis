@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -155,31 +156,49 @@ async def _stream_reply(
             my_generation, text = item  # type: ignore[misc]
             if my_generation != generation:
                 continue  # queued before a cancel
-            try:
-                audio = await asyncio.to_thread(engine.generate, text, voice)
-            except Exception as exc:
-                logger.exception("generation failed")
-                await send_json(
-                    {"type": "error", "reason": str(exc), "generation": my_generation}
-                )
-                continue
-            if my_generation != generation:
-                continue  # cancelled while on the GPU: never send it
-            for start in range(0, len(audio), CHUNK_SAMPLES):
-                if my_generation != generation:
+            # A long sentence is generated in clause-sized pieces. Measured
+            # 22 September: a 1.1 s opener followed by a 6.6 s sentence left
+            # 650 ms of silence mid-reply, because the whole sentence had to
+            # finish generating (1.75 s) before any of it could play. Pieces
+            # of ~1-2 s each arrive faster than they play out.
+            total_seconds = 0.0
+            gen_seconds = 0.0
+            failed = False
+            for piece in split_for_generation(text):
+                try:
+                    audio = await asyncio.to_thread(engine.generate, piece, voice)
+                except Exception as exc:
+                    logger.exception("generation failed")
+                    await send_json(
+                        {
+                            "type": "error",
+                            "reason": str(exc),
+                            "generation": my_generation,
+                        }
+                    )
+                    failed = True
                     break
-                if websocket.client_state != WebSocketState.CONNECTED:
-                    return
-                await websocket.send_bytes(
-                    audio[start : start + CHUNK_SAMPLES].tobytes()
-                )
+                if my_generation != generation:
+                    break  # cancelled while on the GPU: never send it
+                gen_seconds += engine.last_generation_seconds
+                total_seconds += len(audio) / SAMPLE_RATE
+                for start in range(0, len(audio), CHUNK_SAMPLES):
+                    if my_generation != generation:
+                        break
+                    if websocket.client_state != WebSocketState.CONNECTED:
+                        return
+                    await websocket.send_bytes(
+                        audio[start : start + CHUNK_SAMPLES].tobytes()
+                    )
+            if failed:
+                continue
             if my_generation == generation:
                 await send_json(
                     {
                         "type": "segment_done",
                         "generation": my_generation,
-                        "seconds": round(len(audio) / SAMPLE_RATE, 3),
-                        "generation_seconds": engine.last_generation_seconds,
+                        "seconds": round(total_seconds, 3),
+                        "generation_seconds": round(gen_seconds, 3),
                     }
                 )
 
@@ -236,6 +255,46 @@ async def _stream_reply(
             await task
         except (asyncio.CancelledError, Exception):
             pass
+
+
+# Above this many characters a segment is split at clause punctuation.
+# ~55 ms of speech per character here, so 90 chars is about 5 s of audio and
+# ~1.3 s of generation; the pieces it becomes are 1-2 s each.
+SPLIT_OVER_CHARS = 90
+_CLAUSE_BREAK = re.compile(r"(?<=[,;:])\s+|(?<=\s[-–—])\s+")
+
+
+def split_for_generation(text: str) -> list[str]:
+    """Clause-sized pieces of a long segment; a short one is returned whole.
+
+    Splits only at punctuation a speaker would pause on, and never leaves a
+    fragment under ~20 characters on its own (it would be voiced as a
+    stranded word), so prosody survives the cut.
+    """
+    text = text.strip()
+    if len(text) <= SPLIT_OVER_CHARS:
+        return [text] if text else []
+    pieces: list[str] = []
+    current = ""
+    for part in _CLAUSE_BREAK.split(text):
+        part = part.strip()
+        if not part:
+            continue
+        if (
+            current
+            and len(current) + 1 + len(part) > SPLIT_OVER_CHARS
+            and len(current) >= 20
+        ):
+            pieces.append(current)
+            current = part
+        else:
+            current = f"{current} {part}".strip()
+    if current:
+        if pieces and len(current) < 20:
+            pieces[-1] = f"{pieces[-1]} {current}"
+        else:
+            pieces.append(current)
+    return pieces
 
 
 def _drain(queue: "asyncio.Queue[Any]") -> None:
