@@ -1774,6 +1774,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // Words beyond the wake phrase: the user carried on, no greeting.
       // (StartOfTurn cannot tell: the pre-rolled phrase opens a turn too.)
       if (fastFollowRef.current.active && continuesPastWakePhrase(transcript)) {
+        if (greetingTimerRef.current) {
+          voiceTrace('wake.greetCancelled', { heard: transcript.slice(0, 60) });
+        }
         clearGreetingTimer();
       }
       // "Close the diagram" is an instruction to the screen, not an
@@ -1984,7 +1987,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 return;
               }
               // Give up once a question is clearly under way.
-              if (Date.now() - phraseEndedAt > GREETING_GIVE_UP_MS) return;
+              if (Date.now() - phraseEndedAt > GREETING_GIVE_UP_MS) {
+                voiceTrace('wake.greetGaveUp', { quietFor });
+                return;
+              }
               greetingTimerRef.current = setTimeout(check, 100);
             };
             greetingTimerRef.current = setTimeout(check, greetingDelayMs(sinceFiringMs));

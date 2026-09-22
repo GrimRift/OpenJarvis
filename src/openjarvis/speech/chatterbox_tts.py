@@ -427,7 +427,11 @@ class ChatterboxContext:
                 continue
             kind = message.get("type")
             if kind == "segment_done":
-                self._flushes += 1
+                # The sidecar says short segments together with the next
+                # one and acknowledges them in one message; counting that
+                # as one left the other "unspoken", and the route re-sent
+                # it -- a sentence said twice.
+                self._flushes += max(1, int(message.get("segments") or 1))
             elif kind == "done":
                 self._done = True
                 return

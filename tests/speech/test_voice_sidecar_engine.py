@@ -76,3 +76,48 @@ class TestRetry:
         audio = eng.generate(text, "v")
         assert len(eng.model.calls) == 1 + engine.RUNAWAY_RETRIES
         assert len(audio) == engine._budget_samples(text)
+
+
+class TestMergedAcknowledgement:
+    """The sidecar says a short segment together with the next one and
+    acknowledges both in one ``segment_done``. The route counts spoken
+    segments against sent ones and re-sends the difference, so a single
+    count made it say the second segment twice."""
+
+    def test_segment_done_counts_every_segment_it_spoke(self):
+        import asyncio
+        import json
+
+        from openjarvis.speech.chatterbox_tts import ChatterboxContext
+
+        class Socket:
+            def __init__(self, frames):
+                self._frames = frames
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self._frames:
+                    raise StopAsyncIteration
+                return self._frames.pop(0)
+
+        context = ChatterboxContext.__new__(ChatterboxContext)
+        context._flushes = 0
+        context._cancelled = False
+        context._done = False
+        context._socket = Socket(
+            [
+                b"\x00\x00\x00\x00",
+                json.dumps({"type": "segment_done", "segments": 2}),
+                json.dumps({"type": "segment_done"}),
+                json.dumps({"type": "done"}),
+            ]
+        )
+
+        async def drain():
+            return [chunk async for chunk in context.receive_audio()]
+
+        chunks = asyncio.run(drain())
+        assert chunks == [b"\x00\x00\x00\x00"]
+        assert context.flushes == 3

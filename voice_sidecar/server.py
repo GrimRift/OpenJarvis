@@ -28,7 +28,12 @@ logger = logging.getLogger("voice_sidecar")
 CHUNK_SAMPLES = SAMPLE_RATE // 5  # 200 ms
 MAX_SEGMENT_CHARS = 1200
 # Segments shorter than this are merged with what follows (see the worker).
-SHORT_SEGMENT_CHARS = 28
+# One- and two-word pieces ("Sir.", "Yes, sir.", "Checking.") are the ones
+# that came out robotic; at 28 a reply opening with "Sounds good, Sir."
+# waited for its whole second sentence to stream in and be generated
+# before a sound was heard, which is the delay the user noticed on the
+# first audio of a reply.
+SHORT_SEGMENT_CHARS = 14
 SHORT_SEGMENT_WAIT = 0.2
 
 
@@ -164,6 +169,7 @@ async def _stream_reply(
             # robotic on its own: too little text for the model to settle a
             # cadence. If the next segment of the same reply is already here
             # or arrives within a moment, say them together.
+            merged = 1
             while len(text) < SHORT_SEGMENT_CHARS:
                 try:
                     following = await asyncio.wait_for(
@@ -175,6 +181,7 @@ async def _stream_reply(
                     await segments.put(following)  # not ours to merge
                     break
                 text = f"{text.rstrip()} {following[1].lstrip()}"
+                merged += 1
             # A long sentence is generated in clause-sized pieces. Measured
             # 22 September: a 1.1 s opener followed by a 6.6 s sentence left
             # 650 ms of silence mid-reply, because the whole sentence had to
@@ -216,6 +223,12 @@ async def _stream_reply(
                     {
                         "type": "segment_done",
                         "generation": my_generation,
+                        # How many of the caller's segments this spoke. The
+                        # server counts spoken segments against sent ones
+                        # and re-sends the difference as unspoken; one
+                        # acknowledgement for two merged segments made it
+                        # say the second one again.
+                        "segments": merged,
                         "seconds": round(total_seconds, 3),
                         "generation_seconds": round(gen_seconds, 3),
                     }

@@ -270,14 +270,16 @@ def _voice_wav(text: str) -> Optional[str]:
             count = len(payload) // 4
             samples = struct.unpack(f"<{count}f", payload[: count * 4])
         samples = _normalised(samples)
-        # The user's reminder volume (Settings): SoundPlayer has no level of
-        # its own, so it goes into the samples. The boost rides on top; the
-        # 16-bit clamp below is the limiter.
-        from openjarvis.speech.volume import gain as volume_gain
+        if not _ffplay_available():
+            # The user's reminder volume (Settings): SoundPlayer has no
+            # level of its own, so it goes into the samples. The boost rides
+            # on top; the 16-bit clamp below is the limiter. With ffplay the
+            # player applies it, the same way it does for moments.
+            from openjarvis.speech.volume import gain as volume_gain
 
-        gain = volume_gain("reminders")
-        if gain != 1.0:
-            samples = [value * gain for value in samples]
+            gain = volume_gain("reminders")
+            if gain != 1.0:
+                samples = [value * gain for value in samples]
 
         destination = get_config_dir() / "alerts" / "reminder.wav"
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -387,13 +389,36 @@ def _run_hidden(script: str) -> bool:
     return True
 
 
+def _ffplay_available() -> bool:
+    import shutil
+
+    return shutil.which("ffplay") is not None
+
+
 def _play_wav(path: str) -> bool:
     """Play a wav without waiting for it.
 
-    ``SoundPlayer`` rather than Windows Media Player's COM object: the latter
-    never left playState 9 (Transitioning) in a non-interactive session, so
-    the reminder was silent while every check reported success.
+    Through the same player as moments when ffplay is there: a reminder
+    and a moment at the same slider position used to come out at
+    different levels, because SoundPlayer ran under a PowerShell process
+    with its own Windows mixer entry while moments went through ffplay
+    with the reminders slider never touching that entry. One player, one
+    mixer entry, one limiter, and the reminders slider means what it says.
+
+    Otherwise ``SoundPlayer`` rather than Windows Media Player's COM
+    object: the latter never left playState 9 (Transitioning) in a
+    non-interactive session, so the reminder was silent while every check
+    reported success.
     """
+    if _ffplay_available():
+        from openjarvis.speech.player import play_file
+
+        threading.Thread(
+            target=lambda: play_file(path, channel="reminders"),
+            name="reminder-voice",
+            daemon=True,
+        ).start()
+        return True
     escaped = path.replace("'", "''")
     return _run_hidden(f"(New-Object Media.SoundPlayer '{escaped}').PlaySync()")
 
