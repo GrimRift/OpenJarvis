@@ -175,25 +175,23 @@ describe('a syllable swells rather than switching on', () => {
 });
 
 describe('the web keeps its weight at any canvas size', () => {
-  it('puts the same ink per unit area on a small orb as a large one', () => {
+  it('scales the drawn weight of a line with the canvas', () => {
     // Everything scales with the canvas -- the orb, the dots, the bloom --
-    // so the lines must too. Held at a fixed width they came out 27%
-    // thinner per unit area on the 764px Voice orb, which showed a field
-    // of dots with barely a line between them.
-    const inkDensity = (w: number) => {
+    // so the lines must too, or the web thins as the orb grows. Held at a
+    // fixed width they came out 27% light on the 764px Voice orb, which
+    // showed a field of dots with barely a line between them.
+    const weight = (w: number) => {
       resetRecord();
       const target = stubContext(shared);
       const canvas = { width: w, height: w } as HTMLCanvasElement;
       const S = createPlexusState();
       for (let f = 0; f < 20; f++) drawPlexus(target, canvas, S, 'listening', f, 1, 0);
-      // One stroke per band; its ink covers a length that scales with the
-      // orb, over an area that scales with its square.
-      const ink = shared.inks.reduce((a, b) => a + b, 0) * w;
-      return ink / (w * w);
+      // alpha x width, averaged over the stroked bands: what one line puts
+      // on screen per unit of its length.
+      return shared.inks.reduce((a, b) => a + b, 0) / shared.inks.length;
     };
-    const small = inkDensity(473);
-    const large = inkDensity(764);
-    expect(large).toBeGreaterThan(small * 0.75);
-    expect(large).toBeLessThan(small * 1.33);
+    const ratio = weight(764) / weight(473);
+    expect(ratio).toBeGreaterThan((764 / 473) * 0.8);
+    expect(ratio).toBeLessThan((764 / 473) * 1.2);
   });
 });

@@ -41,11 +41,11 @@ export interface PlexusStateConfig {
 export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
   // Sage grows as it engages: smallest with nothing to do, larger when
   // nobody is at the desk, full size once it is listening.
-  idle: { r: 0.65, flow: 0.55, spin: 0.003, bright: 0.53, links: 0.85 },
-  away: { r: 0.8, flow: 0.55, spin: 0.003, bright: 0.7, links: 0.85 },
+  idle: { r: 0.65, flow: 0.55, spin: 0.003, bright: 0.42, links: 0.85 },
+  away: { r: 0.8, flow: 0.55, spin: 0.003, bright: 0.58, links: 0.85 },
   // Only a little larger than standing by, and never as large as a speaking
   // orb at full voice.
-  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 0.84, links: 0.92 },
+  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 0.74, links: 0.92 },
   speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.12, links: 1.1 },
 };
 
@@ -74,8 +74,10 @@ export const PLEXUS_PATCHES: Record<OrbState, { base: number; swing: number; kic
  * underneath it. */
 export const BREATH_DEPTH: Record<OrbState, number> = {
   idle: 0,
-  away: 0.07,
-  listening: 0.12,
+  // 0.07 is 3.5% either way, which at any orb size is under five pixels --
+  // present in the arithmetic and invisible on screen.
+  away: 0.15,
+  listening: 0.18,
   speaking: 0,
 };
 
@@ -97,6 +99,8 @@ const LINK_DIST = 0.43;
 const LINK_RMEAN_FLOOR = 0.68;
 const LINK_MAX_ALPHA = 0.45;
 const LINK_BANDS = 6;
+/** Below 1, this lifts the faint bands and leaves the bright ones. */
+const LINK_BAND_GAMMA = 0.62;
 /** Rebuilt on a timer, not every frame: the nodes drift slowly, so the
  * candidate set is stale by almost nothing after ten frames, and the exact
  * distance is still recomputed every frame for the ones on the list. */
@@ -564,6 +568,14 @@ export function drawPlexus(
     // Scaled by the current brightness, or the cull stops removing the
     // faintest fifth and starts removing the whole web.
     const cut = 0.045 * Math.min(1, bright);
+    // Strokes are batched by alpha, six bands of them, and the bands have to
+    // span the alphas actually present. Held at a fixed 0..LINK_MAX_ALPHA,
+    // every line in the calm states fell in band 0 and was drawn at the
+    // dimmest value the scale can produce -- 7 of 255 on blue against a
+    // dot's 48, which is why standing by was a field of dots with no web.
+    // Worse, five of the six bands went unused, so the web stopped
+    // responding to state brightness at all. The span follows the frame.
+    const bandSpan = LINK_MAX_ALPHA * Math.min(1.2, Math.max(0.3, bright * S.links));
     for (let i = 0; i < S.pairCount; i++) {
       const a = P[S.pairs[i * 2]];
       const c = P[S.pairs[i * 2 + 1]];
@@ -579,7 +591,7 @@ export function drawPlexus(
       const depth = (a.pd + c.pd) / 2;
       const alpha = near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5;
       if (alpha <= cut) continue;
-      const band = Math.min(LINK_BANDS - 1, ((alpha / LINK_MAX_ALPHA) * LINK_BANDS) | 0);
+      const band = Math.min(LINK_BANDS - 1, ((alpha / bandSpan) * LINK_BANDS) | 0);
       bandBuffers[band].push(a.px, a.py, c.px, c.py);
     }
     ctx.save();
@@ -600,7 +612,8 @@ export function drawPlexus(
       const buf = bandBuffers[b];
       if (!buf.length) continue;
       ctx.strokeStyle = RAMP[Math.min(RAMP_STEPS - 1, 3 + b * 3)];
-      ctx.globalAlpha = ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha;
+      ctx.globalAlpha =
+        bandSpan * Math.pow((b + 0.5) / LINK_BANDS, LINK_BAND_GAMMA) * widthAlpha;
       ctx.beginPath();
       for (let i = 0; i < buf.length; i += 4) {
         ctx.moveTo(buf[i], buf[i + 1]);
