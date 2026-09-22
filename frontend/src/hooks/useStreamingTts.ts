@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { IncrementalTtsOutbox } from '../lib/incremental-tts';
 import { limiter } from '../lib/audio-out';
 import { gainFor } from '../lib/volume';
+import { voiceTrace } from '../lib/voice-trace';
 import {
   chunkDuration,
   decodePcmF32,
@@ -299,6 +300,14 @@ export function useStreamingTts() {
         source.connect(gainRef.current ?? ctx.destination);
         // The first chunk of a reply starts a third of a second out, so the
         // queue has something in hand before the speakers ask for it.
+        if (startedRef.current && ctx.currentTime > scheduledUntilRef.current) {
+          // The queue ran dry before this chunk came: a gap the listener
+          // heard, wherever in the sentence it fell. Logged so the cause
+          // (generation, the socket, the device) can be read off the trace.
+          voiceTrace('tts.underrun', {
+            gapMs: Math.round((ctx.currentTime - scheduledUntilRef.current) * 1000),
+          });
+        }
         const startAt = nextStartTime(
           ctx.currentTime,
           scheduledUntilRef.current,

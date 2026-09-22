@@ -33,10 +33,16 @@ _FADE_STEPS = 6
 # them would duck the voice this exists to make audible.
 _OWN_PLAYERS = {"ffplay.exe", "powershell.exe", "pwsh.exe"}
 _STATE_ACTIVE = 1
+# The levels a duck in progress will put back, on disk: a process killed
+# mid-sentence (Stop Sage during a moment, a test run interrupted) never
+# reached its restore, and each such kill left the browser at 35% of the
+# time before -- Opera was found at 4%, three unrestored ducks deep.
+_STATE_FILE = "ducking_state.json"
 
 
-def _sessions() -> List[Tuple[str, Any]]:
-    """(name, session) for every other app currently playing audio."""
+def _sessions(active_only: bool = True) -> List[Tuple[str, Any]]:
+    """(name, session) for every other app currently playing audio (or,
+    with ``active_only`` off, every other app with a session at all)."""
     if sys.platform != "win32":
         return []
     try:
@@ -61,7 +67,7 @@ def _sessions() -> List[Tuple[str, Any]]:
             continue
         if name.lower() in _OWN_PLAYERS:
             continue
-        if session.State != _STATE_ACTIVE:
+        if active_only and session.State != _STATE_ACTIVE:
             continue
         found.append((name, session))
     return found
@@ -108,6 +114,65 @@ def _fade(targets: List[Tuple[Any, float, float]], fade_ms: int) -> None:
             time.sleep(pause)
 
 
+def _state_path():
+    from openjarvis.core.paths import get_config_dir
+
+    return get_config_dir() / _STATE_FILE
+
+
+def _remember(names_and_levels: List[Tuple[str, float]]) -> None:
+    import json
+
+    try:
+        _state_path().write_text(json.dumps(dict(names_and_levels)), encoding="utf-8")
+    except Exception:
+        logger.debug("could not record ducking state", exc_info=True)
+
+
+def _forget() -> None:
+    try:
+        path = _state_path()
+        if path.exists():
+            path.unlink()
+    except Exception:
+        logger.debug("could not clear ducking state", exc_info=True)
+
+
+def restore_leftover() -> List[str]:
+    """Put back the levels a duck that never finished had lowered.
+
+    Run at server start and before every duck. Only a session still
+    *below* its recorded level is touched: one the user has since turned
+    up or down themselves is theirs.
+    """
+    import json
+
+    try:
+        path = _state_path()
+        if not path.exists():
+            return []
+        recorded = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    restored: List[str] = []
+    if isinstance(recorded, dict):
+        for name, session in _sessions(active_only=False):
+            original = recorded.get(name)
+            if not isinstance(original, (int, float)):
+                continue
+            try:
+                current = float(session.SimpleAudioVolume.GetMasterVolume())
+                if 0 < current < float(original) - 1e-6:
+                    _set(session, float(original))
+                    restored.append(name)
+            except Exception:
+                continue
+    _forget()
+    if restored:
+        logger.info("restored volume after an interrupted duck: %s", restored)
+    return restored
+
+
 @contextmanager
 def ducked(
     level: float = DEFAULT_LEVEL, fade_ms: int = DEFAULT_FADE_MS
@@ -121,6 +186,7 @@ def ducked(
     lowered: List[Tuple[Any, float, float]] = []
     names: List[str] = []
     try:
+        restore_leftover()
         for name, session in _sessions():
             try:
                 original = float(session.SimpleAudioVolume.GetMasterVolume())
@@ -130,6 +196,7 @@ def ducked(
                 continue
             lowered.append((session, original, original * level))
             names.append(name)
+        _remember([(name, orig) for name, (_, orig, _) in zip(names, lowered)])
         _fade(lowered, fade_ms)
     except Exception:
         logger.debug("Audio ducking unavailable", exc_info=True)
@@ -143,8 +210,15 @@ def ducked(
                     _set(session, original)
                 except Exception:
                     pass
+            _forget()
         except Exception:
             logger.debug("Audio un-ducking failed", exc_info=True)
 
 
-__all__ = ["DEFAULT_FADE_MS", "DEFAULT_LEVEL", "ducked", "media_peak"]
+__all__ = [
+    "DEFAULT_FADE_MS",
+    "DEFAULT_LEVEL",
+    "ducked",
+    "media_peak",
+    "restore_leftover",
+]

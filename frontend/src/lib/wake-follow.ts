@@ -105,6 +105,13 @@ export function stripWakePhrase(transcript: string): string {
     i += 1;
     // "Peace Sage", "Peace in Sage": the name heard twice over.
     if (i < tokens.length && isNameToken(norm(tokens[i]))) i += 1;
+  } else if (i === 1 && tokens.length === 2 && !STARTERS.has(norm(tokens[1]))) {
+    // "Hey, Steve." (heard 22 September): a lead word and one more that
+    // begins no request is the name in a spelling no shape predicts. As a
+    // partial it cancelled the pause greeting, which then waited for the
+    // end of the turn -- 3 s instead of 1. A real request after the phrase
+    // is a third token.
+    i = 2;
   } else if (isDebris(norm(tokens[0])) && (tokens.length === 1 || isDebris(norm(tokens[1])) || STARTERS.has(norm(tokens[1])) || tokens[1].length > 4)) {
     // No recognisable name, but the turn starts with what is left of it:
     // up to two short non-words ("ACGE", "his age") before the request.

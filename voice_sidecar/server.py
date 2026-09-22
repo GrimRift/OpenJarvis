@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -155,8 +156,24 @@ async def _stream_reply(
         if websocket.client_state == WebSocketState.CONNECTED:
             await websocket.send_json(payload)
 
+    # When the audio sent so far stops playing, if the client plays it
+    # back to back from the moment it arrives. What the worker has "in the
+    # bank" before the speakers go quiet.
+    sent_until = 0.0
+
+    async def send_audio(audio, my_generation: int, until: float) -> float:
+        """Send *audio* in chunks; returns the new sent-until time, or -1
+        when the socket is gone."""
+        for start in range(0, len(audio), CHUNK_SAMPLES):
+            if my_generation != generation:
+                break
+            if websocket.client_state != WebSocketState.CONNECTED:
+                return -1.0
+            await websocket.send_bytes(audio[start : start + CHUNK_SAMPLES].tobytes())
+        return max(until, time.monotonic()) + len(audio) / SAMPLE_RATE
+
     async def worker() -> None:
-        nonlocal generation
+        nonlocal generation, sent_until
         while not closed.is_set():
             item = await segments.get()
             if item is None:
@@ -187,10 +204,24 @@ async def _stream_reply(
             # 650 ms of silence mid-reply, because the whole sentence had to
             # finish generating (1.75 s) before any of it could play. Pieces
             # of ~1-2 s each arrive faster than they play out.
+            #
+            # But a piece that arrives late leaves its gap *inside* the
+            # sentence ("Cuttlefish That Loves ... Diving"), which is the
+            # one place a listener cannot forgive it. So when the audio
+            # already sent will keep the speakers busy for longer than the
+            # whole sentence takes to generate, it is generated whole and
+            # sent at once: any gap then falls between sentences, where a
+            # speaker pauses anyway. Only when the queue is nearly dry --
+            # the first sentence of a reply -- do pieces go out as made.
+            pieces = split_for_generation(text)
+            buffered = sent_until - time.monotonic()
+            hold = len(pieces) > 1 and buffered > _gen_estimate(text) + HOLD_MARGIN
             total_seconds = 0.0
             gen_seconds = 0.0
             failed = False
-            for piece in split_for_generation(text):
+            held: list = []
+            for piece in pieces:
+                waited = time.monotonic()
                 try:
                     audio = await asyncio.to_thread(engine.generate, piece, voice)
                 except Exception as exc:
@@ -208,16 +239,29 @@ async def _stream_reply(
                     break  # cancelled while on the GPU: never send it
                 gen_seconds += engine.last_generation_seconds
                 total_seconds += len(audio) / SAMPLE_RATE
-                for start in range(0, len(audio), CHUNK_SAMPLES):
-                    if my_generation != generation:
-                        break
-                    if websocket.client_state != WebSocketState.CONNECTED:
-                        return
-                    await websocket.send_bytes(
-                        audio[start : start + CHUNK_SAMPLES].tobytes()
-                    )
+                # One line per piece: how long the GPU took against how
+                # long the audio plays, which is what a gap mid-reply
+                # comes down to.
+                logger.info(
+                    "piece %d chars: gen %.2fs (wall %.2fs) audio %.2fs%s",
+                    len(piece),
+                    engine.last_generation_seconds,
+                    time.monotonic() - waited,
+                    len(audio) / SAMPLE_RATE,
+                    " (held)" if hold else "",
+                )
+                if hold:
+                    held.append(audio)
+                    continue
+                sent_until = await send_audio(audio, my_generation, sent_until)
+                if sent_until < 0:
+                    return
             if failed:
                 continue
+            for audio in held:
+                sent_until = await send_audio(audio, my_generation, sent_until)
+                if sent_until < 0:
+                    return
             if my_generation == generation:
                 await send_json(
                     {
@@ -247,6 +291,7 @@ async def _stream_reply(
             if kind == "begin":
                 voice = str(data.get("voice") or default_voice)
                 generation += 1
+                sent_until = 0.0
                 try:
                     await asyncio.to_thread(engine.use_voice, voice)
                 except Exception as exc:
@@ -293,6 +338,14 @@ async def _stream_reply(
 # ~55 ms of speech per character here, so 90 chars is about 5 s of audio and
 # ~1.3 s of generation; the pieces it becomes are 1-2 s each.
 SPLIT_OVER_CHARS = 90
+# Generation runs ~0.27x real time here (1.62 s for 5.88 s of audio, fp32,
+# RTX 5050); 25 ms per character is that with room for a slow sentence.
+GEN_SECONDS_PER_CHAR = 0.025
+HOLD_MARGIN = 0.4
+
+
+def _gen_estimate(text: str) -> float:
+    return len(text) * GEN_SECONDS_PER_CHAR
 _CLAUSE_BREAK = re.compile(r"(?<=[,;:])\s+|(?<=\s[-–—])\s+")
 
 

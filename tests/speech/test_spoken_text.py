@@ -47,7 +47,9 @@ class TestOtherMarkdown:
 
     def test_bullets_lose_their_markers(self):
         spoken = to_spoken_text("- first\n* second\n+ third\n• fourth")
-        assert spoken == "first\nsecond\nthird\nfourth"
+        # Each item ends with a stop: without one the voice ran a whole
+        # list together as a sentence, pausing wherever it breathed.
+        assert spoken == "first.\nsecond.\nthird.\nfourth"
 
     def test_emphasis_is_unwrapped(self):
         assert to_spoken_text("**bold** and *italic* and _under_") == (
@@ -61,8 +63,7 @@ class TestOtherMarkdown:
 
     def test_many_labeled_links_get_one_source_notice(self):
         text = " ".join(
-            f"[Source {index}](https://example.com/{index})."
-            for index in range(1, 4)
+            f"[Source {index}](https://example.com/{index})." for index in range(1, 4)
         )
         spoken = to_spoken_text(text)
         assert "in chat" not in spoken
@@ -84,13 +85,32 @@ class TestOtherMarkdown:
 
     def test_horizontal_rules_are_dropped(self):
         assert to_spoken_text("one\n\n---\n\ntwo").replace("\n", " ").split() == [
-            "one",
+            "one.",
             "two",
         ]
 
     def test_a_bare_asterisk_bullet_is_not_read_as_emphasis(self):
         # "* a *" would otherwise unwrap into "a" and eat the second line.
-        assert to_spoken_text("* alpha\n* beta") == "alpha\nbeta"
+        assert to_spoken_text("* alpha\n* beta") == "alpha.\nbeta"
+
+
+class TestLineEnds:
+    def test_a_line_that_ends_on_a_word_gets_a_stop(self):
+        # Heard 22 September: "COA audit findings and unresolved notices
+        # procurement and infrastructure risks" as one breathless sentence.
+        spoken = to_spoken_text(
+            "A report should cover:\n- COA audit findings\n- Procurement risks\n\nSo."
+        )
+        assert (
+            spoken
+            == "A report should cover:\nCOA audit findings.\nProcurement risks.\n\nSo."
+        )
+
+    def test_a_line_already_ended_is_left_alone(self):
+        assert (
+            to_spoken_text("First, sir:\nsecond?\nthird")
+            == "First, sir:\nsecond?\nthird"
+        )
 
 
 class TestEdges:

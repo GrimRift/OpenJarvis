@@ -594,6 +594,14 @@ def serve(
             console.print("  Voice: [cyan]Chatterbox sidecar starting[/cyan]")
     except Exception as exc:
         logger.debug("Voice sidecar setup failed: %s", exc)
+    try:
+        # A previous server stopped mid-sentence left the other apps
+        # ducked; the levels it meant to restore are on disk.
+        from openjarvis.speech.ducking import restore_leftover
+
+        restore_leftover()
+    except Exception as exc:
+        logger.debug("Ducking restore failed: %s", exc)
 
     # Set up wake-word detector (optional — no-op until a trained model path
     # is set in config.toml's [speech] wake_word_model)

@@ -22,6 +22,12 @@ describe('stripWakePhrase', () => {
     expect(stripWakePhrase('His age.')).toBe('');
     expect(stripWakePhrase('ACG.')).toBe('');
     expect(stripWakePhrase('He said, tell me a joke')).toBe('tell me a joke');
+    // A lead word and one more that begins no request (heard 22 September
+    // as a partial, and it cancelled the pause greeting).
+    expect(stripWakePhrase('Hey, Steve.')).toBe('');
+    expect(stripWakePhrase('Hey Sam')).toBe('');
+    // ...but a request word after the lead is a request.
+    expect(stripWakePhrase('hey stop')).toBe('stop');
   });
 
   it('does not take a short real word for the name', () => {

@@ -309,6 +309,16 @@ def _looks_like_file_path(value: str) -> bool:
 _SPEECH_DASH = re.compile(r"(?<=[^\W\d_])\s*[–—]+\s*(?=[^\W\d_])")
 
 
+_LINE_END = ".!?:;,"
+
+
+def _ended(line: str) -> str:
+    """*line* with a full stop if it ends on a word rather than a mark."""
+    if not line or line[-1] in _LINE_END or not line[-1].isalnum():
+        return line
+    return line + "."
+
+
 def to_spoken_text(markdown: str) -> str:
     """Create speech-only prose without changing the source chat reply."""
     if not markdown:
@@ -421,7 +431,14 @@ def to_spoken_text(markdown: str) -> str:
     text = _SPEECH_DASH.sub(", ", text)
 
     text = _BLANK_RUN.sub("\n\n", text)
-    text = "\n".join(line.rstrip() for line in text.splitlines()).strip()
+    # A list item or heading ends where its line does but carries no full
+    # stop, so the voice ran "COA audit findings and unresolved notices
+    # procurement and infrastructure risks" together as one sentence and
+    # paused wherever it happened to breathe. The line end is the pause.
+    lines = [line.rstrip() for line in text.splitlines()]
+    text = "\n".join(
+        _ended(line) if i < len(lines) - 1 else line for i, line in enumerate(lines)
+    ).strip()
     # No trailing notice announcing what was withheld. The inline "a link",
     # "a file path" and "an identifier" already say that something was left
     # unspoken, and the value is on screen regardless; the extra sentence

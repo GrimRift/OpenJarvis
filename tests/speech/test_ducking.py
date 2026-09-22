@@ -354,3 +354,49 @@ class TestRepliesAndServerVoicesTakeTurns:
                 assert loop.time() - t0 < 1.0
 
         asyncio.run(scenario())
+
+
+class TestInterruptedDuck:
+    """A process killed mid-sentence never restores; Opera was found at 4%,
+    three unrestored ducks deep. The levels are on disk while a duck is in
+    progress and put back at the next start."""
+
+    def _state(self, tmp_path):
+        return patch.object(ducking, "_state_path", return_value=tmp_path / "duck.json")
+
+    def test_a_finished_duck_leaves_nothing_behind(self, tmp_path) -> None:
+        film = _Session(0.8)
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", return_value=[("vlc.exe", film)]),
+            _no_sleep(),
+        ):
+            with ducking.ducked(level=0.35, fade_ms=0):
+                assert (tmp_path / "duck.json").exists()
+        assert not (tmp_path / "duck.json").exists()
+
+    def test_a_killed_duck_is_restored_at_the_next_start(self, tmp_path) -> None:
+        film = _Session(0.8)
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", return_value=[("vlc.exe", film)]),
+            _no_sleep(),
+        ):
+            gen = ducking.ducked(level=0.35, fade_ms=0)
+            gen.__enter__()  # and the process dies here
+            assert abs(film.SimpleAudioVolume.level - 0.28) < 1e-9
+            assert ducking.restore_leftover() == ["vlc.exe"]
+        assert film.SimpleAudioVolume.level == 0.8
+        assert not (tmp_path / "duck.json").exists()
+
+    def test_a_level_the_user_changed_since_is_left_alone(self, tmp_path) -> None:
+        film = _Session(0.8)
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", return_value=[("vlc.exe", film)]),
+            _no_sleep(),
+        ):
+            ducking.ducked(level=0.35, fade_ms=0).__enter__()
+            film.SimpleAudioVolume.level = 1.0  # turned up by hand meanwhile
+            assert ducking.restore_leftover() == []
+        assert film.SimpleAudioVolume.level == 1.0
