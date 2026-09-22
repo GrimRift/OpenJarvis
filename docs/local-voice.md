@@ -79,8 +79,12 @@ from Hugging Face on the first start.
 - **Character**: comes from the recording. Sampling stays near the library
   defaults (temperature 0.7, top_p 0.95, top_k 1000, repetition 1.2);
   pushing them toward "calm" (0.5 / 300 / 1.3) stopped the end-of-speech
-  token being sampled and a two-sentence input ran to 31 s. A runaway
-  guard regenerates once with defaults and truncates. Output is levelled
+  token being sampled and a two-sentence input ran to 31 s. A bench of 24
+  clips per setting, transcribed back with Whisper, found temperature
+  0.55 repeats a phrase in 4 of 24 and 0.7 in 0 of 24: lower temperature
+  is where "Sage repeats words" came from. The runaway guard (audio over
+  90 ms/char + 1 s; clean clips fit 75 ms/char + 0.4 s) resamples twice
+  at the library defaults before it truncates. Output is levelled
   per segment (`target_rms` 0.16) so the volume does not drift.
   `cfg_weight`, `exaggeration` and `min_p` are accepted by the library
   and ignored by Turbo/Nano, so they are not offered.

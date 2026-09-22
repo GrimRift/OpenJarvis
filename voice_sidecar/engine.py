@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 import os
@@ -21,8 +20,8 @@ SAMPLE_RATE = 24000
 # Share of the card the allocator may hold: 0.3 of 8 GB is 2.4 GB, room for
 # fp32 weights plus one reply's activations, never the whole card.
 MEMORY_FRACTION = 0.3
-# Below this many characters the steadier short-text sampling applies.
-SHORT_TEXT_CHARS = 40
+# How many fresh samples a runaway generation gets before it is cut.
+RUNAWAY_RETRIES = 2
 REFERENCE_FILE = "reference.wav"
 CONDS_FILE = "conds.pt"
 PARAMS_FILE = "voice.json"
@@ -35,10 +34,14 @@ PARAMS_FILE = "voice.json"
 # Measured 22 September: pushing these toward "calm" (temperature 0.5,
 # top_k 300, repetition_penalty 1.3) made a two-sentence input run to the
 # 1000-token cap -- 31 s of audio for 108 characters -- because the
-# end-of-speech token stopped being sampled. The library's defaults always
-# stopped. So the defaults stay near them; steadiness comes from
-# sentence-sized segments, the level control below, and the reference
-# recording, which carries the character.
+# end-of-speech token stopped being sampled. A later bench (24 clips per
+# setting, transcribed back) found temperature 0.55 alone repeats a phrase
+# in 4 of 24 while 0.7 repeats in 0 of 24, and the steadier short-text
+# sampling (0.45) that briefly existed produced today's two runaways on
+# 29- and 37-character lines. Lower temperature is where the repeats come
+# from, so the defaults stay; steadiness comes from sentence-sized
+# segments, the level control below, and the reference recording, which
+# carries the character.
 @dataclass
 class VoiceParams:
     temperature: float = 0.7
@@ -335,11 +338,6 @@ class ChatterboxEngine:
             return np.zeros(0, dtype=np.float32)
         self.use_voice(voice)
         params = self.voices.params(voice)
-        if len(text) < SHORT_TEXT_CHARS:
-            # A short utterance has nowhere to run away to, so the steadier
-            # sampling that broke long inputs (see VoiceParams) is safe here
-            # and takes the wobble out of one- and two-word replies.
-            params = dataclasses.replace(params, temperature=0.45, top_k=200)
         started = time.monotonic()
         with self.lock, torch.inference_mode(), self._autocast():
             wav = self.model.generate(
@@ -350,19 +348,23 @@ class ChatterboxEngine:
                 repetition_penalty=params.repetition_penalty,
             )
         audio = wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
-        if _ran_away(audio, text):
-            # Regenerate once with the library defaults, which never ran
-            # away in testing; then cut whatever is left at the budget.
+        for attempt in range(RUNAWAY_RETRIES):
+            if not _ran_away(audio, text):
+                break
+            # A phrase said twice is the failure the user hears ("repeats
+            # words"); another sample at the library defaults, which never
+            # ran away in the bench, is the fix. The cut is a last resort.
             logger.warning(
-                "runaway generation (%.1fs for %d chars); retrying",
+                "runaway generation (%.1fs for %d chars); retry %d",
                 len(audio) / SAMPLE_RATE,
                 len(text),
+                attempt + 1,
             )
             with self.lock, torch.inference_mode(), self._autocast():
                 wav = self.model.generate(text)
-            audio = wav.squeeze(0).detach().cpu().numpy().astype(np.float32)
-            if _ran_away(audio, text):
-                audio = audio[: _budget_samples(text)]
+            audio = wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
+        if _ran_away(audio, text):
+            audio = audio[: _budget_samples(text)]
         self.last_generation_seconds = round(time.monotonic() - started, 3)
         self.generations += 1
         # Hand the allocator's cache back after every piece: the activations
@@ -379,9 +381,14 @@ class ChatterboxEngine:
 
 
 def _budget_samples(text: str) -> int:
-    """Generous ceiling on how long *text* can take to say: measured speech
-    here runs ~55 ms per character; allow double plus a pause."""
-    return int(SAMPLE_RATE * (len(text) * 0.11 + 2.0))
+    """Ceiling on how long *text* can take to say.
+
+    Measured 22 September over 48 clean clips (10-107 characters): every
+    one fit 75 ms per character plus 0.4 s. The old 110 ms + 2 s let a
+    37-character line said twice (6.6 s) through as normal; this catches
+    it with room for a slow, pause-heavy delivery.
+    """
+    return int(SAMPLE_RATE * (len(text) * 0.09 + 1.0))
 
 
 def _ran_away(audio: np.ndarray, text: str) -> bool:
