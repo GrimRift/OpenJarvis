@@ -194,11 +194,13 @@ class ChatterboxEngine:
             torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTION)
         self.model = ChatterboxTurboTTS.from_pretrained(device=self.device, nano=True)
         if self.precision == "fp16" and self.device.startswith("cuda"):
-            # Halves the resident weights (2.2 GB -> 1.4 GB measured for the
-            # process) at a small speed cost. Off by default until the
-            # voice has been compared by ear; the voice encoder stays fp32.
+            # Halves the resident weights, and the voice with them: compared
+            # by ear on 22 September the half-precision vocoder sounded
+            # metallic on every line ("alien" was the word used). Kept as an
+            # opt-in for cards that cannot hold fp32; not the default.
             self.model.t3.half()
             self.model.s3gen.half()
+        self._park_conditioning_modules()
         self.load_seconds = round(time.monotonic() - started, 1)
         logger.info(
             "Chatterbox Nano loaded on %s in %.1fs", self.device, self.load_seconds
@@ -234,7 +236,7 @@ class ChatterboxEngine:
                     "cached conditioning for %s unreadable; recomputing", name
                 )
         started = time.monotonic()
-        with self.lock:
+        with self.lock, self._conditioning_modules_on_device():
             self.model.prepare_conditionals(str(ref))
             self.model.conds.save(conds)
             self.model.conds = self._cast_conds(self.model.conds)
@@ -242,6 +244,66 @@ class ChatterboxEngine:
         logger.info(
             "conditioning for %s computed in %.1fs", name, time.monotonic() - started
         )
+
+    # The speech tokenizer (472 MB), speaker encoder and voice encoder are
+    # used only to turn a reference recording into conditioning, which is
+    # cached per voice. Resident on the card they were 30% of the weights
+    # for something that runs once per uploaded voice, so they live on the
+    # CPU and visit the GPU for that one call.
+    _CONDITIONING_MODULES = (
+        ("s3gen", "tokenizer"),
+        ("s3gen", "speaker_encoder"),
+        ("", "ve"),
+    )
+
+    def _conditioning_module_list(self):
+        found = []
+        for owner, name in self._CONDITIONING_MODULES:
+            parent = getattr(self.model, owner) if owner else self.model
+            module = getattr(parent, name, None)
+            if module is not None and hasattr(module, "to"):
+                found.append(module)
+        return found
+
+    def _park_conditioning_modules(self) -> None:
+        if not self.device.startswith("cuda"):
+            return
+        import torch
+
+        s3gen_cls = type(self.model.s3gen)
+        # S3Token2Wav.device reads the tokenizer's parameters, which would
+        # report "cpu" once parked and put the flow's noise there; the flow
+        # is what generation runs, so read the device from it instead.
+        if not getattr(s3gen_cls, "_sage_device_from_flow", False):
+            s3gen_cls.device = property(
+                lambda s3: next(s3.flow.parameters()).device
+            )
+            s3gen_cls._sage_device_from_flow = True
+        for module in self._conditioning_module_list():
+            module.to("cpu")
+        torch.cuda.empty_cache()
+
+    def _conditioning_modules_on_device(self):
+        import contextlib
+
+        if not self.device.startswith("cuda"):
+            return contextlib.nullcontext()
+
+        @contextlib.contextmanager
+        def visit():
+            import torch
+
+            modules = self._conditioning_module_list()
+            for module in modules:
+                module.to(self.device)
+            try:
+                yield
+            finally:
+                for module in modules:
+                    module.to("cpu")
+                torch.cuda.empty_cache()
+
+        return visit()
 
     def _cast_conds(self, conds):
         if self.precision != "fp16" or not self.device.startswith("cuda"):

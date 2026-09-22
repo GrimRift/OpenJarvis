@@ -101,10 +101,23 @@ def speculation_model_for(requested: Optional[str], server_model: str) -> str:
     afterwards: measured at 7.0 GB of 8.0 GB with a video playing. The client
     sends the model it is actually chatting with, so a cloud-answered turn
     drafts in the cloud and never touches the GPU, while "Prefer cloud model"
-    switched off sends a local id and keeps drafting on-device. An older
-    client sends nothing, and falls back to the server's own model.
+    switched off sends a local id and keeps drafting on-device.
+
+    A client that sends nothing gets the server's model only when that is a
+    cloud one. The browser opens its socket before its model list has
+    loaded, so the first connection of every page carried no model, and the
+    fallback put the 3.6 GB local model on the GPU for the first turn of
+    every session -- 4.2 GB held for five minutes, measured 22 September
+    with only the cloud model in use. A local draft nobody selected is not
+    worth that; those turns simply are not speculated.
     """
-    return requested or server_model
+    if requested:
+        return requested
+    try:
+        from openjarvis.engine.cloud import is_cloud_model
+    except Exception:  # noqa: BLE001 — a missing predicate means no draft
+        return ""
+    return server_model if server_model and is_cloud_model(server_model) else ""
 
 
 @router.websocket("/v1/speech/flux")

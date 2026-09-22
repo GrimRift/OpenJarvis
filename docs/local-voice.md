@@ -81,14 +81,24 @@ from Hugging Face on the first start.
   pushing them toward "calm" (0.5 / 300 / 1.3) stopped the end-of-speech
   token being sampled and a two-sentence input ran to 31 s. A runaway
   guard regenerates once with defaults and truncates. Output is levelled
-  per segment (`target_rms` 0.09) so the volume does not drift.
+  per segment (`target_rms` 0.16) so the volume does not drift.
   `cfg_weight`, `exaggeration` and `min_p` are accepted by the library
   and ignored by Turbo/Nano, so they are not offered.
-- **VRAM**: ~2.2 GB for the process in fp32 (1.66 GB of weights: the
-  "110M" is the text model alone; the vocoder is most of it).
-  `chatterbox_precision = "fp16"` brings it to ~1.4 GB; off by default
-  because s3gen logs an out-of-range token under half precision and the
-  voice should be compared by ear first.
+- **VRAM**: ~1.4 GB for the process in fp32. The weights are 1.7 GB
+  (the "110M" is the text model alone), but the speech tokenizer and
+  speaker encoder -- 0.5 GB used only to turn a reference recording into
+  conditioning, which is cached per voice -- live on the CPU and visit
+  the GPU for that one call. `chatterbox_precision = "fp16"` saves
+  another ~0.3 GB but the half-precision vocoder audibly degrades the
+  voice (metallic; A/B'd 22 September), so it is only for cards that
+  cannot hold fp32.
+- **The other GPU tenant**: with Ollama installed, the speculative draft
+  for a voice turn used to fall back to the server's local model when the
+  browser sent none -- which it does on the first socket of every page,
+  opened before the model list loads -- putting qwen3.5:4b (4.2 GB) on
+  the card for five minutes after the first turn. The browser now reopens
+  that socket with the model once known, and the server never drafts on
+  a local model nobody selected.
 - **Server-side speech** (moments, reminders, the digest) follows the
   Settings choice: the page mirrors it to `<data>/voice_choice.json`.
   Waze audio stays on Cartesia (the phone wants MP3).

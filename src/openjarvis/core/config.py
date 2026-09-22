@@ -1629,8 +1629,10 @@ class SpeechConfig:
     chatterbox_voice: str = "jarvis"
     chatterbox_device: str = "cuda"
     # "fp32" or "fp16". fp16 halves the sidecar's resident VRAM (measured
-    # 2.2 GB -> 1.4 GB) at a small speed cost; compare the voice by ear
-    # before switching.
+    # 2.2 GB -> 1.4 GB) but the half-precision vocoder audibly degrades the
+    # voice (metallic, 22 September A/B); only for cards that cannot hold
+    # fp32. The sidecar keeps fp32 small by parking the reference-encoding
+    # modules on the CPU instead.
     chatterbox_precision: str = "fp32"
     chatterbox_sidecar_port: int = 8791
     # Empty = <data dir>/voice-env (the sidecar's own Python environment).

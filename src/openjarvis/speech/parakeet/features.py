@@ -13,9 +13,9 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from numpy.fft import rfft
 from numpy.lib.stride_tricks import as_strided
 from numpy.typing import NDArray
-from scipy.fft import rfft
 
 from openjarvis.speech.parakeet.config import ParakeetConfig
 

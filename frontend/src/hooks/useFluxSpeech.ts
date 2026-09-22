@@ -287,6 +287,13 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   // connection, which is the right trade against dropping a live turn.
   const modelRef = useRef(model);
   modelRef.current = model;
+  // The model the open socket was built with. On a fresh page the socket
+  // opens before the model list has loaded, so it carries no model at all
+  // and the server drafts with its own startup model -- the local one --
+  // which put 4.2 GB on the GPU for five minutes after the first turn of
+  // every page load. Once the selection is known, an idle socket opened
+  // without one is reopened with it (see the effect below).
+  const socketModelRef = useRef<string>('');
   const [status, setStatus] = useState<FluxStatus>('idle');
   const [reason, setReason] = useState<string>('');
 
@@ -487,6 +494,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     }
     streamRef.current = stream;
 
+    socketModelRef.current = modelRef.current ?? '';
     const ws = new WebSocket(
       buildFluxWsUrl(eager, modelRef.current, provider),
       buildWsProtocols(),
@@ -725,6 +733,22 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // the flag is part of the socket URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, eager, suppressNoise, provider]);
+
+  // A socket opened before the model was known is reopened with it, but
+  // only between turns: mid-turn the EndOfTurn would never arrive and the
+  // orb would stay stuck in 'recording' (the reason `model` is not a
+  // dependency of the effect above). A later change of model still waits
+  // for the next reconnect, as before.
+  useEffect(() => {
+    if (!enabled || !model) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (socketModelRef.current || sendingRef.current) return;
+    voiceTrace('flux.reopenWithModel', { model });
+    teardown();
+    void connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, model]);
 
   return {
     status,

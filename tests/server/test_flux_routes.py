@@ -420,16 +420,19 @@ class TestSpeculationFollowsTheChatModel:
 
         assert speculation_model_for("qwen3.5:4b", "qwen3.5:4b") == "qwen3.5:4b"
 
-    def test_an_older_client_falls_back_to_the_server_model(self):
+    def test_no_selection_never_drafts_on_a_local_server_model(self):
+        """The browser's first socket of a page opens before its model list
+        has loaded and carries no model; falling back to the local server
+        model put 4.2 GB on the GPU for the first turn of every session."""
         from openjarvis.server.flux_routes import speculation_model_for
 
-        assert speculation_model_for(None, "qwen3.5:4b") == "qwen3.5:4b"
+        assert speculation_model_for(None, "qwen3.5:4b") == ""
+        assert speculation_model_for("", "qwen3.5:4b") == ""
 
-    def test_an_empty_model_param_is_not_a_selection(self):
-        """A blank query value must not leave drafting with no model at all."""
+    def test_no_selection_still_drafts_on_a_cloud_server_model(self):
         from openjarvis.server.flux_routes import speculation_model_for
 
-        assert speculation_model_for("", "qwen3.5:4b") == "qwen3.5:4b"
+        assert speculation_model_for(None, "gpt-5.6-luna") == "gpt-5.6-luna"
 
 
 def test_the_socket_route_points_at_the_real_handler():
