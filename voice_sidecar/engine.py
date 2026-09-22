@@ -151,7 +151,10 @@ class ChatterboxEngine:
     """One model, one lock: the GPU serialises generation anyway, and a
     second reply must not interleave its sentences with the first."""
 
-    def __init__(self, device: str, voices: VoiceStore) -> None:
+    def __init__(
+        self, device: str, voices: VoiceStore, precision: str = "fp32"
+    ) -> None:
+        self.precision = precision if precision in ("fp16", "fp32") else "fp32"
         self.requested_device = device
         self.device = device
         self.voices = voices
@@ -175,6 +178,12 @@ class ChatterboxEngine:
             )
             self.device = "cpu"
         self.model = ChatterboxTurboTTS.from_pretrained(device=self.device, nano=True)
+        if self.precision == "fp16" and self.device.startswith("cuda"):
+            # Halves the resident weights (2.2 GB -> 1.4 GB measured for the
+            # process) at a small speed cost. Off by default until the
+            # voice has been compared by ear; the voice encoder stays fp32.
+            self.model.t3.half()
+            self.model.s3gen.half()
         self.load_seconds = round(time.monotonic() - started, 1)
         logger.info(
             "Chatterbox Nano loaded on %s in %.1fs", self.device, self.load_seconds
@@ -200,7 +209,9 @@ class ChatterboxEngine:
         conds = folder / CONDS_FILE
         if conds.exists():
             try:
-                self.model.conds = Conditionals.load(conds, map_location=self.device)
+                self.model.conds = self._cast_conds(
+                    Conditionals.load(conds, map_location=self.device)
+                )
                 self.current_voice = folder.name
                 return
             except Exception:
@@ -211,10 +222,30 @@ class ChatterboxEngine:
         with self.lock:
             self.model.prepare_conditionals(str(ref))
             self.model.conds.save(conds)
+            self.model.conds = self._cast_conds(self.model.conds)
         self.current_voice = folder.name
         logger.info(
             "conditioning for %s computed in %.1fs", name, time.monotonic() - started
         )
+
+    def _cast_conds(self, conds):
+        if self.precision != "fp16" or not self.device.startswith("cuda"):
+            return conds
+        import torch
+
+        for key, value in list(conds.gen.items()):
+            if torch.is_tensor(value) and value.is_floating_point():
+                conds.gen[key] = value.half()
+        return conds
+
+    def _autocast(self):
+        import contextlib
+
+        import torch
+
+        if self.precision == "fp16" and self.device.startswith("cuda"):
+            return torch.autocast("cuda", dtype=torch.float16)
+        return contextlib.nullcontext()
 
     # --------------------------------------------------------- synthesis
 
@@ -228,7 +259,7 @@ class ChatterboxEngine:
         self.use_voice(voice)
         params = self.voices.params(voice)
         started = time.monotonic()
-        with self.lock, torch.inference_mode():
+        with self.lock, torch.inference_mode(), self._autocast():
             wav = self.model.generate(
                 text,
                 temperature=params.temperature,
@@ -236,7 +267,7 @@ class ChatterboxEngine:
                 top_k=params.top_k,
                 repetition_penalty=params.repetition_penalty,
             )
-        audio = wav.squeeze(0).detach().cpu().numpy().astype(np.float32)
+        audio = wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
         if _ran_away(audio, text):
             # Regenerate once with the library defaults, which never ran
             # away in testing; then cut whatever is left at the budget.
@@ -245,13 +276,17 @@ class ChatterboxEngine:
                 len(audio) / SAMPLE_RATE,
                 len(text),
             )
-            with self.lock, torch.inference_mode():
+            with self.lock, torch.inference_mode(), self._autocast():
                 wav = self.model.generate(text)
             audio = wav.squeeze(0).detach().cpu().numpy().astype(np.float32)
             if _ran_away(audio, text):
                 audio = audio[: _budget_samples(text)]
         self.last_generation_seconds = round(time.monotonic() - started, 3)
         self.generations += 1
+        # Hand the allocator's cache back between replies: the activations
+        # of a long sentence otherwise stay reserved for the process life.
+        if self.device.startswith("cuda") and self.generations % 8 == 0:
+            torch.cuda.empty_cache()
         return _level(audio, params)
 
     def warm_up(self, voice: str) -> None:

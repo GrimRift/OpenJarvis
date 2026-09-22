@@ -44,6 +44,7 @@ def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
             "version": __version__,
             "device": engine.device,
             "requested_device": engine.requested_device,
+            "precision": engine.precision,
             "model_loaded": engine.loaded,
             "load_seconds": engine.load_seconds,
             "voice": current,
@@ -327,6 +328,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--device", default=os.environ.get("VOICE_SIDECAR_DEVICE", "cuda")
     )
     parser.add_argument(
+        "--precision",
+        choices=["fp32", "fp16"],
+        default=os.environ.get("VOICE_SIDECAR_PRECISION", "fp32"),
+    )
+    parser.add_argument(
         "--voices-dir", default=os.environ.get("VOICE_SIDECAR_VOICES", "")
     )
     parser.add_argument(
@@ -343,7 +349,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     voices = VoiceStore(
         Path(args.voices_dir) if args.voices_dir else default_voices_dir()
     )
-    engine = ChatterboxEngine(args.device, voices)
+    engine = ChatterboxEngine(args.device, voices, precision=args.precision)
     engine.load()
     if args.voice in voices.names():
         engine.use_voice(args.voice)

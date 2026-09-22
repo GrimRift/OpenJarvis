@@ -173,6 +173,8 @@ class SidecarProcess:
             str(voices_dir()),
             "--voice",
             str(getattr(speech_cfg, "chatterbox_voice", "jarvis") or "jarvis"),
+            "--precision",
+            str(getattr(speech_cfg, "chatterbox_precision", "fp32") or "fp32"),
         ]
         creation = 0
         if os.name == "nt":

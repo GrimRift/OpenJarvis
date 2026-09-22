@@ -1623,6 +1623,10 @@ class SpeechConfig:
     # recording, its cached conditioning, and voice.json with the tuning.
     chatterbox_voice: str = "jarvis"
     chatterbox_device: str = "cuda"
+    # "fp32" or "fp16". fp16 halves the sidecar's resident VRAM (measured
+    # 2.2 GB -> 1.4 GB) at a small speed cost; compare the voice by ear
+    # before switching.
+    chatterbox_precision: str = "fp32"
     chatterbox_sidecar_port: int = 8791
     # Empty = <data dir>/voice-env (the sidecar's own Python environment).
     chatterbox_env_dir: str = ""
