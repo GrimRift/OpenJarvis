@@ -612,7 +612,13 @@ class TestParakeetProvider:
         with client.websocket_connect("/v1/speech/flux?provider=parakeet") as ws:
             message = ws.receive_json()
         assert message["type"] == "FluxUnavailable"
-        assert "model files missing" in message["reason"]
+        # Locally the weights are what is missing from an empty model dir;
+        # on CI onnxruntime itself is absent and is reported first. Either
+        # way the socket fails closed with a Parakeet reason.
+        assert (
+            "model files missing" in message["reason"]
+            or "onnxruntime is not installed" in message["reason"]
+        )
         assert "encoder.onnx" in message["reason"]
 
     def test_the_server_kill_switch_is_honoured(self, tmp_path):

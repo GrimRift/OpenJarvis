@@ -138,6 +138,7 @@ def main() -> int:
 # "Checking.") come out robotic: too little text for the model to settle a
 # cadence. Same slugs, a few more words each, so the clips stay in rotation.
 LOCAL_LINES = {
+    "hello-sir": "Hello, Sir!",
     "sir": "Yes, sir?",
     "checking": "Checking on that now, sir.",
     "let-me-look": "Let me take a look, sir.",
