@@ -79,7 +79,7 @@ describe('a state is never dimmer than a calmer one', () => {
 
   // Not asserted here: that a pause mid-sentence is at least as bright as
   // standing by. It once was the dimmest thing on screen (median 37 against
-  // 53), and it is why speaking's exposure follows the voice. But the two
+  // 53), and it is why speaking's exposure answers its lit patches. But the two
   // states now reach their brightness differently -- standing by through a
   // high exposure that clips, speaking through contrast on stronger marks --
   // and no linear model of that tracks the pixels: the last one said a

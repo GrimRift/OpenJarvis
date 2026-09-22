@@ -29,13 +29,16 @@
 import { approach } from './orb-motion';
 import type { OrbState } from './orb-state';
 
-/** Per state: radius, how hard the flow stirs, spin, brightness, wiring. */
+/** Per state: radius, how hard the flow stirs, spin, brightness, wiring,
+ * and pace -- how fast the web's own clock runs: the drift of its currents
+ * and of its lit patches, the shimmer that reads as electricity. */
 export interface PlexusStateConfig {
   r: number;
   flow: number;
   spin: number;
   bright: number;
   links: number;
+  pace: number;
 }
 
 export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
@@ -44,18 +47,18 @@ export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
   // sees nearly all the time. It carries the preview's standing-by settings.
   // The preview's own "idle" button is a different thing: an orb with nobody
   // watching, which here is "away".
-  idle: { r: 0.8, flow: 0.55, spin: 0.0012, bright: 0.97, links: 0.65 },
+  idle: { r: 0.8, flow: 0.47, spin: 0.0012, bright: 0.97, links: 0.65, pace: 0.8 },
   // Spin is radians per 60Hz frame. Standing by turns once every 87s --
   // slow enough to read as resting, never stopped; it was once every 35s,
   // the same as an empty desk. Away turns slower still, once every 131s.
   //
   // Nobody at the desk: smaller and dimmer, so sitting down is a visible
   // waking up.
-  away: { r: 0.65, flow: 0.55, spin: 0.0008, bright: 0.68, links: 0.6 },
+  away: { r: 0.65, flow: 0.45, spin: 0.0008, bright: 0.68, links: 0.6, pace: 0.75 },
   // Only a little larger than standing by, and never as large as a speaking
   // orb at full voice.
-  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 1.12, links: 0.8 },
-  speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.45, links: 1.15 },
+  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 1.12, links: 0.8, pace: 1 },
+  speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.17, links: 1.02, pace: 1 },
 };
 
 /**
@@ -199,16 +202,22 @@ export const PLEXUS_LOOK = {
     idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1 },
     away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1 },
     listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1 },
-    speaking: { exposure: 1.3, curve: 0.9, white: 0, bloom: 0.85, glow: 2, soft: 0, dots: 1.15, haze: 0, rampTop: 1, red: 0.5 },
+    speaking: { exposure: 1.65, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5 },
   } as Record<OrbState, PlexusLook>,
-  /** Speaking's exposure at full voice; its own exposure above is the one in
-   * a pause. The lit patches already brighten the body several times over
-   * on a word, so one fixed exposure had to choose: set for the words, a
-   * pause mid-sentence scored median 37 against standing by's 53 -- the
-   * dimmest thing on screen exactly while Sage was talking; set for the
-   * pauses, every word washed the orb out. It follows the voice envelope
-   * between the two. */
-  speakingVoiced: 0.7,
+  /**
+   * How far speaking's exposure eases back as its patches light. Its own
+   * exposure above is the one in a pause; while words light the patches it
+   * is divided by (1 + this x how far the patches sit above rest).
+   *
+   * The first version eased it along the voice envelope, which had to guess
+   * how much light a word adds: set for words, a pause mid-sentence scored
+   * median 37 against standing by's 53 -- the dimmest thing on screen while
+   * Sage was talking -- and set for pauses, the tuning wanted an in-word
+   * exposure of 0.1, which a long loud vowel from the real analyser would
+   * have driven nearly dark. Measured against the patches it answers what
+   * is actually on screen.
+   */
+  speakingDamp: 10,
   bloomRadius: 190,
   glowRadius: 420,
   hazeRadius: 60,
@@ -224,8 +233,27 @@ const DRIFT = 5.0e-5;
 const SPRING = 0.0016;
 const DAMP = 0.965;
 const TETHER = 1.2e-4;
-const SYLLABLE_KICK = 9.0e-4;
-const HARD_LIMIT = 1.22;
+/**
+ * The thorns: on each syllable the inner nodes are kicked outward, past the
+ * pinned shell, and the web strung to them from the surface draws a spike.
+ * kick   impulse per syllable onset
+ * limit  how far out a node may go, as a multiple of the orb's radius
+ * reach  how much further a thrown node's links reach, so a thorn is
+ *        strung to more of the surface and reads as a fan, not a line
+ * focus  0..1, how much the kick is confined to the patches the syllable
+ *        just lit. Unfocused, every inner node is pushed out alike: a
+ *        uniform fuzz around the whole rim, and the body thins and dims as
+ *        its interior leaves. Focused, the thorns rise where the orb is
+ *        lit -- a few distinct clusters, as in the reference -- and the
+ *        rest of the body holds still.
+ * glow   how much brighter a thorn's node and the lines strung to it are,
+ *        per unit it has been thrown past the radius. A thorn is long lines
+ *        at the edge of their reach, which the link falloff draws faintest;
+ *        without this they read as wisps.
+ * edge   where the canvas's soft edge begins, as a fraction of its half
+ *        width. The thorns are what reach it.
+ */
+export const PLEXUS_THORNS = { kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 6, edge: 0.96 };
 
 const RAMP_STOPS: Array<[number, number, number, number]> = [
   [0, 10, 76, 107],
@@ -274,6 +302,8 @@ interface Node {
   heat: number;
   size: number;
   px: number; py: number; pd: number; ps: number; pa: number; reg: number;
+  /** How far past the orb's radius this node has been thrown, 0 inside. */
+  out: number;
   lobeA: number; lobeB: number; lobeW: number;
 }
 
@@ -282,7 +312,7 @@ interface Node {
  * rather than from either state's settings. */
 interface Morph {
   radius: number; flow: number; bright: number; links: number;
-  look: PlexusLook; breath: number; spin: number;
+  look: PlexusLook; breath: number; spin: number; pace: number;
 }
 
 /**
@@ -316,6 +346,8 @@ export interface PlexusState {
    * morph to the new state it is (0..1). */
   from: Morph; trans: number;
   lastBreath: number; lastSpin: number;
+  /** The web's own clock, advanced at the state's pace. */
+  phase: number; lastPace: number;
   z: number; zVel: number; linkAge: number;
   particles: Node[];
   pairs: Int32Array; pairCount: number;
@@ -401,7 +433,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
       phase: Math.random() * 1000,
       heat: Math.random(),
       size: isNode ? 0.85 + Math.random() * 0.4 : 0.55 + Math.random() * 0.4,
-      px: 0, py: 0, pd: 0, ps: 0, pa: 0, reg: 1,
+      px: 0, py: 0, pd: 0, ps: 0, pa: 0, reg: 1, out: 0,
       lobeA: 0, lobeB: 0, lobeW: 1,
     };
     // Which two patches this belongs to, computed once: its home direction
@@ -439,9 +471,10 @@ export function createPlexusState(): PlexusState {
     from: {
       radius: PLEXUS_STATES.idle.r, flow: PLEXUS_STATES.idle.flow, bright: PLEXUS_STATES.idle.bright,
       links: PLEXUS_STATES.idle.links, look: { ...PLEXUS_LOOK.states.idle }, breath: 1,
-      spin: PLEXUS_STATES.idle.spin,
+      spin: PLEXUS_STATES.idle.spin, pace: PLEXUS_STATES.idle.pace,
     },
     trans: 1, lastBreath: 1, lastSpin: PLEXUS_STATES.idle.spin,
+    phase: 0, lastPace: PLEXUS_STATES.idle.pace,
     z: 0, zVel: 0, linkAge: 0,
     particles: built.particles,
     pairs: new Int32Array(64000),
@@ -450,7 +483,7 @@ export function createPlexusState(): PlexusState {
 }
 
 function rebuildPairs(S: PlexusState): void {
-  const span = LINK_DIST * LINK_MARGIN * S.radius;
+  const span = LINK_DIST * LINK_MARGIN * (1 + PLEXUS_THORNS.reach) * S.radius;
   const maxSq = span * span;
   const cap = S.pairs.length >> 1;
   const P = S.particles;
@@ -564,7 +597,7 @@ export function drawPlexus(
   if (state !== S.lastState) {
     S.from = {
       radius: S.radius, flow: S.flow, bright: S.bright, links: S.links,
-      look: { ...S.look }, breath: S.lastBreath, spin: S.lastSpin,
+      look: { ...S.look }, breath: S.lastBreath, spin: S.lastSpin, pace: S.lastPace,
     };
     S.trans = 0;
     S.lastState = state;
@@ -572,17 +605,25 @@ export function drawPlexus(
   S.trans = Math.min(1, S.trans + dt / MORPH_FRAMES);
   const e = easeMorph(S.trans);
   const F = S.from;
+  const pace = lerp(F.pace, cfg.pace, e);
+  S.lastPace = pace;
+  S.phase += pace * dt;
+  const tw = S.phase;
   S.radius = lerp(F.radius, cfg.r, e);
   S.flow = lerp(F.flow, cfg.flow, e);
   S.bright = lerp(F.bright, cfg.bright, e);
   S.links = lerp(F.links, cfg.links, e);
   const want = PLEXUS_LOOK.states[state];
-  // Speaking's exposure follows the voice; the morph blends toward that
-  // moving target, and once it lands it simply tracks it.
+  // Speaking's exposure follows its lit patches (see speakingDamp); the
+  // morph blends toward that moving target, and once it lands tracks it.
+  // Only light above the patches' own slow drift counts: that drift runs
+  // the whole time, with no speech at all, and counting it dimmed pauses.
+  const ceiling = PLEXUS_PATCHES[state].base + PLEXUS_PATCHES[state].swing;
+  let lit = 0;
+  for (let i = 0; i < LOBES; i++) lit += Math.max(0, S.lobes[i] - ceiling);
+  lit /= LOBES;
   const exposureTarget =
-    state === 'speaking'
-      ? want.exposure + (PLEXUS_LOOK.speakingVoiced - want.exposure) * S.voiceEnv
-      : want.exposure;
+    state === 'speaking' ? want.exposure / (1 + PLEXUS_LOOK.speakingDamp * lit) : want.exposure;
   S.look.exposure = lerp(F.look.exposure, exposureTarget, e);
   S.look.curve = lerp(F.look.curve, want.curve, e);
   S.look.white = lerp(F.look.white, want.white, e);
@@ -606,7 +647,7 @@ export function drawPlexus(
   // the same way twice.
   const patch = PLEXUS_PATCHES[state];
   for (let i = 0; i < LOBES; i++) {
-    const slow = patch.base + patch.swing * Math.sin(t * (0.01 + i * 0.0021) + i * 2.4);
+    const slow = patch.base + patch.swing * Math.sin(tw * (0.01 + i * 0.0021) + i * 2.4);
     const fall = patch.fall + (i % 3) * 0.012;
     S.lobeTargets[i] = Math.min(1.55, Math.max(slow, S.lobeTargets[i] * Math.pow(fall, dt)));
     S.lobes[i] = approach(S.lobes[i], S.lobeTargets[i], LOBE_ATTACK, dt);
@@ -664,9 +705,9 @@ export function drawPlexus(
   const P = S.particles;
   const n = P.length;
 
-  const fA = t * 0.011, fB = t * 0.014, fC = t * 0.009;
+  const fA = tw * 0.011, fB = tw * 0.014, fC = tw * 0.009;
   const flow = FLOW * S.flow;
-  const kick = S.pulse > 0.02 ? S.pulse * SYLLABLE_KICK : 0;
+  const kick = S.pulse > 0.02 ? S.pulse * PLEXUS_THORNS.kick : 0;
 
   // Only the nodes are simulated. The dust is fixed in the body and rides a
   // turn of its own, so the grain belongs to the surface for none of the
@@ -682,15 +723,17 @@ export function drawPlexus(
     p.vx += fx * flow * own * dt;
     p.vy += fy * flow * own * dt;
     p.vz += fz * flow * own * dt;
-    p.vx += Math.sin(t * 0.037 + ph) * DRIFT * dt;
-    p.vy += Math.sin(t * 0.041 + ph * 1.7 + 2.1) * DRIFT * dt;
-    p.vz += Math.sin(t * 0.033 + ph * 0.6 + 4.2) * DRIFT * dt;
+    p.vx += Math.sin(tw * 0.037 + ph) * DRIFT * dt;
+    p.vy += Math.sin(tw * 0.041 + ph * 1.7 + 2.1) * DRIFT * dt;
+    p.vz += Math.sin(tw * 0.033 + ph * 0.6 + 4.2) * DRIFT * dt;
 
     const dist = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z) || 0.001;
     const spring = (p.home * S.radius - dist) * SPRING * dt;
     // The syllable reaches the outside after the inside, so it reads as a
     // wave through the body rather than one rigid heave.
-    const wave = kick * (0.45 + 0.9 * p.heat) * (1 - 0.5 * p.home) * dt;
+    const lit = Math.min(2, Math.max(0, (p.reg - 0.85) * 2.5));
+    const focus = 1 - PLEXUS_THORNS.focus + PLEXUS_THORNS.focus * lit;
+    const wave = kick * (0.45 + 0.9 * p.heat) * (1 - 0.5 * p.home) * focus * dt;
     const radial = (spring + wave) / dist;
     p.vx += p.x * radial;
     p.vy += p.y * radial;
@@ -705,6 +748,7 @@ export function drawPlexus(
     p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
 
     const d2 = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+    p.out = Math.max(0, d2 / S.radius - 1);
     if (p.rigid) {
       // Held exactly on its sphere, free to slide across it. This is what
       // keeps the silhouette a clean circle while everything inside churns.
@@ -715,7 +759,7 @@ export function drawPlexus(
       const vr = (p.vx * p.x + p.vy * p.y + p.vz * p.z) * inv;
       p.vx -= p.x * vr; p.vy -= p.y * vr; p.vz -= p.z * vr;
     } else {
-      const limit = S.radius * HARD_LIMIT;
+      const limit = S.radius * PLEXUS_THORNS.limit;
       if (d2 > limit) {
         const k = limit / d2;
         p.x *= k; p.y *= k; p.z *= k;
@@ -733,7 +777,7 @@ export function drawPlexus(
     p.pd = Math.max(0, Math.min(1, (rz + 1) / 2));
     p.ps = p.size * persp * sizeScale * breath;
     p.reg = S.lobes[p.lobeA] * p.lobeW + S.lobes[p.lobeB] * (1 - p.lobeW);
-    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure);
+    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
   }
 
   const dCosY = Math.cos(S.spinY * DUST_TURN), dSinY = Math.sin(S.spinY * DUST_TURN);
@@ -772,12 +816,18 @@ export function drawPlexus(
       const rmean = Math.max(LINK_RMEAN_FLOOR, (a.home + c.home) * 0.5);
       // Reach scales with the orb, or contracting the body triples the link
       // count: idle once drew 20,780 lines where listening drew 7,400.
-      const reach = LINK_DIST * rmean * S.radius * speechReach;
+      // A thrown node reaches further, so its thorn is strung to more of the
+      // surface and reads as a fan. Only thrown nodes: lengthening every
+      // line with the voice roughly doubled the line count under loud
+      // speech and burned the whole body out (74% of it clipped).
+      const thrown = Math.min(1, Math.max(a.out, c.out) * 6);
+      const reach = LINK_DIST * rmean * S.radius * speechReach * (1 + PLEXUS_THORNS.reach * thrown);
       const pairSq = reach * reach;
       if (sq > pairSq) continue;
       const near = 1 - Math.sqrt(sq / pairSq) * 0.75;
       const depth = (a.pd + c.pd) / 2;
-      const alpha = near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5;
+      const alpha = near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5 *
+        (1 + PLEXUS_THORNS.glow * Math.max(a.out, c.out));
       if (alpha <= cut) continue;
       const band = Math.min(LINK_BANDS - 1, ((alpha / LINK_MAX_ALPHA) * LINK_BANDS) | 0);
       bandBuffers[band].push(a.px, a.py, c.px, c.py);
@@ -839,7 +889,7 @@ export function drawPlexus(
 
   ctx.save();
   ctx.globalCompositeOperation = 'destination-in';
-  ctx.drawImage(edgeMask(w, h, 0.92), 0, 0);
+  ctx.drawImage(edgeMask(w, h, PLEXUS_THORNS.edge), 0, 0);
   ctx.restore();
 
   // Contrast without leaving the page. A mark's brightness here lives
