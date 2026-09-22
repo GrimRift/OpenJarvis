@@ -8,7 +8,8 @@ deltas at a realistic rate and the time from ``begin`` to the first audio
 byte, and to ``done``, is reported.
 
     .venv\\Scripts\\python.exe scripts\\voice_latency_bench.py
-    .venv\\Scripts\\python.exe scripts\\voice_latency_bench.py --stt-wav path\\to\\question.wav --rounds 3  # noqa: E501
+    .venv\\Scripts\\python.exe scripts\\voice_latency_bench.py ^
+        --stt-wav path\\to\\question.wav --rounds 3
 
 Needs a running server (the Start Menu "Sage" shortcut) and, for the
 local pair, the Parakeet weights and the Chatterbox sidecar environment.

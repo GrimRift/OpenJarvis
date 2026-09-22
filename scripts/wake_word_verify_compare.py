@@ -6,7 +6,8 @@ server uses -- ``WakeWordVerifier`` with ``heard_wake_phrase`` -- so the
 number reported is the number the wake word would see.
 
     .venv\\Scripts\\python.exe scripts\\wake_word_verify_compare.py
-    .venv\\Scripts\\python.exe scripts\\wake_word_verify_compare.py --verifiers tiny.en parakeet --limit 60  # noqa: E501
+    .venv\\Scripts\\python.exe scripts\\wake_word_verify_compare.py ^
+        --verifiers tiny.en parakeet --limit 60
 
 Caveat that matters when reading the result: most positives here are the
 1.8 s ring at the moment the detector fired, which is mid-phrase. A verifier
