@@ -134,3 +134,35 @@ describe('the body does not densify as it shrinks', () => {
     expect(small).toBeLessThan(large * 1.6);
   });
 });
+
+describe('a syllable swells rather than switching on', () => {
+  it('takes several frames to reach the level it was given', () => {
+    // Setting the level outright is a blink: a switch being thrown, not a
+    // voice. The target jumps and the light walks toward it.
+    const target = stubContext(shared);
+    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+    const S = createPlexusState();
+    for (let f = 0; f < 20; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, 0);
+    const before = Math.max(...S.lobes);
+
+    // One loud syllable: a rise from silence.
+    drawPlexus(target, canvas, S, 'speaking', 20, 1, 0.9);
+    const firstFrame = Math.max(...S.lobes);
+    const aimedAt = Math.max(...S.lobeTargets);
+
+    // The target is already up; the light is not there yet.
+    // The target is already up; the light is not there yet.
+    expect(aimedAt).toBeGreaterThan(before + 0.2);
+    expect(firstFrame).toBeLessThan(before + 0.05);
+
+    // Over the next frames it swells toward it and falls back with it, so
+    // the peak arrives later than the frame the syllable landed on.
+    let peak = firstFrame;
+    for (let f = 21; f < 32; f++) {
+      drawPlexus(target, canvas, S, 'speaking', f, 1, 0.9);
+      peak = Math.max(peak, Math.max(...S.lobes));
+    }
+    expect(peak).toBeGreaterThan(before + 0.15);
+    expect(firstFrame).toBeLessThan(peak - 0.05);
+  });
+});

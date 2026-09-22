@@ -5,6 +5,9 @@ import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
 import { StreamingDots } from './StreamingDots';
 import { OrbVisual, useOrbState } from './OrbVisual';
+
+/** 20% over the old 394. */
+const CHAT_ORB_SIZE = 473;
 import { useAppStore } from '../../lib/store';
 import { Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
@@ -129,7 +132,7 @@ export function ChatArea() {
             >
               {orbStateLabel}
             </div>
-            <OrbVisual state={orbState} />
+            <OrbVisual state={orbState} size={CHAT_ORB_SIZE} />
             <h2
               className="font-semibold mt-1"
               style={{ color: 'var(--color-text)', fontFamily: 'var(--font-display)', fontSize: 26 }}
@@ -207,7 +210,7 @@ export function ChatArea() {
       </div>
       {!isEmpty && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, pointerEvents: 'none', zIndex: 5 }}>
-          <OrbVisual state={orbState} />
+          <OrbVisual state={orbState} size={CHAT_ORB_SIZE} />
         </div>
       )}
       <InputArea />

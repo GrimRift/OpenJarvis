@@ -87,7 +87,7 @@ const NODE_LAYERS = [
   { count: 200, rMin: 0.42, rMax: 0.58 },
 ];
 const NODES = 1020;
-const DUST = 1130;
+const DUST = 850;
 
 const LINK_DIST = 0.43;
 /** A floor under a pair's mean radius, so the innermost shell still webs
@@ -108,6 +108,9 @@ const LOBES = 10;
 const LOBE_SHARP = 3;
 const DUST_TURN = 1;
 const BLOOM = 0.95;
+/** Per 60Hz frame: a patch reaches most of a syllable's brightness in
+ * about four frames. Instant is a blink; this is a voice. */
+const LOBE_ATTACK = 0.34;
 
 /** Forces, in units where 1.0 is the orb's own radius. */
 const FLOW = 7.2e-5;
@@ -164,6 +167,8 @@ export interface PlexusState {
   radius: number; flow: number; bright: number; links: number;
   pulse: number; lastSpeech: number; voiceEnv: number;
   lobes: number[];
+  lobeTargets: number[];
+  lobeAxes: Array<[number, number, number]>;
   spinX: number; spinY: number; spinZ: number;
   energy: number; lastState: OrbState;
   z: number; zVel: number; linkAge: number;
@@ -203,7 +208,7 @@ export function framesPerDraw(state: OrbState): number {
   return state === 'idle' || state === 'away' ? 2 : 1;
 }
 
-function makeParticles(): Node[] {
+function makeParticles(): { particles: Node[]; axes: Array<[number, number, number]> } {
   const out: Node[] = [];
   const axes: Array<[number, number, number]> = [];
   for (let k = 0; k < LOBES; k++) {
@@ -261,18 +266,22 @@ function makeParticles(): Node[] {
     p.lobeW = total <= 1e-6 ? 1 : bestW / total;
     out.push(p);
   }
-  return out;
+  return { particles: out, axes };
 }
 
 export function createPlexusState(): PlexusState {
+  const built = makeParticles();
+  const axes = built.axes;
   return {
     radius: 1, flow: 0.55, bright: 0.53, links: 0.85,
     pulse: 0, lastSpeech: 0, voiceEnv: 0,
     lobes: new Array(LOBES).fill(0.8),
+    lobeTargets: new Array(LOBES).fill(0.8),
+    lobeAxes: axes,
     spinX: 0, spinY: 0, spinZ: 0,
     energy: 0, lastState: 'idle',
     z: 0, zVel: 0, linkAge: 0,
-    particles: makeParticles(),
+    particles: built.particles,
     pairs: new Int32Array(64000),
     pairCount: 0,
   };
@@ -393,16 +402,35 @@ export function drawPlexus(
   S.lastSpeech = speech;
   S.pulse = Math.max(S.pulse * Math.pow(0.88, dt), rise * 4.5);
 
+  // Each patch has a target it swells toward rather than a level set
+  // outright. A syllable used to raise the level in a single frame, which
+  // is a blink -- a switch being thrown, not a voice. The target jumps, the
+  // light takes a few frames to reach it and falls back on its own, and
+  // each patch decays at a slightly different rate so a phrase never lights
+  // the same way twice.
   const patch = PLEXUS_PATCHES[state];
   for (let i = 0; i < LOBES; i++) {
     const slow = patch.base + patch.swing * Math.sin(t * (0.01 + i * 0.0021) + i * 2.4);
-    S.lobes[i] = Math.min(1.55, Math.max(slow, S.lobes[i] * Math.pow(patch.fall, dt)));
+    const fall = patch.fall + (i % 3) * 0.012;
+    S.lobeTargets[i] = Math.min(1.55, Math.max(slow, S.lobeTargets[i] * Math.pow(fall, dt)));
+    S.lobes[i] = approach(S.lobes[i], S.lobeTargets[i], LOBE_ATTACK, dt);
   }
   if (rise > 0.06 && patch.kick > 0) {
-    const hit = (Math.random() * LOBES) | 0;
-    S.lobes[hit] = Math.max(S.lobes[hit], patch.base + rise * patch.kick);
+    // Toward whichever patches are facing the viewer. Picking uniformly put
+    // half the syllables on the far side of the body, where a swell is a
+    // vague smudge through the web rather than something being said.
+    const cy0 = Math.cos(S.spinY), sy0 = Math.sin(S.spinY);
+    let hit = 0;
+    let bestFacing = -Infinity;
+    for (let i = 0; i < LOBES; i++) {
+      const ax = S.lobeAxes[i];
+      const facing = -ax[0] * sy0 + ax[2] * cy0 + Math.random() * 0.8;
+      if (facing > bestFacing) { bestFacing = facing; hit = i; }
+    }
+    const lift = patch.base + rise * patch.kick;
+    S.lobeTargets[hit] = Math.max(S.lobeTargets[hit], lift);
     const other = (hit + 1 + ((Math.random() * (LOBES - 1)) | 0)) % LOBES;
-    S.lobes[other] = Math.max(S.lobes[other], patch.base + rise * patch.kick * 0.5);
+    S.lobeTargets[other] = Math.max(S.lobeTargets[other], patch.base + rise * patch.kick * 0.5);
   }
 
   if (state !== S.lastState) { S.energy = 1; S.lastState = state; }

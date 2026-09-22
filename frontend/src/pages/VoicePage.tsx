@@ -5,7 +5,8 @@ import { OrbVisual, useOrbState } from '../components/Chat/OrbVisual';
 import { VoiceTranscript } from '../components/Chat/VoiceTranscript';
 import { useAppStore } from '../lib/store';
 
-const ORB_SIZE = 588;
+/** 30% over the old 588. */
+const ORB_SIZE = 764;
 
 const STATUS: Record<ReturnType<typeof useOrbState>, string> = {
   idle: 'STANDING BY',

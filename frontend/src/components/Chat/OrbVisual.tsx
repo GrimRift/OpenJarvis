@@ -171,18 +171,23 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
 
   return (
     <div style={{ position: 'relative', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-      <div
-        style={{
-          position: 'absolute',
-          width: '160%',
-          height: '160%',
-          left: '-30%',
-          top: '-30%',
-          background:
-            'radial-gradient(circle, rgba(34,211,238,0.18) 0%, rgba(20,60,68,0.08) 35%, rgba(10,10,11,0) 70%)',
-          pointerEvents: 'none',
-        }}
-      />
+      {/* The cloud orb is drawn against this glow and reads flat without it.
+          The constellation lights itself -- a wash behind it is the haze that
+          kept appearing in its middle, and it tints the whole palette. */}
+      {design === 'cloud' && (
+        <div
+          style={{
+            position: 'absolute',
+            width: '160%',
+            height: '160%',
+            left: '-30%',
+            top: '-30%',
+            background:
+              'radial-gradient(circle, rgba(34,211,238,0.18) 0%, rgba(20,60,68,0.08) 35%, rgba(10,10,11,0) 70%)',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
       <canvas ref={canvasRef} width={size} height={size} style={{ position: 'absolute', inset: 0 }} />
     </div>
   );

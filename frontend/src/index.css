@@ -502,9 +502,12 @@
       linear-gradient(var(--color-border-subtle) 1px, transparent 1px),
       linear-gradient(90deg, var(--color-border-subtle) 1px, transparent 1px);
     background-size: 48px 48px;
-    mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
-    -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
-    opacity: 0.45;
+    /* Clear through the middle. The grid used to be strongest at the centre,
+       which is where the orb sits -- its lines read as part of the orb and
+       cut across the web. It now holds off the centre and lives in a ring. */
+    mask-image: radial-gradient(ellipse at center, transparent 20%, black 52%, transparent 84%);
+    -webkit-mask-image: radial-gradient(ellipse at center, transparent 20%, black 52%, transparent 84%);
+    opacity: 0.35;
   }
 
   .hud-backdrop::after {
