@@ -44,14 +44,14 @@ export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
   // sees nearly all the time. It carries the preview's standing-by settings.
   // The preview's own "idle" button is a different thing: an orb with nobody
   // watching, which here is "away".
-  idle: { r: 0.8, flow: 0.55, spin: 0.003, bright: 0.7, links: 0.85 },
+  idle: { r: 0.8, flow: 0.55, spin: 0.003, bright: 0.97, links: 0.9 },
   // Nobody at the desk: smaller and dimmer, so sitting down is a visible
   // waking up.
-  away: { r: 0.65, flow: 0.55, spin: 0.003, bright: 0.5, links: 0.85 },
+  away: { r: 0.65, flow: 0.55, spin: 0.003, bright: 0.68, links: 0.85 },
   // Only a little larger than standing by, and never as large as a speaking
   // orb at full voice.
-  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 0.84, links: 0.92 },
-  speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.12, links: 1.1 },
+  listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 1.12, links: 0.98 },
+  speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.45, links: 1.15 },
 };
 
 /**
@@ -94,7 +94,7 @@ const NODE_LAYERS = [
   { count: 200, rMin: 0.42, rMax: 0.58 },
 ];
 const NODES = 1020;
-const DUST = 850;
+const DUST = 640;
 
 const LINK_DIST = 0.43;
 /** A floor under a pair's mean radius, so the innermost shell still webs
@@ -114,7 +114,50 @@ const FOCAL = 3.1;
 const LOBES = 10;
 const LOBE_SHARP = 3;
 const DUST_TURN = 1;
-const BLOOM = 0.95;
+/**
+ * How the finished frame is lit, after the marks are drawn.
+ *
+ * base   the frame itself
+ * curve  the frame squared, unblurred: contrast. A knot at 255 gains the
+ *        full amount, a mid tone at 128 a quarter of it, the faint wash
+ *        between the webs almost nothing -- so highlights climb toward white
+ *        while the gaps stay dark, and it stays sharp because it is not
+ *        blurred.
+ * bloom  a wide, weak blur of the whole frame: the halo every line in the
+ *        reference carries.
+ * glow   a tighter blur of the squared frame: light spilling off the bright
+ *        knots only, so it does not fog the gaps.
+ * white  how far the contrast layer is drained of colour. Saturated cyan
+ *        clips at a luminance of 201 however hard it is pushed; the
+ *        reference's brightest knots reach 211-246 because they burn
+ *        through to white. Draining only the squared layer whitens only
+ *        the hottest cores, and the halo around them stays cyan.
+ */
+export const PLEXUS_LOOK = {
+  /** Per state, scales every layer: the frame and bloom by this, the two
+   * squared layers by its square, since they are the frame times itself.
+   * Scored inside the orb's disc against the reference clip and the lab
+   * page's speaking frame, luminance 0-255, over 240 frames per state:
+   * standing by lands at median 57 / p90 163 / p99 225 against the
+   * reference's 51 / 119 / 211 -- the same body, more contrast -- and
+   * speaking at 74 / 219 / 251 against the lab's 52 / 191 / 246. */
+  exposure: { idle: 1.7, away: 1.2, listening: 1.8, speaking: 1.1 } as Record<OrbState, number>,
+  /** Speaking's exposure at full voice; 'speaking' above is its exposure in
+   * a pause. The lit patches already brighten the body several times over
+   * on a word, so one fixed exposure had to choose: set for the words, a
+   * pause mid-sentence scored median 37 against standing by's 53 -- the
+   * dimmest thing on screen exactly while Sage was talking; set for the
+   * pauses, every word washed the orb out. It follows the voice envelope
+   * between the two. */
+  speakingVoiced: 0.45,
+  base: 1,
+  curve: 0.9,
+  white: 1,
+  bloom: 0.85,
+  bloomRadius: 190,
+  glow: 2,
+  glowRadius: 420,
+};
 /** Per 60Hz frame: a patch reaches most of a syllable's brightness in
  * about four frames. Instant is a blink; this is a voice. */
 const LOBE_ATTACK = 0.34;
@@ -181,6 +224,9 @@ export interface PlexusState {
   z: number; zVel: number; linkAge: number;
   particles: Node[];
   pairs: Int32Array; pairCount: number;
+  exposure: number;
+  /** The page colour behind the orb, as rgb. See the composite below. */
+  backdrop: [number, number, number] | null;
 }
 
 /** A syllable's onset, not its level: a steady push only inflates the body. */
@@ -280,7 +326,7 @@ export function createPlexusState(): PlexusState {
   const built = makeParticles();
   const axes = built.axes;
   return {
-    radius: 1, flow: 0.55, bright: 0.53, links: 0.85,
+    radius: 1, flow: 0.55, bright: 0.53, links: 0.85, exposure: 1, backdrop: null,
     pulse: 0, lastSpeech: 0, voiceEnv: 0,
     lobes: new Array(LOBES).fill(0.8),
     lobeTargets: new Array(LOBES).fill(0.8),
@@ -322,6 +368,8 @@ for (let i = 0; i < RAMP_STEPS; i++) rampBuckets.push([]);
 interface Surfaces {
   full: HTMLCanvasElement; fctx: CanvasRenderingContext2D;
   half: HTMLCanvasElement; hctx: CanvasRenderingContext2D;
+  glow: HTMLCanvasElement; gctx: CanvasRenderingContext2D;
+  sq: HTMLCanvasElement; qctx: CanvasRenderingContext2D;
   small: HTMLCanvasElement; sctx: CanvasRenderingContext2D;
 }
 const surfaces = new Map<string, Surfaces>();
@@ -338,10 +386,14 @@ function surfacesFor(w: number, h: number): Surfaces {
   };
   const full = mk(w, h);
   const half = mk(w >> 1, h >> 1);
+  const glow = mk(w >> 1, h >> 1);
+  const sq = mk(w, h);
   const small = mk(w >> 2, h >> 2);
   const made: Surfaces = {
     full, fctx: full.getContext('2d')!,
     half, hctx: half.getContext('2d')!,
+    glow, gctx: glow.getContext('2d')!,
+    sq, qctx: sq.getContext('2d')!,
     small, sctx: small.getContext('2d')!,
   };
   surfaces.set(key, made);
@@ -403,6 +455,12 @@ export function drawPlexus(
   S.radius = approach(S.radius, cfg.r, 0.02, dt);
   S.flow = approach(S.flow, cfg.flow, 0.03, dt);
   S.bright = approach(S.bright, cfg.bright, 0.02, dt);
+  const exposureTarget =
+    state === 'speaking'
+      ? PLEXUS_LOOK.exposure.speaking +
+        (PLEXUS_LOOK.speakingVoiced - PLEXUS_LOOK.exposure.speaking) * S.voiceEnv
+      : PLEXUS_LOOK.exposure[state];
+  S.exposure = approach(S.exposure, exposureTarget, state === 'speaking' ? 0.08 : 0.02, dt);
   S.links = approach(S.links, cfg.links, 0.02, dt);
 
   const rise = syllableRise(speech, S.lastSpeech);
@@ -647,29 +705,101 @@ export function drawPlexus(
   ctx.drawImage(edgeMask(w, h, 0.92), 0, 0);
   ctx.restore();
 
-  // Bloom: a blurred copy added back over the frame. Every line in the
-  // reference carries a soft halo, and scaling down and back up instead is
-  // two box averages of a box average -- it loses the faint web that gives
-  // the picture its depth. Blurred at half size, so it costs a quarter of
-  // the pixels.
+  // The contrast and glow layers are the frame multiplied by itself, which
+  // only works on opaque colours: multiplying a partly transparent pixel by
+  // itself doubles it rather than squaring it. So they are built on black,
+  // and the finished frame is composed on the page's own background colour
+  // and faded out at the edge of its circle. Drawn onto black instead it is
+  // a dark square over the page; handed to the page with mix-blend-mode it
+  // is the same square, because the page isolates the orb's layer from
+  // what is behind it (plus-lighter drew nothing at all).
+  //
+  // On a light page, light added to the background is white on white. The
+  // orb keeps the plain frame there, drawn over the page as it always was.
+  const bd = S.backdrop;
+  if (bd && 0.2126 * bd[0] + 0.7152 * bd[1] + 0.0722 * bd[2] > 128) {
+    target.clearRect(0, 0, w, h);
+    target.drawImage(bufs.full, 0, 0);
+    return;
+  }
+  const L = PLEXUS_LOOK;
+  const E = S.exposure;
   const hw = bufs.half.width, hh = bufs.half.height;
-  bufs.hctx.clearRect(0, 0, hw, hh);
+  const opaque = (c: CanvasRenderingContext2D, cw: number, ch: number) => {
+    c.globalCompositeOperation = 'source-over';
+    c.globalAlpha = 1;
+    c.filter = 'none';
+    c.fillStyle = '#000';
+    c.fillRect(0, 0, cw, ch);
+  };
+
+  opaque(bufs.hctx, hw, hh);
+  bufs.hctx.globalCompositeOperation = 'lighter';
   bufs.hctx.drawImage(bufs.full, 0, 0, hw, hh);
-  target.clearRect(0, 0, w, h);
-  target.drawImage(bufs.full, 0, 0);
+  bufs.hctx.globalCompositeOperation = 'source-over';
+
+  // The frame squared, half size, for the glow.
+  opaque(bufs.gctx, hw, hh);
+  bufs.gctx.globalCompositeOperation = 'lighter';
+  bufs.gctx.drawImage(bufs.half, 0, 0);
+  bufs.gctx.globalCompositeOperation = 'multiply';
+  bufs.gctx.drawImage(bufs.half, 0, 0);
+  bufs.gctx.globalCompositeOperation = 'source-over';
+
+  // The frame squared, full size, for the contrast curve.
+  if (L.curve > 0) {
+    opaque(bufs.qctx, w, h);
+    bufs.qctx.globalCompositeOperation = 'lighter';
+    bufs.qctx.drawImage(bufs.full, 0, 0);
+    bufs.qctx.globalCompositeOperation = 'multiply';
+    bufs.qctx.drawImage(bufs.full, 0, 0);
+    bufs.qctx.globalCompositeOperation = 'source-over';
+  }
+
+  opaque(target, w, h);
+  if (bd) {
+    target.fillStyle = `rgb(${bd[0]},${bd[1]},${bd[2]})`;
+    target.fillRect(0, 0, w, h);
+  }
   target.save();
   target.globalCompositeOperation = 'lighter';
-  target.globalAlpha = BLOOM;
   target.imageSmoothingEnabled = true;
+  // 'lighter' clamps at 1 per draw, so a gain above 1 is drawn in whole
+  // passes plus a remainder.
+  const add = (img: CanvasImageSource, gain: number, sw: number, sh: number) => {
+    let left = gain;
+    while (left > 1e-3) {
+      target.globalAlpha = Math.min(1, left);
+      target.drawImage(img, 0, 0, sw, sh, 0, 0, w, h);
+      left -= 1;
+    }
+  };
+  add(bufs.full, L.base * E, w, h);
+  if (L.curve > 0) {
+    if (L.white > 0) target.filter = `saturate(${Math.max(0, 1 - L.white).toFixed(2)})`;
+    add(bufs.sq, L.curve * E * E, w, h);
+    target.filter = 'none';
+  }
   if (blurSupported(target)) {
-    target.filter = `blur(${(w / 190).toFixed(1)}px)`;
-    target.drawImage(bufs.half, 0, 0, hw, hh, 0, 0, w, h);
+    target.filter = `blur(${(w / L.bloomRadius).toFixed(1)}px)`;
+    add(bufs.half, L.bloom * E, hw, hh);
+    target.filter = `blur(${(w / L.glowRadius).toFixed(1)}px)`;
+    add(bufs.glow, L.glow * E * E, hw, hh);
     target.filter = 'none';
   } else {
     const sw = bufs.small.width, sh = bufs.small.height;
-    bufs.sctx.clearRect(0, 0, sw, sh);
+    opaque(bufs.sctx, sw, sh);
+    bufs.sctx.globalCompositeOperation = 'lighter';
     bufs.sctx.drawImage(bufs.half, 0, 0, sw, sh);
-    target.drawImage(bufs.small, 0, 0, sw, sh, 0, 0, w, h);
+    bufs.sctx.globalCompositeOperation = 'source-over';
+    add(bufs.small, L.bloom * E, sw, sh);
+    add(bufs.glow, L.glow * E * E, hw, hh);
   }
+  target.globalAlpha = 1;
+  // Wide and soft, so the edge of the painted background never reads as a
+  // circle against the page.
+  target.globalCompositeOperation = 'destination-in';
+  target.drawImage(edgeMask(w, h, 0.8), 0, 0);
   target.restore();
 }
+

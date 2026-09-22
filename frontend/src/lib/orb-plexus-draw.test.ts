@@ -14,6 +14,8 @@ import { createPlexusState, drawPlexus } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
+  /** fillStyle of every fillRect on the visible canvas -- the backdrop. */
+  targetFills: string[];
   strokes: number;
   fills: number;
   lineSegments: number;
@@ -64,8 +66,9 @@ let previousDocument: unknown;
 // One record, mutated in place. The renderer draws to offscreen surfaces it
 // creates itself and caches by size, so the contexts outlive any one test --
 // replacing the object would leave them writing into a discarded one.
-const shared: Recorded = { strokes: 0, fills: 0, lineSegments: 0, alphas: [], coords: [], inks: [] };
+const shared: Recorded = { targetFills: [], strokes: 0, fills: 0, lineSegments: 0, alphas: [], coords: [], inks: [] };
 function resetRecord() {
+  shared.targetFills.length = 0;
   shared.strokes = 0;
   shared.fills = 0;
   shared.lineSegments = 0;
@@ -193,5 +196,35 @@ describe('the web keeps its weight at any canvas size', () => {
     const ratio = weight(764) / weight(473);
     expect(ratio).toBeGreaterThan((764 / 473) * 0.8);
     expect(ratio).toBeLessThan((764 / 473) * 1.2);
+  });
+});
+
+describe('the orb sits on the page, not on a square', () => {
+  // The contrast and glow layers only work on opaque colour, so on a dark
+  // page the frame is composed on the page's own colour -- never on black,
+  // which drew a dark square over the HUD grid. On a light page, light
+  // added to the background is white on white, so it draws the plain frame
+  // over the page and paints nothing underneath.
+  const fillsOn = (backdrop: [number, number, number] | null) => {
+    resetRecord();
+    const target = stubContext(shared);
+    const fillRect = (target as unknown as { fillRect: (x: number, y: number) => void }).fillRect;
+    (target as unknown as { fillRect: (x: number, y: number) => void }).fillRect = (x, y) => {
+      shared.targetFills.push(String((target as unknown as { fillStyle: string }).fillStyle));
+      fillRect(x, y);
+    };
+    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+    const S = createPlexusState();
+    S.backdrop = backdrop;
+    drawPlexus(target, canvas, S, 'idle', 0, 1, 0);
+    return shared.targetFills;
+  };
+
+  it("paints the page's own colour under a dark page", () => {
+    expect(fillsOn([10, 10, 11])).toContain('rgb(10,10,11)');
+  });
+
+  it('paints nothing under a light page', () => {
+    expect(fillsOn([249, 249, 249])).toEqual([]);
   });
 });

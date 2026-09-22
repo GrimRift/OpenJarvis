@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BREATH_DEPTH,
   BREATH_PERIOD,
+  PLEXUS_LOOK,
   PLEXUS_PATCHES,
   PLEXUS_STATES,
   breathScale,
@@ -63,18 +64,32 @@ describe('syllables', () => {
 });
 
 describe('a state is never dimmer than a calmer one', () => {
-  it('keeps silent speaking above standing by', () => {
+  it('keeps a pause in speech as bright as standing by', () => {
     // Speaking rests at standing-by size, so the dim-on-contraction rule
     // fires with it. With its patch base set low for syllable contrast,
     // three multipliers stacked and a mid-sentence pause became the
     // dimmest thing on screen.
+    //
+    // A first-order model: marks scale with brightness and wiring, the frame
+    // with exposure. Speaking is taken in a pause -- its exposure there, its
+    // body at standing-by size. Measured in the browser with the full
+    // composite (240 frames, luminance inside the disc) a pause scores
+    // median 57 / p90 178 against standing by's 57 / 163; this model, which
+    // leaves out the squared layers that favour speaking's brighter
+    // patches, puts it a few percent under. The floor below allows for that
+    // and no more: before the pause exposure a pause measured median 37,
+    // 30% under.
     const level = (state: 'idle' | 'away' | 'listening' | 'speaking') => {
       const breath = state === 'speaking' ? speakingScale(0) : 1;
-      return PLEXUS_STATES[state].bright * Math.pow(breath, 1.35) * PLEXUS_PATCHES[state].base;
+      const cfg = PLEXUS_STATES[state];
+      return (
+        cfg.bright * cfg.links * Math.pow(breath, 1.35) * PLEXUS_PATCHES[state].base *
+        PLEXUS_LOOK.exposure[state]
+      );
     };
     expect(level('away')).toBeLessThan(level('idle'));
     expect(level('idle')).toBeLessThan(level('listening'));
-    expect(level('listening')).toBeLessThan(level('speaking'));
+    expect(level('speaking')).toBeGreaterThan(level('idle') * 0.9);
   });
 });
 
