@@ -736,6 +736,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       shouldStreamReplySpeech(wasVoice, content, speakTypedReplies)
         ? beginStreamingSpeech(ttsVoice)
         : null;
+    // A typed question whose answer is read aloud is a spoken exchange too:
+    // the user can talk over it, stop it, and be heard after it. Typed
+    // replies were exempt, so during and after "do a deep research about
+    // our sun" the microphone seemed dead (24 September).
+    if (incrementalSpeech) lastReplyWasVoiceRef.current = true;
     spokenTextRef.current = '';
     // "One moment, sir." when nothing has been said back for a while,
     // generating or waiting on a tool alike, then "still working on it"

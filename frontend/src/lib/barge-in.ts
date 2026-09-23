@@ -67,7 +67,7 @@ export interface BargeState {
   enabled: boolean;
   /** Whether Sage's reply audio is playing right now. */
   sageSpeaking: boolean;
-  /** Whether this reply was to a spoken question (typed ones are not cut). */
+  /** Whether this reply is spoken: to a voice question, or a typed one read aloud. */
   voiceReply: boolean;
   /** Whether this turn already interrupted the reply. */
   triggered: boolean;
