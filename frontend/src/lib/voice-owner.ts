@@ -24,6 +24,12 @@ const LOCK = 'sage-voice-listener';
 
 let owner = true;
 let started = false;
+/** Bumped by every request and by stopping: only the latest request's
+ * outcome counts. React starts an effect, stops it and starts it again in
+ * development; the second start's steal rejected the first start's request,
+ * which took this page for having lost the voice to another -- the page
+ * stood down while its own request still held the lock. */
+let generation = 0;
 /** Ends the hold on the lock, when this page has it. */
 let releaseHeld: (() => void) | null = null;
 /** Cancels this page's place in the queue, when it is waiting. */
@@ -45,10 +51,12 @@ function hold(steal: boolean): void {
   if (!manager) return;
   leaveQueue?.abort();
   leaveQueue = null;
+  const mine = ++generation;
   const queue = steal ? null : new AbortController();
   if (queue) leaveQueue = queue;
   manager
     .request(LOCK, steal ? { steal: true } : { signal: queue!.signal }, () => {
+      if (mine !== generation) return Promise.resolve();
       if (queue && leaveQueue === queue) leaveQueue = null;
       setOwner(true);
       return new Promise<void>((resolve) => {
@@ -56,10 +64,8 @@ function hold(steal: boolean): void {
       });
     })
     .catch(() => {
-      // Taken by another page (or this page left the queue): stand down,
-      // and wait for it to come back.
-      if (!started) return;
-      if (queue && queue.signal.aborted) return;
+      // Taken by another page: stand down, and wait for it to come back.
+      if (!started || mine !== generation) return;
       releaseHeld = null;
       setOwner(false);
       hold(false);
@@ -96,6 +102,7 @@ export function startVoiceOwnership(): () => void {
   hold(true);
   return () => {
     started = false;
+    generation += 1;
     window.removeEventListener('focus', claimVoice);
     window.removeEventListener('pointerdown', claimVoice);
     window.removeEventListener('keydown', claimVoice);

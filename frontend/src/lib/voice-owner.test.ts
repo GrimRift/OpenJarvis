@@ -17,12 +17,16 @@ class FakeLocks {
           done = true;
           fn();
         };
-        const held = callback();
-        this.holder = {
-          release: () => finish(() => { this.holder = null; resolve(); this.next(); }),
-          reject: (e) => finish(() => reject(e)),
+        const mine = {
+          release: () => finish(() => {
+            if (this.holder === mine) this.holder = null;
+            resolve();
+            this.next();
+          }),
+          reject: (e: Error) => finish(() => reject(e)),
         };
-        void held.then(() => this.holder?.release());
+        this.holder = mine;
+        void callback().then(() => mine.release());
       };
       if (options.steal) {
         const previous = this.holder;
@@ -105,6 +109,22 @@ describe('one Sage page listens at a time', () => {
     await flush();
     await flush();
     expect(first.isVoiceOwner()).toBe(true);
+  });
+
+  it('starting, stopping and starting again keeps the voice', async () => {
+    // React does exactly this to an effect in development.
+    vi.resetModules();
+    const page = await import('./voice-owner');
+    const stopFirst = page.startVoiceOwnership();
+    stopFirst();
+    page.startVoiceOwnership();
+    await flush();
+    await flush();
+    expect(page.isVoiceOwner()).toBe(true);
+    const other = await openPage();
+    await flush();
+    expect(other.isVoiceOwner()).toBe(true);
+    expect(page.isVoiceOwner()).toBe(false);
   });
 
   it('a lone page keeps the voice however it is used', async () => {
