@@ -381,11 +381,12 @@ const TETHER = 1.2e-4;
  * glow   how much brighter a thorn's node and the lines strung to it are,
  *        per unit it has been thrown past the radius. A thorn is long lines
  *        at the edge of their reach, which the link falloff draws faintest;
- *        without this they read as wisps.
+ *        without this they read as wisps. 3, from 4: at 4 a thrown node
+ *        and its fan flared hard enough to read as a glitch.
  * edge   where the canvas's soft edge begins, as a fraction of its half
  *        width. The thorns are what reach it.
  */
-export const PLEXUS_THORNS = { rise: 0.15, kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 4, edge: 0.96 };
+export const PLEXUS_THORNS = { rise: 0.15, kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 3, edge: 0.96 };
 
 const RAMP_STOPS: Array<[number, number, number, number]> = [
   [0, 10, 76, 107],
