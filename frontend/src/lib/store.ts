@@ -154,7 +154,44 @@ function withoutAutoPlay(messages: ChatMessage[]): ChatMessage[] {
   );
 }
 
+/**
+ * The conversations, parsed once and kept.
+ *
+ * Every change to a chat -- the question going in, each reply update, a
+ * stop -- used to parse all of them out of localStorage and write all of
+ * them back: 171 conversations, 2.35 MB, 50-86 ms each, on the main thread.
+ * Those were the orb's stutters, measured frame for frame against the voice
+ * trace (24 September): the moment the user finished talking, when a reply
+ * began and ended, when it was stopped. Read once; another tab's write
+ * (the storage event) drops the copy so it is read again.
+ */
+let cachedStore: ConversationStore | null = null;
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === CONVERSATIONS_KEY || event.key === null) cachedStore = null;
+  });
+}
+
 function loadConversations(): ConversationStore {
+  if (!cachedStore) {
+    cachedStore = readConversations();
+    return cachedStore;
+  }
+  // A reply's autoPlay is for the moment it arrives. Read from storage it
+  // was always cleared (readConversations); kept in memory it would stay
+  // set, and every spoken reply in the chat would play again on the next
+  // message. Copied, not edited: the UI holds these objects.
+  for (const conversation of Object.values(cachedStore.conversations)) {
+    if (!conversation.messages.some((m) => m.audio?.autoPlay)) continue;
+    conversation.messages = conversation.messages.map((m) =>
+      m.audio?.autoPlay ? { ...m, audio: { ...m.audio, autoPlay: false } } : m,
+    );
+  }
+  return cachedStore;
+}
+
+function readConversations(): ConversationStore {
   try {
     const raw = localStorage.getItem(CONVERSATIONS_KEY);
     if (!raw) return { version: 1, conversations: {}, activeId: null };
@@ -224,20 +261,86 @@ function loadConversations(): ConversationStore {
   }
 }
 
-function saveConversations(store: ConversationStore): void {
+/** Each conversation's saved JSON, reused while it is unchanged. */
+const savedJson = new Map<string, { conversation: Conversation; updatedAt: number; count: number; json: string }>();
+let pendingSave: ConversationStore | null = null;
+let saveScheduled = false;
+
+function writeConversations(store: ConversationStore): void {
   // Images are session-only. A screenshot is 1-3MB of base64 and a handful
   // would quietly exhaust the localStorage quota, taking the whole
   // conversation history with them.
-  const stripped: ConversationStore = {
-    ...store,
-    conversations: Object.fromEntries(
-      Object.entries(store.conversations).map(([id, conversation]) => [
-        id,
-        withoutImages(conversation),
-      ]),
-    ),
-  };
-  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(stripped));
+  //
+  // Only a conversation that changed is encoded again: the other 170 are
+  // the text they were last time.
+  const parts: string[] = [];
+  const live = new Set<string>();
+  for (const [id, conversation] of Object.entries(store.conversations)) {
+    live.add(id);
+    const last = conversation.messages[conversation.messages.length - 1];
+    const known = savedJson.get(id);
+    let json: string;
+    if (
+      known &&
+      known.conversation === conversation &&
+      known.updatedAt === conversation.updatedAt &&
+      known.count === conversation.messages.length &&
+      last === conversation.messages[conversation.messages.length - 1]
+    ) {
+      json = known.json;
+    } else {
+      json = JSON.stringify(withoutImages(conversation));
+      savedJson.set(id, {
+        conversation,
+        updatedAt: conversation.updatedAt,
+        count: conversation.messages.length,
+        json,
+      });
+    }
+    parts.push(`${JSON.stringify(id)}:${json}`);
+  }
+  for (const id of savedJson.keys()) if (!live.has(id)) savedJson.delete(id);
+  const head = JSON.stringify({ version: store.version, activeId: store.activeId ?? null });
+  localStorage.setItem(
+    CONVERSATIONS_KEY,
+    `${head.slice(0, -1)},"conversations":{${parts.join(',')}}}`,
+  );
+}
+
+function flushConversations(): void {
+  saveScheduled = false;
+  const store = pendingSave;
+  pendingSave = null;
+  if (!store) return;
+  try {
+    writeConversations(store);
+  } catch {
+    // Storage full or read-only: the chats stay usable in memory.
+  }
+}
+
+/**
+ * Save when the page is idle rather than in the middle of a frame, and once
+ * for a burst of changes. A browser without idle callbacks (and the tests)
+ * saves at once. Anything pending is written before the page goes away.
+ */
+function saveConversations(store: ConversationStore): void {
+  pendingSave = store;
+  const idle = typeof window !== 'undefined'
+    ? (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback
+    : undefined;
+  if (typeof idle !== 'function') {
+    flushConversations();
+    return;
+  }
+  if (saveScheduled) return;
+  saveScheduled = true;
+  idle.call(window, flushConversations, { timeout: 2000 });
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', flushConversations);
+  window.addEventListener('beforeunload', flushConversations);
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -824,13 +927,19 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!conv) return;
       const lastMsg = conv.messages[conv.messages.length - 1];
       if (lastMsg && lastMsg.role === 'assistant') {
-        lastMsg.content = content;
-        if (toolCalls) lastMsg.toolCalls = toolCalls;
-        if (usage) lastMsg.usage = usage;
-        if (telemetry) lastMsg.telemetry = telemetry;
-        if (audio) lastMsg.audio = audio;
-        if (researchTraces) lastMsg.researchTraces = researchTraces;
-        if (researchSources) lastMsg.researchSources = researchSources;
+        // A new object, not an edit: the conversations are kept in memory
+        // now, and the message already on screen is this same object -- a
+        // bubble memoised on it would never see the reply grow.
+        conv.messages[conv.messages.length - 1] = {
+          ...lastMsg,
+          content,
+          ...(toolCalls ? { toolCalls } : {}),
+          ...(usage ? { usage } : {}),
+          ...(telemetry ? { telemetry } : {}),
+          ...(audio ? { audio } : {}),
+          ...(researchTraces ? { researchTraces } : {}),
+          ...(researchSources ? { researchSources } : {}),
+        };
         conv.updatedAt = Date.now();
         saveConversations(store);
         if (get().activeId === conversationId) {
