@@ -109,7 +109,9 @@ class _Rig:
         self.initiative_contexts.append(context)
         return self.initiative_line
 
-    def _speak(self, text: str) -> bool:
+    def _speak(self, text: str, before=None) -> bool:
+        if before is not None:
+            before()
         self.spoken.append(text)
         return True
 
@@ -347,7 +349,7 @@ class TestGuards:
     def test_a_voice_failure_still_counts(self, tmp_path) -> None:
         # Otherwise a dead speaker would retry every fifteen seconds.
         rig = _Rig(tmp_path)
-        rig.engine._speaker = lambda text: (_ for _ in ()).throw(
+        rig.engine._speaker = lambda text, before=None: (_ for _ in ()).throw(
             RuntimeError("no audio")
         )
         said = rig.tick(_at(8), idle=1.0)
@@ -547,7 +549,11 @@ class TestReturnLatency:
         rig.monitor.poll()  # engine.tick() never called by the test
         assert [t for t in rig.spoken] == ["[welcome_back] 1 hour 50 min"]
 
-    def test_the_chime_sounds_before_the_words_are_written(self, tmp_path) -> None:
+    def test_the_chime_sounds_right_before_the_words(self, tmp_path) -> None:
+        # Not before the line is written: that left a gap of the writing and
+        # the synthesis after the chime -- 46 s on a morning greeting while
+        # the voice loaded -- and a chime with nothing after it when the
+        # voice failed. The speaker plays it once the audio is ready.
         rig = _Rig(tmp_path)
         order: List[str] = []
         rig.engine._chimer = lambda: order.append("chime") or True
@@ -556,9 +562,29 @@ class TestReturnLatency:
             order.append("compose")
             return "words"
 
+        def speak(text: str, before=None) -> bool:
+            order.append("synthesise")
+            if before is not None:
+                before()
+            order.append("speak")
+            return True
+
         rig.engine._composer = compose
+        rig.engine._speaker = speak
         rig.tick(_at(8), idle=1.0)
-        assert order == ["chime", "compose"]
+        assert order == ["compose", "synthesise", "chime", "speak"]
+
+    def test_a_line_that_cannot_be_spoken_is_not_chimed(self, tmp_path) -> None:
+        rig = _Rig(tmp_path)
+        chimes: List[int] = []
+        rig.engine._chimer = lambda: chimes.append(1) or True
+
+        def broken(text: str, before=None) -> bool:
+            raise RuntimeError("voice sidecar unavailable")
+
+        rig.engine._speaker = broken
+        rig.tick(_at(8), idle=1.0)
+        assert chimes == []
 
     def test_nothing_chimes_when_nothing_is_said(self, tmp_path) -> None:
         rig = _Rig(tmp_path)

@@ -1152,20 +1152,30 @@ def deliver_reminder(what: str) -> bool:
 
 
 def chime_now() -> bool:
-    """The chime on its own: played the moment there is something to say,
-    before the model has written it, so the acknowledgement is instant even
-    when the wording takes a few seconds."""
+    """The chime on its own. Played by ``speak_aloud`` right before the
+    words, once they are written and synthesised (see there)."""
     from openjarvis.speech.chime import chime_path
     from openjarvis.speech.player import play_file
 
     return play_file(str(chime_path()), channel="chime")
 
 
-def speak_aloud(text: str) -> bool:
-    """Synthesise with the configured voice and play through the speakers."""
+def speak_aloud(text: str, before: Optional[Callable[[], Any]] = None) -> bool:
+    """Synthesise with the configured voice and play through the speakers.
+
+    *before* -- the chime -- plays once the audio is ready, right before the
+    words and inside the same hold of the floor, so nothing can come between
+    them. It used to sound the moment Sage decided to speak, before the line
+    was written: the gap after it was the writing (for a greeting), the
+    synthesis (6.8 s for a typical 240-character line) and, just after Sage
+    started, the voice model loading -- a morning greeting chimed at 05:25:31
+    and the model finished loading 46 s later, before a word was made. And
+    a voice that failed left a chime with nothing after it. Now a line that
+    cannot be synthesised is never chimed.
+    """
     from openjarvis.core.config import load_config
     from openjarvis.speech.ducking import ducked
-    from openjarvis.speech.player import play_file
+    from openjarvis.speech.player import play_file, speaking
     from openjarvis.speech.providers import server_tts_backend, server_voice_id
     from openjarvis.speech.spoken_text import to_spoken_text
 
@@ -1184,7 +1194,12 @@ def speak_aloud(text: str) -> bool:
         handle.write(result.audio)
         path = handle.name
     try:
-        with ducked():
+        with speaking(), ducked():
+            if before is not None:
+                try:
+                    before()
+                except Exception as exc:  # noqa: BLE001 -- never lose the words
+                    logger.debug("Chime skipped: %s", exc)
             return play_file(path, duck=False, channel="moments")
     finally:
         try:
@@ -1210,7 +1225,7 @@ class MomentEngine:
         config_dir: Optional[Path] = None,
         clock: Callable[[], float] = time.time,
         composer: Callable[[str, Dict[str, str]], str] = compose_with_model,
-        speaker: Callable[[str], bool] = speak_aloud,
+        speaker: Callable[..., bool] = speak_aloud,
         chimer: Callable[[], bool] = chime_now,
         initiative_composer: Callable[[Dict[str, str]], str] = compose_initiative,
         busy_sensor: Optional[Callable[[Any, PresenceSettings], List[str]]] = None,
@@ -1479,12 +1494,9 @@ class MomentEngine:
                         now=now,
                     )
                     self._save()
-            if decision.kinds:
-                # Acknowledge at once; the words follow when written.
-                try:
-                    self._chimer()
-                except Exception as exc:
-                    logger.debug("Chime skipped: %s", exc)
+            # One chime per tick, on the first line actually spoken: the
+            # speaker plays it once the audio is ready (see speak_aloud).
+            chime: Optional[Callable[[], Any]] = self._chimer
             for kind in decision.kinds:
                 context = build_context(
                     kind,
@@ -1512,7 +1524,8 @@ class MomentEngine:
                     )
                     detail = f"model unavailable: {exc}"
                 try:
-                    played = bool(self._speaker(text))
+                    played = bool(self._speaker(text, before=chime))
+                    chime = None
                 except Exception as exc:
                     logger.warning("Moment %s could not be spoken: %s", kind, exc)
                     played = False
@@ -1605,11 +1618,7 @@ class MomentEngine:
         category, line = parse_initiative_reply(state.held_line)
         state.held_line, state.held_at = "", None
         try:
-            self._chimer()
-        except Exception as exc:
-            logger.debug("Chime skipped: %s", exc)
-        try:
-            played = bool(self._speaker(line))
+            played = bool(self._speaker(line, before=self._chimer))
         except Exception as exc:
             logger.warning("Held line could not be spoken: %s", exc)
             played = False

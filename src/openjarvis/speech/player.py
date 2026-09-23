@@ -63,6 +63,10 @@ def _wait_for_the_floor(timeout: float) -> None:
         time.sleep(0.1)
 
 
+#: How many times this thread holds the floor (SPEAKING is re-entrant).
+_holding = threading.local()
+
+
 class speaking:
     """Hold the floor: the lock, and the fact of it for the listeners.
 
@@ -79,8 +83,13 @@ class speaking:
 
     def __enter__(self) -> "speaking":
         global _speakers
-        _wait_for_the_floor(self._wait_for_turn)
+        # Already holding the floor on this thread (the chime inside a
+        # spoken line's hold): do not wait for it again. Waiting there let
+        # a turn the user began after the chime hold the words back.
+        if getattr(_holding, "n", 0) == 0:
+            _wait_for_the_floor(self._wait_for_turn)
         SPEAKING.acquire()
+        _holding.n = getattr(_holding, "n", 0) + 1
         with _state_lock:
             _speakers += 1
         return self
@@ -90,6 +99,7 @@ class speaking:
         with _state_lock:
             _speakers -= 1
             _last_spoke_at = time.monotonic()
+        _holding.n -= 1
         SPEAKING.release()
 
 

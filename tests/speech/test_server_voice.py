@@ -127,3 +127,49 @@ class TestCurrentVoice:
             started = player._voice["started"]
             later = player.current_voice(now=started + 0.4)
             assert later is not None and later["elapsed_ms"] == 400
+
+
+class TestOneHoldForChimeAndWords:
+    """The chime plays inside the spoken line's hold of the floor and its
+    duck. Neither may run again inside: the duck would restore the outer
+    duck's "leftover" volumes, bringing a film back up under the voice, and
+    the floor would make the words wait for a turn begun after the chime."""
+
+    def test_nested_duck_does_nothing(self, monkeypatch) -> None:
+        from openjarvis.speech import ducking
+
+        opened = []
+
+        class _Once:
+            def __init__(self, *a):
+                opened.append(1)
+
+            def __enter__(self):
+                return ["film"]
+
+            def __exit__(self, *exc):
+                return False
+
+        monkeypatch.setattr(ducking, "_duck", _Once)
+        with ducking.ducked() as outer:
+            with ducking.ducked() as inner:
+                assert inner == []
+            assert outer == ["film"]
+        assert opened == [1]
+        # And a later, separate duck is real again.
+        with ducking.ducked():
+            pass
+        assert opened == [1, 1]
+
+    def test_nested_floor_does_not_wait_again(self, monkeypatch) -> None:
+        waits = []
+        monkeypatch.setattr(
+            player, "_wait_for_the_floor", lambda timeout: waits.append(1)
+        )
+        with player.speaking():
+            with player.speaking():
+                pass
+        assert waits == [1]
+        with player.speaking():
+            pass
+        assert waits == [1, 1]

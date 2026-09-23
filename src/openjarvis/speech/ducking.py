@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from typing import Any, Iterator, List, Tuple
@@ -173,6 +174,13 @@ def restore_leftover() -> List[str]:
     return restored
 
 
+#: Ducks already held by this thread. The chime plays inside the spoken
+#: line's duck, and a second duck there would start by restoring the
+#: "leftover" volumes -- the outer duck's own -- bringing the film back up
+#: under the voice for a moment before lowering it again.
+_depth = threading.local()
+
+
 @contextmanager
 def ducked(
     level: float = DEFAULT_LEVEL, fade_ms: int = DEFAULT_FADE_MS
@@ -181,8 +189,26 @@ def ducked(
 
     Yields the names of the apps that were lowered, for the record. Any
     failure leaves the apps as they were and the block still runs: the
-    voice must never depend on the ducking.
+    voice must never depend on the ducking. Inside another duck on the same
+    thread it does nothing: the apps are already down.
     """
+    if getattr(_depth, "n", 0) > 0:
+        _depth.n += 1
+        try:
+            yield []
+        finally:
+            _depth.n -= 1
+        return
+    _depth.n = 1
+    try:
+        with _duck(level, fade_ms) as names:
+            yield names
+    finally:
+        _depth.n = 0
+
+
+@contextmanager
+def _duck(level: float, fade_ms: int) -> Iterator[List[str]]:
     lowered: List[Tuple[Any, float, float]] = []
     names: List[str] = []
     try:

@@ -30,7 +30,7 @@ def engine(tmp_path):
         config_dir=tmp_path,
         clock=lambda: 1_800_000_000.0,
         composer=lambda kind, ctx: kind,
-        speaker=lambda text: True,
+        speaker=lambda text, before=None: True,
         chimer=lambda: True,
         initiative_composer=lambda ctx: "",
         busy_sensor=lambda a, s: [],
