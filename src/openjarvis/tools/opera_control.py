@@ -890,7 +890,9 @@ class YouTubePlayTool(_OperaTool):
                 "'monitor' or 'fullscreen' when the user actually asks to "
                 "see it (words like show, open, put, place, on my second "
                 "monitor, fullscreen). Set 'latest' when they ask for the "
-                "newest/latest/most recent video of a channel. It picks the "
+                "newest/latest/most recent video of a channel, and say in "
+                "'request' what kind of video (e.g. 'race highlights'). It "
+                "picks the "
                 "result that best fits 'request' (the user's own words), not "
                 "just the first, and reports the next best matches; to play "
                 "one of those instead, pass its video_id."
@@ -1025,6 +1027,22 @@ class YouTubePlayTool(_OperaTool):
         resolving the channel answers it exactly; a date-sorted search is the
         fallback for when the channel cannot be found.
         """
+        if latest and youtube_pick.extra_words(request, query):
+            # "The latest F1 race highlight" is not "F1's newest upload":
+            # that was a race-weekend preview (24 September). The newest
+            # results for what was asked, chosen for it, with recency weighed.
+            wanted = " ".join([query, *youtube_pick.extra_words(request, query)[:6]])
+            found = youtube_pick.search(wanted, newest_first=True)
+            seen = {c.video_id for c in found}
+            found += [
+                c
+                for c in youtube_pick.search(query, newest_first=True)
+                if c.video_id not in seen
+            ]
+            ranked = youtube_pick.rank(found, f"{request} {query}", latest=True)
+            if ranked:
+                best = ranked[0]
+                return best.href, best.title, ranked[1 : OTHER_MATCHES + 1]
         if latest:
             channel = _youtube_channel_path(page, query)
             if channel:

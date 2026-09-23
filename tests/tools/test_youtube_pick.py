@@ -109,3 +109,68 @@ class TestRank:
     def test_with_nothing_to_tell_them_apart_youtubes_order_stands(self):
         results = [_candidate(0, "song"), _candidate(1, "song")]
         assert rank(results, "play song")[0].position == 0
+
+
+class TestTheLatestOfAKind:
+    """24 September: "the most latest F1 race highlight, the full race
+    highlight of the twenty twenty six race" played F1's newest upload, a
+    race-weekend preview."""
+
+    def test_what_is_asked_beyond_the_channel_is_found(self):
+        from openjarvis.tools.youtube_pick import extra_words
+
+        request = (
+            "play the most latest f one race highlight of the twenty twenty six race"
+        )
+        assert extra_words(request, "Formula 1") == ["race", "highlight", "2026"]
+        assert extra_words("play the latest kurzgesagt video", "Kurzgesagt") == []
+
+    def test_the_newest_matching_video_beats_the_newest_upload(self):
+        results = [
+            Candidate(
+                "a" * 11,
+                "Weekend Warm-Up | 2026 Azerbaijan Grand Prix",
+                "FORMULA 1",
+                1833,
+                age="7 hours ago",
+                position=0,
+            ),
+            Candidate(
+                "b" * 11,
+                "Drivers Look Ahead To Race Weekend | 2026 Azerbaijan Grand Prix",
+                "FORMULA 1",
+                849,
+                age="5 hours ago",
+                position=1,
+            ),
+            Candidate(
+                "c" * 11,
+                "Race Highlights | 2026 Spanish Grand Prix",
+                "FORMULA 1",
+                485,
+                age="10 days ago",
+                position=2,
+            ),
+            Candidate(
+                "d" * 11,
+                "Race Highlights | 2026 Hungarian Grand Prix",
+                "FORMULA 1",
+                495,
+                age="1 month ago",
+                position=3,
+            ),
+        ]
+        request = (
+            "latest f one race highlight, it should be the full race highlight "
+            "of the twenty twenty six race Formula 1"
+        )
+        best = rank(results, request, latest=True)[0]
+        assert best.title == "Race Highlights | 2026 Spanish Grand Prix"
+
+    def test_ages_are_read_as_days(self):
+        from openjarvis.tools.youtube_pick import age_days
+
+        assert age_days("10 days ago") == 10
+        assert age_days("2 weeks ago") == 14
+        assert age_days("Streamed 3 hours ago") == 3 / 24
+        assert age_days("") is None

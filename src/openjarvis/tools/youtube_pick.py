@@ -27,7 +27,7 @@ _STOPWORDS = frozenset(
     """a an the of to for and or in on at by with from about me my i you your
     play put open watch show find some something video videos youtube yt
     please can could would sage sir hey one that this is it be want wanna
-    like just""".split()
+    like just should it's its want need get give let make""".split()
 )
 
 #: Words asking for a kind of video the scoring otherwise steers away from.
@@ -39,7 +39,6 @@ _WANTS_LONG = frozenset(
         "compilation",
         "hour",
         "hours",
-        "full",
         "playlist",
         "album",
         "podcast",
@@ -128,8 +127,49 @@ def parse_results(markup: str) -> List[Candidate]:
     return found
 
 
-def rank(candidates: Iterable[Candidate], request: str) -> List[Candidate]:
-    """*candidates* best first for what *request* asks for."""
+#: Words that ask for recency, not for any particular video.
+_RECENCY = frozenset(
+    """latest newest recent most new last today yesterday week""".split()
+)
+
+
+def extra_words(request: str, query: str) -> List[str]:
+    """What *request* asks for beyond *query* and recency: "race highlight"
+    in "the latest F1 race highlight" when the query is only the channel."""
+    have = _words(query)
+    return [
+        word
+        for word in dict.fromkeys(
+            re.findall(r"[a-z0-9]+", _spoken_numbers((request or "").lower()))
+        )
+        if _stem(word) not in have
+        and word not in _STOPWORDS
+        and word not in _RECENCY
+        and len(word) > 2
+    ]
+
+
+def age_days(age: str) -> Optional[float]:
+    """Days since "10 days ago", "2 weeks ago", "Streamed 3 hours ago"."""
+    match = re.search(r"(\d+)\s+(minute|hour|day|week|month|year)", (age or "").lower())
+    if not match:
+        return None
+    per = {
+        "minute": 1 / 1440,
+        "hour": 1 / 24,
+        "day": 1,
+        "week": 7,
+        "month": 30,
+        "year": 365,
+    }
+    return int(match.group(1)) * per[match.group(2)]
+
+
+def rank(
+    candidates: Iterable[Candidate], request: str, *, latest: bool = False
+) -> List[Candidate]:
+    """*candidates* best first for what *request* asks for; with *latest*,
+    newer uploads gain over older ones that match as well."""
     words = _words(request)
     live_words = {_stem(word) for word in _WANTS_LIVE}
     short_words = {_stem(word) for word in _WANTS_SHORT}
@@ -145,9 +185,14 @@ def rank(candidates: Iterable[Candidate], request: str) -> List[Candidate]:
         channel_words = _words(candidate.channel)
         score = 0.0
         if wanted:
-            in_title = len(wanted & title_words) / len(wanted)
-            in_either = len(wanted & (title_words | channel_words)) / len(wanted)
-            score += 4.0 * in_title + 2.0 * in_either
+            # Counted, not shared out: a long spoken request ("it should be
+            # the full race highlight of the ...") diluted a share until two
+            # words that mattered counted for nothing. Capped at three, so a
+            # title that happens to repeat the request's filler cannot run
+            # away with it.
+            in_title = min(3, len(wanted & title_words))
+            in_channel = min(1, len(wanted & (channel_words - title_words)))
+            score += 1.6 * in_title + 0.6 * in_channel
         channel_flat = _flat(candidate.channel)
         if len(channel_flat) >= 4 and channel_flat in request_flat:
             score += 3.0
@@ -167,6 +212,10 @@ def rank(candidates: Iterable[Candidate], request: str) -> List[Candidate]:
                 score += 1.0
         if candidate.views:
             score += 0.15 * math.log10(candidate.views + 1)
+        if latest:
+            days = age_days(candidate.age)
+            if days is not None:
+                score -= 0.6 * math.log10(days + 1)
         # YouTube's own order, as the tie-break it is good at.
         score -= 0.25 * candidate.position
         candidate.score = round(score, 3)
@@ -177,13 +226,16 @@ def rank(candidates: Iterable[Candidate], request: str) -> List[Candidate]:
 
 
 _SEARCH_URL = "https://www.youtube.com/results?search_query="
+_BY_UPLOAD_DATE = "&sp=CAI%3D"
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/140.0 Safari/537.36"
 )
 
 
-def search(query: str, timeout: float = 5.0) -> List[Candidate]:
+def search(
+    query: str, timeout: float = 5.0, *, newest_first: bool = False
+) -> List[Candidate]:
     """YouTube's results for *query*, read without the browser. Empty on
     any failure: the caller falls back to the results page in Opera."""
     import urllib.parse
@@ -192,7 +244,9 @@ def search(query: str, timeout: float = 5.0) -> List[Candidate]:
 
     try:
         response = httpx.get(
-            _SEARCH_URL + urllib.parse.quote_plus(query),
+            _SEARCH_URL
+            + urllib.parse.quote_plus(query)
+            + (_BY_UPLOAD_DATE if newest_first else ""),
             headers={"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9"},
             timeout=timeout,
             follow_redirects=True,
@@ -240,10 +294,34 @@ def _count(text: str) -> Optional[int]:
     return int(digits) if digits else None
 
 
+_UNITS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+}
+
+
+def _spoken_numbers(text: str) -> str:
+    """ "twenty twenty six" is how 2026 is said, and "f one" how F1 is:
+    transcribed speech never matched a title that wrote them as digits."""
+    text = re.sub(
+        r"\btwenty\s+twenty(?:[\s-]+(one|two|three|four|five|six|seven|eight|nine))?\b",
+        lambda m: str(2020 + _UNITS.get(m.group(1) or "", 0)),
+        text,
+    )
+    return re.sub(r"\bf\s+one\b", "f1", text)
+
+
 def _words(text: str) -> set[str]:
     return {
         _stem(word)
-        for word in re.findall(r"[a-z0-9]+", (text or "").lower())
+        for word in re.findall(r"[a-z0-9]+", _spoken_numbers((text or "").lower()))
         if word not in _STOPWORDS and len(word) > 1
     }
 
@@ -272,4 +350,4 @@ def _short_count(value: int) -> str:
     return str(value)
 
 
-__all__ = ["Candidate", "parse_results", "rank", "search"]
+__all__ = ["Candidate", "age_days", "extra_words", "parse_results", "rank", "search"]
