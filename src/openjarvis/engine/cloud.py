@@ -5,12 +5,14 @@ OpenAI, Anthropic, Google, MiniMax, and DeepSeek API backends.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, Dict, List, Tuple
 
 import httpx
@@ -228,6 +230,58 @@ def _is_openai_reasoning_model(model: str) -> bool:
     if m == "gpt-5-mini" or m.startswith("gpt-5-mini-"):
         return True
     return any(tier in m for tier in ("-sol", "-terra", "-luna"))
+
+
+_END = object()
+
+
+async def _off_loop(start: Callable[[], AsyncIterator[Any]]) -> AsyncIterator[Any]:
+    """Run a provider stream on a thread of its own, handing items back.
+
+    The providers' streaming here is written as async generators over their
+    synchronous SDK clients: every wait for the next token blocked the event
+    loop. On 23 September a one-line answer took 3.6 s to its first word,
+    and while it waited the whole server stood still -- a 50 ms status
+    request took up to 15 s, and with it the TTS relay, the Flux relay and
+    the orb's voice stream. The stream now runs on a worker thread with a
+    loop of its own; this side only awaits a queue. Stopping early (the
+    user interrupted) stops the worker at its next item.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    stop = threading.Event()
+
+    def put(item: Any) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+
+    def run() -> None:
+        async def pump() -> None:
+            agen = start()
+            try:
+                async for item in agen:
+                    if stop.is_set():
+                        break
+                    put(item)
+            finally:
+                await agen.aclose()
+
+        try:
+            asyncio.run(pump())
+            put(_END)
+        except BaseException as exc:  # noqa: BLE001 -- handed to the caller
+            put(exc)
+
+    threading.Thread(target=run, name="cloud-stream", daemon=True).start()
+    try:
+        while True:
+            item = await queue.get()
+            if item is _END:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        stop.set()
 
 
 def _reasoning_effort_for(create_kwargs: Dict[str, Any]) -> str:
@@ -1214,6 +1268,26 @@ class CloudEngine(InferenceEngine):
         max_tokens: int = 1024,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
+        async for token in _off_loop(
+            lambda: self._stream_on_thread(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
+        ):
+            yield token
+
+    async def _stream_on_thread(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
         kw = dict(
             model=model,
             temperature=temperature,
@@ -1720,6 +1794,9 @@ class CloudEngine(InferenceEngine):
             ),
                 "max_completion_tokens": max_tokens,
                 "stream": True,
+                # The last chunk then carries usage, cached tokens included:
+                # the only way to see whether the prompt cache is serving.
+                "stream_options": {"include_usage": True},
                 **kwargs,
             }
             if not _is_openai_reasoning_model(model):
@@ -1728,6 +1805,19 @@ class CloudEngine(InferenceEngine):
                 create_kwargs["reasoning_effort"] = _reasoning_effort_for(create_kwargs)
         resp = client.chat.completions.create(**create_kwargs)
         for chunk in resp:
+            usage = getattr(chunk, "usage", None)
+            if usage is not None and not chunk.choices:
+                details = getattr(usage, "prompt_tokens_details", None)
+                yield StreamChunk(
+                    usage={
+                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                        "completion_tokens": (
+                            getattr(usage, "completion_tokens", 0) or 0
+                        ),
+                        "cached_tokens": getattr(details, "cached_tokens", 0) or 0,
+                    }
+                )
+                continue
             choice = chunk.choices[0] if chunk.choices else None
             if not choice:
                 continue
@@ -1851,6 +1941,26 @@ class CloudEngine(InferenceEngine):
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Yield StreamChunks with content, tool_calls, and finish_reason."""
+        async for chunk in _off_loop(
+            lambda: self._stream_full_on_thread(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
+        ):
+            yield chunk
+
+    async def _stream_full_on_thread(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        **kwargs: Any,
+    ) -> AsyncIterator[StreamChunk]:
         kw = dict(
             model=model,
             temperature=temperature,
