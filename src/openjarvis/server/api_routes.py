@@ -761,6 +761,11 @@ async def wake_word_stream(websocket: WebSocket):
                         if verdict.confirmed:
                             break
                 if verdict is not None and not verdict.confirmed:
+                    # Reset before saying so: told first, the page (and a
+                    # test) could act on "rejected" while the detector still
+                    # held the rejected phrase's window.
+                    ring.clear()
+                    await asyncio.to_thread(detector.reset)
                     await websocket.send_json(
                         {
                             "type": "rejected",
@@ -770,8 +775,6 @@ async def wake_word_stream(websocket: WebSocket):
                             "strict": verdict.strict,
                         }
                     )
-                    ring.clear()
-                    await asyncio.to_thread(detector.reset)
                     continue
                 # The conversation has started, so open the Cartesia socket
                 # now rather than when the reply is ready to speak: the
