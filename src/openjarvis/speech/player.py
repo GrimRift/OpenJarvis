@@ -269,11 +269,17 @@ def play_file(audio_path: str, *, duck: bool = True, channel: str = "moments") -
     # Measured before taking the floor, so the voice is not held up by it
     # once it has the floor.
     envelope = None if channel in _SILENT_CHANNELS else voice_envelope(audio_path)
+    # The voice is marked only once the other apps are down: marking it
+    # first started the orb's envelope before the 300 ms fade, and a
+    # scheduled task's answer on 23 September had the orb talking about
+    # 0.4 s ahead of the words. speak_aloud (moments) ducks before calling
+    # in here, which is why its orb was in time and the reminders' was not.
     with speaking():
-        with voice(channel, envelope):
-            if not duck:
+        if not duck:
+            with voice(channel, envelope):
                 return _play(audio_path, volume)
-            with ducked():
+        with ducked():
+            with voice(channel, envelope):
                 return _play(audio_path, volume)
 
 

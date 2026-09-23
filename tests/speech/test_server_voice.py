@@ -95,6 +95,31 @@ class TestCurrentVoice:
         assert during["envelope"] and len(during["envelope"]) == 5
         assert player.current_voice() is None
 
+    def test_marked_once_the_other_apps_are_down(self, tmp_path, monkeypatch) -> None:
+        """23 September: the voice was marked before the 300 ms duck fade,
+        so the orb's envelope ran about 0.4 s ahead of the words."""
+        import contextlib
+
+        import openjarvis.speech.ducking as ducking
+
+        clip = _wav(tmp_path / "v.wav", [(0.1, 0.5)])
+        order = []
+
+        @contextlib.contextmanager
+        def slow_duck(*a, **k):
+            order.append(("ducked", player.current_voice()))
+            yield []
+
+        def fake_play(path, volume=1.0):
+            order.append(("play", player.current_voice()))
+            return True
+
+        monkeypatch.setattr(ducking, "ducked", slow_duck)
+        monkeypatch.setattr(player, "_play", fake_play)
+        player.play_file(str(clip), channel="reminders")
+        assert order[0] == ("ducked", None)
+        assert order[1][0] == "play" and order[1][1]["elapsed_ms"] < 50
+
     def test_a_chime_is_not_speech(self, tmp_path, monkeypatch) -> None:
         clip = _wav(tmp_path / "c.wav", [(0.1, 0.5)])
         seen = {}
