@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PanelRight } from 'lucide-react';
-import { InputArea } from '../components/Chat/InputArea';
+import { ComposerSlot } from '../components/Chat/ComposerSlot';
 import { OrbVisual, useOrbGenerating, useOrbState } from '../components/Chat/OrbVisual';
 import { VoiceTranscript } from '../components/Chat/VoiceTranscript';
 import { useAppStore } from '../lib/store';
@@ -58,7 +58,7 @@ export function VoicePage() {
 
         {/* Controls only — this surface is spoken, not typed. */}
         <div className="mt-8 flex items-center gap-3">
-          <InputArea voiceOnly />
+          <ComposerSlot voice />
           <button
             type="button"
             onClick={() => setShowTranscript((v) => !v)}

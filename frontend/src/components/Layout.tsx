@@ -4,6 +4,7 @@ import { ApprovalBell } from './ApprovalBell';
 import { Sidebar } from './Sidebar/Sidebar';
 import { SystemPulse } from './SystemPulse';
 import { useAppStore } from '../lib/store';
+import { PersistentComposer } from './Chat/PersistentComposer';
 import { checkHealth } from '../lib/api';
 
 export function Layout() {
@@ -67,6 +68,9 @@ export function Layout() {
           <div className="flex-1 flex flex-col min-w-0 min-h-0 relative z-[2]">
             <Outlet />
           </div>
+          {/* One message box for every page: it owns the microphone, so a
+              page change must not remount it (lib/composer-slot.ts). */}
+          <PersistentComposer />
         </main>
       </div>
     </div>

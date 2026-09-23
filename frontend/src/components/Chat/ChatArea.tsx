@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { orbStateLabel as labelFor } from '../../lib/orb-state';
 import { useNavigate } from 'react-router';
 import { MessageBubble } from './MessageBubble';
-import { InputArea } from './InputArea';
+import { ComposerSlot } from './ComposerSlot';
 import { StreamingDots } from './StreamingDots';
 import { OrbVisual, useOrbGenerating, useOrbState } from './OrbVisual';
 
@@ -214,7 +214,7 @@ export function ChatArea() {
           <OrbVisual state={orbState} size={CHAT_ORB_SIZE} />
         </div>
       )}
-      <InputArea />
+      <ComposerSlot />
     </div>
   );
 }
