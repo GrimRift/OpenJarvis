@@ -14,6 +14,10 @@ Three sources, merged:
 * the class schedule -- instructors and subject names, read from the local
   file, so "Revilloza" is not a lottery.
 * the user's own list, edited in Settings and kept in ``keyterms.json``.
+* names learned from what Sage remembers -- the people, channels, games and
+  programs the user talks about. A friend's words came back wrong often
+  enough to rate the voice 5/10 (24 September), and the names that matter
+  are already in memory: Kurzgesagt, AutoCAD, Revit, Arthur Nery.
 
 Boosting is not free: every term makes the recogniser likelier to hear that
 word where it isn't, so the list is capped and short ambiguous words are
@@ -35,7 +39,7 @@ logger = logging.getLogger(__name__)
 #: Deepgram accepts repeated ``keyterm`` params; this is a self-imposed
 #: ceiling. Past it the URL grows and every extra word is another chance to
 #: mishear something as that word.
-MAX_TERMS = 60
+MAX_TERMS = 80
 
 #: Terms shorter than this are left out: a boosted two-letter word turns up
 #: everywhere. Tagalog "po" and "at" are exactly the trap.
@@ -158,15 +162,90 @@ def from_class_schedule(path: Optional[Path] = None) -> List[str]:
     return clean(found)
 
 
+#: Most names taken from memory: the rest of the cap stays for what the user
+#: chose and the schedule.
+MAX_LEARNED = 20
+
+#: Capitalised in any sentence, never names.
+_NOT_NAMES = frozenset(
+    """sage sir mark monday tuesday wednesday thursday friday saturday sunday
+    mondays tuesdays wednesdays thursdays fridays saturdays sundays january
+    february march april june july august september october november december
+    english filipino tagalog philippines philippine user today tomorrow""".split()
+)
+
+_WORD = r"[A-Z][a-z]+(?:[A-Z][A-Za-z]*)?"  # "Revit", "AutoCAD", "OpenJarvis"
+# Up to four capitalised words, joined as titles are ("Lord of the
+# Mysteries"), and a trailing number ("Formula 1"). Split, "Lord" alone would
+# be boosted everywhere.
+_NAME = re.compile(
+    rf"\b{_WORD}(?:\s+(?:(?:of|the)\s+)*{_WORD}){{0,3}}(?:\s+\d{{1,2}}\b)?"
+)
+
+
+def from_memory(
+    config_dir: Optional[Path] = None, known: Optional[List[str]] = None
+) -> List[str]:
+    """Names the user talks about, from the facts Sage remembers.
+
+    A word counts as a name when it is capitalised mid-sentence and never
+    written in lower case anywhere in memory -- "Project" and "Course" are
+    both, "Kurzgesagt" and "Revit" never are. Private and removed facts are
+    left out: the list is sent to Deepgram. Most frequent first.
+    """
+    path = (config_dir or DEFAULT_CONFIG_DIR) / "memory_facts.jsonl"
+    texts: List[str] = []
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    fact = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(fact, dict):
+                    continue
+                if fact.get("private") or fact.get("removed_at"):
+                    continue
+                text = str(fact.get("text") or "")
+                if text:
+                    texts.append(text)
+    except OSError:
+        return []
+    lower_words = {
+        word for text in texts for word in re.findall(r"\b[a-z][a-z]+\b", text)
+    }
+    counts: dict[str, int] = {}
+    order: List[str] = []
+    for text in texts:
+        for sentence in re.split(r"(?<=[.!?;:])\s+|\n+", text):
+            for match in _NAME.finditer(sentence):
+                if match.start() == 0:
+                    continue  # the first word of a sentence is capitalised anyway
+                name = match.group(0)
+                words = [word for word in name.split() if word[:1].isupper()]
+                if any(word.lower() in _NOT_NAMES for word in words):
+                    continue
+                if any(word.lower() in lower_words for word in words):
+                    continue
+                if name not in counts:
+                    order.append(name)
+                counts[name] = counts.get(name, 0) + 1
+    ranked = sorted(order, key=lambda name: (-counts[name], order.index(name)))
+    # Names already boosted from elsewhere would only use up the slots.
+    listed = {term.lower() for term in known or []}
+    return [name for name in clean(ranked) if name.lower() not in listed][
+        :MAX_LEARNED
+    ]
+
+
 def all_terms(config_dir: Optional[Path] = None) -> List[str]:
     """Everything Deepgram should be told to expect, in priority order.
 
     Built-ins first so the name can never be crowded out by a long user list
-    hitting the cap.
+    hitting the cap; names learned from memory last, since they are guesses.
     """
-    merged = clean(
-        list(BUILT_IN) + load_user_terms(config_dir) + from_class_schedule()
-    )
+    chosen = list(BUILT_IN) + load_user_terms(config_dir) + from_class_schedule()
+    merged = clean(chosen + from_memory(config_dir, known=chosen))
     return merged[:MAX_TERMS]
 
 
@@ -177,6 +256,7 @@ __all__ = [
     "all_terms",
     "clean",
     "from_class_schedule",
+    "from_memory",
     "keyterms_path",
     "load_user_terms",
     "save_user_terms",

@@ -8,6 +8,8 @@ list, and that boosting stays narrow enough not to make things worse.
 
 from __future__ import annotations
 
+import json
+
 from openjarvis.speech import keyterms
 from openjarvis.speech.flux import KEYTERMS, build_url
 
@@ -84,3 +86,50 @@ class TestTheStoredList:
     def test_the_whole_list_is_capped(self, tmp_path):
         keyterms.save_user_terms([f"word{i}" for i in range(200)], tmp_path)
         assert len(keyterms.all_terms(tmp_path)) <= keyterms.MAX_TERMS
+
+
+class TestLearnedFromMemory:
+    """Names the user talks about are already in memory; Deepgram should
+    expect them (24 September: a friend's words came back wrong)."""
+
+    def _facts(self, tmp_path, *facts):
+        lines = [json.dumps(fact) for fact in facts]
+        (tmp_path / "memory_facts.jsonl").write_text("\n".join(lines), encoding="utf-8")
+
+    def test_names_come_from_what_sage_remembers(self, tmp_path):
+        self._facts(
+            tmp_path,
+            {"text": "Mark watches Kurzgesagt and works in AutoCAD and Revit."},
+            {"text": "He is reading Lord of the Mysteries this term."},
+        )
+        learned = keyterms.from_memory(tmp_path)
+        assert {"Kurzgesagt", "AutoCAD", "Revit", "Lord of the Mysteries"} <= set(
+            learned
+        )
+        assert "Lord" not in learned
+
+    def test_ordinary_words_are_not_names(self, tmp_path):
+        # "Project" is also written "project"; the first word of a sentence
+        # and the days of the week are capitalised anyway.
+        self._facts(
+            tmp_path,
+            {"text": "Mark has a Project due. The project is late."},
+            {"text": "Classes are on Mondays with Revilloza."},
+        )
+        learned = keyterms.from_memory(tmp_path)
+        assert "Project" not in learned and "Mark" not in learned
+        assert "Mondays" not in learned
+        assert "Revilloza" in learned
+
+    def test_private_and_removed_facts_are_never_sent(self, tmp_path):
+        self._facts(
+            tmp_path,
+            {"text": "He banks with Metrobank.", "private": True},
+            {"text": "He used Figma once.", "removed_at": 1790000000},
+        )
+        assert keyterms.from_memory(tmp_path) == []
+
+    def test_names_already_boosted_do_not_use_up_the_slots(self, tmp_path):
+        self._facts(tmp_path, {"text": "He studies in Calamba and plays Steam games."})
+        learned = keyterms.from_memory(tmp_path, known=list(keyterms.BUILT_IN))
+        assert "Calamba" not in learned and "Steam" in learned
