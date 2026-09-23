@@ -2509,3 +2509,80 @@ class TestAFollowUpNotMeantForSageIsDeclined:
         body, seen = self._stream(["Yes, Sir."], followup=False)
         assert self._content(body) == "Yes, Sir."
         assert not any("Addressee check" in (m.content or "") for m in seen[0])
+
+
+class TestALongReplyIsNotCutShort:
+    """23 September: "do a deep research about our sun" stopped three times,
+    at the agent's own 1,024-token ceiling, and each continuation began
+    "Sir, continuing from..." glued onto a cut sentence."""
+
+    def _stream(self, rounds):
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        class _Tool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="tell_me_when",
+                    description="x",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(tool_name="tell_me_when", content="ok", success=True)
+
+        engine = _make_engine(content="unused")
+        budgets: list = []
+
+        async def mock_stream_full(messages, *, model, max_tokens=None, **kwargs):
+            budgets.append(max_tokens)
+            text, finish = rounds[len(budgets) - 1]
+            yield StreamChunk(content=text)
+            yield StreamChunk(finish_reason=finish, usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_Tool()],
+            bus=EventBus(),
+            max_turns=2,
+            temperature=0.7,
+            max_tokens=1024,
+            system_prompt="x",
+        )
+        app = create_app(
+            engine, "test-model", agent=agent, bus=EventBus(), config=_test_config()
+        )
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "tell me about the sun"}],
+                "stream": True,
+                "max_tokens": 4096,
+            },
+        )
+        assert resp.status_code == 200
+        text = ""
+        for line in resp.text.split("\n"):
+            if line.startswith("data:") and '"content"' in line:
+                for choice in json.loads(line[5:].strip()).get("choices", []):
+                    text += (choice.get("delta") or {}).get("content") or ""
+        return text, budgets
+
+    def test_the_requested_budget_reaches_the_model(self):
+        _, budgets = self._stream([("The Sun is a star.", "stop")])
+        assert budgets == [4096]
+
+    def test_a_continuation_joins_without_its_announcement(self):
+        text, _ = self._stream(
+            [
+                ("Early Earth had liquid water despite", "length"),
+                ("Sir, continuing from the faint Sun:\n\na fainter Sun.", "stop"),
+            ]
+        )
+        assert text == "Early Earth had liquid water despite a fainter Sun."

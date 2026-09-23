@@ -17,6 +17,8 @@ from openjarvis.core import activity
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.types import Message, Role, ToolCall
 from openjarvis.server.addressee import IgnoreWatch
+from openjarvis.server.continuation import CONTINUE_PROMPT, seam
+from openjarvis.server.continuation import HOLD_CHARS as CONTINUATION_HOLD_CHARS
 from openjarvis.server.model_capabilities import is_embed_only_model
 from openjarvis.server.models import (
     ChatCompletionChunk,
@@ -1207,6 +1209,11 @@ async def _handle_streaming_orchestrator(
         # A follow-up voice turn may be declined with the marker; its first
         # words are held until they show whether they are it.
         watch = IgnoreWatch() if getattr(req, "voice_followup", False) else None
+        # The agent's own ceiling is the config default, 1,024: every web
+        # reply, deep research included, stopped there -- thinking tokens
+        # counted -- while Settings asked for 4,096 and the complexity score
+        # for more. The request carries both.
+        budget = max(int(agent._max_tokens or 0), int(req.max_tokens or 0))
         total_prompt_tokens = 0
         total_completion_tokens = 0
         turns = 0
@@ -1241,7 +1248,7 @@ async def _handle_streaming_orchestrator(
                     messages,
                     model=model or agent._model,
                     temperature=agent._temperature,
-                    max_tokens=agent._max_tokens,
+                    max_tokens=budget,
                     **stream_kwargs,
                 ):
                     if stream_chunk.content:
@@ -1489,32 +1496,39 @@ async def _handle_streaming_orchestrator(
                     if finish_reason != "length":
                         break
                     messages.append(Message(role=Role.ASSISTANT, content=full_content))
-                    messages.append(
-                        Message(
-                            role=Role.USER,
-                            content="Continue from where you left off.",
-                        )
-                    )
+                    messages.append(Message(role=Role.USER, content=CONTINUE_PROMPT))
                     finish_reason = "stop"
                     continuation = ""
+                    # Held until the seam can be judged: the model announces
+                    # that it is continuing, or writes the last stretch again.
+                    held = ""
+                    joined = False
+
+                    def _content(text: str) -> str:
+                        chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            model=model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=text))],
+                        )
+                        return f"data: {chunk.model_dump_json()}\n\n"
+
                     async for stream_chunk in agent._engine.stream_full(
                         messages,
                         model=model or agent._model,
                         temperature=agent._temperature,
-                        max_tokens=agent._max_tokens,
+                        max_tokens=budget,
                     ):
                         if stream_chunk.content:
-                            continuation += stream_chunk.content
-                            content_chunk = ChatCompletionChunk(
-                                id=chunk_id,
-                                model=model,
-                                choices=[
-                                    StreamChoice(
-                                        delta=DeltaMessage(content=stream_chunk.content)
-                                    )
-                                ],
-                            )
-                            yield f"data: {content_chunk.model_dump_json()}\n\n"
+                            if joined:
+                                continuation += stream_chunk.content
+                                yield _content(stream_chunk.content)
+                            else:
+                                held += stream_chunk.content
+                                if len(held) >= CONTINUATION_HOLD_CHARS:
+                                    joined = True
+                                    continuation = seam(full_content, held)
+                                    if continuation:
+                                        yield _content(continuation)
                         if stream_chunk.finish_reason:
                             finish_reason = stream_chunk.finish_reason
                         if stream_chunk.usage:
@@ -1524,6 +1538,10 @@ async def _handle_streaming_orchestrator(
                             total_completion_tokens += int(
                                 stream_chunk.usage.get("completion_tokens", 0) or 0
                             )
+                    if not joined and held:
+                        continuation = seam(full_content, held)
+                        if continuation:
+                            yield _content(continuation)
                     full_content += continuation
                 break
             else:
