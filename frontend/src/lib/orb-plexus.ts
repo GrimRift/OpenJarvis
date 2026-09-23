@@ -385,8 +385,17 @@ const TETHER = 1.2e-4;
  *        and its fan flared hard enough to read as a glitch.
  * edge   where the canvas's soft edge begins, as a fraction of its half
  *        width. The thorns are what reach it.
+ * regions how many patches may throw thorns at once: the ones the last
+ *        sharp syllables lit. Each syllable lights two patches and they fade
+ *        slowly, so through fast speech nearly all ten stayed lit and thorns
+ *        fired from every side at once -- "too overwhelming" (24 September).
+ * cap    the most one onset may throw: a shout throws no further than a
+ *        firm syllable, so a loud stretch reads as lively, not an explosion.
  */
-export const PLEXUS_THORNS = { rise: 0.15, kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 3, edge: 0.96 };
+export const PLEXUS_THORNS = {
+  rise: 0.15, kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 3, edge: 0.96,
+  regions: 4, cap: 1.6,
+};
 
 const RAMP_STOPS: Array<[number, number, number, number]> = [
   [0, 10, 76, 107],
@@ -484,6 +493,8 @@ export interface PlexusState {
   pulse: number; lastSpeech: number; voiceEnv: number;
   /** What is left of the last sharp onset's throw: see PLEXUS_THORNS. */
   thornPulse: number;
+  /** The patches allowed to throw thorns, most recently lit first. */
+  thornLobes: number[];
   lobes: number[];
   lobeTargets: number[];
   lobeAxes: Array<[number, number, number]>;
@@ -635,7 +646,7 @@ export function createPlexusState(): PlexusState {
     radius: PLEXUS_STATES.idle.r, flow: PLEXUS_STATES.idle.flow, bright: PLEXUS_STATES.idle.bright,
     links: PLEXUS_STATES.idle.links,
     look: { ...PLEXUS_LOOK.states.idle },
-    pulse: 0, lastSpeech: 0, voiceEnv: 0, thornPulse: 0,
+    pulse: 0, lastSpeech: 0, voiceEnv: 0, thornPulse: 0, thornLobes: [],
     lobes: new Array(LOBES).fill(0.8),
     lobeTargets: new Array(LOBES).fill(0.8),
     lobeAxes: axes,
@@ -882,7 +893,10 @@ export function drawPlexus(
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
   S.pulse = Math.max(S.pulse * Math.pow(0.88, dt), rise * 4.5);
-  S.thornPulse = Math.max(S.thornPulse * Math.pow(0.88, dt), rise > PLEXUS_THORNS.rise ? rise * 4.5 : 0);
+  S.thornPulse = Math.max(
+    S.thornPulse * Math.pow(0.88, dt),
+    rise > PLEXUS_THORNS.rise ? Math.min(PLEXUS_THORNS.cap, rise * 4.5) : 0,
+  );
 
   // Each patch has a target it swells toward rather than a level set
   // outright. A syllable used to raise the level in a single frame, which
@@ -926,6 +940,12 @@ export function drawPlexus(
     S.lobeTargets[other] = Math.max(S.lobeTargets[other], patch.base + rise * patch.kick * 0.5);
     S.lastHit = hit;
     S.lastOther = other;
+    if (rise > PLEXUS_THORNS.rise) {
+      // The thorns follow the syllables: these two patches, then the ones
+      // the syllables before them lit, and no more than that.
+      const recent = [hit, other, ...S.thornLobes.filter((i) => i !== hit && i !== other)];
+      S.thornLobes = recent.slice(0, PLEXUS_THORNS.regions);
+    }
   }
 
   const sparkStep = dt / PLEXUS_SPARKS.length;
@@ -982,6 +1002,8 @@ export function drawPlexus(
   const fA = tw * 0.011, fB = tw * 0.014, fC = tw * 0.009;
   const flow = FLOW * S.flow;
   const kick = S.spikes && S.thornPulse > 0.02 ? S.thornPulse * PLEXUS_THORNS.kick : 0;
+  const thornLobe = new Array<boolean>(LOBES).fill(false);
+  for (const i of S.thornLobes) thornLobe[i] = true;
 
   // Only the nodes are simulated. The dust is fixed in the body and rides a
   // turn of its own, so the grain belongs to the surface for none of the
@@ -1019,7 +1041,8 @@ export function drawPlexus(
     // here they would raise thorns wherever they flashed.
     const patchLight = S.lobes[p.lobeA] * p.lobeW + S.lobes[p.lobeB] * (1 - p.lobeW);
     const lit = Math.min(2, Math.max(0, (patchLight - 0.85) * 2.5));
-    const focus = 1 - PLEXUS_THORNS.focus + PLEXUS_THORNS.focus * lit;
+    const thornOk = thornLobe[p.lobeW >= 0.5 ? p.lobeA : p.lobeB] ? 1 : 0;
+    const focus = (1 - PLEXUS_THORNS.focus + PLEXUS_THORNS.focus * lit) * thornOk;
     const wave = kick * (0.45 + 0.9 * p.heat) * (1 - 0.5 * p.home) * focus * dt;
     const radial = (spring + wave) / dist;
     p.vx += p.x * radial;

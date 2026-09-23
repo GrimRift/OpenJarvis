@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_SPARKS, PLEXUS_LOOK, PLEXUS_PATCHES, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
+import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_SPARKS, PLEXUS_THORNS, PLEXUS_LOOK, PLEXUS_PATCHES, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -466,5 +466,33 @@ describe('speaking lights', () => {
       lit = Math.max(lit, S.particles.filter((p) => p.spark > 0).length);
     });
     expect(lit).toBe(0);
+  });
+});
+
+describe('the thorns in loud, fast speech', () => {
+  // 24 September: thorns fired from every side at once, "too overwhelming".
+  // Every patch a syllable lit stayed lit through fast speech, and each
+  // threw. Only the few the latest syllables lit may throw now.
+  it('rise from a few regions at a time, not all sides', () => {
+    resetRecord();
+    const target = stubContext(shared);
+    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+    const S = createPlexusState();
+    S.spikes = true;
+    let most = 0;
+    let thrownFrames = 0;
+    for (let f = 0; f < 600; f++) {
+      // A sharp, loud syllable every 8 frames: fast, emphatic speech.
+      drawPlexus(target, canvas, S, 'speaking', f, 1, (f % 8) < 3 ? 1 : 0.1);
+      const regions = new Set(
+        S.particles
+          .filter((p) => p.out > 0.05)
+          .map((p) => (p.lobeW >= 0.5 ? p.lobeA : p.lobeB)),
+      );
+      if (regions.size > 0) thrownFrames++;
+      most = Math.max(most, regions.size);
+    }
+    expect(thrownFrames).toBeGreaterThan(0); // still lively
+    expect(most).toBeLessThanOrEqual(PLEXUS_THORNS.regions + 2);
   });
 });
