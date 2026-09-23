@@ -1562,6 +1562,15 @@ async def apply_system_fix(fix_id: str, confirmed: bool = False):
 
 presence_router = APIRouter(prefix="/v1/presence", tags=["presence"])
 
+# Every call into the presence monitor or the moment engine below goes
+# through a worker thread. The engine holds its lock for a whole moment --
+# writing the line, synthesising it, playing it, 15 s and more -- and these
+# handlers run on the event loop: the page's constant poll of /moments sat
+# on that lock and froze the entire server for the length of every moment
+# (23 September: a 0.2 s request took 10.5 s, and the voice stream never
+# told the page Sage was speaking, so the orb stayed still). A poll that
+# changes state can also run a whole moment on the calling thread.
+
 
 @presence_router.get("")
 async def presence_state(request: Request):
@@ -1573,7 +1582,7 @@ async def presence_state(request: Request):
     monitor = getattr(request.app.state, "presence_monitor", None)
     if monitor is None:
         return {"state": "disabled", "reason": "presence monitor not running"}
-    return monitor.snapshot().to_dict()
+    return (await asyncio.to_thread(monitor.snapshot)).to_dict()
 
 
 @presence_router.get("/voice")
@@ -1710,7 +1719,7 @@ async def update_presence_settings(request: Request):
     monitor = getattr(request.app.state, "presence_monitor", None)
     if monitor is not None:
         # Reflect the new switch immediately rather than at the next poll.
-        monitor.poll()
+        await asyncio.to_thread(monitor.poll)
     return settings.to_dict()
 
 
@@ -1740,7 +1749,7 @@ async def presence_moments(request: Request, since: float = 0):
     engine = getattr(request.app.state, "moment_engine", None)
     if engine is None:
         return {"running": False, "snoozed_today": False, "watches": [], "history": []}
-    data = engine.snapshot()
+    data = await asyncio.to_thread(engine.snapshot)
     if since:
         data["history"] = [h for h in data["history"] if h["at"] > since]
     return data
@@ -1764,15 +1773,16 @@ async def presence_moments_snooze(request: Request):
             or minutes <= 0
         ):
             raise HTTPException(status_code=400, detail="minutes must be positive")
-        until = engine.snooze_for(float(minutes) * 60)
-        return {"snoozed_today": engine.snoozed_today(), "snoozed_until": until}
+        until = await asyncio.to_thread(engine.snooze_for, float(minutes) * 60)
+        today = await asyncio.to_thread(engine.snoozed_today)
+        return {"snoozed_today": today, "snoozed_until": until}
     snoozed = body.get("snoozed")
     if not isinstance(snoozed, bool):
         raise HTTPException(status_code=400, detail="snoozed must be a boolean")
     if snoozed:
-        engine.snooze_today(True)
+        await asyncio.to_thread(engine.snooze_today, True)
     else:
-        engine.resume()
+        await asyncio.to_thread(engine.resume)
     return {"snoozed_today": snoozed}
 
 
@@ -1781,7 +1791,7 @@ async def presence_cancel_watch(watch_id: str, request: Request):
     engine = getattr(request.app.state, "moment_engine", None)
     if engine is None:
         raise HTTPException(status_code=503, detail="Moments are not running")
-    if not engine.cancel_watch(watch_id):
+    if not await asyncio.to_thread(engine.cancel_watch, watch_id):
         raise HTTPException(status_code=404, detail="No such watch")
     return {"cancelled": watch_id}
 

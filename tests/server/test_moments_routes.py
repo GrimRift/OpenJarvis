@@ -265,3 +265,33 @@ class TestAReminderIsNotSetTwice:
         assert len(engine.list_watches()) == 1
         tool.execute(what="drink water", in_minutes=1)
         assert len(engine.list_watches()) == 2
+
+
+def test_a_moment_being_spoken_does_not_freeze_the_server(engine) -> None:
+    """The engine holds its lock for a whole moment. The page's poll of
+    /moments used to wait on it on the event loop, so for 15 s nothing else
+    was served -- the voice stream included, which is how the orb missed
+    every moment (23 September)."""
+    import threading
+    import time
+
+    held = threading.Event()
+
+    def speak_a_moment():
+        with engine._lock:
+            held.set()
+            time.sleep(1.0)
+
+    # As a context manager the client serves every request on one event
+    # loop, as the real server does; otherwise each gets a loop of its own
+    # and nothing can block anything else.
+    with _client(engine) as client:
+        threading.Thread(target=speak_a_moment).start()
+        held.wait(1)
+        feed = threading.Thread(target=lambda: client.get("/v1/presence/moments"))
+        feed.start()
+        time.sleep(0.1)
+        t0 = time.monotonic()
+        assert client.get("/v1/presence/voice").status_code == 200
+        assert time.monotonic() - t0 < 0.5
+        feed.join(3)
