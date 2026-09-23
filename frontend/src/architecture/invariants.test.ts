@@ -249,6 +249,25 @@ describe('pre-rendered clips never claim audio playback', () => {
   });
 });
 
+describe('the orb reads every voice on one scale', () => {
+  /**
+   * The page scales a chat reply's loudness and the server scales a
+   * reminder's by the same number, so both move the orb alike. They are two
+   * copies of one constant in two languages; this is what keeps them one.
+   * Scaled differently, real reminders sat at a median level of 0.50 while
+   * chat replies sat at 0.83.
+   */
+  it('SPEECH_LEVEL_SCALE is the same in audio-level.ts and speech/player.py', () => {
+    const ts = readFileSync(join(SRC, 'lib', 'audio-level.ts'), 'utf8');
+    const py = readFileSync(join(SRC, '..', '..', 'src', 'openjarvis', 'speech', 'player.py'), 'utf8');
+    const page = ts.match(/export const SPEECH_LEVEL_SCALE = ([\d.]+);/);
+    const server = py.match(/^SPEECH_LEVEL_SCALE = ([\d.]+)$/m);
+    expect(page, 'constant not found in audio-level.ts').not.toBeNull();
+    expect(server, 'constant not found in player.py').not.toBeNull();
+    expect(Number(server![1])).toBe(Number(page![1]));
+  });
+});
+
 describe("the server's voice never claims audio playback", () => {
   /**
    * The server speaks reminders and moments through the machine's speakers,

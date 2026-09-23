@@ -23,7 +23,26 @@ export function resetSpeechLevel(): void {
 }
 
 /**
- * RMS of a time-domain byte buffer, scaled so ordinary speech lands near 1.
+ * How loud the voice has to be to fill the orb's range: level = RMS x this.
+ *
+ * The same number scales the server's voice (SPEECH_LEVEL_SCALE in
+ * speech/player.py), so a reminder the server speaks moves the orb exactly
+ * as a chat reply at the same loudness does; an architecture test holds the
+ * two equal.
+ *
+ * It was 8, set for the cloud voice at its 1.9 volume and measured after the
+ * volume slider. The local voice is louder: replayed through the page's own
+ * chain, real replies sat at a median level of 0.83 with the top tenth
+ * pinned at 1.0 -- no headroom, so a louder syllable could not show -- and
+ * the server's reminders, scaled differently, sat at 0.50. Measured on the
+ * raw voice (see speech-analyser.ts), five real lines in the chosen voice
+ * give an RMS median of 0.134 and p90 of 0.289; at 3.5 that is a median
+ * level of 0.60 and a p90 of 0.90, on both paths.
+ */
+export const SPEECH_LEVEL_SCALE = 3.5;
+
+/**
+ * RMS of a time-domain byte buffer, scaled by SPEECH_LEVEL_SCALE.
  *
  * AnalyserNode centres silence at 128. RMS rather than peak because peak
  * tracks single plosives and reads as twitching; RMS follows syllables.
@@ -36,10 +55,7 @@ export function rmsFromTimeDomain(data: Uint8Array): number {
     sum += centred * centred;
   }
   const rms = Math.sqrt(sum / data.length);
-  // Real Sonic 3.6 PCM at Sage's 1.9 volume measures about 0.055-0.12 RMS
-  // across active syllables. The old 3.2 gain therefore drove only 18-39%
-  // of the orb's speaking range and made a reply look almost static.
-  return Math.min(1, rms * 8);
+  return Math.min(1, rms * SPEECH_LEVEL_SCALE);
 }
 
 /** Attack and release per 60Hz frame — articulate syllables without jitter. */

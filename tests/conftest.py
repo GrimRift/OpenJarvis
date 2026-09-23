@@ -80,6 +80,20 @@ def _nobody_speaking() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_activity_left_over() -> None:
+    """The activity record (a reply being read aloud, the user's last turn)
+    is process-wide, and the presence monitor reads it: a test that left a
+    reply "just ended" made the next test's empty desk read as present --
+    seven moments tests failed whenever the ducking tests ran just before
+    them."""
+    from openjarvis.core import activity
+
+    activity.reset()
+    yield
+    activity.reset()
+
+
+@pytest.fixture(autouse=True)
 def _clean_registries() -> None:
     """Ensure each test starts with empty registries and a fresh event bus."""
     ModelRegistry.clear()

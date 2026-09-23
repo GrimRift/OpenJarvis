@@ -31,12 +31,16 @@ describe('rmsFromTimeDomain', () => {
     expect(loud).toBeGreaterThan(quiet);
   });
 
-  it('uses most of the orb range for measured Sonic 3.6 speech', () => {
-    // A 0.14 sine has roughly 0.10 RMS, representative of active Jarvis
-    // syllables at the configured 1.9 volume. This used to map to only 0.32.
-    const level = rmsFromTimeDomain(tone(0.14));
-    expect(level).toBeGreaterThan(0.7);
-    expect(level).toBeLessThan(0.9);
+  it('puts real speech mid-range, with headroom for a loud syllable', () => {
+    // Measured on five real lines in the local voice, before the volume:
+    // RMS median 0.134, p90 0.289. A sine's RMS is its amplitude / sqrt 2.
+    const typical = rmsFromTimeDomain(tone(0.134 * Math.SQRT2));
+    const loud = rmsFromTimeDomain(tone(0.25 * Math.SQRT2));
+    expect(typical).toBeGreaterThan(0.4);
+    expect(typical).toBeLessThan(0.55);
+    // A loud syllable still reads louder rather than pinned at the ceiling.
+    expect(loud).toBeGreaterThan(typical);
+    expect(loud).toBeLessThan(1);
   });
 
   it('never exceeds one, even on a clipped signal', () => {

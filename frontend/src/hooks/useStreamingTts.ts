@@ -54,7 +54,8 @@ export function useStreamingTts() {
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const completionTimerRef = useRef<number | null>(null);
   const generationsRef = useRef(new PlaybackGeneration());
-  const gainRef = useRef<GainNode | null>(null);
+  // Where each chunk of the voice enters the graph, before the volume.
+  const inputRef = useRef<GainNode | null>(null);
   const stopAnalyserRef = useRef<(() => void) | null>(null);
 
   const teardown = useCallback(() => {
@@ -81,7 +82,7 @@ export function useStreamingTts() {
     sourcesRef.current = [];
     stopAnalyserRef.current?.();
     stopAnalyserRef.current = null;
-    gainRef.current = null;
+    inputRef.current = null;
     try {
       socketRef.current?.close();
     } catch {
@@ -156,17 +157,24 @@ export function useStreamingTts() {
       }
       ctxRef.current = ctx;
       stopAnalyserRef.current?.();
+      const input = ctx.createGain();
       const gain = ctx.createGain();
       // The user's chat-reply volume (Settings → Volume), master × chat,
       // with the boost on top; the limiter keeps a loud stretch clean.
       gain.gain.value = gainFor('chat');
-      gainRef.current = gain;
+      input.connect(gain);
+      inputRef.current = input;
       const limit = limiter(ctx);
       gain.connect(limit);
+      limit.connect(ctx.destination);
+      // The orb hears the voice as it was spoken, before the volume: measured
+      // after it, turning Sage down calmed the orb (median level 0.91 at
+      // full volume, 0.67 at half), and the reminders the server speaks --
+      // which it measures raw -- moved differently from chat replies.
       try {
-        stopAnalyserRef.current = analyseInto(ctx, limit);
+        stopAnalyserRef.current = analyseInto(ctx, input, null);
       } catch {
-        limit.connect(ctx.destination);
+        // No level for the orb this reply; playback is untouched.
       }
 
       let socket: WebSocket;
@@ -297,7 +305,7 @@ export function useStreamingTts() {
         buffer.copyToChannel(samples, 0);
         const source = ctx.createBufferSource();
         source.buffer = buffer;
-        source.connect(gainRef.current ?? ctx.destination);
+        source.connect(inputRef.current ?? ctx.destination);
         // The first chunk of a reply starts a third of a second out, so the
         // queue has something in hand before the speakers ask for it.
         if (startedRef.current && ctx.currentTime > scheduledUntilRef.current) {

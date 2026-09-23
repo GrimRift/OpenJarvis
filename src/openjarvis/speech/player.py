@@ -124,6 +124,14 @@ def is_speaking(now: float | None = None) -> bool:
 #: than a syllable and coarse enough that a minute of speech is 3,000 numbers.
 ENVELOPE_STEP_MS = 20
 
+#: Loudness to orb level: level = RMS x this, the same number the page
+#: scales its own voice by (SPEECH_LEVEL_SCALE in frontend audio-level.ts),
+#: so a reminder moves the orb as a chat reply at the same loudness does. An
+#: architecture test holds the two equal. It used to scale each clip against
+#: its own loud end instead; measured on real lines, that left reminders at
+#: a median level of 0.50 while chat replies sat at 0.83.
+SPEECH_LEVEL_SCALE = 3.5
+
 #: Not speech: a chime playing is not Sage talking.
 _SILENT_CHANNELS = frozenset({"chime"})
 
@@ -133,13 +141,8 @@ _voice_ids = itertools.count(1)
 
 
 def voice_envelope(audio_path: str) -> Optional[List[float]]:
-    """Loudness of *audio_path* every ``ENVELOPE_STEP_MS``, 0..1, or None.
-
-    Scaled against the clip's own loud end, so ordinary syllables land near
-    0.9 whatever volume the voice was synthesised at -- the range the orb's
-    speaking state is tuned to, and what the browser's own level reads for
-    the same voice.
-    """
+    """Loudness of *audio_path* every ``ENVELOPE_STEP_MS``, 0..1, or None,
+    on the page's scale (``SPEECH_LEVEL_SCALE``)."""
     decoded = _decode_mono(audio_path)
     if decoded is None:
         return None
@@ -151,11 +154,7 @@ def voice_envelope(audio_path: str) -> Optional[List[float]]:
         if not chunk:
             break
         rms.append(math.sqrt(sum(v * v for v in chunk) / len(chunk)))
-    voiced = sorted(v for v in rms if v > 1e-4)
-    if not voiced:
-        return [0.0] * len(rms)
-    loud = voiced[min(len(voiced) - 1, int(len(voiced) * 0.95))]
-    return [round(min(1.0, 0.9 * v / loud), 3) for v in rms]
+    return [round(min(1.0, v * SPEECH_LEVEL_SCALE), 3) for v in rms]
 
 
 def _decode_mono(audio_path: str) -> Optional[tuple]:

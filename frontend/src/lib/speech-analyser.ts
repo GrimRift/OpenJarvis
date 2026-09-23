@@ -14,7 +14,9 @@ import {
 export function analyseInto(
   ctx: AudioContext,
   source: AudioNode,
-  destination: AudioNode = ctx.destination,
+  // null: listen only. The analyser taps the signal and passes nothing on;
+  // the caller routes the audio to the speakers itself.
+  destination: AudioNode | null = ctx.destination,
 ): () => void {
   const analyser = ctx.createAnalyser();
   // Small window: this measures loudness, not pitch, and a large FFT would
@@ -23,7 +25,7 @@ export function analyseInto(
   const data = new Uint8Array(analyser.fftSize);
 
   source.connect(analyser);
-  analyser.connect(destination);
+  if (destination) analyser.connect(destination);
 
   let raf = 0;
   let previous = 0;

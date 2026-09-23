@@ -55,13 +55,18 @@ class TestEnvelope:
         assert max(quiet_after) < 0.05
         assert min(loud) > 0.8
 
-    def test_scales_to_the_clip_not_to_full_scale(self, tmp_path) -> None:
-        # A quietly synthesised voice still reaches the orb's full range:
-        # syllables land near 0.9 whatever the synthesis volume was.
-        soft = player.voice_envelope(str(_wav(tmp_path / "s.wav", [(0.3, 0.05)])))
-        loud = player.voice_envelope(str(_wav(tmp_path / "l.wav", [(0.3, 0.8)])))
-        assert soft is not None and loud is not None
-        assert abs(max(soft) - max(loud)) < 0.05
+    def test_on_the_pages_scale_not_the_clips(self, tmp_path) -> None:
+        # One scale for both paths, so a reminder moves the orb as a chat
+        # reply at the same loudness does. Scaled to each clip's own loud
+        # end instead, real reminders sat at 0.50 while replies sat at 0.83.
+        # A sine's RMS is its amplitude / sqrt 2.
+        amp = 0.134 * 2 ** 0.5  # the measured median RMS of real speech
+        env = player.voice_envelope(str(_wav(tmp_path / "m.wav", [(0.3, amp)])))
+        assert env is not None
+        expected = 0.134 * player.SPEECH_LEVEL_SCALE
+        assert abs(sorted(env)[len(env) // 2] - expected) < 0.03
+        quiet = player.voice_envelope(str(_wav(tmp_path / "q.wav", [(0.3, amp / 2)])))
+        assert quiet is not None and max(quiet) < max(env) * 0.6
 
     def test_unreadable_audio_gives_none_not_an_error(
         self, tmp_path, monkeypatch
