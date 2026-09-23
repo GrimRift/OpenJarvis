@@ -38,8 +38,21 @@ export const MODE_THRESHOLDS: Record<BargeMode, ModeThresholds> = {
   sensitive: { words: 2, confidence: 0.5, singleWordConfidence: 0.85 },
 };
 
-/** A stop word below this confidence is not trusted on its own. */
-export const STOP_WORD_CONFIDENCE = 0.8;
+/**
+ * A stop word below this confidence is not trusted on its own. It was 0.8,
+ * and one word said over Sage's voice rarely scores that: a friend had to
+ * say "stop" three or four times while "can you stop" worked first time
+ * (24 September). Every stop word in that trace scored 0.9 or more, so the
+ * ones that failed were lower still, or not transcribed at all.
+ */
+export const STOP_WORD_CONFIDENCE = 0.55;
+
+/**
+ * How far back in Sage's reply a lone stop word can be an echo of. An echo
+ * is of what is playing now; matching the whole reply meant a "stop" was
+ * dropped because the reply had said "bus stop" minutes earlier.
+ */
+export const STOP_ECHO_WINDOW_CHARS = 400;
 /** Words Deepgram is less sure of than this are not counted at all. */
 export const COUNTED_WORD_CONFIDENCE = 0.5;
 
@@ -67,6 +80,7 @@ export type BargeVerdict =
 
 /** The words that cut a reply alone; "sage" is not one, by decision. */
 const FAST_STOP_PHRASES = ['stop', 'wait', 'hold on', 'hang on', 'pause', 'enough'];
+const FAST_STOP_WORDS = new Set(FAST_STOP_PHRASES.flatMap((phrase) => phrase.split(' ')));
 
 function normalise(word: string): string {
   return word.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, '');
@@ -303,6 +317,15 @@ export function judge(
 ): BargeVerdict {
   const counted = countedWords(words);
   if (counted.length === 0) return { decision: 'wait', reason: 'no-words' };
+  // Nothing but stop words: a person telling Sage to stop, however many
+  // times ("Stop. Stop. Stop." read as the recogniser stuttering and was
+  // thrown away). Echo only of what Sage said just now.
+  const stopOnly = counted.every((w) => FAST_STOP_WORDS.has(normalise(w.word)));
+  if (stopOnly && hasConfidentStopWord(counted)) {
+    return isEchoOf(counted, spokenText.slice(-STOP_ECHO_WINDOW_CHARS))
+      ? { decision: 'reject', reason: 'echo' }
+      : { decision: 'cut', reason: 'stop-word' };
+  }
   if (isGarbled(counted)) return { decision: 'reject', reason: 'garbled' };
   if (isEchoOf(counted, spokenText)) return { decision: 'reject', reason: 'echo' };
   if (hasConfidentStopWord(counted)) return { decision: 'cut', reason: 'stop-word' };

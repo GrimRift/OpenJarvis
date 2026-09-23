@@ -32,7 +32,7 @@ describe('judge: conservative by default', () => {
   });
 
   it('does not trust an unsure stop word, nor the name alone', () => {
-    expect(judge([w('stop', 0.6)], '')).toEqual({ decision: 'wait', reason: 'too-few' });
+    expect(judge([w('stop', 0.45)], '')).toEqual({ decision: 'wait', reason: 'no-words' });
     expect(judge([w('sage')], '')).toEqual({ decision: 'wait', reason: 'too-few' });
   });
 
@@ -284,5 +284,28 @@ describe('Sage answering its own voice (the 18 September loop)', () => {
 
   it('never fires without something to compare against', () => {
     expect(isLoopedBack(words('anything at all'), '')).toBe(false);
+  });
+});
+
+describe('a lone "stop" (24 September: it took three or four)', () => {
+  const cut = { decision: 'cut', reason: 'stop-word' };
+
+  it('is trusted at the confidence a word said over Sage gets', () => {
+    expect(judge([w('Stop.', 0.62)], REPLY)).toEqual(cut);
+  });
+
+  it('said again and again is a person insisting, not a stutter', () => {
+    expect(judge(say('Stop. Stop. Stop.'), REPLY)).toEqual(cut);
+    expect(judge(say('stop stop stop stop'), '')).toEqual(cut);
+  });
+
+  it('is not an echo of a word Sage said long before', () => {
+    const long = 'Take the bus stop on Rizal. ' + 'The route runs along the coast. '.repeat(30);
+    expect(judge(say('Stop.'), long)).toEqual(cut);
+  });
+
+  it('is an echo when Sage has just said it', () => {
+    const tail = 'The route runs along the coast. '.repeat(30) + 'Then you can stop.';
+    expect(judge(say('stop'), tail)).toEqual({ decision: 'reject', reason: 'echo' });
   });
 });
