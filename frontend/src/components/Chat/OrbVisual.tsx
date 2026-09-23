@@ -15,7 +15,7 @@ import {
   startRipple,
   type PlexusState,
 } from '../../lib/orb-plexus';
-import { resolveOrbState, type OrbState } from '../../lib/orb-state';
+import { isGenerating, resolveOrbState, type OrbInputs, type OrbState } from '../../lib/orb-state';
 import { useAppStore } from '../../lib/store';
 
 export type { OrbState } from '../../lib/orb-state';
@@ -23,7 +23,7 @@ export type { OrbState } from '../../lib/orb-state';
 // Single source of truth for the orb's state, shared by every component
 // that renders one (the empty-state hero orb, the persistent composer orb)
 // so they never drift out of sync with each other.
-export function useOrbState(): OrbState {
+function useOrbInputs(): OrbInputs {
   const activeId = useAppStore((s) => s.activeId);
   const streamState = useAppStore((s) => s.streamState);
   const voiceState = useAppStore((s) => s.voiceState);
@@ -35,13 +35,22 @@ export function useOrbState(): OrbState {
   // claim it too, so the orb looked identical whether Sage was thinking or
   // talking — and since text now streams well ahead of speech, that covered
   // most of a turn.
-  return resolveOrbState({
+  return {
     audioPlaying,
     serverSpeaking,
     streamingHere: isCurrentChatStreaming,
     voiceState,
     presenceState,
-  });
+  };
+}
+
+export function useOrbState(): OrbState {
+  return resolveOrbState(useOrbInputs());
+}
+
+/** Whether a listening orb is really waiting on Sage's reply. */
+export function useOrbGenerating(): boolean {
+  return isGenerating(useOrbInputs());
 }
 
 interface Particle {

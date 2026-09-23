@@ -29,10 +29,16 @@ export function resolveOrbState(inputs: OrbInputs): OrbState {
   return 'idle';
 }
 
-export function orbStateLabel(state: OrbState): string {
+/** Listening, but no longer to the user: the mic is done and Sage is
+ * writing its reply. The same orb state; only the label says so. */
+export function isGenerating(inputs: OrbInputs): boolean {
+  return resolveOrbState(inputs) === 'listening' && inputs.voiceState !== 'recording';
+}
+
+export function orbStateLabel(state: OrbState, generating = false): string {
   switch (state) {
     case 'listening':
-      return 'Listening';
+      return generating ? 'Generating' : 'Listening';
     case 'speaking':
       return 'Speaking';
     case 'away':

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { orbStateLabel, resolveOrbState } from './orb-state';
+import { isGenerating, orbStateLabel, resolveOrbState } from './orb-state';
 
 const base = { audioPlaying: false, streamingHere: false, voiceState: 'idle', presenceState: 'present' };
 
@@ -18,5 +18,16 @@ describe('resolveOrbState', () => {
   it('labels every state', () => {
     expect(orbStateLabel('away')).toBe('Away');
     expect(orbStateLabel('idle')).toBe('Standing by');
+  });
+
+  it('says generating once the mic is done, without a new orb state', () => {
+    const replying = { ...base, streamingHere: true };
+    expect(resolveOrbState(replying)).toBe('listening');
+    expect(isGenerating(replying)).toBe(true);
+    expect(isGenerating({ ...replying, voiceState: 'recording' })).toBe(false);
+    expect(isGenerating({ ...base, voiceState: 'recording' })).toBe(false);
+    expect(isGenerating({ ...replying, audioPlaying: true })).toBe(false);
+    expect(orbStateLabel('listening', true)).toBe('Generating');
+    expect(orbStateLabel('listening')).toBe('Listening');
   });
 });

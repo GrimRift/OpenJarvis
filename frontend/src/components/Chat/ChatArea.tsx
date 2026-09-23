@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router';
 import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
 import { StreamingDots } from './StreamingDots';
-import { OrbVisual, useOrbState } from './OrbVisual';
+import { OrbVisual, useOrbGenerating, useOrbState } from './OrbVisual';
 
 /** 20% over the old 394. */
 const CHAT_ORB_SIZE = 473;
@@ -24,6 +24,7 @@ export function ChatArea() {
   const messages = useAppStore((s) => s.messages);
   const streamState = useAppStore((s) => s.streamState);
   const orbState = useOrbState();
+  const generating = useOrbGenerating();
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -31,7 +32,7 @@ export function ChatArea() {
   const lastScrollTop = useRef(0);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
   const currentStreamContent = isCurrentChatStreaming ? streamState.content : '';
-  const orbStateLabel = labelFor(orbState);
+  const orbStateLabel = labelFor(orbState, generating);
 
   // Check if any data sources are connected
   const [hasConnectedSources, setHasConnectedSources] = useState<boolean | null>(null);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PanelRight } from 'lucide-react';
 import { InputArea } from '../components/Chat/InputArea';
-import { OrbVisual, useOrbState } from '../components/Chat/OrbVisual';
+import { OrbVisual, useOrbGenerating, useOrbState } from '../components/Chat/OrbVisual';
 import { VoiceTranscript } from '../components/Chat/VoiceTranscript';
 import { useAppStore } from '../lib/store';
 
@@ -26,6 +26,7 @@ const STATUS: Record<ReturnType<typeof useOrbState>, string> = {
  */
 export function VoicePage() {
   const orbState = useOrbState();
+  const generating = useOrbGenerating();
   const messages = useAppStore((s) => s.messages);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const startNewChat = useAppStore((s) => s.startNewChat);
@@ -60,7 +61,7 @@ export function VoicePage() {
           className="text-[11px] tracking-[0.28em] mb-3 select-none"
           style={{ color: 'var(--color-text-tertiary)' }}
         >
-          {STATUS[orbState]}
+          {generating ? 'GENERATING' : STATUS[orbState]}
         </div>
 
         <OrbVisual state={orbState} size={ORB_SIZE} />
