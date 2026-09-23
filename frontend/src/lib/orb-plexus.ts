@@ -330,16 +330,26 @@ export const PLEXUS_SUSTAIN = { floor: 0.2, onset: 0.15, after: 16, grow: 36, li
 
 /**
  * Sparks: on a sharp onset -- a t, k or p, a stressed start -- a few nodes
- * in the lit patch flash white for a frame or two. A vowel's softer rise
- * only swells its patch, so the two read differently.
+ * in the lit patch glint. A vowel's softer rise only swells its patch, so
+ * the two read differently.
+ *
+ * They first went white at full strength in a single frame, 2.2 times
+ * their node's size, lit every line to them, and were gone six frames
+ * later: read as the picture glitching, not as light. Now each rises and
+ * falls over a quarter second, smaller and dimmer, and barely lifts its
+ * lines.
  *
  * rise   the onset that sparks. On Sage's recorded voice a rise over 0.15
  *        comes 1.3 times a second; over 0.06, the patch's, 5.8.
  * count  nodes lit, from a rise at the threshold to one 0.15 over it
- * fall   what is left of a spark each frame: gone in about six
+ * length frames a spark lasts, rising then falling
  * size   a spark's size against its node's
+ * alpha  its strength at the top
+ * lines  how much it brightens the lines strung to it
  */
-export const PLEXUS_SPARKS = { rise: 0.15, count: [5, 12] as [number, number], fall: 0.62, size: 2.2, alpha: 0.95 };
+export const PLEXUS_SPARKS = {
+  rise: 0.15, count: [3, 6] as [number, number], length: 16, size: 1.5, alpha: 0.55, lines: 0.4,
+};
 
 
 /** Per 60Hz frame: a patch reaches most of a syllable's brightness in
@@ -436,7 +446,8 @@ interface Node {
   /** How far past the orb's radius this node has been thrown, 0 inside. */
   out: number;
   lobeA: number; lobeB: number; lobeW: number;
-  /** A spark on this node, 0..1: see PLEXUS_SPARKS. */
+  /** How far through its spark this node is, 0..1, 0 for none: see
+   * PLEXUS_SPARKS. */
   spark: number;
 }
 
@@ -903,8 +914,8 @@ export function drawPlexus(
       // Front-facing nodes of the lit patch, as they were last drawn.
       for (let tries = 0, lit = 0; tries < 600 && lit < want; tries++) {
         const p = S.particles[(Math.random() * NODES) | 0];
-        if (p.lobeA !== hit || p.pd < 0.45 || p.spark > 0.5) continue;
-        p.spark = 1;
+        if (p.lobeA !== hit || p.pd < 0.45 || p.spark > 0) continue;
+        p.spark = 1e-3;
         lit++;
       }
     }
@@ -916,7 +927,7 @@ export function drawPlexus(
     S.lastOther = other;
   }
 
-  const sparkFall = Math.pow(PLEXUS_SPARKS.fall, dt);
+  const sparkStep = dt / PLEXUS_SPARKS.length;
 
   const SU = PLEXUS_SUSTAIN;
   if (rise > SU.onset || speech < SU.floor) S.holdFrames = 0;
@@ -1070,9 +1081,9 @@ export function drawPlexus(
       p.reg += listenLift * Math.exp(-(off * off) / (LP.width * LP.width));
     }
     if (p.spark > 0) {
-      p.reg += p.spark * 1.5;
-      p.spark *= sparkFall;
-      if (p.spark < 0.03) p.spark = 0;
+      p.spark += sparkStep;
+      if (p.spark >= 1) p.spark = 0;
+      else p.reg += Math.sin(Math.PI * p.spark) * PLEXUS_SPARKS.lines;
     }
     p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
   }
@@ -1223,7 +1234,7 @@ export function drawPlexus(
     const m = P[i];
     if (m.spark <= 0) continue;
     const size = m.ps * PLEXUS_SPARKS.size;
-    ctx.globalAlpha = Math.min(1, m.spark * PLEXUS_SPARKS.alpha);
+    ctx.globalAlpha = Math.sin(Math.PI * m.spark) * PLEXUS_SPARKS.alpha;
     ctx.fillRect(m.px - (size - m.ps) / 2, m.py - (size - m.ps) / 2, size, size);
   }
   ctx.globalAlpha = 1;
