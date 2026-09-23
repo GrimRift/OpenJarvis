@@ -27,7 +27,7 @@ _STOPWORDS = frozenset(
     """a an the of to for and or in on at by with from about me my i you your
     play put open watch show find some something video videos youtube yt
     please can could would sage sir hey one that this is it be want wanna
-    like just should it's its want need get give let make""".split()
+    like just should it's its want need get give let make not no""".split()
 )
 
 #: Words asking for a kind of video the scoring otherwise steers away from.
@@ -149,20 +149,45 @@ def extra_words(request: str, query: str) -> List[str]:
     ]
 
 
+_REFUSAL = re.compile(
+    r"\b(?:not|no|without|except|never|isn't|aren't|don't|nothing)\b([^.,;:!?]*)",
+    re.IGNORECASE,
+)
+
+
+def refused_words(request: str) -> set[str]:
+    """Words the request rules out: "not a preview or behind-the-scenes"."""
+    refused: set[str] = set()
+    for match in _REFUSAL.finditer(request or ""):
+        # Up to "but": "not the preview but the race" wants the race.
+        phrase = re.split(r"\bbut\b|\binstead\b", match.group(1), maxsplit=1)[0]
+        refused |= _words(phrase) - {"or", "nor", "and"}
+    return refused
+
+
 def age_days(age: str) -> Optional[float]:
-    """Days since "10 days ago", "2 weeks ago", "Streamed 3 hours ago"."""
-    match = re.search(r"(\d+)\s+(minute|hour|day|week|month|year)", (age or "").lower())
+    """Days since "10 days ago", "2 weeks ago", "Streamed 3 hours ago" --
+    or "10d ago" and "3mo ago", which YouTube also writes."""
+    match = re.search(
+        r"(\d+)\s*(mo|months?|min|minutes?|h|hr|hours?|d|days?|w|wk|weeks?|y|yr|years?)\b",
+        (age or "").lower(),
+    )
     if not match:
         return None
-    per = {
-        "minute": 1 / 1440,
-        "hour": 1 / 24,
-        "day": 1,
-        "week": 7,
-        "month": 30,
-        "year": 365,
-    }
-    return int(match.group(1)) * per[match.group(2)]
+    unit = match.group(2)
+    if unit.startswith("mo"):
+        per = 30.0
+    elif unit.startswith("mi"):
+        per = 1 / 1440
+    elif unit.startswith("h"):
+        per = 1 / 24
+    elif unit.startswith("d"):
+        per = 1.0
+    elif unit.startswith("w"):
+        per = 7.0
+    else:
+        per = 365.0
+    return int(match.group(1)) * per
 
 
 def rank(
@@ -176,7 +201,9 @@ def rank(
     wants_live = bool(words & live_words)
     wants_short = bool(words & short_words)
     wants_long = bool(words & {_stem(word) for word in _WANTS_LONG})
-    wanted = words - live_words - short_words
+    unwanted = refused_words(request)
+    recency = {_stem(word) for word in _RECENCY}
+    wanted = words - live_words - short_words - unwanted - recency
     request_flat = _flat(request)
     ranked: List[Candidate] = []
     for candidate in candidates:
@@ -212,10 +239,16 @@ def rank(
                 score += 1.0
         if candidate.views:
             score += 0.15 * math.log10(candidate.views + 1)
+        refused = unwanted & (title_words | channel_words)
+        if refused:
+            # "Not a preview": counted as a word wanted, it chose the one
+            # preview in the results (24 September).
+            score -= 2.5 * len(refused)
+            reasons.append("not what you ruled out")
         if latest:
             days = age_days(candidate.age)
             if days is not None:
-                score -= 0.6 * math.log10(days + 1)
+                score -= 0.9 * math.log10(days + 1)
         # YouTube's own order, as the tie-break it is good at.
         score -= 0.25 * candidate.position
         candidate.score = round(score, 3)
@@ -350,4 +383,12 @@ def _short_count(value: int) -> str:
     return str(value)
 
 
-__all__ = ["Candidate", "age_days", "extra_words", "parse_results", "rank", "search"]
+__all__ = [
+    "Candidate",
+    "age_days",
+    "extra_words",
+    "parse_results",
+    "rank",
+    "refused_words",
+    "search",
+]

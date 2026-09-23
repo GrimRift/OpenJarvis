@@ -172,5 +172,49 @@ class TestTheLatestOfAKind:
 
         assert age_days("10 days ago") == 10
         assert age_days("2 weeks ago") == 14
-        assert age_days("Streamed 3 hours ago") == 3 / 24
+        assert abs(age_days("Streamed 3 hours ago") - 3 / 24) < 1e-9
         assert age_days("") is None
+
+
+class TestWhatIsRuledOut:
+    """24 September: "not a preview or behind-the-scenes" counted "preview" as
+    wanted, and the one preview in the results was played."""
+
+    def test_words_after_not_are_refused(self):
+        from openjarvis.tools.youtube_pick import refused_words
+
+        request = (
+            "full race highlight, actual F1 footage, not a preview or behind-the-scenes"
+        )
+        assert refused_words(request) == {"preview", "behind", "scene"}
+        assert refused_words("not the preview but the race") == {"preview"}
+
+    def test_a_refused_word_sinks_the_video(self):
+        results = [
+            Candidate(
+                "a" * 11,
+                "Azerbaijan GP Preview | F1 Nation Podcast",
+                "FORMULA 1",
+                3600,
+                age="5h ago",
+                position=0,
+            ),
+            Candidate(
+                "b" * 11,
+                "Race Highlights | 2026 Spanish Grand Prix",
+                "FORMULA 1",
+                485,
+                age="10d ago",
+                position=1,
+            ),
+        ]
+        request = "Formula 1. the most recent race highlight, not a preview"
+        assert rank(results, request, latest=True)[0].video_id == "b" * 11
+
+    def test_short_ages_are_read_too(self):
+        from openjarvis.tools.youtube_pick import age_days
+
+        assert age_days("10d ago") == 10
+        assert age_days("3mo ago") == 90
+        assert abs(age_days("5h ago") - 5 / 24) < 1e-9
+        assert age_days("1y ago") == 365

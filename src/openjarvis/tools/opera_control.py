@@ -1039,7 +1039,9 @@ class YouTubePlayTool(_OperaTool):
                 for c in youtube_pick.search(query, newest_first=True)
                 if c.video_id not in seen
             ]
-            ranked = youtube_pick.rank(found, f"{request} {query}", latest=True)
+            # The channel first: "not a preview" runs to the end of its
+            # sentence, and a channel written after it was ruled out too.
+            ranked = youtube_pick.rank(found, f"{query}. {request}", latest=True)
             if ranked:
                 best = ranked[0]
                 return best.href, best.title, ranked[1 : OTHER_MATCHES + 1]
