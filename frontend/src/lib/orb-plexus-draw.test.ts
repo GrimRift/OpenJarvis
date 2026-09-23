@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLEXUS_HEARTBEAT, PLEXUS_LOOK, PLEXUS_RIPPLE, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
+import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_LOOK, PLEXUS_RIPPLE, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -331,5 +331,38 @@ describe('depth', () => {
     expect(shell.hx).toBe(before[0]);
     expect(shell.hz).toBe(before[1]);
     expect(Math.hypot(inner.hx - before[2], inner.hz - before[3])).toBeGreaterThan(0.01);
+  });
+});
+
+describe('the inside of the orb', () => {
+  it('keeps every candidate pair, the inner webs included', () => {
+    // The list once filled at 32,000 with about 70,000 wanted, surface
+    // first: the inner webs had next to no lines among themselves.
+    const { S } = run('listening', 12);
+    expect(S.pairCount).toBeLessThan(S.pairs.length >> 1);
+    let inner = 0;
+    for (let i = 0; i < S.pairCount; i++) {
+      const a = S.particles[S.pairs[i * 2]];
+      const c = S.particles[S.pairs[i * 2 + 1]];
+      if (!a.rigid && !c.rigid) inner++;
+    }
+    expect(inner).toBeGreaterThan(3000);
+  });
+});
+
+describe("listening's pulse", () => {
+  it('rings again and again while listening, and not otherwise', () => {
+    const period = PLEXUS_LISTEN_PULSE.length + PLEXUS_LISTEN_PULSE.rest;
+    let starts = 0;
+    let last = Infinity;
+    frames('listening', period * 4, (s) => {
+      const phase = s.listenAt >= 0 ? s.listenAt % period : Infinity;
+      if (phase < last) starts++;
+      last = phase;
+    });
+    expect(starts).toBeGreaterThanOrEqual(3);
+    expect(period / 60).toBeGreaterThan(PLEXUS_RIPPLE.length / 60);
+    const idle = frames('idle', period * 2, () => {});
+    expect(idle.listenGlow).toBe(0);
   });
 });

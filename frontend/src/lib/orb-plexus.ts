@@ -100,7 +100,7 @@ const NODE_LAYERS = [
   { count: 260, rMin: 0.7, rMax: 0.82 },
   { count: 200, rMin: 0.42, rMax: 0.58 },
 ];
-const NODES = 1020;
+const NODES = NODE_LAYERS.reduce((sum, layer) => sum + layer.count, 0);
 const DUST = 640;
 
 const LINK_DIST = 0.43;
@@ -150,6 +150,24 @@ export const PLEXUS_HEARTBEAT = { every: [1200, 2400] as [number, number], lengt
 export const PLEXUS_RIPPLE = { length: 48, width: 0.1, lift: 0.9 };
 
 /**
+ * Listening's pulse: the wake ripple again and again, softer and slower,
+ * for as long as Sage listens. Each ring takes a second to cross, a beat
+ * slower than the wake's, then half a second's rest before the next: a
+ * pulse every 1.5 s. Once every half second was asked for as a starting
+ * point; rings that close ran into each other and read as a strobe.
+ */
+export const PLEXUS_LISTEN_PULSE = { length: 60, rest: 30, width: 0.12, lift: 0.5 };
+
+/**
+ * Interior lines -- those with neither end on the surface -- are never let
+ * dim below this share of full, whatever the patch over them is doing. A
+ * dim patch used to put out the lines behind it too, which is what left
+ * whole regions of the orb empty; the surface still dims, so the patches
+ * still read.
+ */
+const CORE_LIGHT_FLOOR = 0.75;
+
+/**
  * A line fades out over the last share of its reach instead of vanishing.
  * Two nodes drifting into reach used to be joined at a quarter of a line's
  * full strength in a single frame, all over the web at once: a faint,
@@ -197,6 +215,9 @@ const LINK_FADE = 0.2;
  *           other that it turns into a solid slab; drawing fewer, each as
  *           bright, keeps the knots where lines cross and opens the slab
  *           back into a web.
+ * core      how strong the interior lines are against the surface's. They
+ *           are what gives the orb a volume rather than a shell with a web
+ *           drawn on it. Not thinned by wires below CORE_MIN_WIRES.
  * soft      a blur on the frame itself, in pixels at 764 (scaled with the
  *           canvas). At zero every line is a one-pixel hairline and every
  *           dot a hard square, which at full size reads as a sharp wire
@@ -214,7 +235,12 @@ export interface PlexusLook {
   rampTop: number;
   red: number;
   wires: number;
+  core: number;
 }
+
+/** The interior is never thinned more than this, or thinning the surface
+ * web would hollow the middle again. */
+const CORE_MIN_WIRES = 0.7;
 
 export const PLEXUS_LOOK = {
   // Scored at 300px inside the orb's disc on the page's background colour
@@ -245,15 +271,16 @@ export const PLEXUS_LOOK = {
   // are 6% -- by drawing 42% of its lines each as bright (wires), not by
   // compressing, which took its peaks under listening's with them.
   states: {
-    // Standing by draws 75% of its lines -- about 3,350 a frame against
-    // 4,200, asked for as a lighter web -- and exposure makes up the light
-    // they carried, and the light the fade at the edge of a line's reach
-    // (LINK_FADE) takes: mean ~39 inside the shell, as before.
-    idle: { exposure: 4.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 0.75 },
-    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1 },
+    // Standing by and listening draw 55% and 65% of their surface lines,
+    // asked for as a lighter web; the interior lines, which the pair list
+    // had been leaving out (PAIR_CAP), carry the light the surface gave up,
+    // at the same exposure: mean inside the disc 89 against 92 before for
+    // standing by, 98 against 101 for listening.
+    idle: { exposure: 4.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 0.55, core: 0.7 },
+    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1, core: 1 },
     // 3.2, from 2.9: the reach fade took 12% of listening's light.
-    listening: { exposure: 3.2, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 1 },
-    speaking: { exposure: 2.8, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5, wires: 0.42 },
+    listening: { exposure: 3.2, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 0.65, core: 0.6 },
+    speaking: { exposure: 2.8, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5, wires: 0.42, core: 0.8 },
   } as Record<OrbState, PlexusLook>,
   /**
    * Speaking's exposure is automatic: it steers the light the web draws --
@@ -418,6 +445,8 @@ export interface PlexusState {
   beatAt: number; beatIn: number; beatAxis: [number, number, number];
   /** The wake ripple: frames into it, -1 when none is running. */
   rippleAt: number;
+  /** Frames into listening's pulse train; restarts on entering listening. */
+  listenAt: number; listenGlow: number;
   /** The web's own clock, advanced at the state's pace. */
   phase: number; lastPace: number;
   z: number; zVel: number; linkAge: number;
@@ -566,16 +595,28 @@ export function createPlexusState(): PlexusState {
     depthMid: 0, depthInner: 0,
     beatAt: -1, beatIn: nextBeat(), beatAxis: [0, 1, 0],
     rippleAt: -1,
+    listenAt: 0, listenGlow: 0,
     z: 0, zVel: 0, linkAge: 0,
     particles: built.particles,
-    pairs: new Int32Array(64000),
+    pairs: new Int32Array(PAIR_CAP * 2),
     pairCount: 0,
   };
 }
 
+/**
+ * Room for every candidate pair. The list held 32,000 when the web needed
+ * about 70,000, and it fills surface first: the middle and inner webs got
+ * next to no lines among themselves, which is what left the inside of the
+ * orb empty.
+ */
+const PAIR_CAP = 90000;
+
 function rebuildPairs(S: PlexusState): void {
-  const span = LINK_DIST * LINK_MARGIN * (1 + PLEXUS_THORNS.reach) * S.radius;
-  const maxSq = span * span;
+  // Each pair's candidate reach is the reach it is drawn at, with margin:
+  // an inner pair's is shorter (its mean radius), and only the surface is
+  // thrown into thorns, so only a pair touching it needs the thorn's reach.
+  const base = LINK_DIST * LINK_MARGIN * 1.1 * S.radius;
+  const thornSq = (1 + PLEXUS_THORNS.reach) ** 2;
   const cap = S.pairs.length >> 1;
   const P = S.particles;
   let count = 0;
@@ -584,6 +625,8 @@ function rebuildPairs(S: PlexusState): void {
     for (let j = i + 1; j < NODES && count < cap; j++) {
       const c = P[j];
       const dx = a.x - c.x, dy = a.y - c.y, dz = a.z - c.z;
+      const span = base * Math.max(LINK_RMEAN_FLOOR, (a.home + c.home) * 0.5);
+      const maxSq = span * span * (a.rigid || c.rigid ? thornSq : 1);
       if (dx * dx + dy * dy + dz * dz > maxSq) continue;
       S.pairs[count * 2] = i;
       S.pairs[count * 2 + 1] = j;
@@ -692,6 +735,9 @@ export function drawPlexus(
     };
     S.trans = 0;
     S.lastState = state;
+    // The first ring waits for the wake ripple, which usually opens
+    // listening, to clear the rim.
+    if (state === 'listening') S.listenAt = -PLEXUS_RIPPLE.length * 0.6;
   }
   S.trans = Math.min(1, S.trans + dt / MORPH_FRAMES);
   const e = easeMorph(S.trans);
@@ -740,6 +786,17 @@ export function drawPlexus(
   const rippleProgress = rippling ? S.rippleAt / RP.length : 0;
   const ringAt = 0.05 + 1.05 * (1 - Math.pow(1 - rippleProgress, 2));
   const ringLift = rippling ? RP.lift * Math.pow(1 - rippleProgress, 1.5) : 0;
+
+  // Listening's rings, faded in and out rather than started or cut off
+  // with the state.
+  const LP = PLEXUS_LISTEN_PULSE;
+  S.listenGlow += ((state === 'listening' ? 1 : 0) - S.listenGlow) * Math.min(1, 0.05 * dt);
+  S.listenAt += dt;
+  const listenPhase = S.listenAt >= 0 ? (S.listenAt % (LP.length + LP.rest)) / LP.length : 2;
+  const listening = S.listenGlow > 0.01 && listenPhase < 1 && !rippling;
+  const listenRingAt = listening ? 0.05 + 1.05 * (1 - Math.pow(1 - listenPhase, 2)) : 0;
+  const listenLift = listening ? LP.lift * S.listenGlow * Math.pow(1 - listenPhase, 1.5) : 0;
+
   S.radius = lerp(F.radius, cfg.r, e);
   S.flow = lerp(F.flow, cfg.flow, e);
   S.bright = lerp(F.bright, cfg.bright, e);
@@ -761,6 +818,7 @@ export function drawPlexus(
   S.look.rampTop = lerp(F.look.rampTop, want.rampTop, e);
   S.look.red = lerp(F.look.red, want.red, e);
   S.look.wires = lerp(F.look.wires, want.wires, e);
+  S.look.core = lerp(F.look.core, want.core, e);
 
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
@@ -825,6 +883,8 @@ export function drawPlexus(
   const sR = R * 0.8 * breath;
   const sizeScale = w / 560;
   const wires = Math.min(1, Math.max(0, S.look.wires));
+  const coreWires = Math.max(CORE_MIN_WIRES, wires);
+  const core = S.look.core;
   const rampTop = Math.round(Math.min(1, Math.max(0, S.look.rampTop)) * (RAMP_STEPS - 1));
   const ramp = RAMPS[Math.round(Math.min(1, Math.max(0, S.look.red)) * RED_LEVELS)];
   const damp = Math.pow(DAMP, dt);
@@ -928,6 +988,10 @@ export function drawPlexus(
       const off = Math.hypot(p.px - cx, p.py - cy) / sR - ringAt;
       p.reg += ringLift * Math.exp(-(off * off) / (RP.width * RP.width));
     }
+    if (listening) {
+      const off = Math.hypot(p.px - cx, p.py - cy) / sR - listenRingAt;
+      p.reg += listenLift * Math.exp(-(off * off) / (LP.width * LP.width));
+    }
     p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
   }
 
@@ -961,6 +1025,10 @@ export function drawPlexus(
       const off = Math.hypot(q.px - cx, q.py - cy) / sR - ringAt;
       q.reg += ringLift * Math.exp(-(off * off) / (RP.width * RP.width));
     }
+    if (listening) {
+      const off = Math.hypot(q.px - cx, q.py - cy) / sR - listenRingAt;
+      q.reg += listenLift * Math.exp(-(off * off) / (LP.width * LP.width));
+    }
     q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * q.reg * S.look.dots * S.look.exposure);
   }
 
@@ -982,9 +1050,11 @@ export function drawPlexus(
       const ic = S.pairs[i * 2 + 1];
       // Thinned by pair, not by position in the list: the list is rebuilt
       // every few frames, and a line chosen by index would blink.
-      if (wires < 1 && pairHash(ia, ic) >= wires) continue;
       const a = P[ia];
       const c = P[ic];
+      const inside = !a.rigid && !c.rigid;
+      const drawn = inside ? coreWires : wires;
+      if (drawn < 1 && pairHash(ia, ic) >= drawn) continue;
       const ddx = a.x - c.x, ddy = a.y - c.y, ddz = a.z - c.z;
       const sq = ddx * ddx + ddy * ddy + ddz * ddz;
       const rmean = Math.max(LINK_RMEAN_FLOOR, (a.home + c.home) * 0.5);
@@ -1003,7 +1073,8 @@ export function drawPlexus(
       const e0 = Math.min(1, (1 - frac) / LINK_FADE);
       const fade = e0 * e0 * (3 - 2 * e0);
       const depth = (a.pd + c.pd) / 2;
-      const alpha = fade * near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5 *
+      const light = inside ? Math.max(CORE_LIGHT_FLOOR, (a.reg + c.reg) * 0.5) * core : (a.reg + c.reg) * 0.5;
+      const alpha = fade * near * (0.118 + 0.155 * depth) * bright * S.links * light *
         (1 + PLEXUS_THORNS.glow * Math.max(a.out, c.out));
       if (alpha <= cut) continue;
       ink += alpha;
