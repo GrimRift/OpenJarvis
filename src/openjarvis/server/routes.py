@@ -36,6 +36,9 @@ from openjarvis.server.models import (
 
 router = APIRouter()
 
+#: History a cloud-model web turn may carry, system prompt included.
+CLOUD_HISTORY_TOKENS = 24_000
+
 
 def _has_attached_image(request_body) -> bool:
     """Whether the newest user turn carries an image.
@@ -1178,7 +1181,15 @@ async def _handle_streaming_orchestrator(
     )
     if agent._loop_guard:
         agent._loop_guard.reset()
-        messages = agent._trim_history_once(messages)
+        # A cloud model's window is far past the guard's 8,000 tokens, most
+        # of which Sage's own instructions take (~6,600): the chat itself
+        # had about 1,400. Local models keep the smaller budget.
+        from openjarvis.engine.cloud import is_cloud_model
+
+        budget = (
+            CLOUD_HISTORY_TOKENS if is_cloud_model(model or agent._model) else None
+        )
+        messages = agent._trim_history_once(messages, token_budget=budget)
 
     openai_tools = agent._executor.get_openai_tools() if agent._tools else []
     if openai_tools and agent._route_tools:

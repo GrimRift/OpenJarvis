@@ -273,6 +273,21 @@ class LoopGuard:
             units.append(unit)
         return units
 
+    @classmethod
+    def _newest_exchange_units(cls, units: list[list]) -> int:
+        """How many units at the end make up the current message and the
+        exchange before it: back to and including the previous user turn."""
+        users = 0
+        for count, unit in enumerate(reversed(units), start=1):
+            if (
+                getattr(unit[0], "role", None) is not None
+                and str(getattr(unit[0].role, "value", unit[0].role)) == "user"
+            ):
+                users += 1
+                if users == 2:
+                    return count
+        return len(units)
+
     @staticmethod
     def _approx_tokens(messages: list) -> int:
         """Rough token count. Deliberately dependency-free — this decides how
@@ -296,7 +311,11 @@ class LoopGuard:
         )
 
     def compress_context(
-        self, messages: list, *, apply_token_budget: bool = True
+        self,
+        messages: list,
+        *,
+        apply_token_budget: bool = True,
+        token_budget: Optional[int] = None,
     ) -> list:
         """Apply 4-stage context overflow recovery to message list.
 
@@ -316,10 +335,27 @@ class LoopGuard:
         messages are removed. Tool-call turns are then treated as atomic units
         so no stage can separate a result from its assistant parent.
 
+        *token_budget* overrides the configured size for this call: a cloud
+        model with a large window can be given more history than a local one.
+
         Stages:
         1. Summarize old tool results (replace content with "[Tool result truncated]")
         2. Sliding window — keep system + the most recent complete units that fit
+
+        The newest exchange -- the reply being followed up and the question
+        it answered -- is always kept, whatever it costs. "Summarize all of
+        that" after a 7,000-token answer arrived with the answer evicted,
+        and the model summarised its memory instead (24 September).
         """
+        if token_budget is not None:
+            saved = self._config.max_context_tokens
+            self._config.max_context_tokens = token_budget
+            try:
+                return self.compress_context(
+                    messages, apply_token_budget=apply_token_budget
+                )
+            finally:
+                self._config.max_context_tokens = saved
         messages = self._repair_tool_history(messages)
         if not self._needs_compression(messages, apply_token_budget):
             return messages
@@ -382,12 +418,16 @@ class LoopGuard:
         kept_units: list[list] = []
         kept_messages = 0
         used = 0
-        for unit in reversed(units):
+        # The current message, the reply before it and the question that
+        # reply answered: kept whatever they cost.
+        must_keep = self._newest_exchange_units(units)
+        for position, unit in enumerate(reversed(units)):
             unit_messages = len(unit)
             cost = self._approx_tokens(unit)
-            if kept_units and kept_messages + unit_messages > max_msgs:
+            required = position < must_keep
+            if not required and kept_units and kept_messages + unit_messages > max_msgs:
                 break
-            if budget > 0 and kept_units and used + cost > budget:
+            if not required and budget > 0 and kept_units and used + cost > budget:
                 break
             kept_units.append(unit)
             kept_messages += unit_messages

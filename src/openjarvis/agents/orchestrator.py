@@ -89,7 +89,9 @@ class OrchestratorAgent(ToolUsingAgent):
                 route_tools = True
         self._route_tools = route_tools
 
-    def _trim_history_once(self, messages: list) -> list:
+    def _trim_history_once(
+        self, messages: list, token_budget: Optional[int] = None
+    ) -> list:
         """Apply the token budget once, before the turn loop starts.
 
         Trimming inside the loop would move the start of the context on every
@@ -99,7 +101,7 @@ class OrchestratorAgent(ToolUsingAgent):
         """
         if not self._loop_guard:
             return messages
-        return self._loop_guard.compress_context(messages)
+        return self._loop_guard.compress_context(messages, token_budget=token_budget)
 
     def run(
         self,

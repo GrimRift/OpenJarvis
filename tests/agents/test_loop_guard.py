@@ -203,7 +203,8 @@ class TestTokenAwareCompression:
 
         assert len(messages) < 100  # would never have triggered on count
         assert len(out) < len(messages)
-        assert guard._approx_tokens(out) <= 2000
+        # Over the budget only by the newest exchange, which is always kept.
+        assert guard._approx_tokens(out) <= 2000 + guard._approx_tokens(messages[-3:])
 
     def test_the_newest_exchange_always_survives(self):
         guard = self._guard(max_context_tokens=100)
@@ -369,10 +370,13 @@ class TestPrefixStabilityForPromptCache:
         first = messages[0]
         second = messages[1]
 
+        # Each pass a new exchange, as a later turn brings: the newest
+        # exchange is always kept, so what moves is the start behind it.
         moved = False
         for turn in range(5):
             call_id = f"call_{turn}"
             messages = messages + [
+                Message(role=Role.USER, content=f"next {turn} " + "q" * 2000),
                 Message(
                     role=Role.ASSISTANT,
                     content="",
@@ -465,3 +469,41 @@ class TestAnAttachedDocumentIsNeverEvicted:
         kept = guard.compress_context(plain)
         assert len(kept) < len(plain), "still trims when nothing is pinned"
         assert kept[0].role.value == "system"
+
+
+class TestTheReplyBeingFollowedUpIsKept:
+    """24 September: "summarize all of that" after a 7,000-token answer. The
+    window's 8,000 tokens were mostly the system prompt; the answer was
+    evicted and the model summarised its memory instead."""
+
+    def _messages(self):
+        from openjarvis.core.types import Message, Role
+
+        return [
+            Message(role=Role.SYSTEM, content="You are Sage. " * 1500),
+            Message(role=Role.USER, content="earlier question"),
+            Message(role=Role.ASSISTANT, content="earlier answer"),
+            Message(role=Role.USER, content="do a deep research of Marvel Doomsday"),
+            Message(role=Role.ASSISTANT, content="Avengers: Doomsday is " * 1400),
+            Message(role=Role.USER, content="summarize all of that in one paragraph"),
+        ]
+
+    def test_the_long_answer_survives_a_budget_it_does_not_fit(self):
+        from openjarvis.agents.loop_guard import LoopGuard, LoopGuardConfig
+
+        kept = LoopGuard(LoopGuardConfig(max_context_tokens=8000)).compress_context(
+            self._messages()
+        )
+        contents = [m.content for m in kept]
+        assert any(c.startswith("Avengers: Doomsday") for c in contents)
+        assert "do a deep research of Marvel Doomsday" in contents
+        # Older chatter is still what goes.
+        assert "earlier answer" not in contents
+
+    def test_a_larger_budget_can_be_given_for_one_call(self):
+        from openjarvis.agents.loop_guard import LoopGuard, LoopGuardConfig
+
+        guard = LoopGuard(LoopGuardConfig(max_context_tokens=8000))
+        kept = guard.compress_context(self._messages(), token_budget=24_000)
+        assert "earlier answer" in [m.content for m in kept]
+        assert guard._config.max_context_tokens == 8000
