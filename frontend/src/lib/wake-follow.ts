@@ -65,6 +65,14 @@ const NAME = new Set(['sage', 'stage', 'sayge', 'saige', 'sages', 'says', 'siege
  */
 const NAME_SHAPE = /^[a-z]{0,3}[scz][aeiy]+(?:[gjdnmzv]+e?|ch)?$/;
 
+/**
+ * The name heard as a whole turn: the same shape, but the s-sound may come
+ * out as "ch" or "j" -- "Hey Sage" alone was sent to Sage as the request
+ * "Change." A one-word turn only: "change" also begins real requests
+ * ("change the song"), which have more words.
+ */
+const WHOLE_NAME_SHAPE = /^[a-z]{0,3}(?:[scz]|ch|j)[aeiy]+(?:[gjdnmzv]+e?|ch)?$/;
+
 function isNameToken(token: string): boolean {
   return NAME.has(token) || (token.length >= 4 && NAME_SHAPE.test(token));
 }
@@ -122,6 +130,9 @@ export function stripWakePhrase(transcript: string): string {
     // begin no request: "Eight inch. Give me my daily briefing." (heard 20
     // September). In a turn the wake word opened, that first sentence is
     // the phrase in some spelling no shape can predict.
+    if (tokens.length === 1 && !STARTERS.has(norm(tokens[0])) && WHOLE_NAME_SHAPE.test(norm(tokens[0]))) {
+      return '';
+    }
     const lead = leadingNonRequestSentence(tokens);
     if (lead === 0) return text;
     i = lead;

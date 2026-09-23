@@ -152,3 +152,25 @@ describe('the phrase as a sentence of its own', () => {
     expect(stripWakePhrase('Eight inch.')).toBe('Eight inch.');
   });
 });
+
+describe('the wake phrase heard as one word', () => {
+  it('drops "Change." -- how "Hey Sage" alone was once transcribed', async () => {
+    const { stripWakePhrase, isOnlyWakePhrase } = await import('./wake-follow');
+    expect(stripWakePhrase('Change.')).toBe('');
+    expect(isOnlyWakePhrase('Change.')).toBe(true);
+    expect(stripWakePhrase('Sage.')).toBe('');
+  });
+
+  it('keeps real requests that begin with the same word', async () => {
+    const { stripWakePhrase } = await import('./wake-follow');
+    expect(stripWakePhrase('Change the song.')).toBe('Change the song.');
+    expect(stripWakePhrase('Hey Sage, change the volume.')).toBe('change the volume.');
+  });
+
+  it('keeps one-word commands and one-word questions', async () => {
+    const { stripWakePhrase } = await import('./wake-follow');
+    for (const word of ['Stop.', 'Next.', 'Mute.', 'Weather?', 'Thanks.']) {
+      expect(stripWakePhrase(word)).toBe(word);
+    }
+  });
+});
