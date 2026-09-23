@@ -39,7 +39,9 @@ def _quick_settle(monkeypatch):
     never populates just burns them, which cost this file 20 seconds.
     """
     monkeypatch.setattr(opera_control, "_INBOX_SETTLE_CEILING", 0.05)
-
+    # The plain results read reaches YouTube; the browser path is the one
+    # under test here (the ranking has its own tests).
+    monkeypatch.setattr(opera_control.youtube_pick, "search", lambda q, **kw: [])
 
 
 class TestTheClosedPortIsExplained:
@@ -374,7 +376,7 @@ class TestInboxTextIsMarkedUntrusted:
 
 
 class TestMonitorPlacementIsOptional:
-    """"unless I specify where" — no monitor means leave the window alone."""
+    """ "unless I specify where" — no monitor means leave the window alone."""
 
     def test_no_monitor_moves_nothing(self):
         assert opera_control.Session(None).move_to_monitor(None) == ""
@@ -503,7 +505,7 @@ class TestWhereTheVideoGoes:
 
 
 class TestTheLatestVideo:
-    """"Play the latest video of kurzgesagt" played one from a year earlier.
+    """ "Play the latest video of kurzgesagt" played one from a year earlier.
 
     Search is ordered by relevance, and the most relevant match for a channel
     name is not its newest upload. Asking the channel is the only way to answer
@@ -523,17 +525,17 @@ class TestTheLatestVideo:
         return YouTubePlayTool()._resolve(_FakePage(), "kurzgesagt", True)
 
     def test_it_plays_the_channels_newest_upload(self, monkeypatch):
-        href, title = self._resolve(
+        href, title, _ = self._resolve(
             monkeypatch, channel="/@kurzgesagt", newest=("/watch?v=new", "Newest")
         )
         assert (href, title) == ("/watch?v=new", "Newest")
 
     def test_an_unresolvable_channel_falls_back_to_a_search(self, monkeypatch):
-        href, _ = self._resolve(monkeypatch, channel="", newest=("", ""))
+        href, _, _ = self._resolve(monkeypatch, channel="", newest=("", ""))
         assert href == "/watch?v=from-search"
 
     def test_a_channel_with_no_readable_uploads_also_falls_back(self, monkeypatch):
-        href, _ = self._resolve(monkeypatch, channel="/@kurzgesagt", newest=("", ""))
+        href, _, _ = self._resolve(monkeypatch, channel="/@kurzgesagt", newest=("", ""))
         assert href == "/watch?v=from-search"
 
     def test_the_fallback_search_is_sorted_by_date(self, monkeypatch):
@@ -656,7 +658,7 @@ class TestReadingTheDateOnAMessage:
         assert parse_when(fragment, self.WEDNESDAY) == expected
 
     def test_a_weekday_and_time_means_the_most_recent_one(self):
-        """"Sun 5:15 PM" on a Wednesday is the Sunday just gone."""
+        """ "Sun 5:15 PM" on a Wednesday is the Sunday just gone."""
         assert parse_when("Sun 5:15 PM", self.WEDNESDAY) == date(2026, 8, 30)
 
     def test_a_bare_time_means_today(self):
@@ -729,9 +731,7 @@ class TestSayingWhenThereIsNothingNew:
 
     def test_the_newest_date_is_reported(self, monkeypatch):
         page = _FakePage(
-            evaluations={
-                "role='option'": ["A\nsubject\n8/20", "B\nsubject\n8/28"]
-            }
+            evaluations={"role='option'": ["A\nsubject\n8/20", "B\nsubject\n8/28"]}
         )
         _install(monkeypatch, page)
         newest = OutlookReadTool().execute().metadata["newest"]
@@ -807,7 +807,7 @@ class TestSkippingAds:
         monkeypatch.setattr(
             opera_control.YouTubePlayTool,
             "_resolve",
-            lambda self, p, q, latest: ("/watch?v=x", "Egg"),
+            lambda self, p, q, latest, request="": ("/watch?v=x", "Egg", []),
         )
         monkeypatch.setattr(opera_control, "_ensure_playing", lambda p: True)
         result = opera_control.YouTubePlayTool().execute(query="egg")
@@ -844,7 +844,7 @@ class TestTheStalledVideoHealsItself:
         monkeypatch.setattr(
             opera_control.YouTubePlayTool,
             "_resolve",
-            lambda self, p, q, latest: ("/watch?v=x", "Egg"),
+            lambda self, p, q, latest, request="": ("/watch?v=x", "Egg", []),
         )
         monkeypatch.setattr(opera_control, "_ensure_playing", lambda p: True)
         monkeypatch.setattr(opera_control, "skip_ad", lambda p, **k: "no ad")
@@ -859,3 +859,39 @@ class TestTheStalledVideoHealsItself:
         assert "v.paused" in script and "v.ended" in script
         assert "v.seeking" in script and "ad-showing" in script
         assert "v.readyState >= 3" in script
+
+
+class TestTheVideoIsChosen:
+    """The first result is YouTube's guess; the one played fits the request."""
+
+    def test_the_best_match_is_played_and_the_rest_reported(self, monkeypatch):
+        from openjarvis.tools.youtube_pick import Candidate
+
+        results = [
+            Candidate("aaaaaaaaaaa", "lofi radio", "Lofi Girl", None, live=True),
+            Candidate("bbbbbbbbbbb", "lofi study mix", "Lofi Girl", 10_800, position=1),
+        ]
+        monkeypatch.setattr(
+            opera_control.youtube_pick, "search", lambda q, **kw: results
+        )
+        page = _FakePage()
+        href, title, others = YouTubePlayTool()._resolve(
+            page, "lofi", False, "some lofi to study to"
+        )
+        assert (href, title) == ("/watch?v=bbbbbbbbbbb", "lofi study mix")
+        assert [o.video_id for o in others] == ["aaaaaaaaaaa"]
+        assert page.visited == []  # no results page drawn in the browser
+
+    def test_a_named_video_id_is_played_as_is(self, monkeypatch):
+        page = _FakePage()
+        session = _install(monkeypatch, page)
+        session.show_compact = lambda: ""
+        monkeypatch.setattr(opera_control, "_ensure_playing", lambda p: True)
+        monkeypatch.setattr(
+            opera_control.YouTubePlayTool,
+            "_resolve",
+            lambda *a, **k: pytest.fail("a named video needs no search"),
+        )
+        result = YouTubePlayTool().execute(query="lofi", video_id="bbbbbbbbbbb")
+        assert result.success is True
+        assert any("watch?v=bbbbbbbbbbb" in url for url in page.visited)

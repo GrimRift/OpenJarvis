@@ -51,6 +51,7 @@ from typing import Any, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
+from openjarvis.tools import youtube_pick
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 DEBUG_PORT = int(os.environ.get("OPENJARVIS_OPERA_CDP_PORT", "9222"))
@@ -495,6 +496,8 @@ def _netflix_pick(page, query: str):
 #: resolved. Relevance order is the default and is what played a video from a
 #: year earlier when the user asked for the latest one.
 _YT_SORT_BY_DATE = "&sp=CAI%3D"
+#: Runner-up results reported after a play, for "play the other one".
+OTHER_MATCHES = 3
 
 #: YouTube's "channel" result-type filter.
 _YT_CHANNELS_ONLY = "&sp=EgIQAg%3D%3D"
@@ -887,7 +890,10 @@ class YouTubePlayTool(_OperaTool):
                 "'monitor' or 'fullscreen' when the user actually asks to "
                 "see it (words like show, open, put, place, on my second "
                 "monitor, fullscreen). Set 'latest' when they ask for the "
-                "newest/latest/most recent video of a channel."
+                "newest/latest/most recent video of a channel. It picks the "
+                "result that best fits 'request' (the user's own words), not "
+                "just the first, and reports the next best matches; to play "
+                "one of those instead, pass its video_id."
             ),
             parameters={
                 "type": "object",
@@ -897,6 +903,21 @@ class YouTubePlayTool(_OperaTool):
                         "description": (
                             "What to search for. For 'latest video of X', "
                             "pass just the channel name as X."
+                        ),
+                    },
+                    "request": {
+                        "type": "string",
+                        "description": (
+                            "What the user asked for, in their words (e.g. "
+                            "'something calm to study to, not a live "
+                            "stream'). The video is chosen to fit this."
+                        ),
+                    },
+                    "video_id": {
+                        "type": "string",
+                        "description": (
+                            "Play exactly this video: an id from an earlier "
+                            "youtube_play's other matches."
                         ),
                     },
                     "latest": {
@@ -935,12 +956,20 @@ class YouTubePlayTool(_OperaTool):
             return self._fail("What should I search for?")
         monitor = params.get("monitor")
         latest = bool(params.get("latest", False))
+        request = str(params.get("request") or "").strip() or query
+        video_id = str(params.get("video_id") or "").strip()
+        others: list = []
         # Showing it is opt-in. Naming a monitor is itself a request to watch.
         wants_to_watch = monitor is not None or bool(params.get("fullscreen", False))
         try:
             with opera_session(own_window=True) as session:
                 page = session.page
-                href, known_title = self._resolve(page, query, latest)
+                if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+                    href, known_title = f"/watch?v={video_id}", ""
+                else:
+                    href, known_title, others = self._resolve(
+                        page, query, latest, request
+                    )
                 if not href:
                     return self._fail(f"No YouTube results for {query!r}.")
                 # Installed before the watch page loads, so it is already
@@ -970,15 +999,25 @@ class YouTubePlayTool(_OperaTool):
             return self._fail(f"could not play that: {error}")
         state = "Playing" if playing else "Opened (paused — press play)"
         note = {"skipped": " Skipped the ad.", "unskippable": " (An ad is playing.)"}
+        content = f"{state} {title!r} on YouTube.{where}{note.get(ad, '')}"
+        if others:
+            content += "\nOther matches (pass video_id to play one): " + "; ".join(
+                f"{other.video_id}: {other.describe()}" for other in others
+            )
         return ToolResult(
             tool_name=self.tool_id,
-            content=f"{state} {title!r} on YouTube.{where}{note.get(ad, '')}",
+            content=content,
             success=True,
-            metadata={"playing": playing, "latest": latest, "ad": ad},
+            metadata={
+                "playing": playing,
+                "latest": latest,
+                "ad": ad,
+                "others": [other.video_id for other in others],
+            },
         )
 
-    def _resolve(self, page, query: str, latest: bool):
-        """``(watch_path, title)`` for what the user asked to hear.
+    def _resolve(self, page, query: str, latest: bool, request: str = ""):
+        """``(watch_path, title, other_matches)`` for what the user asked for.
 
         "Latest video of X" is a different question from "best match for X",
         and answering it with relevance order played a Kurzgesagt video from a
@@ -991,7 +1030,7 @@ class YouTubePlayTool(_OperaTool):
             if channel:
                 href, title = _youtube_newest_upload(page, channel)
                 if href:
-                    return href, title
+                    return href, title, []
             page.navigate(
                 "https://www.youtube.com/results?search_query="
                 + urllib.parse.quote_plus(query)
@@ -999,12 +1038,16 @@ class YouTubePlayTool(_OperaTool):
                 timeout=_NAV_TIMEOUT,
             )
         else:
+            ranked = youtube_pick.rank(youtube_pick.search(query), request or query)
+            if ranked:
+                best = ranked[0]
+                return best.href, best.title, ranked[1:OTHER_MATCHES + 1]
             page.navigate(
                 "https://www.youtube.com/results?search_query="
                 + urllib.parse.quote_plus(query),
                 timeout=_NAV_TIMEOUT,
             )
-        return _first_href(page, "a#video-title, a#thumbnail", "/watch?v="), ""
+        return _first_href(page, "a#video-title, a#thumbnail", "/watch?v="), "", []
 
 
 @ToolRegistry.register("netflix_play")
