@@ -192,3 +192,18 @@ export function isOnlyWakePhrase(
   if (tokens.length === 2 && STARTERS.has(first)) return false;
   return greetedAlready || elapsedMs < PAUSE_TURN_MS;
 }
+
+/**
+ * The transcript without Sage's own greeting in it. The microphone keeps
+ * listening while "Yes, Sir?" plays, so a question said over it is heard --
+ * it was discarded, and had to be asked twice (24 September) -- and echo
+ * cancellation leaves some of the greeting in the audio. Its words ("Hello,
+ * Sir", "Yes, Sir", "Sir") are taken out wherever they landed.
+ */
+export function stripGreetingEcho(transcript: string): string {
+  return transcript
+    .replace(/\b(?:hello|hi|yes|yeah)[,.!?]*\s+sir\b[,.!?]*/gi, ' ')
+    .replace(/^\s*sir\b[,.!?]*/i, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}

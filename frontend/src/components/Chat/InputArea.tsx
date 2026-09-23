@@ -38,6 +38,7 @@ import {
   continuesPastWakePhrase,
   greetingDelayMs,
   isOnlyWakePhrase,
+  stripGreetingEcho,
   stripWakePhrase,
 } from '../../lib/wake-follow';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
@@ -226,6 +227,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // one, may have caught people talking to each other.
   const listenKindRef = useRef<'wake' | 'followUp' | 'mic'>('mic');
   const voiceFollowUpRef = useRef(false);
+  // Whether a greeting played into the turn being heard: its echo is then
+  // taken out of the transcript (lib/wake-follow stripGreetingEcho).
+  const greetingInTurnRef = useRef(false);
   // Set once the listening machinery exists (it is declared further down).
   const resumeAfterDeclineRef = useRef<(() => void) | null>(null);
   // Persists past voiceOriginatedRef's reset-at-send-time so the
@@ -1608,6 +1612,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }
 
       let spoken = (transcript || '').trim();
+      if (greetingInTurnRef.current && spoken) {
+        const cleaned = stripGreetingEcho(spoken);
+        if (!cleaned) {
+          // Only Sage's own greeting, heard back: keep listening for the
+          // question it asked for.
+          voiceTrace('wake.greetingEchoOnly', { chars: spoken.length });
+          flux.beginTurn();
+          armFluxSilenceTimer('wake');
+          return;
+        }
+        spoken = cleaned;
+      }
       if (fastFollowRef.current.active) {
         clearGreetingTimer();
         const elapsed = Date.now() - fastFollowRef.current.startedAt;
@@ -1747,6 +1763,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         return;
       }
       voiceOriginatedRef.current = true;
+      greetingInTurnRef.current = false;
       // Saying the name is speaking to Sage, whatever opened the microphone.
       voiceFollowUpRef.current =
         listenKindRef.current === 'followUp' && !/\bsage\b/i.test(spoken);
@@ -2119,10 +2136,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           }
           return;
         }
-        // Same sequential contract as the local path: the greeting finishes
-        // before any audio is transmitted, so Sage's own voice never enters
-        // the turn Deepgram is judging.
-        if (greeting) await greeting;
+        // Listening from the start of the greeting, not its end: a question
+        // said over "Yes, Sir?" was discarded and had to be asked twice (24
+        // September). The greeting plays out in full; its echo is taken out
+        // of the transcript.
+        greetingInTurnRef.current = Boolean(greeting);
         flux.beginTurn();
         armFluxSilenceTimer('wake');
         return;
@@ -2156,12 +2174,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     state.greeted = true;
     clearGreetingTimer();
     voiceTrace('wake.pauseGreeting', { why });
-    const clip = playGreeting({
+    // Heard through, not held: the user may already be answering it.
+    greetingInTurnRef.current = true;
+    playGreeting({
       voiceId: ttsVoice.id,
       onFailure: (reason) =>
         toast.error(`Greeting didn't play — ${reason}`, { duration: 8000 }),
     });
-    flux.holdAudio(clip);
   };
 
   useEffect(() => {

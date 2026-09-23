@@ -174,3 +174,27 @@ describe('the wake phrase heard as one word', () => {
     }
   });
 });
+
+describe('stripGreetingEcho (24 September: a question said over the greeting was lost)', () => {
+  it('takes the greeting out wherever it landed', async () => {
+    const { stripGreetingEcho } = await import('./wake-follow');
+    expect(stripGreetingEcho('Yes, sir? What time is my class tomorrow')).toBe(
+      'What time is my class tomorrow',
+    );
+    expect(stripGreetingEcho('What time hello sir is my class')).toBe('What time is my class');
+    expect(stripGreetingEcho('Sir. Play some music')).toBe('Play some music');
+  });
+
+  it('leaves nothing when the turn was only the greeting', async () => {
+    const { stripGreetingEcho } = await import('./wake-follow');
+    expect(stripGreetingEcho('Yes, sir?')).toBe('');
+    expect(stripGreetingEcho('Sir.')).toBe('');
+  });
+
+  it('keeps a question that merely contains the word', async () => {
+    const { stripGreetingEcho } = await import('./wake-follow');
+    expect(stripGreetingEcho('Tell me about sir Isaac Newton')).toBe(
+      'Tell me about sir Isaac Newton',
+    );
+  });
+});
