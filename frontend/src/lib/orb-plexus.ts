@@ -157,6 +157,11 @@ const DUST_TURN = 1;
  *           and the peak burns white. A cap works but dulls the state; the
  *           'red' control below is how speaking avoids it.
  * red       how much of the ramp's red is kept, 0..1. See RAMPS.
+ * wires     the share of the web's lines drawn, 0..1: a fixed choice per pair
+ *           of nodes. A lit speaking patch piles so many lines on each
+ *           other that it turns into a solid slab; drawing fewer, each as
+ *           bright, keeps the knots where lines cross and opens the slab
+ *           back into a web.
  * soft      a blur on the frame itself, in pixels at 764 (scaled with the
  *           canvas). At zero every line is a one-pixel hairline and every
  *           dot a hard square, which at full size reads as a sharp wire
@@ -173,6 +178,7 @@ export interface PlexusLook {
   haze: number;
   rampTop: number;
   red: number;
+  wires: number;
 }
 
 export const PLEXUS_LOOK = {
@@ -185,8 +191,11 @@ export const PLEXUS_LOOK = {
   //   reference GIF     50  118  211   0.51   0.20  15,75,98
   //   standing by       52  133  212   0.40   0.18  14,75,97
   //   lab speaking      52  189  245   0.28   0.22  22,99,120
-  //   listening         60  183  224      -   0.21  20,91,111
-  //   speaking          97  212  236      -   0.18  26,143,158
+  //   listening         43  166  225      -      -  -
+  //   speaking          64  202  231      -      -  -
+  //   a pause in it     41  154  217      -      -  -
+  //   (these three measured inside the shell at full size, not at 300px;
+  //   among their brightest pixels red over green is 0.28 / 0.23 / 0.19)
   //
   // A screenshot of the version before scored sharpness 0.75 and
   // whiteness 0.61 -- half again as sharp as the reference and three times
@@ -196,28 +205,35 @@ export const PLEXUS_LOOK = {
   // pixels red over green is 0.20, listening's 0.24 -- it was 0.40, its lit
   // patches burning white. Capping it at a deeper teal fixed the white but
   // left it duller than listening; halving its red instead lets it run
-  // bright. It draws about 1,500 clearly visible dots to listening's 900;
-  // it drew 84, its exposure sinking under every word.
+  // bright. And its lit patches no longer pile into solid slabs: 16 px
+  // blocks averaging over 200 were 16% of its disc (listening's: 2%), and
+  // are 6% -- by drawing 42% of its lines each as bright (wires), not by
+  // compressing, which took its peaks under listening's with them.
   states: {
-    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1 },
-    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1 },
-    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1 },
-    speaking: { exposure: 1.65, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5 },
+    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1 },
+    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1 },
+    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 1 },
+    speaking: { exposure: 2.8, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5, wires: 0.42 },
   } as Record<OrbState, PlexusLook>,
   /**
-   * How far speaking's exposure eases back as its patches light. Its own
-   * exposure above is the one in a pause; while words light the patches it
-   * is divided by (1 + this x how far the patches sit above rest).
+   * Speaking's exposure is automatic: it steers the light the web draws --
+   * the sum of its lines' strengths, known for free as they are drawn --
+   * toward this, within speakingRange of its own exposure. Up in a pause,
+   * back under a loud word; a syllable's patch still flares, since it is
+   * local and the steering is over the whole frame and slow.
    *
-   * The first version eased it along the voice envelope, which had to guess
-   * how much light a word adds: set for words, a pause mid-sentence scored
-   * median 37 against standing by's 53 -- the dimmest thing on screen while
-   * Sage was talking -- and set for pauses, the tuning wanted an in-word
-   * exposure of 0.1, which a long loud vowel from the real analyser would
-   * have driven nearly dark. Measured against the patches it answers what
-   * is actually on screen.
+   * Three fixed rules came first, each leaving a gap. A fixed exposure let
+   * a pause fall below standing by (median 37 against 53), the old dark
+   * speaking. Easing it along the voice envelope needed an in-word exposure
+   * of 0.1 to keep pauses up, which a long loud vowel would have driven
+   * dark. Easing it by the lit patches missed sustained loud speech, which
+   * brightens through the orb's swell and pulse rather than its patches: a
+   * harsh test voice clipped 20% of the disc into solid slabs.
    */
-  speakingDamp: 10,
+  // What normal speech draws at speaking's 0.42 wires, measured over three
+  // layouts. A pause draws about half of it.
+  speakingInk: 427,
+  speakingRange: [0.5, 1.3] as [number, number],
   bloomRadius: 190,
   glowRadius: 420,
   hazeRadius: 60,
@@ -253,7 +269,7 @@ const TETHER = 1.2e-4;
  * edge   where the canvas's soft edge begins, as a fraction of its half
  *        width. The thorns are what reach it.
  */
-export const PLEXUS_THORNS = { kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 6, edge: 0.96 };
+export const PLEXUS_THORNS = { kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 4, edge: 0.96 };
 
 const RAMP_STOPS: Array<[number, number, number, number]> = [
   [0, 10, 76, 107],
@@ -263,6 +279,15 @@ const RAMP_STOPS: Array<[number, number, number, number]> = [
   [1, 255, 255, 255],
 ];
 const RAMP_STEPS = 18;
+
+/** A fixed number in 0..1 for a pair of nodes. */
+function pairHash(a: number, b: number): number {
+  let h = Math.imul(a, 0x9e3779b1) ^ Math.imul(b + 0x7f4a7c15, 0x85ebca77);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2c1b3c6d);
+  h ^= h >>> 12;
+  return (h >>> 0) / 4294967296;
+}
 
 function buildRamp(red = 1): string[] {
   const ramp: string[] = [];
@@ -351,6 +376,8 @@ export interface PlexusState {
   z: number; zVel: number; linkAge: number;
   particles: Node[];
   pairs: Int32Array; pairCount: number;
+  /** The light the web drew, smoothed: the sum of its lines' strengths. */
+  ink: number;
   look: PlexusLook;
 }
 
@@ -473,6 +500,7 @@ export function createPlexusState(): PlexusState {
       links: PLEXUS_STATES.idle.links, look: { ...PLEXUS_LOOK.states.idle }, breath: 1,
       spin: PLEXUS_STATES.idle.spin, pace: PLEXUS_STATES.idle.pace,
     },
+    ink: 0,
     trans: 1, lastBreath: 1, lastSpin: PLEXUS_STATES.idle.spin,
     phase: 0, lastPace: PLEXUS_STATES.idle.pace,
     z: 0, zVel: 0, linkAge: 0,
@@ -614,16 +642,11 @@ export function drawPlexus(
   S.bright = lerp(F.bright, cfg.bright, e);
   S.links = lerp(F.links, cfg.links, e);
   const want = PLEXUS_LOOK.states[state];
-  // Speaking's exposure follows its lit patches (see speakingDamp); the
-  // morph blends toward that moving target, and once it lands tracks it.
-  // Only light above the patches' own slow drift counts: that drift runs
-  // the whole time, with no speech at all, and counting it dimmed pauses.
-  const ceiling = PLEXUS_PATCHES[state].base + PLEXUS_PATCHES[state].swing;
-  let lit = 0;
-  for (let i = 0; i < LOBES; i++) lit += Math.max(0, S.lobes[i] - ceiling);
-  lit /= LOBES;
-  const exposureTarget =
-    state === 'speaking' ? want.exposure / (1 + PLEXUS_LOOK.speakingDamp * lit) : want.exposure;
+  // Speaking's exposure is steered (see speakingInk); the morph blends
+  // toward that moving target, and once it lands tracks it.
+  const [lo, hi] = PLEXUS_LOOK.speakingRange;
+  const steer = S.ink > 0 ? Math.min(hi, Math.max(lo, PLEXUS_LOOK.speakingInk / S.ink)) : hi;
+  const exposureTarget = state === 'speaking' ? want.exposure * steer : want.exposure;
   S.look.exposure = lerp(F.look.exposure, exposureTarget, e);
   S.look.curve = lerp(F.look.curve, want.curve, e);
   S.look.white = lerp(F.look.white, want.white, e);
@@ -634,6 +657,7 @@ export function drawPlexus(
   S.look.haze = lerp(F.look.haze, want.haze, e);
   S.look.rampTop = lerp(F.look.rampTop, want.rampTop, e);
   S.look.red = lerp(F.look.red, want.red, e);
+  S.look.wires = lerp(F.look.wires, want.wires, e);
 
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
@@ -697,6 +721,7 @@ export function drawPlexus(
 
   const sR = R * 0.8 * breath;
   const sizeScale = w / 560;
+  const wires = Math.min(1, Math.max(0, S.look.wires));
   const rampTop = Math.round(Math.min(1, Math.max(0, S.look.rampTop)) * (RAMP_STEPS - 1));
   const ramp = RAMPS[Math.round(Math.min(1, Math.max(0, S.look.red)) * RED_LEVELS)];
   const damp = Math.pow(DAMP, dt);
@@ -808,9 +833,15 @@ export function drawPlexus(
     // Scaled by the current brightness, or the cull stops removing the
     // faintest fifth and starts removing the whole web.
     const cut = 0.045 * Math.min(1, bright);
+    let ink = 0;
     for (let i = 0; i < S.pairCount; i++) {
-      const a = P[S.pairs[i * 2]];
-      const c = P[S.pairs[i * 2 + 1]];
+      const ia = S.pairs[i * 2];
+      const ic = S.pairs[i * 2 + 1];
+      // Thinned by pair, not by position in the list: the list is rebuilt
+      // every few frames, and a line chosen by index would blink.
+      if (wires < 1 && pairHash(ia, ic) >= wires) continue;
+      const a = P[ia];
+      const c = P[ic];
       const ddx = a.x - c.x, ddy = a.y - c.y, ddz = a.z - c.z;
       const sq = ddx * ddx + ddy * ddy + ddz * ddz;
       const rmean = Math.max(LINK_RMEAN_FLOOR, (a.home + c.home) * 0.5);
@@ -829,9 +860,12 @@ export function drawPlexus(
       const alpha = near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5 *
         (1 + PLEXUS_THORNS.glow * Math.max(a.out, c.out));
       if (alpha <= cut) continue;
+      ink += alpha;
       const band = Math.min(LINK_BANDS - 1, ((alpha / LINK_MAX_ALPHA) * LINK_BANDS) | 0);
       bandBuffers[band].push(a.px, a.py, c.px, c.py);
     }
+    // Before exposure, so steering by it cannot feed back on itself.
+    S.ink += (ink - S.ink) * Math.min(1, 0.1 * dt);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     // Line width scales with the canvas, like everything else does. Held at

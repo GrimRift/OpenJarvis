@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createPlexusState, drawPlexus } from './orb-plexus';
+import { PLEXUS_LOOK, createPlexusState, drawPlexus } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -220,5 +220,30 @@ describe('the orb sits on the page, not on a square', () => {
       for (let f = 0; f < 4; f++) drawPlexus(target, canvas, S, state, f, 1, state === 'speaking' ? 0.6 : 0);
     }
     expect(shared.targetFills).toEqual([]);
+  });
+});
+
+describe("speaking's exposure steers itself", () => {
+  it('opens up in a pause and eases back under loud speech, within bounds', () => {
+    // A pause once fell below standing by, and a harsh sustained voice
+    // clipped a fifth of the disc into solid slabs; exposure now steers the
+    // light the web draws toward a set amount instead of following a rule.
+    const settle = (speech: (f: number) => number) => {
+      resetRecord();
+      const target = stubContext(shared);
+      const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+      const S = createPlexusState();
+      for (let f = 0; f < 240; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, speech(f));
+      return S.look.exposure;
+    };
+    const loud = settle((f) => 0.8 + 0.2 * Math.abs(Math.sin(f * 0.4)));
+    const pause = settle(() => 0);
+    const base = PLEXUS_LOOK.states.speaking.exposure;
+    const [lo, hi] = PLEXUS_LOOK.speakingRange;
+    expect(pause).toBeGreaterThan(loud);
+    for (const e of [loud, pause]) {
+      expect(e).toBeGreaterThanOrEqual(base * lo - 1e-6);
+      expect(e).toBeLessThanOrEqual(base * hi + 1e-6);
+    }
   });
 });
