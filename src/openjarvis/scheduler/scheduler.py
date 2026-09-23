@@ -106,6 +106,50 @@ def _stringify_result(result: Any) -> str:
     return str(result) if result is not None else ""
 
 
+#: Longest a delivered result is, toast, phone and voice alike: the whole
+#: answer stays in the run log.
+DELIVERED_CHARS = 320
+
+
+def _delivery(result_text: str) -> Optional[str]:
+    """What to tell the user about a run, or None when there is nothing to
+    say or the run already said it (it called notify_windows itself: a
+    second notification is what the user complained of on 23 September)."""
+    content = result_text
+    try:
+        data = json.loads(result_text)
+    except (TypeError, ValueError):
+        data = None
+    if isinstance(data, dict):
+        for item in data.get("tool_results") or []:
+            if isinstance(item, dict) and item.get("tool_name") == "notify_windows":
+                return None
+        content = str(data.get("content") or "")
+    content = content.strip()
+    if not content:
+        return None
+    if len(content) <= DELIVERED_CHARS:
+        return content
+    cut = content[:DELIVERED_CHARS]
+    end = max(cut.rfind(". "), cut.rfind("\n"))
+    return (cut[: end + 1] if end > DELIVERED_CHARS // 2 else cut).rstrip() + " ..."
+
+
+def _deliver_result(task: "ScheduledTask", result_text: str) -> None:
+    """A task scheduled from chat reports back: toast, voice and the phone,
+    through the same path as a reminder. Before this a run's answer went
+    only into the run log, and a task that fired looked as if it had not."""
+    message = _delivery(result_text)
+    if message is None:
+        return
+    try:
+        from openjarvis.tools.notify_windows import deliver
+
+        deliver("Scheduled task", message)
+    except Exception:
+        logger.warning("Could not deliver task %s's result", task.id, exc_info=True)
+
+
 class TaskScheduler:
     """Scheduler that polls for due tasks and executes them.
 
@@ -361,6 +405,9 @@ class TaskScheduler:
                 if next_run is None:
                     d["status"] = "completed"
                 self._store.update_task(d)
+
+        if success and (task.metadata or {}).get("deliver"):
+            _deliver_result(task, result_text)
 
         # Publish end event
         if self._bus is not None:

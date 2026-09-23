@@ -497,3 +497,59 @@ class TestOnceTasksWithLocalOffsets:
         assert store.get_task("stale1")["next_run"] == "2099-09-13T14:00:00+00:00"
         assert store.get_due_tasks("2099-09-13T16:07:00+00:00")
         assert not store.get_due_tasks("2099-09-13T13:00:00+00:00")
+
+
+class TestATaskFromChatReportsBack:
+    """23 September: "narration test at 3:22 PM" ran at 3:22:16 and its
+    answer went only into the run log. The user saw nothing and took the
+    scheduler for broken."""
+
+    def _run(self, store, monkeypatch, answer, metadata):
+        import openjarvis.tools.notify_windows as notify
+
+        sent = []
+        monkeypatch.setattr(
+            notify, "deliver", lambda title, text, **kw: sent.append((title, text))
+        )
+        system = MagicMock()
+        system.ask.return_value = answer
+        sched = TaskScheduler(store, system=system, poll_interval=1)
+        task = sched.create_task(
+            "x", "once", "2026-01-01T00:00:00+00:00", metadata=metadata
+        )
+        sched._execute_task(task)
+        return sent
+
+    def test_its_answer_is_delivered(self, store, monkeypatch):
+        answer = {"content": "The test passed.", "tool_results": []}
+        sent = self._run(store, monkeypatch, answer, {"deliver": True})
+        assert sent == [("Scheduled task", "The test passed.")]
+
+    def test_not_twice_when_it_notified_itself(self, store, monkeypatch):
+        answer = {"content": "Sent.", "tool_results": [{"tool_name": "notify_windows"}]}
+        assert self._run(store, monkeypatch, answer, {"deliver": True}) == []
+
+    def test_system_tasks_report_their_own_way(self, store, monkeypatch):
+        assert self._run(store, monkeypatch, "Nothing upcoming.", {}) == []
+
+    def test_a_long_answer_is_cut_at_a_sentence(self, store, monkeypatch):
+        long = "First sentence here. " * 40
+        [(_, message)] = self._run(store, monkeypatch, long, {"deliver": True})
+        assert len(message) < 340
+        assert message.endswith(". ...")
+
+
+def test_a_task_from_chat_is_marked_to_deliver(store):
+    from openjarvis.scheduler.tools import ScheduleTaskTool
+
+    sched = TaskScheduler(store, poll_interval=1)
+    tool = ScheduleTaskTool()
+    tool._scheduler = sched
+    result = tool.execute(
+        prompt="Check the weather in Calamba and summarise it.",
+        schedule_type="once",
+        schedule_value="2030-01-01T09:00:00",
+    )
+    assert result.success, result.content
+    [task] = sched.list_tasks()
+    assert task.metadata.get("deliver") is True

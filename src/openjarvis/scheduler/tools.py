@@ -342,18 +342,25 @@ class ScheduleTaskTool(BaseTool):
         return ToolSpec(
             name="schedule_task",
             description=(
-                "Schedule a prompt to run automatically, later or on a "
-                "repeating schedule. Use for requests like 'every morning at "
-                "8, check X' or 'remind me in 30 minutes'. Write cron times in "
-                "the user's LOCAL time — the conversion to UTC is handled for "
-                "you, so do not adjust the hour yourself."
+                "Schedule work for Sage to do automatically, later or on a "
+                "repeating schedule, like 'every morning at 8, check X'. Its "
+                "answer is sent to the user when it runs. Not for plain "
+                "reminders ('remind me in 30 minutes to ...'): use "
+                "tell_me_when for those. Write cron times in the user's LOCAL "
+                "time — the conversion to UTC is handled for you, so do not "
+                "adjust the hour yourself."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "The prompt/query to execute on schedule.",
+                        "description": (
+                            "The instruction to run on schedule. It runs later "
+                            "with no memory of this conversation, so make it "
+                            "self-contained: say exactly what to do, with any "
+                            "names, places or details it needs."
+                        ),
                     },
                     "schedule_type": {
                         "type": "string",
@@ -522,7 +529,14 @@ class ScheduleTaskTool(BaseTool):
                 tools=params.get("tools", ""),
                 # TaskScheduler._execute_task reads this back out; it rides in
                 # metadata because scheduled_tasks has no migration path.
-                metadata=({"model": requested_model} if requested_model else {}),
+                # "deliver": the answer is sent to the user when the task
+                # runs (TaskScheduler._deliver_result); tasks the system sets
+                # up for itself report their own way.
+                metadata=(
+                    {"deliver": True, "model": requested_model}
+                    if requested_model
+                    else {"deliver": True}
+                ),
             )
             payload = {
                 "task_id": task.id,
