@@ -175,9 +175,22 @@ export function echoTokens(word: string): string[] {
       .split(/[^\p{L}\p{N}]+/u)
       .filter(Boolean)
       .map((part) => part.toLowerCase())
-      .map((part) => NUMBER_WORDS[part] ?? stem(part))
+      .map((part) => ECHO_ALIASES[part] ?? NUMBER_WORDS[part] ?? stem(part))
   );
 }
+
+/**
+ * How Sage's own words come back through the speakers. "Good morning, Sir.
+ * It's Thursday" was heard as "Good morning. So it", matched only two of
+ * four words, and cut Sage off after a question nobody interrupted (24
+ * September). Both sides pass through this, so a match is a match.
+ */
+const ECHO_ALIASES: Record<string, string> = {
+  so: 'sir',
+  sure: 'sir',
+  sirs: 'sir',
+  its: 'it',
+};
 
 /** A verbatim run this long is Sage's own sentence, not a coincidence. */
 export const ECHO_RUN = 5;

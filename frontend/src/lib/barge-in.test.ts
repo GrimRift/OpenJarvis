@@ -309,3 +309,15 @@ describe('a lone "stop" (24 September: it took three or four)', () => {
     expect(judge(say('stop'), tail)).toEqual({ decision: 'reject', reason: 'echo' });
   });
 });
+
+describe('Sage hearing its own greeting back (24 September)', () => {
+  it('"Good morning. So it" is its own "Good morning, Sir. It\'s"', () => {
+    const reply = "Good morning, Sir. It's Thursday, September 24, 2026, around 7:39 AM.";
+    const heard = [w('Good', 0.97), w('morning.', 0.98), w('So', 1.0), w('it', 0.59)];
+    expect(judge(heard, reply)).toEqual({ decision: 'reject', reason: 'echo' });
+  });
+
+  it('the user saying "so" is still the user', () => {
+    expect(judge(say('so what about tomorrow'), REPLY)).toEqual({ decision: 'cut', reason: 'words' });
+  });
+});
