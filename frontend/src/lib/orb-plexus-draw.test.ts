@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_LOOK, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
+import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_SIGNAL, PLEXUS_SPARKS, PLEXUS_TRAVEL, PLEXUS_LOOK, PLEXUS_PATCHES, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -266,6 +266,26 @@ describe('the spikes setting', () => {
     expect(run(true)).toBeGreaterThan(0.02);
     expect(run(false)).toBeLessThan(1e-6);
   });
+
+  it('throws them on sharp onsets only', () => {
+    // Soft syllables, each a rise under the threshold: the body reaches no
+    // further than with thorns switched off. Sharp ones throw them.
+    const run = (spikes: boolean, high: number) => {
+      resetRecord();
+      const target = stubContext(shared);
+      const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+      const S = createPlexusState();
+      S.spikes = spikes;
+      let thrown = 0;
+      for (let f = 0; f < 240; f++) {
+        drawPlexus(target, canvas, S, 'speaking', f, 1, f < 20 ? 0.1 : (f % 14) < 7 ? high : 0.1);
+        thrown += S.particles.filter((p) => p.out > 0.05).length;
+      }
+      return thrown;
+    };
+    expect(run(true, 0.22)).toBe(run(false, 0.22));
+    expect(run(true, 0.6)).toBeGreaterThan(run(false, 0.6));
+  });
 });
 
 function frames(state: 'idle' | 'listening', n: number, each?: (S: ReturnType<typeof createPlexusState>, f: number) => void) {
@@ -382,11 +402,15 @@ describe('a held sound', () => {
   }
 
   it('swells the patch it lit instead of letting it go out', () => {
-    // Silence, then one long vowel.
-    const { lit } = speak((f) => (f < 80 ? 0 : 0.7), 200);
-    const afterOnset = lit[80 + 30];
-    const heldOn = lit[80 + 110];
-    expect(heldOn).toBeGreaterThan(afterOnset + 0.2);
+    // Silence, then one long vowel. Its patch is held above anything its
+    // own slow drift reaches (base + swing), which is where it would sit
+    // without the swell.
+    const { S, lit } = speak((f) => (f < 80 ? 0 : 0.7), 200);
+    const { base, swing } = PLEXUS_PATCHES.speaking;
+    const want = base + PLEXUS_SUSTAIN.lift * 0.7 * 0.9;
+    expect(want).toBeGreaterThan(base + swing);
+    expect(S.lobeTargets[S.lastHit]).toBeGreaterThanOrEqual(want);
+    expect(lit[199]).toBeGreaterThan(base + swing);
   });
 
   it('leaves ordinary syllables to their onsets', () => {
@@ -394,4 +418,80 @@ describe('a held sound', () => {
     const { S } = speak((f) => (f < 80 ? 0 : f % 12 < 6 ? 0.7 : 0.1), 200);
     expect(S.holdFrames).toBeLessThan(PLEXUS_SUSTAIN.after);
   });
+});
+
+describe('speaking lights', () => {
+  function speakState(level: (f: number) => number, n: number, each?: (S: ReturnType<typeof createPlexusState>, f: number) => void) {
+    resetRecord();
+    const target = stubContext(shared);
+    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+    const S = createPlexusState();
+    for (let f = 0; f < n; f++) {
+      drawPlexus(target, canvas, S, 'speaking', f, 1, level(f));
+      each?.(S, f);
+    }
+    return S;
+  }
+
+  it('sparks on a sharp onset and is dark again within a few frames', () => {
+    let peak = 0;
+    let after = -1;
+    speakState((f) => (f < 90 ? 0 : 0.8), 110, (S, f) => {
+      const lit = S.particles.filter((p) => p.spark > 0).length;
+      if (f === 90) peak = lit;
+      if (f === 105) after = lit;
+    });
+    expect(peak).toBeGreaterThanOrEqual(PLEXUS_SPARKS.count[0]);
+    expect(after).toBe(0);
+  });
+
+  it('does not spark on a soft onset', () => {
+    let lit = 0;
+    speakState((f) => (f < 90 ? 0 : 0.12), 110, (S) => {
+      lit = Math.max(lit, S.particles.filter((p) => p.spark > 0).length);
+    });
+    expect(lit).toBe(0);
+  });
+
+  it('sends a signal out from the lit patch that runs its course', () => {
+    let seen = 0;
+    const S = speakState((f) => (f < 90 ? 0 : 0.6), 90 + PLEXUS_SIGNAL.length + 5, (s) => {
+      seen = Math.max(seen, s.signals.length);
+    });
+    expect(seen).toBe(1);
+    expect(S.signals.length).toBe(0);
+  });
+
+  it('walks a phrase to the patch beside the last', () => {
+    // Syllables every 10 frames. Picking by facing alone relights the same
+    // front patch again and again; the walk moves on every syllable, and to
+    // a patch on the same side (a patch whose neighbours have all turned
+    // away may still jump to one in front, so this is an average over
+    // several bodies, not a rule for each step).
+    const walk = () => {
+      const dots: number[] = [];
+      let repeats = 0;
+      for (let run = 0; run < 4; run++) {
+        const hits: number[] = [];
+        const S = speakState((f) => (f < 60 ? 0 : f % 10 < 5 ? 0.7 : 0.05), 200, (s, f) => {
+          if (f >= 60 && f % 10 === 0) hits.push(s.lastHit);
+        });
+        for (let i = 1; i < hits.length; i++) {
+          if (hits[i] === hits[i - 1]) repeats++;
+          const a = S.lobeAxes[hits[i]], b = S.lobeAxes[hits[i - 1]];
+          dots.push(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+        }
+      }
+      return { mean: dots.reduce((x, y) => x + y, 0) / dots.length, repeats };
+    };
+    const travelling = walk();
+    const within = PLEXUS_TRAVEL.within;
+    PLEXUS_TRAVEL.within = 0;
+    const scattered = walk();
+    PLEXUS_TRAVEL.within = within;
+    expect(travelling.repeats).toBe(0);
+    expect(scattered.repeats).toBeGreaterThan(10);
+    expect(travelling.mean).toBeGreaterThan(0.3);
+  }, 20_000);
+
 });

@@ -328,6 +328,42 @@ export const PLEXUS_LOOK = {
  */
 export const PLEXUS_SUSTAIN = { floor: 0.2, onset: 0.15, after: 16, grow: 36, lift: 0.5, spread: 0.45, glow: 0.08 };
 
+/**
+ * Sparks: on a sharp onset -- a t, k or p, a stressed start -- a few nodes
+ * in the lit patch flash white for a frame or two. A vowel's softer rise
+ * only swells its patch, so the two read differently.
+ *
+ * rise   the onset that sparks. On Sage's recorded voice a rise over 0.15
+ *        comes 1.3 times a second; over 0.06, the patch's, 5.8.
+ * count  nodes lit, from a rise at the threshold to one 0.15 over it
+ * fall   what is left of a spark each frame: gone in about six
+ * size   a spark's size against its node's
+ */
+export const PLEXUS_SPARKS = { rise: 0.15, count: [5, 12] as [number, number], fall: 0.62, size: 2.2, alpha: 0.95 };
+
+/**
+ * A signal: light that runs out along the web from the lit patch as a
+ * syllable starts, and fades within a few links. On the nodes, so the
+ * lines between them carry it; the dust is left out, or it would read as a
+ * ring of glitter rather than current in the wires.
+ *
+ * rise   the onset that sends one: over 0.1, about three a second
+ * length frames it runs
+ * reach  how far it gets, in 1 - cos of the angle from the patch: 0.8 is
+ *        about 80 degrees
+ * width  the running front's width, same units
+ * lift   its brightness at the start, fading as it runs
+ * max    signals running at once; a new one replaces the oldest
+ */
+export const PLEXUS_SIGNAL = { rise: 0.1, length: 28, reach: 0.8, width: 0.07, lift: 0.8, max: 3 };
+
+/**
+ * A phrase travels. Within this many frames of the last onset the next
+ * syllable lights the patch beside the last one, not a random one, so a
+ * sentence moves across the body instead of scattering over it.
+ */
+export const PLEXUS_TRAVEL = { within: 40 };
+
 /** Per 60Hz frame: a patch reaches most of a syllable's brightness in
  * about four frames. Instant is a blink; this is a voice. */
 const LOBE_ATTACK = 0.34;
@@ -339,9 +375,12 @@ const SPRING = 0.0016;
 const DAMP = 0.965;
 const TETHER = 1.2e-4;
 /**
- * The thorns: on each syllable the inner nodes are kicked outward, past the
+ * The thorns: on a sharp onset the inner nodes are kicked outward, past the
  * pinned shell, and the web strung to them from the surface draws a spike.
- * kick   impulse per syllable onset
+ * rise   the onset that throws them. Every onset used to, which on Sage's
+ *        voice is near six a second, and the body bristled the whole time
+ *        it spoke. Over 0.15, the same onsets that spark: 1.3 a second.
+ * kick   impulse per onset
  * limit  how far out a node may go, as a multiple of the orb's radius
  * reach  how much further a thrown node's links reach, so a thorn is
  *        strung to more of the surface and reads as a fan, not a line
@@ -358,7 +397,7 @@ const TETHER = 1.2e-4;
  * edge   where the canvas's soft edge begins, as a fraction of its half
  *        width. The thorns are what reach it.
  */
-export const PLEXUS_THORNS = { kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 4, edge: 0.96 };
+export const PLEXUS_THORNS = { rise: 0.15, kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 4, edge: 0.96 };
 
 const RAMP_STOPS: Array<[number, number, number, number]> = [
   [0, 10, 76, 107],
@@ -419,6 +458,8 @@ interface Node {
   /** How far past the orb's radius this node has been thrown, 0 inside. */
   out: number;
   lobeA: number; lobeB: number; lobeW: number;
+  /** A spark on this node, 0..1: see PLEXUS_SPARKS. */
+  spark: number;
 }
 
 /** Everything a state change blends, captured as it was when the change
@@ -451,6 +492,8 @@ const lerp = (a: number, b: number, e: number) => a + (b - a) * e;
 export interface PlexusState {
   radius: number; flow: number; bright: number; links: number;
   pulse: number; lastSpeech: number; voiceEnv: number;
+  /** What is left of the last sharp onset's throw: see PLEXUS_THORNS. */
+  thornPulse: number;
   lobes: number[];
   lobeTargets: number[];
   lobeAxes: Array<[number, number, number]>;
@@ -479,6 +522,11 @@ export interface PlexusState {
   /** Frames since the last syllable's onset while the voice has stayed up,
    * and the patches that onset lit: see PLEXUS_SUSTAIN. */
   holdFrames: number; lastHit: number; lastOther: number;
+  /** The patch lit before the last, and frames since the last onset:
+   * see PLEXUS_TRAVEL. */
+  prevHit: number; sinceOnset: number;
+  /** Signals running: the patch each left from and frames into it. */
+  signals: Array<{ ax: number; ay: number; az: number; at: number }>;
   /** The light the web drew, smoothed: the sum of its lines' strengths. */
   ink: number;
   look: PlexusLook;
@@ -564,7 +612,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
       heat: Math.random(),
       size: isNode ? 0.85 + Math.random() * 0.4 : 0.55 + Math.random() * 0.4,
       px: 0, py: 0, pd: 0, ps: 0, pa: 0, reg: 1, out: 0,
-      lobeA: 0, lobeB: 0, lobeW: 1,
+      lobeA: 0, lobeB: 0, lobeW: 1, spark: 0,
     };
     // Which two patches this belongs to, computed once: its home direction
     // never changes, so this is not ten dot products per particle per frame.
@@ -602,7 +650,7 @@ export function createPlexusState(): PlexusState {
     radius: PLEXUS_STATES.idle.r, flow: PLEXUS_STATES.idle.flow, bright: PLEXUS_STATES.idle.bright,
     links: PLEXUS_STATES.idle.links,
     look: { ...PLEXUS_LOOK.states.idle },
-    pulse: 0, lastSpeech: 0, voiceEnv: 0,
+    pulse: 0, lastSpeech: 0, voiceEnv: 0, thornPulse: 0,
     lobes: new Array(LOBES).fill(0.8),
     lobeTargets: new Array(LOBES).fill(0.8),
     lobeAxes: axes,
@@ -615,6 +663,7 @@ export function createPlexusState(): PlexusState {
     },
     ink: 0,
     holdFrames: 0, lastHit: 0, lastOther: 1,
+    prevHit: -1, sinceOnset: Infinity, signals: [],
     spikes: true,
     trans: 1, lastBreath: 1, lastSpin: PLEXUS_STATES.idle.spin,
     phase: 0, lastPace: PLEXUS_STATES.idle.pace,
@@ -849,6 +898,7 @@ export function drawPlexus(
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
   S.pulse = Math.max(S.pulse * Math.pow(0.88, dt), rise * 4.5);
+  S.thornPulse = Math.max(S.thornPulse * Math.pow(0.88, dt), rise > PLEXUS_THORNS.rise ? rise * 4.5 : 0);
 
   // Each patch has a target it swells toward rather than a level set
   // outright. A syllable used to raise the level in a single frame, which
@@ -863,17 +913,47 @@ export function drawPlexus(
     S.lobeTargets[i] = Math.min(1.55, Math.max(slow, S.lobeTargets[i] * Math.pow(fall, dt)));
     S.lobes[i] = approach(S.lobes[i], S.lobeTargets[i], LOBE_ATTACK, dt);
   }
+  S.sinceOnset += dt;
   if (rise > 0.06 && patch.kick > 0) {
     // Toward whichever patches are facing the viewer. Picking uniformly put
     // half the syllables on the far side of the body, where a swell is a
     // vague smudge through the web rather than something being said.
+    // Mid-phrase, toward the patch beside the last one as well, and never
+    // straight back to the one before it.
     const cy0 = Math.cos(S.spinY), sy0 = Math.sin(S.spinY);
+    const phrase = state === 'speaking' && S.sinceOnset < PLEXUS_TRAVEL.within;
+    const last = S.lobeAxes[S.lastHit];
     let hit = 0;
     let bestFacing = -Infinity;
     for (let i = 0; i < LOBES; i++) {
       const ax = S.lobeAxes[i];
-      const facing = -ax[0] * sy0 + ax[2] * cy0 + Math.random() * 0.8;
-      if (facing > bestFacing) { bestFacing = facing; hit = i; }
+      const facing = -ax[0] * sy0 + ax[2] * cy0;
+      let score: number;
+      if (phrase) {
+        if (i === S.lastHit || i === S.prevHit) continue;
+        score = facing * 0.6 + (ax[0] * last[0] + ax[1] * last[1] + ax[2] * last[2]) * 1.2 + Math.random() * 0.3;
+      } else {
+        score = facing + Math.random() * 0.8;
+      }
+      if (score > bestFacing) { bestFacing = score; hit = i; }
+    }
+    S.prevHit = S.lastHit;
+    S.sinceOnset = 0;
+    if (state === 'speaking' && rise > PLEXUS_SIGNAL.rise) {
+      const ax = S.lobeAxes[hit];
+      if (S.signals.length >= PLEXUS_SIGNAL.max) S.signals.shift();
+      S.signals.push({ ax: ax[0], ay: ax[1], az: ax[2], at: 0 });
+    }
+    const SP = PLEXUS_SPARKS;
+    if (state === 'speaking' && rise > SP.rise) {
+      const want = Math.round(SP.count[0] + (SP.count[1] - SP.count[0]) * Math.min(1, (rise - SP.rise) / 0.15));
+      // Front-facing nodes of the lit patch, as they were last drawn.
+      for (let tries = 0, lit = 0; tries < 600 && lit < want; tries++) {
+        const p = S.particles[(Math.random() * NODES) | 0];
+        if (p.lobeA !== hit || p.pd < 0.45 || p.spark > 0.5) continue;
+        p.spark = 1;
+        lit++;
+      }
     }
     const lift = patch.base + rise * patch.kick;
     S.lobeTargets[hit] = Math.max(S.lobeTargets[hit], lift);
@@ -882,6 +962,11 @@ export function drawPlexus(
     S.lastHit = hit;
     S.lastOther = other;
   }
+
+  const SG = PLEXUS_SIGNAL;
+  for (const sg of S.signals) sg.at += dt;
+  while (S.signals.length && S.signals[0].at >= SG.length) S.signals.shift();
+  const sparkFall = Math.pow(PLEXUS_SPARKS.fall, dt);
 
   const SU = PLEXUS_SUSTAIN;
   if (rise > SU.onset || speech < SU.floor) S.holdFrames = 0;
@@ -934,7 +1019,7 @@ export function drawPlexus(
 
   const fA = tw * 0.011, fB = tw * 0.014, fC = tw * 0.009;
   const flow = FLOW * S.flow;
-  const kick = S.spikes && S.pulse > 0.02 ? S.pulse * PLEXUS_THORNS.kick : 0;
+  const kick = S.spikes && S.thornPulse > 0.02 ? S.thornPulse * PLEXUS_THORNS.kick : 0;
 
   // Only the nodes are simulated. The dust is fixed in the body and rides a
   // turn of its own, so the grain belongs to the surface for none of the
@@ -968,7 +1053,10 @@ export function drawPlexus(
     const spring = (p.home * S.radius - dist) * SPRING * dt;
     // The syllable reaches the outside after the inside, so it reads as a
     // wave through the body rather than one rigid heave.
-    const lit = Math.min(2, Math.max(0, (p.reg - 0.85) * 2.5));
+    // By the patches' light alone: signals and sparks light nodes too, and
+    // counted here they would raise thorns wherever they ran.
+    const patchLight = S.lobes[p.lobeA] * p.lobeW + S.lobes[p.lobeB] * (1 - p.lobeW);
+    const lit = Math.min(2, Math.max(0, (patchLight - 0.85) * 2.5));
     const focus = 1 - PLEXUS_THORNS.focus + PLEXUS_THORNS.focus * lit;
     const wave = kick * (0.45 + 0.9 * p.heat) * (1 - 0.5 * p.home) * focus * dt;
     const radial = (spring + wave) / dist;
@@ -1030,6 +1118,17 @@ export function drawPlexus(
     if (listening) {
       const off = Math.hypot(p.px - cx, p.py - cy) / sR - listenRingAt;
       p.reg += listenLift * Math.exp(-(off * off) / (LP.width * LP.width));
+    }
+    for (const sg of S.signals) {
+      const prog = sg.at / SG.length;
+      const front = SG.reach * (1 - (1 - prog) * (1 - prog));
+      const off = 1 - (p.hx * sg.ax + p.hy * sg.ay + p.hz * sg.az) - front;
+      p.reg += SG.lift * (1 - prog) * Math.exp(-(off * off) / (SG.width * SG.width));
+    }
+    if (p.spark > 0) {
+      p.reg += p.spark * 1.5;
+      p.spark *= sparkFall;
+      if (p.spark < 0.03) p.spark = 0;
     }
     p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
   }
@@ -1173,6 +1272,15 @@ export function drawPlexus(
       ctx.globalAlpha = m.pa;
       ctx.fillRect(m.px, m.py, m.ps, m.ps);
     }
+  }
+  // Sparks over everything, in the palest colour the state allows.
+  ctx.fillStyle = ramp[rampTop];
+  for (let i = 0; i < NODES; i++) {
+    const m = P[i];
+    if (m.spark <= 0) continue;
+    const size = m.ps * PLEXUS_SPARKS.size;
+    ctx.globalAlpha = Math.min(1, m.spark * PLEXUS_SPARKS.alpha);
+    ctx.fillRect(m.px - (size - m.ps) / 2, m.py - (size - m.ps) / 2, size, size);
   }
   ctx.globalAlpha = 1;
   ctx.restore();
