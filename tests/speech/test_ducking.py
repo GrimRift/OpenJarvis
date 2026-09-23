@@ -253,7 +253,7 @@ class TestListenersAreDeafWhileTheServerSpeaks:
 
 
 class TestAVoiceWaitsForTheUsersTurn:
-    def test_speaking_waits_until_the_turn_closes(self):
+    def test_speaking_waits_while_the_user_is_talking(self):
         import threading
         import time
 
@@ -261,8 +261,9 @@ class TestAVoiceWaitsForTheUsersTurn:
         from openjarvis.speech import player
 
         activity.flux_transmitting(True)
+        activity.user_talking(True)
         try:
-            threading.Timer(0.3, lambda: activity.flux_transmitting(False)).start()
+            threading.Timer(0.3, activity.user_talking, args=(False,)).start()
             t0 = time.monotonic()
             with player.speaking(wait_for_turn=5.0):
                 waited = time.monotonic() - t0
@@ -270,7 +271,10 @@ class TestAVoiceWaitsForTheUsersTurn:
         finally:
             activity.flux_transmitting(False)
 
-    def test_but_not_forever(self):
+    def test_not_for_a_listening_window_nobody_is_talking_in(self):
+        """23 September: a task's answer waited out every follow-up window
+        and was heard 32 s after it was ready. The first gap after a reply
+        is the user's chosen moment."""
         import time
 
         from openjarvis.core import activity
@@ -279,11 +283,41 @@ class TestAVoiceWaitsForTheUsersTurn:
         activity.flux_transmitting(True)
         try:
             t0 = time.monotonic()
+            with player.speaking(wait_for_turn=5.0):
+                pass
+            assert time.monotonic() - t0 < 0.5
+        finally:
+            activity.flux_transmitting(False)
+
+    def test_nor_into_the_gap_before_a_reply_starts(self):
+        import threading
+        import time
+
+        from openjarvis.core import activity
+        from openjarvis.speech import player
+
+        activity.note_user_turn()
+        threading.Timer(0.3, activity.tts_begin).start()
+        threading.Timer(0.6, activity.tts_end).start()
+        t0 = time.monotonic()
+        with player.speaking(wait_for_turn=5.0):
+            waited = time.monotonic() - t0
+        assert 0.55 <= waited < 2.0
+
+    def test_but_not_forever(self):
+        import time
+
+        from openjarvis.core import activity
+        from openjarvis.speech import player
+
+        activity.user_talking(True)
+        try:
+            t0 = time.monotonic()
             with player.speaking(wait_for_turn=0.2):
                 pass
             assert time.monotonic() - t0 < 1.0
         finally:
-            activity.flux_transmitting(False)
+            activity.user_talking(False)
 
 
 class TestRepliesAndServerVoicesTakeTurns:

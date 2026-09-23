@@ -64,7 +64,7 @@ def _wait_for_the_floor(timeout: float) -> None:
     from openjarvis.core import activity
 
     deadline = time.monotonic() + timeout
-    while activity.snapshot().sage_mid_turn and time.monotonic() < deadline:
+    while activity.snapshot().exchange_live and time.monotonic() < deadline:
         time.sleep(0.1)
     deadline = time.monotonic() + REPLY_WAIT_SECONDS
     while activity.snapshot().reply_audible and time.monotonic() < deadline:

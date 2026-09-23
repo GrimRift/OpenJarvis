@@ -24,6 +24,14 @@ _lock = threading.Lock()
 #: The page repeats it every few seconds while it plays, so a closed tab or
 #: a lost "stopped" frees the floor within this.
 BROWSER_PLAYING_TTL = 20.0
+#: How long "the user is talking" lasts without a fresh turn event. Deepgram
+#: sends an Update every few hundred ms while they speak; a lost EndOfTurn
+#: must not hold a reminder back for good.
+USER_TALKING_TTL = 10.0
+#: How long a chat request counts as awaiting its reply's audio. The reply
+#: to a spoken turn usually starts in 1-3 s; a text-only reply never starts
+#: any, and must not hold a reminder back past this.
+REPLY_PENDING_TTL = 20.0
 
 
 @dataclass
@@ -37,6 +45,11 @@ class Activity:
     #: the second half of every reply played with the server thinking it was
     #: over, and a reminder was spoken into one on 23 September.
     browser_playing_until: float = 0.0
+    #: Until when the user is mid-turn, by Flux's turn events: talking, not
+    #: merely with the microphone open in a silent listening window.
+    user_talking_until: float = 0.0
+    #: When the last chat request arrived and no reply audio has begun since.
+    reply_pending_since: Optional[float] = None
     #: Whether the web interface has been open at any point since the server
     #: started. Sage autostarts with Windows, so without this it began making
     #: unprompted remarks into an empty room -- the user was elsewhere and had
@@ -53,6 +66,21 @@ class Activity:
     def sage_mid_turn(self) -> bool:
         return self.reply_audible or self.flux_transmitting
 
+    @property
+    def exchange_live(self) -> bool:
+        """Someone is actually saying something, or about to: the user is
+        talking, their reply is being written, or it is being heard. Unlike
+        sage_mid_turn, a listening window with nobody talking does not
+        count -- a reminder waits for the reply, not for the window after
+        it (asked for on 23 September: a task's answer waited out every
+        follow-up window and was heard 32 s after it was ready)."""
+        now = time.time()
+        pending = (
+            self.reply_pending_since is not None
+            and now - self.reply_pending_since < REPLY_PENDING_TTL
+        )
+        return self.reply_audible or now < self.user_talking_until or pending
+
 
 _state = Activity()
 
@@ -60,6 +88,13 @@ _state = Activity()
 def note_user_turn(now: Optional[float] = None) -> None:
     with _lock:
         _state.last_user_turn_at = now if now is not None else time.time()
+        _state.reply_pending_since = _state.last_user_turn_at
+
+
+def user_talking(active: bool, now: Optional[float] = None) -> None:
+    with _lock:
+        now = now if now is not None else time.time()
+        _state.user_talking_until = now + USER_TALKING_TTL if active else 0.0
 
 
 def note_ui_seen() -> None:
@@ -70,6 +105,7 @@ def note_ui_seen() -> None:
 def tts_begin() -> None:
     with _lock:
         _state.tts_streams += 1
+        _state.reply_pending_since = None
 
 
 def tts_end(now: Optional[float] = None) -> None:
@@ -87,6 +123,8 @@ def browser_playing(active: bool, now: Optional[float] = None) -> None:
 def flux_transmitting(active: bool) -> None:
     with _lock:
         _state.flux_transmitting = active
+        if not active:
+            _state.user_talking_until = 0.0
 
 
 def snapshot() -> Activity:
@@ -97,6 +135,8 @@ def snapshot() -> Activity:
             tts_streams=_state.tts_streams,
             flux_transmitting=_state.flux_transmitting,
             browser_playing_until=_state.browser_playing_until,
+            user_talking_until=_state.user_talking_until,
+            reply_pending_since=_state.reply_pending_since,
             ui_seen=_state.ui_seen,
         )
 
@@ -116,5 +156,6 @@ __all__ = [
     "reset",
     "snapshot",
     "tts_begin",
+    "user_talking",
     "tts_end",
 ]

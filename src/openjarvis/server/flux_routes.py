@@ -409,6 +409,9 @@ async def _relay_turns(
         """Deepgram -> browser. Only turn events are relayed."""
         nonlocal spec_task
         async for event in session.events():
+            # Talking, as opposed to the microphone merely open: what a
+            # server voice waits out (activity.exchange_live).
+            activity.user_talking(not event.is_final)
             if event.cancels_speculation:
                 cancel_speculation()
             elif event.is_speculative and eager_threshold is not None:
