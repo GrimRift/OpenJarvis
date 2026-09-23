@@ -2310,3 +2310,99 @@ class TestPreambleBeforeAToolCallIsTakenBack:
         # The retract arrives before the tool starts, so the client trims
         # before the tool's own status line replaces it.
         assert body.index("event: text_retract") < body.index("event: tool_call_start")
+
+
+class TestNothingAfterTheToolsIsNotNothing:
+    """23 September: "remind me in one minute to go downstairs" set the
+    reminder, the preamble was retracted, and the model said nothing after
+    the tool: "No response was generated". The preamble stands in; with no
+    preamble the model is asked once more."""
+
+    def _body(self, preamble, after):
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        class _Tool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="tell_me_when",
+                    description="x",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(tool_name="tell_me_when", content="ok", success=True)
+
+        engine = _make_engine(content="unused")
+        turn = 0
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            nonlocal turn
+            turn += 1
+            if turn == 1:
+                if preamble:
+                    yield StreamChunk(content=preamble)
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "tell_me_when", "arguments": "{}"},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            text = after[min(turn - 2, len(after) - 1)]
+            if text:
+                yield StreamChunk(content=text)
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_Tool()],
+            bus=EventBus(),
+            max_turns=4,
+            max_tokens=128,
+            system_prompt="x",
+        )
+        app = create_app(
+            engine, "test-model", agent=agent, bus=EventBus(), config=_test_config()
+        )
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "remind me in a minute"}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+        content = ""
+        for line in resp.text.split("\n"):
+            if line.startswith("data:") and '"content"' in line:
+                delta = json.loads(line[5:].strip())["choices"][0]["delta"]
+                content += delta.get("content") or ""
+        return content, turn
+
+    def test_the_preamble_stands_when_nothing_follows(self):
+        content, _ = self._body("I'll remind you at 12:19, Sir.", [""])
+        # Streamed once before the retract and once restored: the client
+        # trims the first, so the second is what stays on the message.
+        assert content.count("I'll remind you at 12:19, Sir.") == 2
+
+    def test_with_no_preamble_it_asks_once_more(self):
+        content, turns = self._body("", ["", "Done, Sir."])
+        assert content == "Done, Sir."
+        assert turns == 3
+
+    def test_a_real_answer_is_left_alone(self):
+        content, turns = self._body("I'll remind you.", ["Done, Sir, at 12:19."])
+        assert content.endswith("Done, Sir, at 12:19.")
+        assert "I'll remind you.Done" in content  # retracted by the client
+        assert turns == 2

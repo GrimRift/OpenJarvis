@@ -1137,6 +1137,10 @@ async def _handle_streaming_orchestrator(
         active_tools = list(openai_tools)
         full_content = ""
         all_tool_results = []
+        #: The last round's preamble, retracted when its tool ran, and whether
+        #: an empty answer after the tools has been asked for again.
+        preamble = ""
+        asked_again = False
         total_prompt_tokens = 0
         total_completion_tokens = 0
         turns = 0
@@ -1207,6 +1211,7 @@ async def _handle_streaming_orchestrator(
                     # restates it. Streamed already, so tell the client to
                     # take it back rather than show both, glued together.
                     if turn_content.strip():
+                        preamble = turn_content.strip()
                         retract_payload = _json.dumps(
                             {"chars": len(turn_content), "text": turn_content}
                         )
@@ -1347,6 +1352,35 @@ async def _handle_streaming_orchestrator(
                             not in _BROWSER_OPEN_TOOL_NAMES
                         ]
                     continue
+
+                # Nothing after the tools. On 23 September "remind me in one
+                # minute to go downstairs" set the reminder, retracted "I'll
+                # remind you..." as a preamble, and then the model said
+                # nothing: the page showed "No response was generated". The
+                # preamble was the answer after all; with none, ask once.
+                if not turn_content.strip() and all_tool_results and not full_content:
+                    if preamble:
+                        turn_content = preamble
+                        restore_chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            model=model,
+                            choices=[
+                                StreamChoice(delta=DeltaMessage(content=preamble))
+                            ],
+                        )
+                        yield f"data: {restore_chunk.model_dump_json()}\n\n"
+                    elif not asked_again:
+                        asked_again = True
+                        messages.append(
+                            Message(
+                                role=Role.USER,
+                                content=(
+                                    "(Tell me in one short sentence what you "
+                                    "just did.)"
+                                ),
+                            )
+                        )
+                        continue
 
                 full_content += turn_content
 
