@@ -14,7 +14,7 @@ import { type VolumeChannel, gainFor, volumeFor } from './volume';
 let shared: AudioContext | null = null;
 const attached = new WeakMap<HTMLMediaElement, GainNode>();
 
-function outputContext(): AudioContext | null {
+export function outputContext(): AudioContext | null {
   if (typeof AudioContext === 'undefined') return null;
   if (!shared) {
     try {

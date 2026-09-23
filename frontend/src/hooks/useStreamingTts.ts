@@ -1,5 +1,5 @@
 import { IncrementalTtsOutbox } from '../lib/incremental-tts';
-import { limiter } from '../lib/audio-out';
+import { limiter, outputContext } from '../lib/audio-out';
 import { gainFor } from '../lib/volume';
 import { voiceTrace } from '../lib/voice-trace';
 import {
@@ -23,7 +23,15 @@ const MAX_SOCKET_BUFFERED_BYTES = 256 * 1024;
 export type IncrementalTtsOutcome =
   | 'spoken'
   | 'failed-before-audio'
+  /** The browser would not start the page's audio: it needs a click first. */
+  | 'blocked'
   | 'cancelled';
+
+/**
+ * How long a suspended AudioContext gets to resume when a reply's audio
+ * arrives before the reply is given up as unplayable.
+ */
+const RESUME_WAIT_MS = 700;
 
 export interface IncrementalTtsSession {
   push(delta: string): boolean;
@@ -105,6 +113,37 @@ function createStreamingTtsPlayer() {
       .setAudioPlayback(playbackOwnerRef.current, false);
   };
 
+  const ensureContext = (): AudioContext => {
+    const existing = ctxRef.current;
+    if (existing && existing.state !== 'closed') return existing;
+    const Ctor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    const created = new Ctor({ sampleRate: 24000 });
+    ctxRef.current = created;
+    return created;
+  };
+
+  /**
+   * Resume the page's audio from inside a click or key press, the one
+   * moment a browser allows it. After any reload -- a Sage restart, a
+   * laptop restart, the dev server's own -- the context starts suspended,
+   * and a user who only ever says "Hey Sage" never clicks: every reply was
+   * then dropped unheard, the orb stayed on standing by, and follow-up
+   * listening never re-armed (89 of 560 voice replies, 22-24 September).
+   */
+  const unlock = () => {
+    try {
+      const ctx = ensureContext();
+      if (ctx.state !== 'running') void ctx.resume().catch(() => {});
+    } catch {
+      // No Web Audio at all; nothing to unlock.
+    }
+    const out = outputContext();
+    if (out && out.state !== 'running') void out.resume().catch(() => {});
+  };
+
   const begin = (voice: VoiceProfile): IncrementalTtsSession => {
     teardown();
     const generation = generationsRef.current.begin();
@@ -132,16 +171,7 @@ function createStreamingTtsPlayer() {
 
     let ctx: AudioContext;
     try {
-      const existing = ctxRef.current;
-      if (existing && existing.state !== 'closed') {
-        ctx = existing;
-      } else {
-        const Ctor =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext })
-            .webkitAudioContext;
-        ctx = new Ctor({ sampleRate: 24000 });
-      }
+      ctx = ensureContext();
     } catch {
       setPlaying(false);
       settleOutcome('failed-before-audio');
@@ -259,6 +289,10 @@ function createStreamingTtsPlayer() {
       );
     };
 
+    // Audio that arrived while a suspended context was being resumed.
+    const waiting: ArrayBuffer[] = [];
+    let resuming = false;
+
     socket.onmessage = (event) => {
       if (!generationsRef.current.isCurrent(generation)) return;
       if (typeof event.data === 'string') {
@@ -266,16 +300,41 @@ function createStreamingTtsPlayer() {
         if (message.kind === 'ready') {
           outbox.markReady();
         } else if (message.kind === 'start') {
-          if (ctx.state !== 'running') {
-            failStream();
+          const startPlayback = () => {
+            sampleRateRef.current = message.sampleRate;
+            scheduledUntilRef.current = 0;
+            startedRef.current = false;
+            started = true;
+            if (shouldShowSpeakingState(message)) setPlaying(true);
+            settleOutcome('spoken');
+            for (const chunk of waiting.splice(0)) playChunk(chunk);
+          };
+          if (ctx.state === 'running') {
+            startPlayback();
             return;
           }
-          sampleRateRef.current = message.sampleRate;
-          scheduledUntilRef.current = 0;
-    startedRef.current = false;
-          started = true;
-          if (shouldShowSpeakingState(message)) setPlaying(true);
-          settleOutcome('spoken');
+          // Suspended: try to resume, holding the audio as it arrives,
+          // rather than dropping the whole reply without a word.
+          resuming = true;
+          const resumed = ctx.resume().then(
+            () => ctx.state === 'running',
+            () => false,
+          );
+          const timeout = new Promise<boolean>((resolve) =>
+            window.setTimeout(() => resolve(ctx.state === 'running'), RESUME_WAIT_MS),
+          );
+          void Promise.race([resumed, timeout]).then((running) => {
+            resuming = false;
+            if (!generationsRef.current.isCurrent(generation)) return;
+            if (running) {
+              startPlayback();
+              return;
+            }
+            voiceTrace('tts.blocked', { state: ctx.state });
+            waiting.length = 0;
+            settleOutcome('blocked');
+            failStream();
+          });
         } else if (message.kind === 'error') {
           if (!message.started && !started) {
             settleOutcome('failed-before-audio');
@@ -293,8 +352,17 @@ function createStreamingTtsPlayer() {
         return;
       }
 
-      if (!started || !generationsRef.current.isCurrent(generation)) return;
-      const samples = decodePcmF32(event.data as ArrayBuffer);
+      if (!generationsRef.current.isCurrent(generation)) return;
+      if (resuming) {
+        waiting.push(event.data as ArrayBuffer);
+        return;
+      }
+      if (!started) return;
+      playChunk(event.data as ArrayBuffer);
+    };
+
+    const playChunk = (data: ArrayBuffer) => {
+      const samples = decodePcmF32(data);
       if (samples.length === 0) return;
       const rate = sampleRateRef.current;
       const buffer = ctx.createBuffer(1, samples.length, rate);
@@ -363,17 +431,25 @@ function createStreamingTtsPlayer() {
     session.push(text);
     const result = await session.finish();
     // Cancellation is deliberate and must never trigger a batch replay.
-    return result !== 'failed-before-audio';
+    return result !== 'failed-before-audio' && result !== 'blocked';
   };
 
-  return { begin, speak, stop: teardown };
+  return { begin, speak, stop: teardown, unlock };
 }
 
 let player: ReturnType<typeof createStreamingTtsPlayer> | null = null;
 
 /** The shared player, built on first use. */
 export function streamingTtsPlayer(): ReturnType<typeof createStreamingTtsPlayer> {
-  if (!player) player = createStreamingTtsPlayer();
+  if (!player) {
+    const built = createStreamingTtsPlayer();
+    player = built;
+    if (typeof window !== 'undefined') {
+      for (const type of ['pointerdown', 'keydown', 'touchstart'] as const) {
+        window.addEventListener(type, built.unlock, { capture: true, passive: true });
+      }
+    }
+  }
   return player;
 }
 

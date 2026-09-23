@@ -272,6 +272,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     begin: beginStreamingSpeech,
     speak: speakStreaming,
     stop: stopSpeaking,
+    unlock: unlockSpeech,
   } = useStreamingTts();
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
@@ -1277,6 +1278,27 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             // promise keeps its .catch and a stopped turn cannot surface as
             // an unhandled rejection.
             if (userStopped) return;
+            if (outcome === 'blocked') {
+              // The browser will not start audio until the page is clicked,
+              // so a batch replay would be just as silent. Say so, offer the
+              // reply on the click that unlocks it, and keep listening -- a
+              // reply that makes no sound never ends, so nothing re-armed.
+              const reply = accumulatedContent;
+              toast.warning('Sage could not speak: click the page once so it can.', {
+                id: 'sage-audio-blocked',
+                duration: 20000,
+                action: {
+                  label: 'Speak it',
+                  onClick: () => {
+                    unlockSpeech();
+                    spokenTextRef.current = reply;
+                    void speakStreaming(reply, ttsVoice);
+                  },
+                },
+              });
+              if (wasVoice) resumeAfterDeclineRef.current?.();
+              return;
+            }
             if (outcome !== 'failed-before-audio') return;
             // No streamed audio was heard, so batch fallback cannot replay
             // any opening. A manual Stop resolves as cancelled and never
