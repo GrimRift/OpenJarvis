@@ -59,6 +59,7 @@ class TestRetry:
             "Store", (), {"params": lambda self, name: engine.VoiceParams()}
         )()
         eng.use_voice = lambda name: None
+        eng.fast_t3 = None
         return eng
 
     def test_a_runaway_is_resampled_at_library_defaults(self):
@@ -66,9 +67,9 @@ class TestRetry:
         eng = self._engine([_seconds(6.6), _seconds(2.6)])
         audio = eng.generate(text, "v")
         assert len(audio) == int(SR * 2.6)
-        # First call carries the voice's sampling; the retry passes none.
+        # First call carries the voice's sampling; the retry the library's.
         assert eng.model.calls[0]["temperature"] == 0.7
-        assert eng.model.calls[1] == {}
+        assert eng.model.calls[1] == engine.LIBRARY_SAMPLING
 
     def test_after_the_retries_the_audio_is_cut_at_the_budget(self):
         text = "It is three o'clock in the afternoon."
@@ -76,6 +77,56 @@ class TestRetry:
         audio = eng.generate(text, "v")
         assert len(eng.model.calls) == 1 + engine.RUNAWAY_RETRIES
         assert len(audio) == engine._budget_samples(text)
+
+
+class TestGraphedTokens:
+    """The graphed speech-token loop (fast_t3.py) in the engine's retry."""
+
+    def _engine(self, graphed):
+        eng = TestRetry()._engine([_seconds(2.6)])
+        eng.fast_t3 = object()
+        eng.graphed_calls = []
+
+        def synthesize_graphed(text, sampling, vocode_runaway):
+            eng.graphed_calls.append((dict(sampling), vocode_runaway))
+            result = graphed.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        eng._synthesize_graphed = synthesize_graphed
+        return eng
+
+    def test_a_runaway_is_retried_before_it_is_turned_into_audio(self):
+        # None: the tokens ran over the budget and were never vocoded.
+        eng = self._engine([None, _seconds(2.6)])
+        audio = eng.generate("It is three o'clock in the afternoon.", "v")
+        assert len(audio) == int(SR * 2.6)
+        assert eng.graphed_calls[0][1] is False
+        assert eng.graphed_calls[1][0] == engine.LIBRARY_SAMPLING
+        assert eng.model.calls == []
+
+    def test_the_last_take_is_vocoded_and_cut(self):
+        text = "It is three o'clock in the afternoon."
+        eng = self._engine([None, None, _seconds(8.0)])
+        audio = eng.generate(text, "v")
+        assert [call[1] for call in eng.graphed_calls] == [False, False, True]
+        assert len(audio) == engine._budget_samples(text)
+
+    def test_a_failure_falls_back_to_the_stock_loop_for_good(self):
+        eng = self._engine([RuntimeError("capture failed")])
+        audio = eng.generate("It is three o'clock in the afternoon.", "v")
+        assert len(audio) == int(SR * 2.6)
+        assert eng.fast_t3 is None
+        assert len(eng.model.calls) == 1
+
+    def test_a_piece_too_long_for_the_cache_uses_stock_once(self):
+        from voice_sidecar.fast_t3 import PieceTooLong
+
+        eng = self._engine([PieceTooLong(2000)])
+        eng.generate("It is three o'clock in the afternoon.", "v")
+        assert eng.fast_t3 is not None
+        assert len(eng.model.calls) == 1
 
 
 class TestMergedAcknowledgement:

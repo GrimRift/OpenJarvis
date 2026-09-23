@@ -22,6 +22,12 @@ SAMPLE_RATE = 24000
 MEMORY_FRACTION = 0.3
 # How many fresh samples a runaway generation gets before it is cut.
 RUNAWAY_RETRIES = 2
+# The library's own sampling, which a runaway is retried with: it never ran
+# away in the 22 September bench.
+LIBRARY_SAMPLING = dict(temperature=0.8, top_k=1000, top_p=0.95, repetition_penalty=1.2)
+# Cache lengths captured at warm-up, so the first real line does not pay for
+# a capture: they hold every piece up to ~110 characters.
+WARM_BUCKETS = (512, 640, 768)
 REFERENCE_FILE = "reference.wav"
 CONDS_FILE = "conds.pt"
 PARAMS_FILE = "voice.json"
@@ -175,6 +181,8 @@ class ChatterboxEngine:
         self.load_seconds = 0.0
         self.last_generation_seconds = 0.0
         self.generations = 0
+        # The graphed speech-token loop (fast_t3.py); None means stock.
+        self.fast_t3 = None
 
     # ------------------------------------------------------------ loading
 
@@ -204,6 +212,10 @@ class ChatterboxEngine:
             self.model.t3.half()
             self.model.s3gen.half()
         self._park_conditioning_modules()
+        if self.device.startswith("cuda") and self.precision == "fp32":
+            from .fast_t3 import GraphedT3
+
+            self.fast_t3 = GraphedT3(self.model.t3, self.device)
         self.load_seconds = round(time.monotonic() - started, 1)
         logger.info(
             "Chatterbox Nano loaded on %s in %.1fs", self.device, self.load_seconds
@@ -339,30 +351,31 @@ class ChatterboxEngine:
         self.use_voice(voice)
         params = self.voices.params(voice)
         started = time.monotonic()
-        with self.lock, torch.inference_mode(), self._autocast():
-            wav = self.model.generate(
-                text,
-                temperature=params.temperature,
-                top_p=params.top_p,
-                top_k=params.top_k,
-                repetition_penalty=params.repetition_penalty,
-            )
-        audio = wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
-        for attempt in range(RUNAWAY_RETRIES):
-            if not _ran_away(audio, text):
+        sampling = dict(
+            temperature=params.temperature,
+            top_p=params.top_p,
+            top_k=params.top_k,
+            repetition_penalty=params.repetition_penalty,
+        )
+        audio = None
+        for attempt in range(RUNAWAY_RETRIES + 1):
+            last = attempt == RUNAWAY_RETRIES
+            with self.lock, torch.inference_mode(), self._autocast():
+                audio = self._synthesize(text, sampling, vocode_runaway=last)
+            if audio is not None and not _ran_away(audio, text):
+                break
+            if last:
                 break
             # A phrase said twice is the failure the user hears ("repeats
             # words"); another sample at the library defaults, which never
             # ran away in the bench, is the fix. The cut is a last resort.
             logger.warning(
-                "runaway generation (%.1fs for %d chars); retry %d",
-                len(audio) / SAMPLE_RATE,
+                "runaway generation (%s for %d chars); retry %d",
+                "over budget" if audio is None else f"{len(audio) / SAMPLE_RATE:.1f}s",
                 len(text),
                 attempt + 1,
             )
-            with self.lock, torch.inference_mode(), self._autocast():
-                wav = self.model.generate(text)
-            audio = wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
+            sampling = dict(LIBRARY_SAMPLING)
         if _ran_away(audio, text):
             audio = audio[: _budget_samples(text)]
         self.last_generation_seconds = round(time.monotonic() - started, 3)
@@ -373,11 +386,76 @@ class ChatterboxEngine:
             torch.cuda.empty_cache()
         return _level(audio, params)
 
+    def _synthesize(
+        self, text: str, sampling: Dict[str, Any], *, vocode_runaway: bool
+    ) -> Optional[np.ndarray]:
+        """One take of *text*. None when the speech tokens ran over the
+        length budget and *vocode_runaway* is off: turning a runaway into
+        audio only to discard it cost seconds, and ran the card out of memory
+        on 23 September."""
+        if self.fast_t3 is None:
+            wav = self.model.generate(text, **sampling)
+            return wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
+        from .fast_t3 import PieceTooLong
+
+        try:
+            return self._synthesize_graphed(text, sampling, vocode_runaway)
+        except PieceTooLong:
+            wav = self.model.generate(text, **sampling)
+            return wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
+        except Exception:
+            logger.warning(
+                "graphed speech tokens failed; using the stock loop from now on",
+                exc_info=True,
+            )
+            self.fast_t3 = None
+            wav = self.model.generate(text, **sampling)
+            return wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
+
+    def _synthesize_graphed(
+        self, text: str, sampling: Dict[str, Any], vocode_runaway: bool
+    ) -> Optional[np.ndarray]:
+        """``ChatterboxTurboTTS.generate`` with its speech-token loop
+        replaced by fast_t3's; every other step is the library's own."""
+        import torch
+        from chatterbox.tts_turbo import S3GEN_SIL, punc_norm
+
+        from .fast_t3 import token_budget
+
+        model = self.model
+        normed = punc_norm(text)
+        text_tokens = model.tokenizer(
+            normed, return_tensors="pt", padding=True, truncation=True
+        ).input_ids.to(self.device)
+        budget = token_budget(_budget_samples(text) / SAMPLE_RATE)
+        speech_tokens, stopped = self.fast_t3.generate(
+            model.conds.t3, text_tokens, max_tokens=budget, **sampling
+        )
+        if not stopped and not vocode_runaway:
+            return None
+        speech_tokens = speech_tokens[speech_tokens < 6561].to(self.device)
+        silence = torch.tensor([S3GEN_SIL, S3GEN_SIL, S3GEN_SIL]).long().to(self.device)
+        speech_tokens = torch.cat([speech_tokens, silence])
+        wav, _ = model.s3gen.inference(
+            speech_tokens=speech_tokens, ref_dict=model.conds.gen, n_cfm_timesteps=2
+        )
+        wav = wav.squeeze(0).detach().cpu().numpy()
+        wav = model.watermarker.apply_watermark(wav, sample_rate=model.sr)
+        return np.asarray(wav, dtype=np.float32).reshape(-1)
+
     def warm_up(self, voice: str) -> None:
         try:
             self.generate("Ready, sir.", voice)
         except Exception:
             logger.warning("warm-up generation failed", exc_info=True)
+        if self.fast_t3 is not None:
+            try:
+                import torch
+
+                with self.lock, torch.inference_mode():
+                    self.fast_t3.prepare(WARM_BUCKETS)
+            except Exception:
+                logger.warning("graph warm-up failed", exc_info=True)
 
 
 def _budget_samples(text: str) -> int:
