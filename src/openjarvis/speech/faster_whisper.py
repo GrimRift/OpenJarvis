@@ -178,6 +178,7 @@ class FasterWhisperBackend(SpeechBackend):
                 start=seg.start,
                 end=seg.end,
                 confidence=None,
+                no_speech=getattr(seg, "no_speech_prob", None),
             )
             for seg in segments_list
         ]

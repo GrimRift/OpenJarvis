@@ -15,6 +15,9 @@ class Segment:
     start: float  # Start time in seconds
     end: float  # End time in seconds
     confidence: Optional[float] = None
+    #: The recogniser's own doubt that this was speech at all, 0..1, when
+    #: it reports one.
+    no_speech: Optional[float] = None
 
 
 @dataclass

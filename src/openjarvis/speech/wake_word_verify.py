@@ -123,13 +123,21 @@ _PHONETIC_LETTERS = 12
 #: he's in." from a conversation downstairs, 23 September. Not applied when
 #: the name itself ends it ("Peace Sage."): the hey was misheard, not made up.
 _PHONETIC_MAX_LEAD = 3
+#: Whisper's no-speech probability at or above which only the words confirm,
+#: not the sound. Distant, muffled speech sets the detector off and Whisper
+#: then guesses a word for it; "Easy." from a conversation downstairs (23
+#: September) scored 0.52. The only two recorded takes out of 220 that
+#: passed on the sound alone scored 0.06 (from the door) and 0.01.
+MUFFLED_NO_SPEECH = 0.45
 
 
 def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^a-z']+", text.lower()) if t]
 
 
-def heard_wake_phrase(text: str, *, strict: bool = False) -> bool:
+def heard_wake_phrase(
+    text: str, *, strict: bool = False, muffled: bool = False
+) -> bool:
     """Whether the transcript is "hey sage" as Whisper usually writes it.
 
     Two rules, either suffices. By words: a hey-word followed by a
@@ -142,6 +150,8 @@ def heard_wake_phrase(text: str, *, strict: bool = False) -> bool:
     audibly playing, when a lyric can have the shape but rarely the word,
     and the recogniser, hearing the user over music, gets the name right
     and the "hey" wrong ("Thank you, Sage", "And Sage" -- 17 September).
+    ``muffled`` also drops the sound rule, keeping the words: the
+    recogniser doubted it heard speech at all (see ``MUFFLED_NO_SPEECH``).
     """
     words = [w.rstrip("'s") if w.endswith("'s") else w for w in _tokens(text)]
     if strict:
@@ -152,6 +162,8 @@ def heard_wake_phrase(text: str, *, strict: bool = False) -> bool:
         for j in (i + 1, i + 2):
             if j < len(words) and words[j] in _SAGE:
                 return True
+    if muffled:
+        return False
     full = re.sub(r"[^a-z]", "", text.lower())
     letters = full[-_PHONETIC_LETTERS:]
     match = _PHONETIC_TAIL.search(letters)
@@ -201,8 +213,8 @@ def pcm_to_wav(pcm: bytes) -> bytes:
 class Verdict:
     confirmed: bool
     heard: str
-    #: Why a firing was confirmed without the words -- empty when the
-    #: transcript itself decided.
+    #: Why a firing was confirmed without the words, or "muffled" when only
+    #: the words could confirm it -- empty when the transcript itself decided.
     note: str = ""
     #: How long the transcriber took, so slowness is measured, not felt.
     ms: int = 0
@@ -246,7 +258,7 @@ class WakeWordVerifier:
     def backend_id(self) -> str:
         return str(getattr(self._backend, "backend_id", "") or "")
 
-    def _transcribe(self, pcm: bytes) -> str:
+    def _transcribe(self, pcm: bytes) -> tuple[str, bool]:
         kwargs: dict = {"format": "wav", "language": self._language or None}
         # A backend that takes no prompt (a fake in tests) still works.
         if self._initial_prompt and _accepts(
@@ -254,7 +266,13 @@ class WakeWordVerifier:
         ):
             kwargs["initial_prompt"] = self._initial_prompt
         result = self._backend.transcribe(pcm_to_wav(normalise_level(pcm)), **kwargs)
-        return str(getattr(result, "text", "") or "").strip()
+        doubt = [
+            s.no_speech
+            for s in getattr(result, "segments", None) or []
+            if getattr(s, "no_speech", None) is not None
+        ]
+        muffled = bool(doubt) and max(doubt) >= MUFFLED_NO_SPEECH
+        return str(getattr(result, "text", "") or "").strip(), muffled
 
     async def verify(self, pcm: bytes, *, strict: bool = False) -> Verdict:
         if self._backend is None:
@@ -263,7 +281,7 @@ class WakeWordVerifier:
             return Verdict(True, "", "no audio buffered")
         started = time.perf_counter()
         try:
-            heard = await asyncio.wait_for(
+            heard, muffled = await asyncio.wait_for(
                 asyncio.to_thread(self._transcribe, pcm), timeout=self._timeout
             )
         except asyncio.TimeoutError:
@@ -275,7 +293,11 @@ class WakeWordVerifier:
             return Verdict(True, "", f"verifier error: {exc}")
         ms = int((time.perf_counter() - started) * 1000)
         verdict = Verdict(
-            heard_wake_phrase(heard, strict=strict), heard, "", ms, strict
+            heard_wake_phrase(heard, strict=strict, muffled=muffled),
+            heard,
+            "muffled" if muffled else "",
+            ms,
+            strict,
         )
         keep_clip(pcm, verdict)
         return verdict

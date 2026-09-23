@@ -194,6 +194,13 @@ next time. Changes:
   transcript. Distant speech that is heard as a whole short phrase
   ("Easy.") still passes; loudness does not separate it (peak 4,821 against
   1,431-7,952 for genuine takes).
+- **Muffled speech: words only** (2026-09-23). Distant talk too muffled to
+  make out ("Easy.", from downstairs) passes the shape, but Whisper doubts
+  it heard speech: no-speech 0.52. At `MUFFLED_NO_SPEECH` (0.45) or above
+  only the words confirm, and the trace notes `muffled`. Over all 220
+  recorded positives the sound rule alone accepted two, at 0.06 (from the
+  door) and 0.01, so this costs no measured recall. Whisper backends only;
+  one without segment scores (Parakeet) is judged as before.
 - **Threshold 0.79 → 0.65.** With a second stage that rejected noise 14/14,
   the detector's job is recall; a firing costs ~200 ms of GPU, a miss costs
   the user a repeat.

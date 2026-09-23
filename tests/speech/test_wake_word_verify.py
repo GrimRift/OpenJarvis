@@ -75,8 +75,9 @@ class TestRing:
 
 
 class _Backend:
-    def __init__(self, text="", delay=0.0, error=None):
+    def __init__(self, text="", delay=0.0, error=None, no_speech=None):
         self.text, self.delay, self.error = text, delay, error
+        self.no_speech = no_speech
         self.calls = []
 
     def transcribe(self, audio, *, format="wav", language=None, initial_prompt=None):
@@ -91,6 +92,10 @@ class _Backend:
 
         r = R()
         r.text = self.text
+        if self.no_speech is not None:
+            from openjarvis.speech._stubs import Segment
+
+            r.segments = [Segment(self.text, 0.0, 1.0, no_speech=self.no_speech)]
         return r
 
 
@@ -272,3 +277,27 @@ def test_verify_passes_strict_through_to_the_verdict():
     assert loose.confirmed and loose.strict is False
     strict = asyncio.run(WakeWordVerifier(_Backend("hazage")).verify(pcm, strict=True))
     assert not strict.confirmed and strict.strict is True
+
+
+class TestMuffledSpeech:
+    """23 September: a conversation downstairs, too far to make out, set the
+    detector off and Whisper guessed "Easy." (no-speech 0.52). Genuine takes
+    that pass on the sound alone score 0.06 or less."""
+
+    def test_a_guess_at_muffled_speech_does_not_confirm(self):
+        verdict = asyncio.run(
+            WakeWordVerifier(_Backend("Easy.", no_speech=0.52)).verify(bytes(3200))
+        )
+        assert not verdict.confirmed and verdict.note == "muffled"
+
+    def test_the_name_spelt_out_still_does(self):
+        verdict = asyncio.run(
+            WakeWordVerifier(_Backend("Hey Sage.", no_speech=0.64)).verify(bytes(3200))
+        )
+        assert verdict.confirmed
+
+    def test_clear_speech_keeps_the_sound_rule(self):
+        verdict = asyncio.run(
+            WakeWordVerifier(_Backend("He's in.", no_speech=0.01)).verify(bytes(3200))
+        )
+        assert verdict.confirmed and verdict.note == ""
