@@ -208,3 +208,60 @@ class TestTools:
         anywhere = tool.execute(what="b", at="2027-01-19T16:00", anywhere=True)
         assert "wherever you are" in anywhere.content
         assert [w.anywhere for w in engine.list_watches()] == [False, True]
+
+
+class TestAReminderIsNotSetTwice:
+    """23 September: "go downstairs" was said aloud, the user asked "can you
+    remind me again?" -- what was it? -- and the model set it for another
+    minute, twice over: three voices, three phone notifications."""
+
+    def test_one_just_said_is_not_set_again_for_right_now(self, engine) -> None:
+        import time
+
+        from openjarvis.core.moments import MOMENT_TOLD
+        from openjarvis.tools.moments import TellMeWhenTool
+
+        engine._record(
+            MOMENT_TOLD, "(reminder) go downstairs", spoken=False,
+            detail="reminder", now=time.time() - 20,
+        )
+        result = TellMeWhenTool().execute(what="Go downstairs.", in_minutes=1)
+        assert "just said aloud" in result.content
+        assert engine.list_watches() == []
+
+    def test_later_is_still_a_new_reminder(self, engine) -> None:
+        import time
+
+        from openjarvis.core.moments import MOMENT_TOLD
+        from openjarvis.tools.moments import TellMeWhenTool
+
+        engine._record(
+            MOMENT_TOLD, "(reminder) go downstairs", spoken=False,
+            detail="reminder", now=time.time() - 20,
+        )
+        TellMeWhenTool().execute(what="go downstairs", in_minutes=10)
+        assert len(engine.list_watches()) == 1
+
+    def test_long_after_it_is_a_new_reminder(self, engine) -> None:
+        import time
+
+        from openjarvis.core.moments import MOMENT_TOLD
+        from openjarvis.tools.moments import TellMeWhenTool
+
+        engine._record(
+            MOMENT_TOLD, "(reminder) go downstairs", spoken=False,
+            detail="reminder", now=time.time() - 600,
+        )
+        TellMeWhenTool().execute(what="go downstairs", in_minutes=1)
+        assert len(engine.list_watches()) == 1
+
+    def test_the_same_one_twice_in_a_turn_is_one(self, engine) -> None:
+        from openjarvis.tools.moments import TellMeWhenTool
+
+        tool = TellMeWhenTool()
+        tool.execute(what="go downstairs", in_minutes=1)
+        again = tool.execute(what="Go downstairs", in_minutes=1)
+        assert "Already set" in again.content
+        assert len(engine.list_watches()) == 1
+        tool.execute(what="drink water", in_minutes=1)
+        assert len(engine.list_watches()) == 2

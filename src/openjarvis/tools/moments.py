@@ -22,6 +22,7 @@ import uuid
 from typing import Any, Optional
 
 from openjarvis.core.moments import (
+    MOMENT_TOLD,
     MomentEngine,
     Watch,
     configured_timezone,
@@ -335,6 +336,10 @@ class TellMeWhenTool(BaseTool):
                 content="A reminder needs a time; a job watch is said at the desk.",
                 success=False,
             )
+        if due_at is not None:
+            repeat = _repeat_of(what, due_at, now, engine)
+            if repeat:
+                return ToolResult(tool_name=self.tool_id, content=repeat, success=True)
         try:
             if engine is not None:
                 watch = engine.add_watch(
@@ -374,6 +379,59 @@ class TellMeWhenTool(BaseTool):
             success=True,
             metadata={"watch": watch.to_dict()},
         )
+
+
+#: A reminder just said aloud is not set again for a time this close. On
+#: 23 September "go downstairs" fired, the user asked "can you remind me
+#: again?" -- what was it? -- and the model set it for another minute, twice:
+#: three voices, three phone notifications. Sage's own voice is not in the
+#: chat, so the model cannot know it has just said it; the tool can.
+JUST_SAID_SECONDS = 180.0
+JUST_SAID_NEAR_SECONDS = 150.0
+#: Two pending reminders for the same thing this close together are one: a
+#: second call in the same turn, or a retried turn.
+DUPLICATE_SECONDS = 90.0
+
+
+def _same(a: str, b: str) -> bool:
+    def norm(s: str) -> str:
+        kept = "".join(ch for ch in s.lower() if ch.isalnum() or ch == " ")
+        return " ".join(kept.split())
+
+    return norm(a) == norm(b)
+
+
+def _repeat_of(what: str, due_at: float, now: float, engine: Any) -> Optional[str]:
+    """Why this reminder should not be set, or None."""
+    watches = engine.list_watches() if engine else load_state().watches
+    for watch in watches:
+        if (
+            watch.due_at is not None
+            and _same(watch.what, what)
+            and abs(watch.due_at - due_at) <= DUPLICATE_SECONDS
+        ):
+            local = to_local(watch.due_at, configured_timezone())
+            return (
+                f"Already set for {local.strftime('%H:%M')}: {watch.what}. "
+                f"Not set twice (watch id {watch.id})."
+            )
+    if due_at - now > JUST_SAID_NEAR_SECONDS:
+        return None
+    history = engine.history() if engine else load_state().history
+    for record in reversed(history):
+        if now - record.at > JUST_SAID_SECONDS:
+            break
+        if record.kind != MOMENT_TOLD or not record.text.startswith("(reminder) "):
+            continue
+        said = record.text[len("(reminder) ") :]
+        if _same(said, what):
+            local = to_local(record.at, configured_timezone())
+            return (
+                f"This reminder was just said aloud at {local.strftime('%H:%M')}: "
+                f"{said}. Not set again. If the user asked what it was, tell them; "
+                "if they want it again later, ask when."
+            )
+    return None
 
 
 def _minutes_phrase(minutes: Optional[float]) -> str:
