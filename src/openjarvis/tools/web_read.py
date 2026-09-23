@@ -7,9 +7,13 @@ JavaScript after load: the served HTML is a 29 KB shell containing no showtime,
 no film title, not even the word "Showtimes". Every static fetcher, Tavily
 included, sees that shell. A browser sees the page.
 
-So this drives the browser the user already has open, in a tab that closes
-itself -- the same mechanism as ``teams_read`` and the inbox reader, with the
-site no longer hardcoded.
+So when the served page has little text, or not the text asked for, this
+drives the browser the user already has open, in a tab that closes itself --
+the same mechanism as ``teams_read`` and the inbox reader, with the site no
+longer hardcoded. Most pages are not that shell: an article's HTML already
+holds the article, and a plain request for it takes a fraction of a second
+where the browser took seconds (23 September: a turn sat over 20 s on one
+page, whose waits could add up to 52 s). So the plain request goes first.
 
 Everything it returns was written by someone else. It is reported as data and
 marked untrusted, never followed as instructions, and the URL it will open has
@@ -20,13 +24,18 @@ exactly the one that must not be followed.
 
 from __future__ import annotations
 
+import html as _html
+import json
 import logging
+import re
 import time
 from typing import Any, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.security import page_access
+from openjarvis.security.ssrf import check_ssrf
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.opera_control import (
     _NAV_TIMEOUT,
@@ -48,8 +57,37 @@ logger = logging.getLogger(__name__)
 #: thread boundaries between the request handler and the tool.
 MAX_READS_PER_TURN = 2
 
-#: Longest a page gets to finish rendering before its text is taken anyway.
-SETTLE_TIMEOUT_SECONDS = 12.0
+#: Longest a page gets in the browser, loading and rendering together,
+#: before its text is taken anyway. Opening, loading and settling each had
+#: their own wait (25 + 15 + 12 s); one budget bounds the whole read.
+SETTLE_TIMEOUT_SECONDS = 8.0
+
+#: Longest the plain request may take before the browser is tried instead.
+STATIC_TIMEOUT_SECONDS = 4.0
+
+#: Served text shorter than this is taken for a JavaScript shell (the
+#: showtimes page served 29 KB of markup and almost no words).
+STATIC_MIN_CHARS = 1500
+
+#: Most of a page worth downloading for the plain read.
+STATIC_MAX_BYTES = 3_000_000
+
+_STATIC_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+)
+
+#: Markup that is never the page's words.
+_NOISE = re.compile(
+    r"<(script|style|noscript|svg|template|iframe|nav|footer|header|form)\b"
+    r"[^>]*>.*?</\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+_BLOCK = re.compile(
+    r"</?(p|div|section|article|main|li|ul|ol|h[1-6]|tr|table|br|blockquote|pre)"
+    r"\b[^>]*>",
+    re.IGNORECASE,
+)
 
 #: How often the rendered length is sampled while waiting for it to settle.
 SETTLE_POLL_SECONDS = 0.25
@@ -150,15 +188,22 @@ class WebReadTool(BaseTool):
                 f"I have read {MAX_READS_PER_TURN} pages just now, which is "
                 "the limit. Ask again in a moment for another."
             )
-        if not port_is_open():
-            return self._fail(setup_hint())
-
         wait_for = str(params.get("wait_for") or "").strip()
-        try:
-            text, waited = self._render(url, wait_for)
-        except Exception as error:  # noqa: BLE001
-            logger.debug("web_read failed for %s", url, exc_info=True)
-            return self._fail(f"could not read {url}: {error}")
+        started = time.monotonic()
+        served = self._fetch_static(url, wait_for)
+        if served is not None:
+            text, title = served
+            mode = "direct"
+            waited = time.monotonic() - started
+        else:
+            if not port_is_open():
+                return self._fail(setup_hint())
+            try:
+                text, waited, title = self._render(url, wait_for)
+            except Exception as error:  # noqa: BLE001
+                logger.debug("web_read failed for %s", url, exc_info=True)
+                return self._fail(f"could not read {url}: {error}")
+            mode = "browser"
 
         page_access.note_read()
         if not text.strip():
@@ -179,16 +224,73 @@ class WebReadTool(BaseTool):
                 "chars": len(text),
                 "truncated": truncated,
                 "settled_seconds": round(waited, 2),
+                "mode": mode,
+                # A page read is a source the answer rests on, and the chat
+                # lists sources from this; without it the page Sage spent
+                # longest on was the one reference never shown.
+                "sources": [
+                    {
+                        "title": (title or "").strip() or urlparse(url).netloc,
+                        "url": url,
+                        "summary": " ".join(body.split())[:300],
+                    }
+                ],
             },
         )
 
-    def _render(self, url: str, wait_for: str) -> Tuple[str, float]:
-        """Open *url*, let it finish drawing, and take its text."""
+    def _fetch_static(self, url: str, wait_for: str) -> Optional[Tuple[str, str]]:
+        """The page's text and title from a plain request, or None when it
+        needs the browser: a shell with little text, text missing what the
+        caller is waiting for, or anything but HTML."""
+        import httpx
+
+        if check_ssrf(url):
+            return None
+        try:
+            with httpx.Client(
+                follow_redirects=True,
+                timeout=httpx.Timeout(STATIC_TIMEOUT_SECONDS, connect=2.0),
+                headers={"User-Agent": _STATIC_UA, "Accept": "text/html"},
+            ) as client:
+                with client.stream("GET", url) as response:
+                    if response.status_code >= 400:
+                        return None
+                    if check_ssrf(str(response.url)):
+                        return None
+                    kind = response.headers.get("content-type", "")
+                    if "html" not in kind.lower():
+                        return None
+                    chunks: list[bytes] = []
+                    size = 0
+                    for chunk in response.iter_bytes():
+                        chunks.append(chunk)
+                        size += len(chunk)
+                        if size >= STATIC_MAX_BYTES:
+                            break
+                    encoding = response.encoding or "utf-8"
+        except Exception:  # noqa: BLE001
+            logger.debug("plain read failed for %s", url, exc_info=True)
+            return None
+        markup = b"".join(chunks).decode(encoding, errors="replace")
+        video = youtube_text(url, markup)
+        if video is not None:
+            text, title = video
+        else:
+            text, title = page_text(markup)
+            if len(text) < STATIC_MIN_CHARS:
+                return None
+        if wait_for and wait_for.lower() not in text.lower():
+            return None
+        return text, title
+
+    def _render(self, url: str, wait_for: str) -> Tuple[str, float, str]:
+        """Open *url*, let it finish drawing, and take its text and title."""
         started = time.monotonic()
         with opera_session(transient=True) as session:
             page = session.page
-            page.navigate(url, timeout=_NAV_TIMEOUT)
-            page.wait_for("document.readyState === 'complete'", timeout=15.0)
+            # ``navigate`` already waits for the load; bounded by the one
+            # budget, a page still loading is read as far as it got.
+            page.navigate(url, timeout=min(_NAV_TIMEOUT, SETTLE_TIMEOUT_SECONDS))
             if wait_for:
                 # A caller who knows what should appear gets a precise wait.
                 # Failing it is not fatal: the settle loop below still returns
@@ -197,11 +299,16 @@ class WebReadTool(BaseTool):
                 with _Ignore():
                     page.wait_for(
                         "document.body.innerText.includes('" + escaped + "')",
-                        timeout=SETTLE_TIMEOUT_SECONDS,
+                        timeout=max(
+                            0.5, SETTLE_TIMEOUT_SECONDS - (time.monotonic() - started)
+                        ),
                     )
             self._settle(page, started)
             text = page.evaluate(_EXTRACT_JS) or ""
-        return str(text), time.monotonic() - started
+            title = ""
+            with _Ignore():
+                title = str(page.evaluate("document.title") or "")
+        return str(text), time.monotonic() - started, title
 
     def _settle(self, page: Any, started: float) -> None:
         """Wait until the rendered text stops growing."""
@@ -222,4 +329,78 @@ class WebReadTool(BaseTool):
         return ToolResult(tool_name=self.tool_id, content=reason, success=False)
 
 
-__all__ = ["MAX_CHARS", "MAX_READS_PER_TURN", "WebReadTool"]
+_JSON_STRING = r'("(?:[^"\\]|\\.)*")'
+
+
+def youtube_text(url: str, markup: str) -> Optional[Tuple[str, str]]:
+    """A YouTube video's details from the data embedded in its page.
+
+    The watch page is a JavaScript app: its served text is ~200 characters
+    and the browser took the whole budget to draw it. The title, channel,
+    date and full description are in the page's own player data.
+    """
+    host = urlparse(url).netloc.lower()
+    if not (host.endswith("youtube.com") or host.endswith("youtu.be")):
+        return None
+
+    def field(name: str) -> str:
+        match = re.search('"' + name + '":' + _JSON_STRING, markup)
+        if not match:
+            return ""
+        try:
+            return str(json.loads(match.group(1)))
+        except ValueError:
+            return ""
+
+    title = field("title")
+    description = field("shortDescription")
+    if not (title or description):
+        return None
+    lines = [title]
+    channel = field("ownerChannelName")
+    if channel:
+        lines.append(f"Channel: {channel}")
+    published = field("publishDate")
+    if published:
+        lines.append(f"Published: {published[:10]}")
+    seconds = field("lengthSeconds")
+    if seconds.isdigit():
+        minutes, rest = divmod(int(seconds), 60)
+        lines.append(f"Length: {minutes}:{rest:02d}")
+    views = field("viewCount")
+    if views.isdigit():
+        lines.append(f"Views: {int(views):,}")
+    if description:
+        lines += ["", "Description:", description]
+    page_title = f"{title} - YouTube" if title else "YouTube"
+    return "\n".join(line for line in lines if line is not None), page_title
+
+
+def page_text(markup: str) -> Tuple[str, str]:
+    """Readable text and title of served HTML, roughly as ``innerText`` would
+    give it: the ``main``/``article`` part when there is one, without
+    scripts, navigation and other chrome, a line per block."""
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", markup, re.I | re.S)
+    title = _html.unescape(title_match.group(1)) if title_match else ""
+    title = " ".join(title.split())
+    body = _NOISE.sub(" ", markup)
+    for tag in ("main", "article"):
+        part = re.search(rf"<{tag}\b[^>]*>(.*)</{tag}\s*>", body, re.I | re.S)
+        if part and len(part.group(1)) > 500:
+            body = part.group(1)
+            break
+    body = re.sub(r"<!--.*?-->", " ", body, flags=re.S)
+    body = _BLOCK.sub("\n", body)
+    body = re.sub(r"<[^>]+>", " ", body)
+    body = _html.unescape(body)
+    lines = [" ".join(line.split()) for line in body.splitlines()]
+    return "\n".join(line for line in lines if line), title
+
+
+__all__ = [
+    "MAX_CHARS",
+    "MAX_READS_PER_TURN",
+    "WebReadTool",
+    "page_text",
+    "youtube_text",
+]

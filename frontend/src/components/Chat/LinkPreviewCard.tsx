@@ -53,3 +53,41 @@ export function LinkPreviewCard({ preview }: { preview: LinkPreview }) {
     </a>
   );
 }
+
+/** The rest of an answer's sources, one line each, pages read first. */
+export function SourceList({ sources }: { sources: LinkPreview[] }) {
+  return (
+    <div className="mt-2" data-testid="source-list">
+      <div className="mb-1 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+        Sources
+      </div>
+      <ul className="m-0 list-none space-y-1 p-0">
+        {sources.map((source) => {
+          const hostname = new URL(source.url).hostname.replace(/^www\./, '');
+          return (
+            <li key={source.url} className="min-w-0">
+              <a
+                href={source.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex min-w-0 items-baseline gap-2 text-xs no-underline"
+                style={{ color: 'var(--color-text-secondary)' }}
+                title={source.title}
+              >
+                <span className="shrink-0" style={{ color: 'var(--color-accent)' }}>
+                  {hostname}
+                </span>
+                <span className="truncate">{source.title}</span>
+                {source.read && (
+                  <span className="shrink-0" style={{ color: 'var(--color-text-tertiary)' }}>
+                    · read
+                  </span>
+                )}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}

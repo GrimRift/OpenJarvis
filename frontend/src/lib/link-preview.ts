@@ -6,6 +6,8 @@ export interface LinkPreview {
   summary?: string;
   imageUrl?: string;
   publishedDate?: string;
+  /** Sage opened and read this page, rather than only seeing it in results. */
+  read?: boolean;
 }
 
 export interface SearchImage {
@@ -38,8 +40,12 @@ export function externalLinkAttributes(href: string | undefined): {
     : {};
 }
 
+/** Tools whose results list the pages an answer came from. */
+const SOURCE_TOOLS = new Set(['web_search', 'web_read']);
+
 function previewsFromToolCall(toolCall: ToolCallInfo): LinkPreview[] {
-  if (toolCall.tool !== 'web_search' || toolCall.status !== 'success') return [];
+  if (!SOURCE_TOOLS.has(toolCall.tool) || toolCall.status !== 'success') return [];
+  const read = toolCall.tool === 'web_read';
   const sources = toolCall.metadata?.sources;
   if (!Array.isArray(sources)) return [];
 
@@ -59,7 +65,7 @@ function previewsFromToolCall(toolCall: ToolCallInfo): LinkPreview[] {
     const publishedDate = typeof record.published_date === 'string' && record.published_date.trim()
       ? record.published_date.trim()
       : undefined;
-    return [{ title, url, summary, imageUrl, publishedDate }];
+    return [{ title, url, summary, imageUrl, publishedDate, ...(read ? { read } : {}) }];
   });
 }
 
@@ -92,7 +98,42 @@ export function selectLinkPreview(message: ChatMessage): LinkPreview | undefined
   const previews = (message.toolCalls ?? []).flatMap(previewsFromToolCall);
   if (previews.length === 0) return undefined;
 
-  // Prefer a source the final answer actually linked. Fall back to Tavily's
-  // highest-ranked result when the model cited it by name rather than URL.
-  return previews.find((preview) => message.content.includes(preview.url)) ?? previews[0];
+  // Prefer a source the final answer actually linked, then a page Sage read
+  // (what the answer rests on), then Tavily's highest-ranked result.
+  return (
+    previews.find((preview) => message.content.includes(preview.url))
+    ?? previews.find((preview) => preview.read)
+    ?? previews[0]
+  );
+}
+
+/** Most sources listed under an answer. */
+export const MAX_LISTED_SOURCES = 8;
+
+/**
+ * Every other source behind an answer, pages read first, one per address.
+ * The card showed a single result, so a page Sage spent twenty seconds
+ * reading could be the one reference missing (23 September).
+ */
+export function selectSources(
+  message: ChatMessage,
+  shown?: LinkPreview,
+): LinkPreview[] {
+  const previews = (message.toolCalls ?? []).flatMap(previewsFromToolCall);
+  const ordered = [...previews.filter((p) => p.read), ...previews.filter((p) => !p.read)];
+  const seen = new Set<string>(shown ? [sourceKey(shown.url)] : []);
+  const listed: LinkPreview[] = [];
+  for (const preview of ordered) {
+    const key = sourceKey(preview.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    listed.push(preview);
+    if (listed.length >= MAX_LISTED_SOURCES) break;
+  }
+  return listed;
+}
+
+function sourceKey(url: string): string {
+  const parsed = new URL(url);
+  return `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname.replace(/\/$/, '')}${parsed.search}`;
 }

@@ -13,11 +13,12 @@ import { AudioPlayer } from './AudioPlayer';
 import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
 import { XRayFooter } from './XRayFooter';
-import { LinkPreviewCard } from './LinkPreviewCard';
+import { LinkPreviewCard, SourceList } from './LinkPreviewCard';
 import {
   externalLinkAttributes,
   selectLinkPreview,
   selectSearchImages,
+  selectSources,
 } from '../../lib/link-preview';
 import { protectCurrencyFromMath } from '../../lib/currency-math';
 import type { ChatMessage } from '../../types';
@@ -146,6 +147,10 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
     [cleanContent],
   );
   const linkPreview = useMemo(() => selectLinkPreview(message), [message]);
+  const otherSources = useMemo(
+    () => selectSources(message, linkPreview),
+    [message, linkPreview],
+  );
   const searchImages = useMemo(() => selectSearchImages(message), [message]);
   // A search image is a third-party URL nobody has fetched yet, so some of
   // them will not load: hotlink blocks, 404s, a URL that was never an image.
@@ -284,6 +289,7 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
       )}
 
       {linkPreview && <LinkPreviewCard preview={linkPreview} />}
+      {otherSources.length > 0 && <SourceList sources={otherSources} />}
 
       {visibleImages.length > 0 && (
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">

@@ -3,6 +3,7 @@ import {
   externalLinkAttributes,
   selectLinkPreview,
   selectSearchImages,
+  selectSources,
 } from './link-preview';
 import type { ChatMessage } from '../types';
 
@@ -118,5 +119,53 @@ describe('selectSearchImages', () => {
 
   it('does not create a gallery for an ordinary web search', () => {
     expect(selectSearchImages(message(false))).toEqual([]);
+  });
+});
+
+describe('selectSources', () => {
+  const message: ChatMessage = {
+    id: 'm2',
+    role: 'assistant',
+    timestamp: 1,
+    content: 'The Sun is a G-type star.',
+    toolCalls: [
+      {
+        id: 't1',
+        tool: 'web_search',
+        arguments: '{}',
+        status: 'success',
+        metadata: {
+          sources: [
+            { title: 'Video', url: 'https://www.youtube.com/watch?v=abc' },
+            { title: 'Maricopa', url: 'https://open.maricopa.edu/sun/' },
+            { title: 'Wiki', url: 'https://en.wikipedia.org/wiki/Sun' },
+          ],
+        },
+      },
+      {
+        id: 't2',
+        tool: 'web_read',
+        arguments: '{}',
+        status: 'success',
+        metadata: {
+          sources: [{ title: 'The Structure of the Sun', url: 'https://open.maricopa.edu/sun' }],
+        },
+      },
+    ],
+  };
+
+  it('puts a page Sage read on the card, ahead of the top search result', () => {
+    const card = selectLinkPreview(message);
+    expect(card?.url).toBe('https://open.maricopa.edu/sun');
+    expect(card?.read).toBe(true);
+  });
+
+  it('lists every other source once, without the card', () => {
+    const card = selectLinkPreview(message);
+    expect(selectSources(message, card).map((s) => s.title)).toEqual(['Video', 'Wiki']);
+  });
+
+  it('lists nothing for an answer without sources', () => {
+    expect(selectSources({ ...message, toolCalls: [] })).toEqual([]);
   });
 });
