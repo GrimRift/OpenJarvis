@@ -46,13 +46,12 @@ export function Sidebar() {
 
   const messages = useAppStore((s) => s.messages);
   const handleNewChat = () => {
+    // Voice has a conversation of its own and stays where it is; every
+    // other page has none to show one in, so the new chat opens in Chat.
+    const target = location.pathname === '/voice' ? '/voice' : '/';
     // Don't create a new chat if the current one is empty
-    if (messages.length === 0) {
-      navigate('/');
-      return;
-    }
-    createConversation(selectedModel);
-    navigate('/');
+    if (messages.length > 0) createConversation(selectedModel);
+    if (location.pathname !== target) navigate(target);
   };
 
   const navItems = [
