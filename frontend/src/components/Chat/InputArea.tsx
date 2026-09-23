@@ -389,26 +389,28 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     useAppStore.getState().setVoiceState(effectiveSpeechState);
   }, [effectiveSpeechState]);
 
+  const settleAfterStopRef = useRef<(() => void) | null>(null);
+
   const handleMicClick = useCallback(async () => {
     // A Flux turn leaves speechState 'idle', so checking it directly sent
     // every press down the "start" branch: the wake word was un-suspended
     // and a competing local recording began, which is why pressing the
     // button during a Flux turn could not pause anything.
+    // Stopping a turn by hand goes back to waiting for the wake word, after
+    // a short settle so the tail of what was just heard cannot fire it. It
+    // used to suspend the wake word until the mic was pressed again, which
+    // left Sage deaf after every stop -- asked on 23 September to re-arm.
     if (fluxTurnActive) {
-      setWakeWordSuspended(true);
-      toast('Listening paused — tap the mic again to talk.', { duration: 4000 });
+      settleAfterStopRef.current?.();
+      toast('Stopped. Say “Hey Sage” when you need me.', { duration: 3000 });
       flux.endTurn();
       clearFluxSilenceTimer();
       setFluxTurnActive(false);
       return;
     }
     if (speechState === 'recording') {
-      // Stopping by hand also stops listening. Without this the button only
-      // ended the current recording, the wake word re-armed a second later,
-      // and a false trigger started another one — so pressing it repeatedly
-      // appeared to do nothing at all.
-      setWakeWordSuspended(true);
-      toast('Listening paused — tap the mic again to talk.', { duration: 4000 });
+      settleAfterStopRef.current?.();
+      toast('Stopped. Say “Hey Sage” when you need me.', { duration: 3000 });
       try {
         const text = await stopRecording();
         if (text) {
@@ -419,7 +421,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // Error is captured in useSpeech
       }
     } else {
-      setWakeWordSuspended(false);
       if (fluxActive) {
         clearContinuationWindow();
         setFluxTurnActive(true);
@@ -2102,11 +2103,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const [wakeWordSettled, setWakeWordSettled] = useState(true);
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Set when the user stops a recording by hand, so the wake word does not
-  // immediately re-arm behind them. Cleared when they start one deliberately,
-  // or when the Settings toggle is touched — otherwise pausing here would
-  // silently outlive the switch that is supposed to control it.
-  const [wakeWordSuspended, setWakeWordSuspended] = useState(false);
 
   // While Sage speaks, the microphone either closes or listens for an
   // interruption. Closed is the old rule: echo cancellation is imperfect,
@@ -2177,6 +2173,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }
     };
   }, [audioPlaying]);
+  // The same settle after a turn stopped by hand (handleMicClick, declared
+  // above this state, reaches it through the ref).
+  settleAfterStopRef.current = () => {
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    setWakeWordSettled(false);
+    settleTimerRef.current = setTimeout(() => {
+      setWakeWordSettled(true);
+      settleTimerRef.current = null;
+    }, 1200);
+  };
 
   useEffect(() => {
     setVoiceTraceSink((event, detail, at) =>
@@ -2192,7 +2198,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
 
   const wakeGate =
     wakeWordEnabled &&
-    !wakeWordSuspended &&
     !micDisabled &&
     effectiveSpeechState === 'idle' &&
     !audioPlaying &&
@@ -2205,7 +2210,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     lastGateRef.current = wakeGate;
     voiceTrace(wakeGate ? 'gate.open' : 'gate.closed', {
       wakeWordEnabled,
-      suspended: wakeWordSuspended,
       micDisabled,
       streaming: streamState.isStreaming,
       speech: effectiveSpeechState,
@@ -2220,7 +2224,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   }, [
     wakeGate,
     wakeWordEnabled,
-    wakeWordSuspended,
     micDisabled,
     streamState.isStreaming,
     effectiveSpeechState,
@@ -2242,7 +2245,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // itself, independent of any toggle. wakeWordSettled adds the
     // post-playback cooldown described above.
     wakeWordEnabled &&
-      !wakeWordSuspended &&
       !micDisabled &&
       effectiveSpeechState === 'idle' &&
       !audioPlaying &&
@@ -2261,13 +2263,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   );
   takeRecentAudioRef.current = takeRecentAudio;
   ambientRmsRef.current = ambientRms;
-
-  // The Settings switch is the authority: flipping it either way ends a
-  // pause started from the mic button, so the two controls cannot disagree
-  // about whether Sage is listening.
-  useEffect(() => {
-    setWakeWordSuspended(false);
-  }, [wakeWordEnabled]);
 
   useEffect(() => {
     if (wakeWordError) {
