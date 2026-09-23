@@ -1,4 +1,5 @@
 import { keepOutputAwake } from '../lib/audio-out';
+import { markWake } from '../lib/orb-events';
 import { voiceTrace } from '../lib/voice-trace';
 import { WAKE_MAX_GAIN, applyGain, nextGain } from '../lib/mic-gain';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -232,6 +233,7 @@ export function useWakeWord(
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'detected') {
+          markWake();
           voiceTrace('wakeword.fired', {
             verified: Boolean(data.verified),
             heard: String(data.heard ?? ''),

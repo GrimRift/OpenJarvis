@@ -121,6 +121,41 @@ const FOCAL = 3.1;
 const LOBES = 10;
 const LOBE_SHARP = 3;
 const DUST_TURN = 1;
+
+/**
+ * Depth. The middle web drifts one way against the surface and the inner
+ * web the other, radians per 60Hz frame (scaled by the state's pace).
+ * Turning as one, the layers read as a single surface with lines drawn on
+ * it; sliding past each other, they read as a volume. The nodes are moved,
+ * not just drawn moved, so a line between layers is re-linked as they
+ * slide rather than stretched across the gap.
+ */
+export const PLEXUS_DEPTH = { middle: -0.0011, inner: 0.0016 };
+
+/**
+ * Standing by's heartbeat: every so often one soft band of light sweeps
+ * across the sphere and is gone. Alive without being busy.
+ *
+ * every  frames between beats, at random within the range
+ * length how long one takes to cross, frames
+ * width  the band's width, in dot-product units across the sphere
+ * lift   how much it brightens what it passes over
+ */
+export const PLEXUS_HEARTBEAT = { every: [1200, 2400] as [number, number], length: 210, width: 0.22, lift: 0.5 };
+
+/**
+ * The wake word's acknowledgement: one ring of light from the centre out
+ * to the rim, over this many frames, lifting what it passes by this much.
+ */
+export const PLEXUS_RIPPLE = { length: 48, width: 0.1, lift: 0.9 };
+
+/**
+ * A line fades out over the last share of its reach instead of vanishing.
+ * Two nodes drifting into reach used to be joined at a quarter of a line's
+ * full strength in a single frame, all over the web at once: a faint,
+ * constant flicker of lines switching on and off.
+ */
+const LINK_FADE = 0.2;
 /**
  * How the finished frame is lit, after the marks are drawn. Per state, and
  * eased between states like everything else.
@@ -212,11 +247,12 @@ export const PLEXUS_LOOK = {
   states: {
     // Standing by draws 75% of its lines -- about 3,350 a frame against
     // 4,200, asked for as a lighter web -- and exposure makes up the light
-    // they carried: mean 39.9 inside the shell, against 37-41 before (it
-    // varies that much between particle layouts).
-    idle: { exposure: 4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 0.75 },
+    // they carried, and the light the fade at the edge of a line's reach
+    // (LINK_FADE) takes: mean ~39 inside the shell, as before.
+    idle: { exposure: 4.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 0.75 },
     away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1 },
-    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 1 },
+    // 3.2, from 2.9: the reach fade took 12% of listening's light.
+    listening: { exposure: 3.2, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 1 },
     speaking: { exposure: 2.8, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5, wires: 0.42 },
   } as Record<OrbState, PlexusLook>,
   /**
@@ -375,6 +411,13 @@ export interface PlexusState {
    * morph to the new state it is (0..1). */
   from: Morph; trans: number;
   lastBreath: number; lastSpin: number;
+  /** How far the middle and inner webs have drifted against the surface. */
+  depthMid: number; depthInner: number;
+  /** The heartbeat: frames into one (-1 when none is running), frames to
+   * the next, and the axis it sweeps along. */
+  beatAt: number; beatIn: number; beatAxis: [number, number, number];
+  /** The wake ripple: frames into it, -1 when none is running. */
+  rippleAt: number;
   /** The web's own clock, advanced at the state's pace. */
   phase: number; lastPace: number;
   z: number; zVel: number; linkAge: number;
@@ -488,6 +531,16 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
   return { particles: out, axes };
 }
 
+function nextBeat(): number {
+  const [lo, hi] = PLEXUS_HEARTBEAT.every;
+  return lo + Math.random() * (hi - lo);
+}
+
+/** Begin the wake word's ripple. */
+export function startRipple(S: PlexusState): void {
+  S.rippleAt = 0;
+}
+
 export function createPlexusState(): PlexusState {
   const built = makeParticles();
   const axes = built.axes;
@@ -510,6 +563,9 @@ export function createPlexusState(): PlexusState {
     spikes: true,
     trans: 1, lastBreath: 1, lastSpin: PLEXUS_STATES.idle.spin,
     phase: 0, lastPace: PLEXUS_STATES.idle.pace,
+    depthMid: 0, depthInner: 0,
+    beatAt: -1, beatIn: nextBeat(), beatAxis: [0, 1, 0],
+    rippleAt: -1,
     z: 0, zVel: 0, linkAge: 0,
     particles: built.particles,
     pairs: new Int32Array(64000),
@@ -644,6 +700,46 @@ export function drawPlexus(
   S.lastPace = pace;
   S.phase += pace * dt;
   const tw = S.phase;
+  const dMid = PLEXUS_DEPTH.middle * pace * dt;
+  const dInner = PLEXUS_DEPTH.inner * pace * dt;
+  S.depthMid += dMid;
+  S.depthInner += dInner;
+  const cMid = Math.cos(dMid), sMid = Math.sin(dMid);
+  const cIn = Math.cos(dInner), sIn = Math.sin(dInner);
+
+  // A heartbeat only while standing by; one already crossing finishes.
+  const HB = PLEXUS_HEARTBEAT;
+  if (S.beatAt >= 0) {
+    S.beatAt += dt;
+    if (S.beatAt >= HB.length) {
+      S.beatAt = -1;
+      S.beatIn = nextBeat();
+    }
+  } else if (state === 'idle') {
+    S.beatIn -= dt;
+    if (S.beatIn <= 0) {
+      S.beatAt = 0;
+      const u = Math.random() * 2 - 1, phi = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+      S.beatAxis = [r * Math.cos(phi), u, r * Math.sin(phi)];
+    }
+  }
+  const beating = S.beatAt >= 0;
+  const beatProgress = beating ? S.beatAt / HB.length : 0;
+  // The band sweeps from one side of the sphere to the other, fading in and
+  // out at the ends so it neither appears nor vanishes.
+  const beatFront = -1.25 + 2.5 * beatProgress;
+  const beatLift = beating ? HB.lift * Math.sin(Math.PI * beatProgress) : 0;
+  const [bax, bay, baz] = S.beatAxis;
+
+  const RP = PLEXUS_RIPPLE;
+  if (S.rippleAt >= 0) {
+    S.rippleAt += dt;
+    if (S.rippleAt >= RP.length) S.rippleAt = -1;
+  }
+  const rippling = S.rippleAt >= 0;
+  const rippleProgress = rippling ? S.rippleAt / RP.length : 0;
+  const ringAt = 0.05 + 1.05 * (1 - Math.pow(1 - rippleProgress, 2));
+  const ringLift = rippling ? RP.lift * Math.pow(1 - rippleProgress, 1.5) : 0;
   S.radius = lerp(F.radius, cfg.r, e);
   S.flow = lerp(F.flow, cfg.flow, e);
   S.bright = lerp(F.bright, cfg.bright, e);
@@ -747,6 +843,16 @@ export function drawPlexus(
   // square root every frame to show motion the web was already showing.
   for (let i = 0; i < NODES; i++) {
     const p = P[i];
+    if (!p.rigid) {
+      const c = p.home > 0.65 ? cMid : cIn;
+      const sn = p.home > 0.65 ? sMid : sIn;
+      let a = p.x;
+      p.x = a * c + p.z * sn; p.z = -a * sn + p.z * c;
+      a = p.vx;
+      p.vx = a * c + p.vz * sn; p.vz = -a * sn + p.vz * c;
+      a = p.hx;
+      p.hx = a * c + p.hz * sn; p.hz = -a * sn + p.hz * c;
+    }
     const ph = p.phase;
     const fx = Math.sin(2.7 * p.y + fA) * Math.cos(3.4 * p.z + fB) + 0.45 * Math.sin(5.9 * p.z + fC);
     const fy = Math.sin(2.7 * p.z + fB) * Math.cos(3.4 * p.x + fC) + 0.45 * Math.sin(5.9 * p.x + fA);
@@ -814,14 +920,27 @@ export function drawPlexus(
     p.pd = Math.max(0, Math.min(1, (rz + 1) / 2));
     p.ps = p.size * persp * sizeScale * breath;
     p.reg = S.lobes[p.lobeA] * p.lobeW + S.lobes[p.lobeB] * (1 - p.lobeW);
+    if (beating) {
+      const off = p.hx * bax + p.hy * bay + p.hz * baz - beatFront;
+      p.reg += beatLift * Math.exp(-(off * off) / (HB.width * HB.width));
+    }
+    if (rippling) {
+      const off = Math.hypot(p.px - cx, p.py - cy) / sR - ringAt;
+      p.reg += ringLift * Math.exp(-(off * off) / (RP.width * RP.width));
+    }
     p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
   }
 
   const dCosY = Math.cos(S.spinY * DUST_TURN), dSinY = Math.sin(S.spinY * DUST_TURN);
   for (let i = NODES; i < n; i++) {
     const q = P[i];
-    const qx = q.x * dCosY + q.z * dSinY;
-    let qz = -q.x * dSinY + q.z * dCosY;
+    // Dust has no lines to keep, so its layer's drift is applied as it is
+    // drawn rather than to where it is.
+    const drift = q.home > 0.95 ? 0 : q.home > 0.65 ? S.depthMid : S.depthInner;
+    const dc = drift ? Math.cos(S.spinY * DUST_TURN + drift) : dCosY;
+    const ds = drift ? Math.sin(S.spinY * DUST_TURN + drift) : dSinY;
+    const qx = q.x * dc + q.z * ds;
+    let qz = -q.x * ds + q.z * dc;
     const qy = q.y * cosX - qz * sinX;
     qz = q.y * sinX + qz * cosX + S.z;
     const qp = FOCAL / (FOCAL - qz);
@@ -830,6 +949,18 @@ export function drawPlexus(
     q.pd = Math.max(0, Math.min(1, (qz + 1) / 2));
     q.ps = q.size * qp * sizeScale * breath;
     q.reg = S.lobes[q.lobeA] * q.lobeW + S.lobes[q.lobeB] * (1 - q.lobeW);
+    if (beating) {
+      // Against where it is drawn, drift included, or the band would cross
+      // the inner dust somewhere other than where it crosses the web.
+      const cd = Math.cos(drift), sd = Math.sin(drift);
+      const hx = q.hx * cd + q.hz * sd, hz = -q.hx * sd + q.hz * cd;
+      const off = hx * bax + q.hy * bay + hz * baz - beatFront;
+      q.reg += beatLift * Math.exp(-(off * off) / (HB.width * HB.width));
+    }
+    if (rippling) {
+      const off = Math.hypot(q.px - cx, q.py - cy) / sR - ringAt;
+      q.reg += ringLift * Math.exp(-(off * off) / (RP.width * RP.width));
+    }
     q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * q.reg * S.look.dots * S.look.exposure);
   }
 
@@ -867,9 +998,12 @@ export function drawPlexus(
       const reach = LINK_DIST * rmean * S.radius * speechReach * (1 + PLEXUS_THORNS.reach * thrown);
       const pairSq = reach * reach;
       if (sq > pairSq) continue;
-      const near = 1 - Math.sqrt(sq / pairSq) * 0.75;
+      const frac = Math.sqrt(sq / pairSq);
+      const near = 1 - frac * 0.75;
+      const e0 = Math.min(1, (1 - frac) / LINK_FADE);
+      const fade = e0 * e0 * (3 - 2 * e0);
       const depth = (a.pd + c.pd) / 2;
-      const alpha = near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5 *
+      const alpha = fade * near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5 *
         (1 + PLEXUS_THORNS.glow * Math.max(a.out, c.out));
       if (alpha <= cut) continue;
       ink += alpha;

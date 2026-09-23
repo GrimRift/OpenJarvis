@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLEXUS_LOOK, createPlexusState, drawPlexus } from './orb-plexus';
+import { PLEXUS_HEARTBEAT, PLEXUS_LOOK, PLEXUS_RIPPLE, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -265,5 +265,71 @@ describe('the spikes setting', () => {
     };
     expect(run(true)).toBeGreaterThan(0.02);
     expect(run(false)).toBeLessThan(1e-6);
+  });
+});
+
+function frames(state: 'idle' | 'listening', n: number, each?: (S: ReturnType<typeof createPlexusState>, f: number) => void) {
+  resetRecord();
+  const target = stubContext(shared);
+  const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+  const S = createPlexusState();
+  for (let f = 0; f < n; f++) {
+    each?.(S, f);
+    drawPlexus(target, canvas, S, state, f, 1, 0);
+  }
+  return S;
+}
+
+describe('the heartbeat', () => {
+  it('beats in standing by, then waits 20-40 s for the next', () => {
+    let started = -1;
+    const S = frames('idle', PLEXUS_HEARTBEAT.length + 20, (s, f) => {
+      if (f === 0) s.beatIn = 1;
+      if (s.beatAt === 0 && started < 0) started = f;
+    });
+    expect(started).toBeGreaterThanOrEqual(0);
+    // Crossed and gone, with the next one a quiet while away.
+    expect(S.beatAt).toBe(-1);
+    expect(S.beatIn).toBeGreaterThanOrEqual(PLEXUS_HEARTBEAT.every[0] - 30);
+    expect(S.beatIn).toBeLessThanOrEqual(PLEXUS_HEARTBEAT.every[1]);
+  });
+
+  it('never starts one outside standing by', () => {
+    let started = false;
+    frames('listening', 120, (S, f) => {
+      if (f === 0) S.beatIn = 1;
+      if (S.beatAt >= 0) started = true;
+    });
+    expect(started).toBe(false);
+  });
+});
+
+describe('the wake ripple', () => {
+  it('runs once and is gone', () => {
+    const seen: number[] = [];
+    const S = frames('listening', PLEXUS_RIPPLE.length + 20, (s, f) => {
+      if (f === 5) startRipple(s);
+      seen.push(s.rippleAt);
+    });
+    expect(seen.some((v) => v > 0)).toBe(true);
+    expect(S.rippleAt).toBe(-1);
+  });
+});
+
+describe('depth', () => {
+  it('turns the inner webs against the surface', () => {
+    // The layers slide past each other: an inner node's home direction
+    // turns while the shell's stays put.
+    const S = createPlexusState();
+    const shell = S.particles.find((p) => p.rigid)!;
+    const inner = S.particles.find((p) => p.node && !p.rigid)!;
+    const before = [shell.hx, shell.hz, inner.hx, inner.hz];
+    resetRecord();
+    const target = stubContext(shared);
+    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+    for (let f = 0; f < 120; f++) drawPlexus(target, canvas, S, 'idle', f, 1, 0);
+    expect(shell.hx).toBe(before[0]);
+    expect(shell.hz).toBe(before[1]);
+    expect(Math.hypot(inner.hx - before[2], inner.hz - before[3])).toBeGreaterThan(0.01);
   });
 });

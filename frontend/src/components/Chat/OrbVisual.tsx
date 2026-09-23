@@ -7,10 +7,12 @@ import {
 } from '../../lib/orb-motion';
 import { getSpeechLevel } from '../../lib/audio-level';
 import { serverVoiceLevel } from '../../lib/server-voice';
+import { wakeCount } from '../../lib/orb-events';
 import {
   createPlexusState,
   drawPlexus,
   MIN_DRAW_GAP_MS,
+  startRipple,
   type PlexusState,
 } from '../../lib/orb-plexus';
 import { resolveOrbState, type OrbState } from '../../lib/orb-state';
@@ -103,6 +105,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
   const lastFrameRef = useRef(0);
   const sinceDrawRef = useRef(0);
   const lastDrawRef = useRef(0);
+  const wakesRef = useRef(wakeCount());
   const design = useAppStore((s) => s.settings.orbDesign);
   const spikes = useAppStore((s) => s.settings.orbSpikes);
   const spikesRef = useRef(spikes);
@@ -153,6 +156,10 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
         sinceDrawRef.current += dt;
         if (now - lastDrawRef.current >= MIN_DRAW_GAP_MS) {
           plexusRef.current!.spikes = spikesRef.current;
+          if (wakeCount() !== wakesRef.current) {
+            wakesRef.current = wakeCount();
+            startRipple(plexusRef.current!);
+          }
           drawPlexus(
             ctx,
             canvas,
