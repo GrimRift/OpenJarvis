@@ -20,6 +20,11 @@ from typing import Optional
 
 _lock = threading.Lock()
 
+#: How long the page's "a reply is playing" lasts without being said again.
+#: The page repeats it every few seconds while it plays, so a closed tab or
+#: a lost "stopped" frees the floor within this.
+BROWSER_PLAYING_TTL = 20.0
+
 
 @dataclass
 class Activity:
@@ -27,6 +32,11 @@ class Activity:
     last_reply_end_at: Optional[float] = None
     tts_streams: int = 0
     flux_transmitting: bool = False
+    #: Until when the page says a reply is still being heard. The TTS stream
+    #: ends when the audio is made, which is about twice as fast as it plays:
+    #: the second half of every reply played with the server thinking it was
+    #: over, and a reminder was spoken into one on 23 September.
+    browser_playing_until: float = 0.0
     #: Whether the web interface has been open at any point since the server
     #: started. Sage autostarts with Windows, so without this it began making
     #: unprompted remarks into an empty room -- the user was elsewhere and had
@@ -35,8 +45,13 @@ class Activity:
     ui_seen: bool = False
 
     @property
+    def reply_audible(self) -> bool:
+        """A reply is being made or heard."""
+        return self.tts_streams > 0 or time.time() < self.browser_playing_until
+
+    @property
     def sage_mid_turn(self) -> bool:
-        return self.tts_streams > 0 or self.flux_transmitting
+        return self.reply_audible or self.flux_transmitting
 
 
 _state = Activity()
@@ -63,6 +78,12 @@ def tts_end(now: Optional[float] = None) -> None:
         _state.last_reply_end_at = now if now is not None else time.time()
 
 
+def browser_playing(active: bool, now: Optional[float] = None) -> None:
+    with _lock:
+        now = now if now is not None else time.time()
+        _state.browser_playing_until = now + BROWSER_PLAYING_TTL if active else 0.0
+
+
 def flux_transmitting(active: bool) -> None:
     with _lock:
         _state.flux_transmitting = active
@@ -75,6 +96,7 @@ def snapshot() -> Activity:
             last_reply_end_at=_state.last_reply_end_at,
             tts_streams=_state.tts_streams,
             flux_transmitting=_state.flux_transmitting,
+            browser_playing_until=_state.browser_playing_until,
             ui_seen=_state.ui_seen,
         )
 
@@ -88,6 +110,7 @@ def reset() -> None:
 
 __all__ = [
     "Activity",
+    "browser_playing",
     "flux_transmitting",
     "note_user_turn",
     "reset",

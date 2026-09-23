@@ -45,6 +45,11 @@ _last_spoke_at = 0.0
 #: turn, or a reply being read aloud -- before speaking anyway. A reminder
 #: is time-sensitive; a long reply can run half a minute.
 FLOOR_WAIT_SECONDS = 45.0
+#: Past that, a voice still waits for a reply being heard to end, this much
+#: longer. An open microphone can be talked into; a reply cannot be talked
+#: over. On 23 September a reminder waited its 45 s through a run of back-
+#: and-forth and then spoke over the next answer, and was not heard.
+REPLY_WAIT_SECONDS = 90.0
 
 
 def _wait_for_the_floor(timeout: float) -> None:
@@ -60,6 +65,9 @@ def _wait_for_the_floor(timeout: float) -> None:
 
     deadline = time.monotonic() + timeout
     while activity.snapshot().sage_mid_turn and time.monotonic() < deadline:
+        time.sleep(0.1)
+    deadline = time.monotonic() + REPLY_WAIT_SECONDS
+    while activity.snapshot().reply_audible and time.monotonic() < deadline:
         time.sleep(0.1)
 
 

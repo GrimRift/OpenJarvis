@@ -1377,6 +1377,16 @@ async def put_volume(request: Request):
     return volumes.to_dict()
 
 
+@speech_router.post("/playback")
+async def speech_playback(body: dict):
+    """The page is (or has stopped) playing a reply aloud. Repeated while it
+    plays; see activity.BROWSER_PLAYING_TTL."""
+    from openjarvis.core import activity
+
+    activity.browser_playing(bool(body.get("playing")))
+    return {"playing": bool(body.get("playing"))}
+
+
 @speech_router.post("/conversation-ended")
 async def speech_conversation_ended():
     """The listening window closed with nothing said: the conversation is

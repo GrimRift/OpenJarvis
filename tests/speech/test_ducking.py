@@ -309,6 +309,37 @@ class TestRepliesAndServerVoicesTakeTurns:
         finally:
             activity.tts_end()
 
+    def test_a_server_voice_waits_for_a_reply_still_being_heard(self):
+        """23 September: a reminder waited out its turn through a run of
+        back-and-forth, then spoke over the next answer. The page says while
+        a reply plays; past the floor's wait, a voice still waits for that."""
+        import threading
+        import time
+
+        from openjarvis.core import activity
+        from openjarvis.speech import player
+
+        activity.browser_playing(True)
+        try:
+            threading.Timer(0.4, activity.browser_playing, args=(False,)).start()
+            t0 = time.monotonic()
+            with player.speaking(wait_for_turn=0.05):
+                waited = time.monotonic() - t0
+            assert 0.35 <= waited < 2.0
+        finally:
+            activity.browser_playing(False)
+
+    def test_the_page_saying_playing_lapses_on_its_own(self):
+        from openjarvis.core import activity
+
+        long_ago = time_now() - activity.BROWSER_PLAYING_TTL - 1
+        activity.browser_playing(True, now=long_ago)
+        assert not activity.snapshot().reply_audible
+        activity.browser_playing(True)
+        assert activity.snapshot().sage_mid_turn
+        activity.browser_playing(False)
+        assert not activity.snapshot().sage_mid_turn
+
     def test_a_reply_waits_for_a_server_voice(self):
         import asyncio
         import threading
@@ -400,3 +431,9 @@ class TestInterruptedDuck:
             film.SimpleAudioVolume.level = 1.0  # turned up by hand meanwhile
             assert ducking.restore_leftover() == []
         assert film.SimpleAudioVolume.level == 1.0
+
+
+def time_now() -> float:
+    import time
+
+    return time.time()
