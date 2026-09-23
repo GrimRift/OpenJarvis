@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_LOOK, PLEXUS_RIPPLE, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
+import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_LOOK, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -364,5 +364,34 @@ describe("listening's pulse", () => {
     expect(period / 60).toBeGreaterThan(PLEXUS_RIPPLE.length / 60);
     const idle = frames('idle', period * 2, () => {});
     expect(idle.listenGlow).toBe(0);
+  });
+});
+
+describe('a held sound', () => {
+  function speak(level: (f: number) => number, n: number) {
+    resetRecord();
+    const target = stubContext(shared);
+    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+    const S = createPlexusState();
+    const lit: number[] = [];
+    for (let f = 0; f < n; f++) {
+      drawPlexus(target, canvas, S, 'speaking', f, 1, level(f));
+      lit.push(S.lobes[S.lastHit]);
+    }
+    return { S, lit };
+  }
+
+  it('swells the patch it lit instead of letting it go out', () => {
+    // Silence, then one long vowel.
+    const { lit } = speak((f) => (f < 80 ? 0 : 0.7), 200);
+    const afterOnset = lit[80 + 30];
+    const heldOn = lit[80 + 110];
+    expect(heldOn).toBeGreaterThan(afterOnset + 0.2);
+  });
+
+  it('leaves ordinary syllables to their onsets', () => {
+    // Syllables every 12 frames: none is held long enough to count.
+    const { S } = speak((f) => (f < 80 ? 0 : f % 12 < 6 ? 0.7 : 0.1), 200);
+    expect(S.holdFrames).toBeLessThan(PLEXUS_SUSTAIN.after);
   });
 });

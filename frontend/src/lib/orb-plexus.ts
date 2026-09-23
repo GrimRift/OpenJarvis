@@ -306,6 +306,28 @@ export const PLEXUS_LOOK = {
   hazeRadius: 60,
 };
 
+/**
+ * A held sound. A syllable lights a patch as it starts, and that light
+ * falls away within a quarter second whatever the voice does next, so a
+ * long vowel left the orb full-sized but its light going out, as if the
+ * voice had stopped. Once a sound is held past a normal syllable, the
+ * patch it lit swells instead, and spreads to the patch beside it.
+ *
+ * floor  the level a sound must hold above, 0..1
+ * onset  a rise this sharp is a new syllable and starts the count again.
+ *        Not the 0.06 that lights a patch: a vowel's own level wobbles
+ *        past that, and on Sage's recorded voice no stretch then lasted
+ *        past 24 frames. At 0.15, over 0.2, 19% of its speech counts as
+ *        held (runs p50 9 frames, p90 26): long vowels and slow words.
+ * after  frames since the syllable's onset before it counts as held --
+ *        a syllable is 150-250 ms, 9-15 frames
+ * grow   frames the swell takes to reach full
+ * lift   how far above its resting level the held patch rises, at full
+ * spread the share of it the neighbouring patch takes
+ * glow   how much brighter the whole web runs, at full
+ */
+export const PLEXUS_SUSTAIN = { floor: 0.2, onset: 0.15, after: 16, grow: 36, lift: 0.5, spread: 0.45, glow: 0.08 };
+
 /** Per 60Hz frame: a patch reaches most of a syllable's brightness in
  * about four frames. Instant is a blink; this is a voice. */
 const LOBE_ATTACK = 0.34;
@@ -454,6 +476,9 @@ export interface PlexusState {
   pairs: Int32Array; pairCount: number;
   /** Thorns allowed at all -- the user's setting (Settings > Orb spikes). */
   spikes: boolean;
+  /** Frames since the last syllable's onset while the voice has stayed up,
+   * and the patches that onset lit: see PLEXUS_SUSTAIN. */
+  holdFrames: number; lastHit: number; lastOther: number;
   /** The light the web drew, smoothed: the sum of its lines' strengths. */
   ink: number;
   look: PlexusLook;
@@ -589,6 +614,7 @@ export function createPlexusState(): PlexusState {
       spin: PLEXUS_STATES.idle.spin, pace: PLEXUS_STATES.idle.pace,
     },
     ink: 0,
+    holdFrames: 0, lastHit: 0, lastOther: 1,
     spikes: true,
     trans: 1, lastBreath: 1, lastSpin: PLEXUS_STATES.idle.spin,
     phase: 0, lastPace: PLEXUS_STATES.idle.pace,
@@ -853,6 +879,19 @@ export function drawPlexus(
     S.lobeTargets[hit] = Math.max(S.lobeTargets[hit], lift);
     const other = (hit + 1 + ((Math.random() * (LOBES - 1)) | 0)) % LOBES;
     S.lobeTargets[other] = Math.max(S.lobeTargets[other], patch.base + rise * patch.kick * 0.5);
+    S.lastHit = hit;
+    S.lastOther = other;
+  }
+
+  const SU = PLEXUS_SUSTAIN;
+  if (rise > SU.onset || speech < SU.floor) S.holdFrames = 0;
+  else S.holdFrames += dt;
+  const held = Math.min(1, Math.max(0, (S.holdFrames - SU.after) / SU.grow));
+  const sustain = state === 'speaking' ? held * held * (3 - 2 * held) : 0;
+  if (sustain > 0) {
+    const swell = sustain * SU.lift * speech;
+    S.lobeTargets[S.lastHit] = Math.max(S.lobeTargets[S.lastHit], patch.base + swell);
+    S.lobeTargets[S.lastOther] = Math.max(S.lobeTargets[S.lastOther], patch.base + swell * SU.spread);
   }
 
   // The tumble rises and settles with the morph instead of starting at
@@ -878,7 +917,7 @@ export function drawPlexus(
   // Dimmer as it contracts: the same marks packed into a smaller disc would
   // otherwise glare.
   const bright =
-    S.bright * breathe * (1 + Math.min(1.2, S.pulse) * 0.22) * Math.pow(breath, 1.35);
+    S.bright * breathe * (1 + Math.min(1.2, S.pulse) * 0.22 + sustain * SU.glow) * Math.pow(breath, 1.35);
 
   const sR = R * 0.8 * breath;
   const sizeScale = w / 560;
