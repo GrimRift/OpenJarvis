@@ -367,7 +367,9 @@ const TETHER = 1.2e-4;
  * pinned shell, and the web strung to them from the surface draws a spike.
  * rise   the onset that throws them. Every onset used to, which on Sage's
  *        voice is near six a second, and the body bristled the whole time
- *        it spoke. Over 0.15, the same onsets that spark: 1.3 a second.
+ *        it spoke. Over 0.15, the same onsets that spark, was 1.3 a
+ *        second; with regions and cap reining each throw in, that read as
+ *        underwhelming (24 September), so a little softer onset throws too.
  * kick   impulse per onset
  * limit  how far out a node may go, as a multiple of the orb's radius
  * reach  how much further a thrown node's links reach, so a thorn is
@@ -385,16 +387,17 @@ const TETHER = 1.2e-4;
  *        and its fan flared hard enough to read as a glitch.
  * edge   where the canvas's soft edge begins, as a fraction of its half
  *        width. The thorns are what reach it.
- * regions how many patches may throw thorns at once: the ones the last
+ * regions how many patches may throw thorns at once (5; 4 was too few): the ones the last
  *        sharp syllables lit. Each syllable lights two patches and they fade
  *        slowly, so through fast speech nearly all ten stayed lit and thorns
  *        fired from every side at once -- "too overwhelming" (24 September).
- * cap    the most one onset may throw: a shout throws no further than a
- *        firm syllable, so a loud stretch reads as lively, not an explosion.
+ * cap    the most one onset may throw, so a shout reads as lively, not an
+ *        explosion. 2.2: uncapped a shout threw up to 4, and 1.6 left even
+ *        loud words short (24 September).
  */
 export const PLEXUS_THORNS = {
-  rise: 0.15, kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 3, edge: 0.96,
-  regions: 4, cap: 1.6,
+  rise: 0.13, kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 3, edge: 0.96,
+  regions: 5, cap: 2.2,
 };
 
 const RAMP_STOPS: Array<[number, number, number, number]> = [
