@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { PanelRight } from 'lucide-react';
 import { InputArea } from '../components/Chat/InputArea';
 import { OrbVisual, useOrbGenerating, useOrbState } from '../components/Chat/OrbVisual';
@@ -22,28 +22,18 @@ const STATUS: Record<ReturnType<typeof useOrbState>, string> = {
  * icons only, and the conversation is read from a transcript that floats over
  * the right edge. Everything underneath — wake word, transcription, streaming
  * speech — is the same pipeline the main chat uses, so this page composes
- * existing pieces rather than reimplementing them.
+ * existing pieces rather than reimplementing them. It continues whichever
+ * conversation is open: it once cleared the thread on every visit, so a
+ * switch from Chat to Voice mid-conversation lost the thread.
  */
 export function VoicePage() {
   const orbState = useOrbState();
   const generating = useOrbGenerating();
   const messages = useAppStore((s) => s.messages);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
-  const startNewChat = useAppStore((s) => s.startNewChat);
   // Closed on arrival: this surface is for speaking, and the transcript is
   // something you reach for when reading is easier than listening.
   const [showTranscript, setShowTranscript] = useState(false);
-  const startedRef = useRef(false);
-
-  useEffect(() => {
-    // A fresh thread per visit, but only on the way in: turns taken while you
-    // stay on this page continue the same conversation. Clears rather than
-    // creates — creating eagerly put an empty "New chat" in the sidebar on
-    // every switch between Chat and Voice.
-    if (startedRef.current) return;
-    startedRef.current = true;
-    startNewChat();
-  }, [startNewChat]);
 
   return (
     <div className="relative h-full w-full overflow-hidden">
