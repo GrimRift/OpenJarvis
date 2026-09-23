@@ -18,6 +18,7 @@ import { useAppStore } from './lib/store';
 import { useMomentsFeed, usePresenceState } from './hooks/useMomentsFeed';
 import { useServerVoice } from './hooks/useServerVoice';
 import { usePlaybackReport } from './hooks/usePlaybackReport';
+import { useVoiceOwnership } from './hooks/useVoiceOwner';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri, fetchToolCredentialStatus } from './lib/api';
 import { OptInModal } from './components/OptInModal';
 import { DiagramLayer } from './components/Diagram/DiagramLayer';
@@ -75,6 +76,7 @@ export default function App() {
   usePresenceState();
   useServerVoice();
   usePlaybackReport();
+  useVoiceOwnership();
 
   // Sync overlay conversations into the main app
   const importOverlay = useAppStore((s) => s.importOverlayConversation);

@@ -65,6 +65,7 @@ import { useStreamingTts } from '../../hooks/useStreamingTts';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
+import { useVoiceOwner } from '../../hooks/useVoiceOwner';
 import { turnSurvivesStatus, useFluxSpeech } from '../../hooks/useFluxSpeech';
 import {
   CONTINUATION_WINDOW_MS,
@@ -320,7 +321,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // Flux replaces the local silence timer as the end-of-turn decision.
   // Declared here because handleMicClick, defined well above the Flux
   // hook, needs it too. With the toggle off nothing Flux-related runs.
-  const fluxActive = speechEnabled && fluxEnabled;
+  // Only the Sage page used last listens; another open one would hear the
+  // same microphone and answer every turn a second time.
+  const voiceOwner = useVoiceOwner();
+  const fluxActive = speechEnabled && fluxEnabled && voiceOwner;
   const maxTokens = useAppStore((s) => s.settings.maxTokens);
   const temperature = useAppStore((s) => s.settings.temperature);
   const createConversation = useAppStore((s) => s.createConversation);
@@ -2049,7 +2053,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }
   }, [speechState]);
 
-  const wakeWordEnabled = useAppStore((s) => s.settings.wakeWordEnabled);
+  const wakeWordEnabled = useAppStore((s) => s.settings.wakeWordEnabled) && voiceOwner;
 
   // A spoken moment that invites an answer (M37): open the microphone for
   // it, so "yes, actually" needs no wake word. Only in Flux mode with the

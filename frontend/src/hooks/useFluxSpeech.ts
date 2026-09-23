@@ -380,7 +380,9 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
 
     const ws = wsRef.current;
     wsRef.current = null;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    // CONNECTING too: a socket still opening when it was replaced used to
+    // be left alive, a second session nobody had closed.
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       try {
         ws.close();
       } catch {
@@ -503,6 +505,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     wsRef.current = ws;
 
     ws.onmessage = (ev) => {
+      // A replaced session's late messages are not this session's turns.
+      if (session !== sessionIdRef.current) return;
       if (typeof ev.data === 'string') handleMessage(ev.data);
     };
     // fail() tears the session down and hands the caller its buffered audio,
