@@ -9,7 +9,7 @@
  * hands the canvas.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_SPARKS, PLEXUS_THORNS, PLEXUS_LOOK, PLEXUS_PATCHES, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
@@ -474,6 +474,13 @@ describe('the thorns in loud, fast speech', () => {
   // Every patch a syllable lit stayed lit through fast speech, and each
   // threw. Only the few the latest syllables lit may throw now.
   it('rise from a few regions at a time, not all sides', () => {
+    // Seeded: which patches a syllable lights is random, and the worst
+    // moment of a run is what this measures.
+    let seed = 12345;
+    const random = vi.spyOn(Math, 'random').mockImplementation(() => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    });
     resetRecord();
     const target = stubContext(shared);
     const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
@@ -492,6 +499,7 @@ describe('the thorns in loud, fast speech', () => {
       if (regions.size > 0) thrownFrames++;
       most = Math.max(most, regions.size);
     }
+    random.mockRestore();
     expect(thrownFrames).toBeGreaterThan(0); // still lively
     expect(most).toBeLessThanOrEqual(PLEXUS_THORNS.regions + 2);
   });
