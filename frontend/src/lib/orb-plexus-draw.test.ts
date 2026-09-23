@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLEXUS_LOOK, createPlexusState, drawPlexus } from './orb-plexus';
+import { PLEXUS_ENERGY, PLEXUS_THORNS, createPlexusState, drawPlexus, pulseEnvelope } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -145,38 +145,6 @@ describe('the body does not densify as it shrinks', () => {
   });
 });
 
-describe('a syllable swells rather than switching on', () => {
-  it('takes several frames to reach the level it was given', () => {
-    // Setting the level outright is a blink: a switch being thrown, not a
-    // voice. The target jumps and the light walks toward it.
-    const target = stubContext(shared);
-    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
-    const S = createPlexusState();
-    for (let f = 0; f < 20; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, 0);
-    const before = Math.max(...S.lobes);
-
-    // One loud syllable: a rise from silence.
-    drawPlexus(target, canvas, S, 'speaking', 20, 1, 0.9);
-    const firstFrame = Math.max(...S.lobes);
-    const aimedAt = Math.max(...S.lobeTargets);
-
-    // The target is already up; the light is not there yet.
-    // The target is already up; the light is not there yet.
-    expect(aimedAt).toBeGreaterThan(before + 0.2);
-    expect(firstFrame).toBeLessThan(before + 0.05);
-
-    // Over the next frames it swells toward it and falls back with it, so
-    // the peak arrives later than the frame the syllable landed on.
-    let peak = firstFrame;
-    for (let f = 21; f < 32; f++) {
-      drawPlexus(target, canvas, S, 'speaking', f, 1, 0.9);
-      peak = Math.max(peak, Math.max(...S.lobes));
-    }
-    expect(peak).toBeGreaterThan(before + 0.2);
-    expect(firstFrame).toBeLessThan(peak - 0.05);
-  });
-});
-
 describe('the web keeps its weight at any canvas size', () => {
   it('scales the drawn weight of a line with the canvas', () => {
     // Everything scales with the canvas -- the orb, the dots, the bloom --
@@ -223,27 +191,74 @@ describe('the orb sits on the page, not on a square', () => {
   });
 });
 
-describe("speaking's exposure steers itself", () => {
-  it('opens up in a pause and eases back under loud speech, within bounds', () => {
-    // A pause once fell below standing by, and a harsh sustained voice
-    // clipped a fifth of the disc into solid slabs; exposure now steers the
-    // light the web draws toward a set amount instead of following a rule.
-    const settle = (speech: (f: number) => number) => {
-      resetRecord();
-      const target = stubContext(shared);
-      const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
-      const S = createPlexusState();
-      for (let f = 0; f < 240; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, speech(f));
-      return S.look.exposure;
-    };
-    const loud = settle((f) => 0.8 + 0.2 * Math.abs(Math.sin(f * 0.4)));
-    const pause = settle(() => 0);
-    const base = PLEXUS_LOOK.states.speaking.exposure;
-    const [lo, hi] = PLEXUS_LOOK.speakingRange;
-    expect(pause).toBeGreaterThan(loud);
-    for (const e of [loud, pause]) {
-      expect(e).toBeGreaterThanOrEqual(base * lo - 1e-6);
-      expect(e).toBeLessThanOrEqual(base * hi + 1e-6);
+/** Speak a sharp syllable every 14 frames, the way a voice does. */
+const syllables = (f: number) => ((f % 14) < 2 ? 0.9 : 0.1);
+
+function speak(frames: number, spikes = true) {
+  resetRecord();
+  const target = stubContext(shared);
+  const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+  const S = createPlexusState();
+  S.spikes = spikes;
+  const log: Array<{ burst: number; out: number; calm: number }> = [];
+  for (let f = 0; f < frames; f++) {
+    drawPlexus(target, canvas, S, 'speaking', f, 1, syllables(f));
+    log.push({ burst: S.burst, out: Math.max(...S.particles.map((p) => p.out)), calm: S.calmFor });
+  }
+  return { S, log };
+}
+
+describe('energy moves inside the sphere while Sage speaks', () => {
+  it('pulses rise and retreat smoothly, never snapping on or off', () => {
+    // Syllables used to throw a patch to full in a frame and let it fall:
+    // hotspots switching on and off. A pulse is a raised cosine each way.
+    const total = PLEXUS_ENERGY.rise + PLEXUS_ENERGY.hold + PLEXUS_ENERGY.fall;
+    expect(pulseEnvelope(0)).toBe(0);
+    expect(pulseEnvelope(total)).toBe(0);
+    let worst = 0;
+    for (let f = 0; f < total; f += 0.5) worst = Math.max(worst, Math.abs(pulseEnvelope(f + 0.5) - pulseEnvelope(f)));
+    // No half-frame step bigger than a smooth rise over the attack needs.
+    expect(worst).toBeLessThan((Math.PI / 2 / PLEXUS_ENERGY.rise) * 0.5 + 1e-9);
+  });
+
+  it('leaves a calm interval between pulses, however fast the syllables', () => {
+    const { log } = speak(600);
+    const starts: number[] = [];
+    for (let f = 1; f < log.length; f++) if (log[f].burst > 0 && log[f - 1].burst === 0) starts.push(f);
+    expect(starts.length).toBeGreaterThan(1);
+    const period = PLEXUS_ENERGY.rise + PLEXUS_ENERGY.hold + PLEXUS_ENERGY.fall + PLEXUS_ENERGY.calm;
+    for (let i = 1; i < starts.length; i++) {
+      expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(period - 1);
     }
+  });
+
+  it('throws spikes only during a pulse, and not far', () => {
+    const { log } = speak(400);
+    const during = log.filter((l) => l.burst > 0.5);
+    const calm = log.filter((l) => l.burst === 0);
+    expect(during.length).toBeGreaterThan(0);
+    expect(Math.max(...during.map((l) => l.out))).toBeGreaterThan(0.02);
+    // Between pulses the silhouette is the shell: a circle.
+    expect(Math.max(...calm.map((l) => l.out))).toBe(0);
+    // Short: the tip never reaches past the configured length.
+    expect(Math.max(...log.map((l) => l.out))).toBeLessThanOrEqual(PLEXUS_THORNS.length + 1e-9);
+  });
+
+  it('throws no spikes at all when they are turned off', () => {
+    const { log } = speak(400, false);
+    expect(log.some((l) => l.burst > 0.5)).toBe(true);
+    expect(Math.max(...log.map((l) => l.out))).toBe(0);
+  });
+
+  it('keeps the fine mesh drawn between pulses', () => {
+    // The orb must stay whole when no current is lit: the mesh is drawn by
+    // every line, not only by the ones a current is passing through.
+    resetRecord();
+    const target = stubContext(shared);
+    const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+    const S = createPlexusState();
+    for (let f = 0; f < 30; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, 0);
+    expect(S.currents.every((c) => c.level < 0.5)).toBe(true);
+    expect(shared.lineSegments).toBeGreaterThan(1000);
   });
 });

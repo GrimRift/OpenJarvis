@@ -669,6 +669,17 @@ export function SettingsPage() {
                 <option value="cloud">Particle cloud</option>
               </select>
             </SettingRow>
+            {settings.orbDesign === 'constellation' && (
+              <SettingRow
+                label="Orb spikes"
+                description="Short spikes that fan out from the orb when a pulse of speech travels through it. Off keeps the orb a clean sphere."
+              >
+                <Switch
+                  on={settings.orbSpikes}
+                  onClick={() => { updateSettings({ orbSpikes: !settings.orbSpikes }); showSaved(); }}
+                />
+              </SettingRow>
+            )}
             <SettingRow label="Font size">
               <select
                 value={settings.fontSize}

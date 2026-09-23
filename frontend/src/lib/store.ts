@@ -255,6 +255,9 @@ interface Settings {
   /** Which orb Sage draws. 'constellation' is a particle shell webbed with
    * lines and lit in patches; 'cloud' is the original particle cloud. */
   orbDesign: OrbDesign;
+  /** Spikes on the constellation while Sage speaks: short fans thrown out
+   * from where a pulse is travelling. Off keeps the silhouette a circle. */
+  orbSpikes: boolean;
   defaultModel: string;
   // Cloud is ~6x faster at Sage's real prompt sizes (11.7s vs 1.9s measured on
   // the same question at ~6,200 input tokens), so it is the default. Falls
@@ -332,6 +335,7 @@ function loadSettings(): Settings {
     apiKey: '',
     fontSize: 'default',
     orbDesign: 'constellation',
+    orbSpikes: true,
     defaultModel: 'qwen3.5:4b',
     preferCloudModel: true,
     cloudModel: DEFAULT_CLOUD_MODEL,
@@ -393,6 +397,7 @@ function loadSettings(): Settings {
     if (merged.orbDesign !== 'cloud' && merged.orbDesign !== 'constellation') {
       merged.orbDesign = defaults.orbDesign;
     }
+    if (typeof merged.orbSpikes !== 'boolean') merged.orbSpikes = defaults.orbSpikes;
     // Settings saved before providers existed carry only fluxEnabled.
     if (!STT_PROVIDERS.includes(parsed.sttProvider)) {
       merged.sttProvider = parsed.fluxEnabled ? 'flux' : 'whisper';

@@ -104,6 +104,9 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
   const sinceDrawRef = useRef(0);
   const lastDrawRef = useRef(0);
   const design = useAppStore((s) => s.settings.orbDesign);
+  const spikes = useAppStore((s) => s.settings.orbSpikes);
+  const spikesRef = useRef(spikes);
+  spikesRef.current = spikes;
   // Read at draw time: switching design mid-session must not tear the loop
   // down, and the two renderers keep separate state of their own.
   const designRef = useRef(design);
@@ -149,6 +152,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
         // same speed however often it is drawn.
         sinceDrawRef.current += dt;
         if (now - lastDrawRef.current >= MIN_DRAW_GAP_MS) {
+          plexusRef.current!.spikes = spikesRef.current;
           drawPlexus(
             ctx,
             canvas,

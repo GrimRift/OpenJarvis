@@ -58,12 +58,15 @@ export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
   // Only a little larger than standing by, and never as large as a speaking
   // orb at full voice.
   listening: { r: 0.86, flow: 1.0, spin: 0.0042, bright: 1.12, links: 0.8, pace: 1 },
-  speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.17, links: 1.02, pace: 1 },
+  // Speaking's own marks are the fine mesh now, as muted as listening's;
+  // its light comes from the currents moving over it (PLEXUS_ENERGY).
+  speaking: { r: 0.97, flow: 1.55, spin: 0.005, bright: 1.05, links: 0.85, pace: 1 },
 };
 
 /**
- * How the lit patches behave per state: resting level, how far they drift on
- * their own, how hard a syllable throws one up, how fast it falls back.
+ * How the slow patches behave per state: resting level, how far they drift
+ * on their own, how fast a raised one falls back. Syllables no longer kick
+ * them -- the moving currents carry speech (PLEXUS_ENERGY).
  *
  * Speaking's base was 0.62 at first, set low so a syllable had room to rise.
  * But speaking also rests at standing-by size, and the dim-on-contraction
@@ -71,13 +74,11 @@ export const PLEXUS_STATES: Record<OrbState, PlexusStateConfig> = {
  * came out dimmer than standing by. It was the dimmest thing on screen
  * exactly when Sage was mid-sentence.
  */
-export const PLEXUS_PATCHES: Record<OrbState, { base: number; swing: number; kick: number; fall: number }> = {
-  away: { base: 0.8, swing: 0.16, kick: 0, fall: 0.97 },
-  idle: { base: 0.8, swing: 0.16, kick: 0, fall: 0.97 },
-  listening: { base: 0.72, swing: 0.22, kick: 0.8, fall: 0.945 },
-  // Falls slower than the light can rise, or the target is gone before
-  // the patch reaches it and a syllable shows as a 14% nudge.
-  speaking: { base: 0.8, swing: 0.2, kick: 1.05, fall: 0.932 },
+export const PLEXUS_PATCHES: Record<OrbState, { base: number; swing: number; fall: number }> = {
+  away: { base: 0.8, swing: 0.16, fall: 0.97 },
+  idle: { base: 0.8, swing: 0.16, fall: 0.97 },
+  listening: { base: 0.72, swing: 0.22, fall: 0.945 },
+  speaking: { base: 0.8, swing: 0.2, fall: 0.932 },
 };
 
 /** How deep the breath goes, per state. An unwatched orb holds still; one
@@ -157,6 +158,9 @@ const DUST_TURN = 1;
  *           and the peak burns white. A cap works but dulls the state; the
  *           'red' control below is how speaking avoids it.
  * red       how much of the ramp's red is kept, 0..1. See RAMPS.
+ * energy    how much the moving currents light the picture (PLEXUS_ENERGY)
+ * lobes     how much the old fixed patches still light it -- the slow
+ *           shimmer standing by and listening keep
  * wires     the share of the web's lines drawn, 0..1: a fixed choice per pair
  *           of nodes. A lit speaking patch piles so many lines on each
  *           other that it turns into a solid slab; drawing fewer, each as
@@ -179,6 +183,8 @@ export interface PlexusLook {
   rampTop: number;
   red: number;
   wires: number;
+  energy: number;
+  lobes: number;
 }
 
 export const PLEXUS_LOOK = {
@@ -191,49 +197,27 @@ export const PLEXUS_LOOK = {
   //   reference GIF     50  118  211   0.51   0.20  15,75,98
   //   standing by       52  133  212   0.40   0.18  14,75,97
   //   lab speaking      52  189  245   0.28   0.22  22,99,120
-  //   listening         43  166  225      -      -  -
-  //   speaking          64  202  231      -      -  -
-  //   a pause in it     41  154  217      -      -  -
-  //   (these three measured inside the shell at full size, not at 300px;
-  //   among their brightest pixels red over green is 0.28 / 0.23 / 0.19)
+  //   listening         40  166  225      -      -  -
+  //   speaking          52  202  238      -      -  -
+  //   a pause in it     40  124  211      -      -  -
+  //   (these three measured inside the shell at full size, not at 300px)
   //
   // A screenshot of the version before scored sharpness 0.75 and
   // whiteness 0.61 -- half again as sharp as the reference and three times
   // as white; the one after it (soft 1, haze 0.8) was asked to be less
-  // blurry. Standing by now sits on the reference. Speaking outshines
-  // listening at every level but stays the same cyan: among its brightest
-  // pixels red over green is 0.20, listening's 0.24 -- it was 0.40, its lit
-  // patches burning white. Capping it at a deeper teal fixed the white but
-  // left it duller than listening; halving its red instead lets it run
-  // bright. And its lit patches no longer pile into solid slabs: 16 px
-  // blocks averaging over 200 were 16% of its disc (listening's: 2%), and
-  // are 6% -- by drawing 42% of its lines each as bright (wires), not by
-  // compressing, which took its peaks under listening's with them.
+  // blurry. Standing by now sits on the reference.
+  //
+  // Speaking is a fine mesh with energy moving over it (PLEXUS_ENERGY): at
+  // least three quarters of its disc shows web in every frame, pulse or
+  // not, and its brightest accents still outshine listening's peaks. Solid
+  // 16 px blocks averaging over 200 are 3-4% of its disc -- they were 16%
+  // when syllables lit whole patches at once.
   states: {
-    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1 },
-    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1 },
-    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 1 },
-    speaking: { exposure: 2.8, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5, wires: 0.42 },
+    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1, energy: 0, lobes: 1 },
+    away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1, energy: 0, lobes: 1 },
+    listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 1, energy: 0, lobes: 1 },
+    speaking: { exposure: 2.2, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5, wires: 0.9, energy: 1, lobes: 0.2 },
   } as Record<OrbState, PlexusLook>,
-  /**
-   * Speaking's exposure is automatic: it steers the light the web draws --
-   * the sum of its lines' strengths, known for free as they are drawn --
-   * toward this, within speakingRange of its own exposure. Up in a pause,
-   * back under a loud word; a syllable's patch still flares, since it is
-   * local and the steering is over the whole frame and slow.
-   *
-   * Three fixed rules came first, each leaving a gap. A fixed exposure let
-   * a pause fall below standing by (median 37 against 53), the old dark
-   * speaking. Easing it along the voice envelope needed an in-word exposure
-   * of 0.1 to keep pauses up, which a long loud vowel would have driven
-   * dark. Easing it by the lit patches missed sustained loud speech, which
-   * brightens through the orb's swell and pulse rather than its patches: a
-   * harsh test voice clipped 20% of the disc into solid slabs.
-   */
-  // What normal speech draws at speaking's 0.42 wires, measured over three
-  // layouts. A pause draws about half of it.
-  speakingInk: 427,
-  speakingRange: [0.5, 1.3] as [number, number],
   bloomRadius: 190,
   glowRadius: 420,
   hazeRadius: 60,
@@ -250,26 +234,70 @@ const SPRING = 0.0016;
 const DAMP = 0.965;
 const TETHER = 1.2e-4;
 /**
- * The thorns: on each syllable the inner nodes are kicked outward, past the
- * pinned shell, and the web strung to them from the surface draws a spike.
- * kick   impulse per syllable onset
- * limit  how far out a node may go, as a multiple of the orb's radius
- * reach  how much further a thrown node's links reach, so a thorn is
- *        strung to more of the surface and reads as a fan, not a line
- * focus  0..1, how much the kick is confined to the patches the syllable
- *        just lit. Unfocused, every inner node is pushed out alike: a
- *        uniform fuzz around the whole rim, and the body thins and dims as
- *        its interior leaves. Focused, the thorns rise where the orb is
- *        lit -- a few distinct clusters, as in the reference -- and the
- *        rest of the body holds still.
- * glow   how much brighter a thorn's node and the lines strung to it are,
- *        per unit it has been thrown past the radius. A thorn is long lines
- *        at the edge of their reach, which the link falloff draws faintest;
- *        without this they read as wisps.
- * edge   where the canvas's soft edge begins, as a fraction of its half
- *        width. The thorns are what reach it.
+ * The spikes. A pulse (see PLEXUS_ENERGY) throws a few interior nodes out
+ * through the pinned shell from the lead current's region, and the web
+ * strung to them from the surface draws each spike as a fan. They rise and
+ * retreat with the pulse's envelope rather than from impulses, so a spike
+ * is felt as the pulse travelling out, not as the orb coming apart.
+ *
+ * They used to be kicked outward on every syllable, from wherever a patch
+ * happened to light, and allowed to 1.3x the radius: several unrelated
+ * thorns at once, long enough to make the silhouette look unstable.
+ *
+ * length  how far past the shell a spike's tip reaches at the pulse's peak,
+ *         as a fraction of the orb's radius
+ * share   the share of middle-shell nodes that can become a spike
+ * width   how tightly they gather round the lead current (1 - cos units)
+ * reach   how much further a thrown node's links reach, so a spike is
+ *         strung to more of the surface and reads as a fan, not a line
+ * glow    how much brighter a spike's node and its lines are, per unit it
+ *         is thrown past the radius
+ * edge    where the canvas's soft edge begins, as a fraction of its half
+ *         width
  */
-export const PLEXUS_THORNS = { kick: 4.5e-3, limit: 1.3, reach: 0.3, focus: 1, glow: 4, edge: 0.96 };
+export const PLEXUS_THORNS = { length: 0.22, share: 0.3, width: 0.16, reach: 0.3, glow: 2.5, edge: 0.96 };
+
+/**
+ * Energy moving inside the sphere, while Sage speaks.
+ *
+ * Syllables used to kick one of ten fixed patches at random -- scattered
+ * hotspots switching on and off across the body. Now a couple of currents
+ * drift over the sphere, each a soft region of light; the voice swells them
+ * gently and continuously, and a strong syllable, once the orb has been
+ * calm for a moment, fires a pulse on the lead current that rises, holds
+ * and fades (and throws the spikes). Between pulses there is a calm
+ * interval, so each one reads as an event.
+ *
+ * currents  how many drift over the sphere
+ * width     their size, in (1 - cos) of the angle from their centre
+ * travel    how fast they drift, radians per 60Hz frame
+ * rest      their level with Sage speaking but between words
+ * voice     how much the voice adds on top, at most (it saturates)
+ * pulse     the level a pulse lifts the lead current to at its peak
+ * rise/hold/fall  the pulse's envelope, in 60Hz frames
+ * calm      frames after a pulse before another may fire
+ * trigger   how sharp a syllable onset has to be to fire one
+ * accent    the share of lines that can carry a current's light; the rest
+ *           stay the fine mesh, which is what keeps the orb whole between
+ *           pulses. Few, on purpose: at 30% a lit region packed so many
+ *           bright lines together under loud speech that it read as solid
+ * gain      how bright an accent line gets at full current
+ */
+export const PLEXUS_ENERGY = {
+  currents: 2,
+  width: 0.2,
+  travel: 0.004,
+  rest: 0.35,
+  voice: 0.5,
+  pulse: 1.2,
+  rise: 18,
+  hold: 10,
+  fall: 48,
+  calm: 72,
+  trigger: 0.14,
+  accent: 0.18,
+  gain: 4.2,
+};
 
 const RAMP_STOPS: Array<[number, number, number, number]> = [
   [0, 10, 76, 107],
@@ -287,6 +315,12 @@ function pairHash(a: number, b: number): number {
   h = Math.imul(h, 0x2c1b3c6d);
   h ^= h >>> 12;
   return (h >>> 0) / 4294967296;
+}
+
+/** A second fixed number for a pair, independent of pairHash: which lines
+ * can carry a current's light is not tied to which are drawn at all. */
+function accentHash(a: number, b: number): number {
+  return pairHash(b + 7919, a + 104729);
 }
 
 function buildRamp(red = 1): string[] {
@@ -329,6 +363,10 @@ interface Node {
   px: number; py: number; pd: number; ps: number; pa: number; reg: number;
   /** How far past the orb's radius this node has been thrown, 0 inside. */
   out: number;
+  /** Can be thrown out as a spike: a few middle-shell nodes. */
+  spike: boolean;
+  /** How much the moving currents light it this frame. */
+  en: number;
   lobeA: number; lobeB: number; lobeW: number;
 }
 
@@ -361,7 +399,16 @@ const lerp = (a: number, b: number, e: number) => a + (b - a) * e;
 
 export interface PlexusState {
   radius: number; flow: number; bright: number; links: number;
-  pulse: number; lastSpeech: number; voiceEnv: number;
+  lastSpeech: number; voiceEnv: number;
+  /** The currents: where each is (body frame, unit), the axis it drifts
+   * round, and how bright it is. */
+  currents: Current[];
+  /** The pulse: its envelope now (0..1 x strength), frames into it (-1
+   * when none is running), its strength, how long it has been calm,
+   * and which current leads it. */
+  burst: number; burstAt: number; burstAmp: number; calmFor: number; lead: number;
+  /** Spikes allowed at all -- the user's setting. */
+  spikes: boolean;
   lobes: number[];
   lobeTargets: number[];
   lobeAxes: Array<[number, number, number]>;
@@ -376,8 +423,6 @@ export interface PlexusState {
   z: number; zVel: number; linkAge: number;
   particles: Node[];
   pairs: Int32Array; pairCount: number;
-  /** The light the web drew, smoothed: the sum of its lines' strengths. */
-  ink: number;
   look: PlexusLook;
 }
 
@@ -437,6 +482,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
     const isNode = i < NODES;
     let r: number;
     let rigid = false;
+    let spike = false;
     if (isNode) {
       let seen = 0;
       let layer = NODE_LAYERS[0];
@@ -447,6 +493,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
       }
       r = layer.rMin + Math.random() * (layer.rMax - layer.rMin);
       rigid = index === 0;
+      spike = index === 1 && Math.random() < PLEXUS_THORNS.share;
     } else {
       r = Math.random() < 0.72 ? 0.97 + Math.random() * 0.03 : 0.45 + Math.random() * 0.45;
     }
@@ -460,7 +507,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
       phase: Math.random() * 1000,
       heat: Math.random(),
       size: isNode ? 0.85 + Math.random() * 0.4 : 0.55 + Math.random() * 0.4,
-      px: 0, py: 0, pd: 0, ps: 0, pa: 0, reg: 1, out: 0,
+      px: 0, py: 0, pd: 0, ps: 0, pa: 0, reg: 1, out: 0, spike, en: 0,
       lobeA: 0, lobeB: 0, lobeW: 1,
     };
     // Which two patches this belongs to, computed once: its home direction
@@ -482,6 +529,68 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
   return { particles: out, axes };
 }
 
+interface Current {
+  x: number; y: number; z: number;
+  ax: number; ay: number; az: number;
+  level: number;
+}
+
+function unit(x: number, y: number, z: number): [number, number, number] {
+  const m = Math.hypot(x, y, z) || 1;
+  return [x / m, y / m, z / m];
+}
+
+function makeCurrents(n: number): Current[] {
+  const out: Current[] = [];
+  for (let i = 0; i < n; i++) {
+    // Spread apart to start, each drifting round its own tilted axis.
+    const phi = (i / Math.max(1, n)) * Math.PI * 2 + 0.7;
+    const [x, y, z] = unit(Math.cos(phi), 0.35 - 0.7 * i, Math.sin(phi));
+    const [ax, ay, az] = unit(0.3 + i * 0.5, 1, -0.4 + i * 0.9);
+    out.push({ x, y, z, ax, ay, az, level: 0 });
+  }
+  return out;
+}
+
+/** Rotate unit vector v about unit axis (kx, ky, kz) by angle a. */
+function turn(v: { x: number; y: number; z: number }, kx: number, ky: number, kz: number, a: number): void {
+  const c = Math.cos(a), sn = Math.sin(a);
+  const dot = kx * v.x + ky * v.y + kz * v.z;
+  const crx = ky * v.z - kz * v.y, cry = kz * v.x - kx * v.z, crz = kx * v.y - ky * v.x;
+  const x = v.x * c + crx * sn + kx * dot * (1 - c);
+  const y = v.y * c + cry * sn + ky * dot * (1 - c);
+  const z = v.z * c + crz * sn + kz * dot * (1 - c);
+  const m = Math.hypot(x, y, z) || 1;
+  v.x = x / m; v.y = y / m; v.z = z / m;
+}
+
+/** The pulse's envelope f frames in: a raised-cosine rise, a hold, a
+ * raised-cosine fall. Smooth at both ends, so it neither snaps on nor off. */
+export function pulseEnvelope(f: number): number {
+  const E = PLEXUS_ENERGY;
+  if (f < 0) return 0;
+  if (f < E.rise) return 0.5 - 0.5 * Math.cos((Math.PI * f) / E.rise);
+  if (f < E.rise + E.hold) return 1;
+  const g = f - E.rise - E.hold;
+  if (g < E.fall) return 0.5 + 0.5 * Math.cos((Math.PI * g) / E.fall);
+  return 0;
+}
+
+/** How much light the currents throw on a point of the body (unit
+ * direction, body frame): each a soft region round its centre. */
+function energyAt(S: PlexusState, hx: number, hy: number, hz: number): number {
+  let e = 0;
+  const width = PLEXUS_ENERGY.width;
+  for (let k = 0; k < S.currents.length; k++) {
+    const c = S.currents[k];
+    if (c.level < 0.005) continue;
+    const near = hx * c.x + hy * c.y + hz * c.z;
+    if (near < 0) continue;
+    e += c.level * Math.exp(-(1 - near) / width);
+  }
+  return e;
+}
+
 export function createPlexusState(): PlexusState {
   const built = makeParticles();
   const axes = built.axes;
@@ -489,7 +598,10 @@ export function createPlexusState(): PlexusState {
     radius: PLEXUS_STATES.idle.r, flow: PLEXUS_STATES.idle.flow, bright: PLEXUS_STATES.idle.bright,
     links: PLEXUS_STATES.idle.links,
     look: { ...PLEXUS_LOOK.states.idle },
-    pulse: 0, lastSpeech: 0, voiceEnv: 0,
+    lastSpeech: 0, voiceEnv: 0,
+    currents: makeCurrents(PLEXUS_ENERGY.currents),
+    burst: 0, burstAt: -1, burstAmp: 0, calmFor: 1e9, lead: 0,
+    spikes: true,
     lobes: new Array(LOBES).fill(0.8),
     lobeTargets: new Array(LOBES).fill(0.8),
     lobeAxes: axes,
@@ -500,7 +612,6 @@ export function createPlexusState(): PlexusState {
       links: PLEXUS_STATES.idle.links, look: { ...PLEXUS_LOOK.states.idle }, breath: 1,
       spin: PLEXUS_STATES.idle.spin, pace: PLEXUS_STATES.idle.pace,
     },
-    ink: 0,
     trans: 1, lastBreath: 1, lastSpin: PLEXUS_STATES.idle.spin,
     phase: 0, lastPace: PLEXUS_STATES.idle.pace,
     z: 0, zVel: 0, linkAge: 0,
@@ -642,12 +753,7 @@ export function drawPlexus(
   S.bright = lerp(F.bright, cfg.bright, e);
   S.links = lerp(F.links, cfg.links, e);
   const want = PLEXUS_LOOK.states[state];
-  // Speaking's exposure is steered (see speakingInk); the morph blends
-  // toward that moving target, and once it lands tracks it.
-  const [lo, hi] = PLEXUS_LOOK.speakingRange;
-  const steer = S.ink > 0 ? Math.min(hi, Math.max(lo, PLEXUS_LOOK.speakingInk / S.ink)) : hi;
-  const exposureTarget = state === 'speaking' ? want.exposure * steer : want.exposure;
-  S.look.exposure = lerp(F.look.exposure, exposureTarget, e);
+  S.look.exposure = lerp(F.look.exposure, want.exposure, e);
   S.look.curve = lerp(F.look.curve, want.curve, e);
   S.look.white = lerp(F.look.white, want.white, e);
   S.look.bloom = lerp(F.look.bloom, want.bloom, e);
@@ -658,10 +764,11 @@ export function drawPlexus(
   S.look.rampTop = lerp(F.look.rampTop, want.rampTop, e);
   S.look.red = lerp(F.look.red, want.red, e);
   S.look.wires = lerp(F.look.wires, want.wires, e);
+  S.look.energy = lerp(F.look.energy, want.energy, e);
+  S.look.lobes = lerp(F.look.lobes, want.lobes, e);
 
   const rise = syllableRise(speech, S.lastSpeech);
   S.lastSpeech = speech;
-  S.pulse = Math.max(S.pulse * Math.pow(0.88, dt), rise * 4.5);
 
   // Each patch has a target it swells toward rather than a level set
   // outright. A syllable used to raise the level in a single frame, which
@@ -676,24 +783,6 @@ export function drawPlexus(
     S.lobeTargets[i] = Math.min(1.55, Math.max(slow, S.lobeTargets[i] * Math.pow(fall, dt)));
     S.lobes[i] = approach(S.lobes[i], S.lobeTargets[i], LOBE_ATTACK, dt);
   }
-  if (rise > 0.06 && patch.kick > 0) {
-    // Toward whichever patches are facing the viewer. Picking uniformly put
-    // half the syllables on the far side of the body, where a swell is a
-    // vague smudge through the web rather than something being said.
-    const cy0 = Math.cos(S.spinY), sy0 = Math.sin(S.spinY);
-    let hit = 0;
-    let bestFacing = -Infinity;
-    for (let i = 0; i < LOBES; i++) {
-      const ax = S.lobeAxes[i];
-      const facing = -ax[0] * sy0 + ax[2] * cy0 + Math.random() * 0.8;
-      if (facing > bestFacing) { bestFacing = facing; hit = i; }
-    }
-    const lift = patch.base + rise * patch.kick;
-    S.lobeTargets[hit] = Math.max(S.lobeTargets[hit], lift);
-    const other = (hit + 1 + ((Math.random() * (LOBES - 1)) | 0)) % LOBES;
-    S.lobeTargets[other] = Math.max(S.lobeTargets[other], patch.base + rise * patch.kick * 0.5);
-  }
-
   // The tumble rises and settles with the morph instead of starting at
   // full: a state change is felt as the body turning, not a jolt.
   const spin = lerp(F.spin, cfg.spin, e);
@@ -708,6 +797,57 @@ export function drawPlexus(
   const attack = speech > S.voiceEnv ? 0.22 : 0.035;
   S.voiceEnv += (speech - S.voiceEnv) * Math.min(1, attack * dt);
 
+  // The currents drift, and swell with the voice. A pulse fires on a sharp
+  // onset once the orb has been calm long enough, and runs its envelope.
+  const EN = PLEXUS_ENERGY;
+  if (S.burstAt >= 0) {
+    S.burstAt += dt;
+    S.burst = pulseEnvelope(S.burstAt) * S.burstAmp;
+    if (S.burstAt >= EN.rise + EN.hold + EN.fall) {
+      S.burstAt = -1;
+      S.burst = 0;
+      S.calmFor = 0;
+    }
+  } else {
+    S.calmFor += dt;
+    if (state === 'speaking' && rise > EN.trigger && S.calmFor >= EN.calm) {
+      S.burstAt = 0;
+      S.burstAmp = Math.min(1, 0.55 + rise);
+      // Led by whichever current is nearest the edge as seen: a spike
+      // points outward from its region, so one facing the viewer is
+      // foreshortened to nothing and one behind is hidden. At the edge it
+      // stands out sideways against the dark. The currents drift, so the
+      // side still changes from pulse to pulse.
+      let best = Infinity;
+      const cY = Math.cos(S.spinY), sY = Math.sin(S.spinY);
+      const cX = Math.cos(S.spinX), sX = Math.sin(S.spinX);
+      for (let k = 0; k < S.currents.length; k++) {
+        const c = S.currents[k];
+        const z0 = -c.x * sY + c.z * cY;
+        const facing = Math.abs(c.y * sX + z0 * cX);
+        if (facing < best) { best = facing; S.lead = k; }
+      }
+    }
+  }
+  for (let k = 0; k < S.currents.length; k++) {
+    const cur = S.currents[k];
+    turn(cur, cur.ax, cur.ay, cur.az, EN.travel * (1 + 0.35 * k) * dt);
+    // The axis wanders too, so a current's path is not a fixed ring.
+    const axis = { x: cur.ax, y: cur.ay, z: cur.az };
+    turn(axis, 0, 1, 0, EN.travel * 0.3 * dt);
+    cur.ax = axis.x; cur.ay = axis.y; cur.az = axis.z;
+    // The voice's part saturates, and a pulse fills the room left under a
+    // ceiling rather than stacking on top: loud, sustained speech held the
+    // currents near full and a pulse on top packed their regions solid (a
+    // harsh test voice clipped 13% of the disc). Normal speech is barely
+    // changed by either.
+    const voiced = state === 'speaking' ? EN.rest + EN.voice * (1 - Math.exp(-2.5 * S.voiceEnv)) : 0;
+    const share = k === S.lead ? 1 : 0.6;
+    const base = voiced * share;
+    const target = base + (k === S.lead ? Math.max(0, EN.pulse - base) * S.burst : 0);
+    cur.level = approach(cur.level, target, 0.08, dt);
+  }
+
   const breath = lerp(S.from.breath, breathScale(state, t, S.voiceEnv), e);
   S.lastBreath = breath;
   // A twentieth either way. It was 0.78 + 0.22*sin, a 1.8x swing inherited
@@ -717,7 +857,7 @@ export function drawPlexus(
   // Dimmer as it contracts: the same marks packed into a smaller disc would
   // otherwise glare.
   const bright =
-    S.bright * breathe * (1 + Math.min(1.2, S.pulse) * 0.22) * Math.pow(breath, 1.35);
+    S.bright * breathe * (1 + 0.12 * S.burst) * Math.pow(breath, 1.35);
 
   const sR = R * 0.8 * breath;
   const sizeScale = w / 560;
@@ -732,7 +872,9 @@ export function drawPlexus(
 
   const fA = tw * 0.011, fB = tw * 0.014, fC = tw * 0.009;
   const flow = FLOW * S.flow;
-  const kick = S.pulse > 0.02 ? S.pulse * PLEXUS_THORNS.kick : 0;
+  const lead = S.currents[S.lead];
+  const spiking = S.spikes && S.burst > 0.001;
+  const energyOn = S.look.energy > 0.001;
 
   // Only the nodes are simulated. The dust is fixed in the body and rides a
   // turn of its own, so the grain belongs to the surface for none of the
@@ -754,12 +896,7 @@ export function drawPlexus(
 
     const dist = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z) || 0.001;
     const spring = (p.home * S.radius - dist) * SPRING * dt;
-    // The syllable reaches the outside after the inside, so it reads as a
-    // wave through the body rather than one rigid heave.
-    const lit = Math.min(2, Math.max(0, (p.reg - 0.85) * 2.5));
-    const focus = 1 - PLEXUS_THORNS.focus + PLEXUS_THORNS.focus * lit;
-    const wave = kick * (0.45 + 0.9 * p.heat) * (1 - 0.5 * p.home) * focus * dt;
-    const radial = (spring + wave) / dist;
+    const radial = spring / dist;
     p.vx += p.x * radial;
     p.vy += p.y * radial;
     p.vz += p.z * radial;
@@ -773,7 +910,6 @@ export function drawPlexus(
     p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
 
     const d2 = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
-    p.out = Math.max(0, d2 / S.radius - 1);
     if (p.rigid) {
       // Held exactly on its sphere, free to slide across it. This is what
       // keeps the silhouette a clean circle while everything inside churns.
@@ -784,7 +920,7 @@ export function drawPlexus(
       const vr = (p.vx * p.x + p.vy * p.y + p.vz * p.z) * inv;
       p.vx -= p.x * vr; p.vy -= p.y * vr; p.vz -= p.z * vr;
     } else {
-      const limit = S.radius * PLEXUS_THORNS.limit;
+      const limit = S.radius * 1.12;
       if (d2 > limit) {
         const k = limit / d2;
         p.x *= k; p.y *= k; p.z *= k;
@@ -792,17 +928,42 @@ export function drawPlexus(
       }
     }
 
-    const rx = p.x * cosY + p.z * sinY;
-    let rz = -p.x * sinY + p.z * cosY;
-    const ry = p.y * cosX - rz * sinX;
-    rz = p.y * sinX + rz * cosX + S.z;
+    // A spike: a spike-carrying node in the lead current's region is drawn
+    // pushed out through the shell by the pulse. Drawn there, not moved
+    // there: it keeps its neighbours, so the surface strings a fan to the
+    // tip, and the rise and retreat are exactly the pulse's envelope.
+    let sx = p.x, sy = p.y, sz = p.z;
+    p.out = 0;
+    if (spiking && p.spike) {
+      const near = p.hx * lead.x + p.hy * lead.y + p.hz * lead.z;
+      // A solid core with a soft edge. A spike node starts at three
+      // quarters of the radius, so a bell-shaped weight only carried the
+      // node or two at its very centre out through the shell: at a pulse's
+      // peak three nodes cleared it, the furthest by 9%.
+      const bell = Math.exp(-(1 - near) / PLEXUS_THORNS.width);
+      const u = Math.min(1, Math.max(0, (bell - 0.1) / 0.5));
+      const wgt = u * u * (3 - 2 * u);
+      if (wgt > 0.001) {
+        const d = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1e-6;
+        const tip = S.radius * (1 + PLEXUS_THORNS.length * (0.6 + 0.4 * p.heat));
+        const to = d + (tip - d) * Math.min(1, S.burst) * wgt;
+        const k = to / d;
+        sx *= k; sy *= k; sz *= k;
+        p.out = Math.max(0, to / S.radius - 1);
+      }
+    }
+    const rx = sx * cosY + sz * sinY;
+    let rz = -sx * sinY + sz * cosY;
+    const ry = sy * cosX - rz * sinX;
+    rz = sy * sinX + rz * cosX + S.z;
     const persp = FOCAL / (FOCAL - rz);
     p.px = cx + rx * persp * sR;
     p.py = cy + ry * persp * sR;
     p.pd = Math.max(0, Math.min(1, (rz + 1) / 2));
     p.ps = p.size * persp * sizeScale * breath;
-    p.reg = S.lobes[p.lobeA] * p.lobeW + S.lobes[p.lobeB] * (1 - p.lobeW);
-    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
+    p.reg = patch.base + (S.lobes[p.lobeA] * p.lobeW + S.lobes[p.lobeB] * (1 - p.lobeW) - patch.base) * S.look.lobes;
+    p.en = energyOn ? energyAt(S, p.hx, p.hy, p.hz) * S.look.energy : 0;
+    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * (p.reg + p.en) * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
   }
 
   const dCosY = Math.cos(S.spinY * DUST_TURN), dSinY = Math.sin(S.spinY * DUST_TURN);
@@ -817,8 +978,9 @@ export function drawPlexus(
     q.py = cy + qy * qp * sR * S.radius;
     q.pd = Math.max(0, Math.min(1, (qz + 1) / 2));
     q.ps = q.size * qp * sizeScale * breath;
-    q.reg = S.lobes[q.lobeA] * q.lobeW + S.lobes[q.lobeB] * (1 - q.lobeW);
-    q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * q.reg * S.look.dots * S.look.exposure);
+    q.reg = patch.base + (S.lobes[q.lobeA] * q.lobeW + S.lobes[q.lobeB] * (1 - q.lobeW) - patch.base) * S.look.lobes;
+    q.en = energyOn ? energyAt(S, q.hx, q.hy, q.hz) * S.look.energy : 0;
+    q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * (q.reg + q.en) * S.look.dots * S.look.exposure);
   }
 
   // Links first, so the particles sit on top of their own wiring.
@@ -833,7 +995,6 @@ export function drawPlexus(
     // Scaled by the current brightness, or the cull stops removing the
     // faintest fifth and starts removing the whole web.
     const cut = 0.045 * Math.min(1, bright);
-    let ink = 0;
     for (let i = 0; i < S.pairCount; i++) {
       const ia = S.pairs[i * 2];
       const ic = S.pairs[i * 2 + 1];
@@ -857,15 +1018,20 @@ export function drawPlexus(
       if (sq > pairSq) continue;
       const near = 1 - Math.sqrt(sq / pairSq) * 0.75;
       const depth = (a.pd + c.pd) / 2;
-      const alpha = near * (0.118 + 0.155 * depth) * bright * S.links * (a.reg + c.reg) * 0.5 *
-        (1 + PLEXUS_THORNS.glow * Math.max(a.out, c.out));
+      // Two layers. Every line carries the fine mesh, lit by the slow
+      // patches only; a fixed share of lines can also carry a current's
+      // light, strongest where both ends sit in it. So the mesh is there
+      // at all times, and the bright accents travel over it.
+      const shade = near * (0.118 + 0.155 * depth);
+      const mesh = shade * bright * S.links * (a.reg + c.reg) * 0.5;
+      const lit = a.en > 0.01 && c.en > 0.01 && accentHash(ia, ic) < PLEXUS_ENERGY.accent
+        ? shade * PLEXUS_ENERGY.gain * Math.sqrt(a.en * c.en)
+        : 0;
+      const alpha = (mesh + lit) * (1 + PLEXUS_THORNS.glow * Math.max(a.out, c.out));
       if (alpha <= cut) continue;
-      ink += alpha;
       const band = Math.min(LINK_BANDS - 1, ((alpha / LINK_MAX_ALPHA) * LINK_BANDS) | 0);
       bandBuffers[band].push(a.px, a.py, c.px, c.py);
     }
-    // Before exposure, so steering by it cannot feed back on itself.
-    S.ink += (ink - S.ink) * Math.min(1, 0.1 * dt);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     // Line width scales with the canvas, like everything else does. Held at
