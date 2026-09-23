@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_SIGNAL, PLEXUS_SPARKS, PLEXUS_TRAVEL, PLEXUS_LOOK, PLEXUS_PATCHES, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
+import { PLEXUS_HEARTBEAT, PLEXUS_LISTEN_PULSE, PLEXUS_SPARKS, PLEXUS_LOOK, PLEXUS_PATCHES, PLEXUS_RIPPLE, PLEXUS_SUSTAIN, createPlexusState, drawPlexus, startRipple } from './orb-plexus';
 import type { OrbState } from './orb-state';
 
 interface Recorded {
@@ -452,46 +452,4 @@ describe('speaking lights', () => {
     });
     expect(lit).toBe(0);
   });
-
-  it('sends a signal out from the lit patch that runs its course', () => {
-    let seen = 0;
-    const S = speakState((f) => (f < 90 ? 0 : 0.6), 90 + PLEXUS_SIGNAL.length + 5, (s) => {
-      seen = Math.max(seen, s.signals.length);
-    });
-    expect(seen).toBe(1);
-    expect(S.signals.length).toBe(0);
-  });
-
-  it('walks a phrase to the patch beside the last', () => {
-    // Syllables every 10 frames. Picking by facing alone relights the same
-    // front patch again and again; the walk moves on every syllable, and to
-    // a patch on the same side (a patch whose neighbours have all turned
-    // away may still jump to one in front, so this is an average over
-    // several bodies, not a rule for each step).
-    const walk = () => {
-      const dots: number[] = [];
-      let repeats = 0;
-      for (let run = 0; run < 4; run++) {
-        const hits: number[] = [];
-        const S = speakState((f) => (f < 60 ? 0 : f % 10 < 5 ? 0.7 : 0.05), 200, (s, f) => {
-          if (f >= 60 && f % 10 === 0) hits.push(s.lastHit);
-        });
-        for (let i = 1; i < hits.length; i++) {
-          if (hits[i] === hits[i - 1]) repeats++;
-          const a = S.lobeAxes[hits[i]], b = S.lobeAxes[hits[i - 1]];
-          dots.push(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
-        }
-      }
-      return { mean: dots.reduce((x, y) => x + y, 0) / dots.length, repeats };
-    };
-    const travelling = walk();
-    const within = PLEXUS_TRAVEL.within;
-    PLEXUS_TRAVEL.within = 0;
-    const scattered = walk();
-    PLEXUS_TRAVEL.within = within;
-    expect(travelling.repeats).toBe(0);
-    expect(scattered.repeats).toBeGreaterThan(10);
-    expect(travelling.mean).toBeGreaterThan(0.3);
-  }, 20_000);
-
 });
