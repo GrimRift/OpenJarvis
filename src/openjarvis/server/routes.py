@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from openjarvis.core import activity
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.types import Message, Role, ToolCall
+from openjarvis.server.addressee import IgnoreWatch
 from openjarvis.server.model_capabilities import is_embed_only_model
 from openjarvis.server.models import (
     ChatCompletionChunk,
@@ -445,6 +446,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     recent_days=recent_days,
                     placement="turn",
                 )
+                if request_body.voice_followup:
+                    from openjarvis.server.addressee import FOLLOWUP_NOTE
+                    from openjarvis.tools.storage.context import add_turn_context
+
+                    enriched = add_turn_context(enriched, FOLLOWUP_NOTE)
                 # Rebuild after identity/context merging so downstream engine
                 # adapters always receive exactly one system message.
                 from openjarvis.server.models import ChatMessage
@@ -1198,6 +1204,9 @@ async def _handle_streaming_orchestrator(
         #: an empty answer after the tools has been asked for again.
         preamble = ""
         asked_again = False
+        # A follow-up voice turn may be declined with the marker; its first
+        # words are held until they show whether they are it.
+        watch = IgnoreWatch() if getattr(req, "voice_followup", False) else None
         total_prompt_tokens = 0
         total_completion_tokens = 0
         turns = 0
@@ -1238,16 +1247,20 @@ async def _handle_streaming_orchestrator(
                     if stream_chunk.content:
                         clock.setdefault("first_words", time.perf_counter())
                         turn_content += stream_chunk.content
-                        content_chunk = ChatCompletionChunk(
-                            id=chunk_id,
-                            model=model,
-                            choices=[
-                                StreamChoice(
-                                    delta=DeltaMessage(content=stream_chunk.content)
-                                )
-                            ],
-                        )
-                        yield f"data: {content_chunk.model_dump_json()}\n\n"
+                        release = stream_chunk.content
+                        if watch is not None:
+                            release = watch.feed(stream_chunk.content)
+                            if watch.ignored:
+                                break
+                        if release:
+                            content_chunk = ChatCompletionChunk(
+                                id=chunk_id,
+                                model=model,
+                                choices=[
+                                    StreamChoice(delta=DeltaMessage(content=release))
+                                ],
+                            )
+                            yield f"data: {content_chunk.model_dump_json()}\n\n"
                     if stream_chunk.tool_calls:
                         _merge_agent_tool_call_fragments(
                             tool_fragments,
@@ -1259,6 +1272,27 @@ async def _handle_streaming_orchestrator(
                         turn_usage = stream_chunk.usage
 
                 rounds.append((round_start, time.perf_counter()))
+                if watch is not None:
+                    if watch.ignored:
+                        agent._emit_turn_end(turns=turns, content_length=0)
+                        logging.getLogger("openjarvis.timing").info(
+                            "Turn declined as not addressed to Sage after %.2fs",
+                            time.perf_counter() - rounds[-1][0],
+                        )
+                        payload = _json.dumps({"heard": query_text[:200]})
+                        yield f"event: ignored\ndata: {payload}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+                    # Only the first words can be the marker.
+                    held = watch.finish()
+                    watch = None
+                    if held:
+                        held_chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            model=model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=held))],
+                        )
+                        yield f"data: {held_chunk.model_dump_json()}\n\n"
                 clock["prompt_tokens"] = clock.get("prompt_tokens", 0) + float(
                     turn_usage.get("prompt_tokens", 0) or 0
                 )

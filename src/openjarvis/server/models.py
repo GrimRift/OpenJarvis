@@ -40,6 +40,10 @@ class ChatCompletionRequest(BaseModel):
     # unasked: "auto", "on-request" or "off" (openjarvis.prompt.diagrams).
     # Off by default so every other caller is unaffected.
     diagrams: str = "off"
+    # A voice turn the microphone heard in the follow-up window, not one the
+    # user opened with the wake word or the mic button: it may be people
+    # nearby talking to each other, so Sage may decline it (addressee.py).
+    voice_followup: bool = False
     tools: Optional[List[Dict[str, Any]]] = None
 
 

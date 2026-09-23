@@ -2420,3 +2420,92 @@ class TestNothingAfterTheToolsIsNotNothing:
         assert content.endswith("Done, Sir, at 12:19.")
         assert "I'll remind you.Done" in content  # retracted by the client
         assert turns == 2
+
+
+class TestAFollowUpNotMeantForSageIsDeclined:
+    """24 September: a friend who never stops talking, and people talking in
+    the background, each fragment answered and cut off by the next. A voice
+    turn heard in the follow-up window may be declined with a marker, which
+    is never shown, spoken or remembered."""
+
+    def _stream(self, replies, *, followup):
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        class _Tool(BaseTool):
+            @property
+            def spec(self):
+                return ToolSpec(
+                    name="tell_me_when",
+                    description="x",
+                    parameters={"type": "object", "properties": {}},
+                )
+
+            def execute(self, **params):
+                return ToolResult(tool_name="tell_me_when", content="ok", success=True)
+
+        engine = _make_engine(content="unused")
+        seen: list = []
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            seen.append(messages)
+            for piece in replies:
+                yield StreamChunk(content=piece)
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_Tool()],
+            bus=EventBus(),
+            max_turns=2,
+            system_prompt="x",
+        )
+        app = create_app(
+            engine, "test-model", agent=agent, bus=EventBus(), config=_test_config()
+        )
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "and then he said the"}],
+                "stream": True,
+                "voice": True,
+                "voice_followup": followup,
+            },
+        )
+        assert resp.status_code == 200
+        return resp.text, seen
+
+    @staticmethod
+    def _content(body):
+        text = ""
+        for line in body.split("\n"):
+            if line.startswith("data:") and '"content"' in line:
+                data = json.loads(line[5:].strip())
+                for choice in data.get("choices", []):
+                    text += (choice.get("delta") or {}).get("content") or ""
+        return text
+
+    def test_the_marker_declines_the_turn_unseen(self):
+        body, _ = self._stream(["[[ig", "nore]]"], followup=True)
+        assert "event: ignored" in body
+        assert "ignore" not in self._content(body)
+
+    def test_a_real_answer_streams_whole(self):
+        body, seen = self._stream(["Yes", ", Sir. It is three."], followup=True)
+        assert "event: ignored" not in body
+        assert self._content(body) == "Yes, Sir. It is three."
+        assert any("Addressee check" in (m.content or "") for m in seen[0])
+
+    def test_a_reply_shorter_than_the_marker_still_arrives(self):
+        body, _ = self._stream(["[["], followup=True)
+        assert self._content(body) == "[["
+
+    def test_a_turn_the_user_opened_is_never_offered_the_choice(self):
+        body, seen = self._stream(["Yes, Sir."], followup=False)
+        assert self._content(body) == "Yes, Sir."
+        assert not any("Addressee check" in (m.content or "") for m in seen[0])

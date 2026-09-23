@@ -27,6 +27,8 @@ export interface ChatRequest {
   // Set when this turn's user message came in via voice (wake word or mic
   // dictation) — tells the backend to synthesize the reply to speech too.
   voice?: boolean;
+  /** Heard in the follow-up window, so Sage may decline it (server/addressee.py). */
+  voice_followup?: boolean;
   /** Whether Sage may draw a diagram this turn, and unasked: "auto",
    * "on-request" or "off" (openjarvis/prompt/diagrams.py). */
   diagrams?: 'auto' | 'on-request' | 'off';

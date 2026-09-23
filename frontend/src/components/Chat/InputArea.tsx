@@ -221,6 +221,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // by hand (cleared in the textarea's onChange) or sends — used to gate
   // auto-speaking the reply to voice-initiated messages only.
   const voiceOriginatedRef = useRef(false);
+  // How the microphone came to be listening: the wake word or the mic button
+  // mean the user spoke to Sage; the follow-up window after a reply, or over
+  // one, may have caught people talking to each other.
+  const listenKindRef = useRef<'wake' | 'followUp' | 'mic'>('mic');
+  const voiceFollowUpRef = useRef(false);
+  // Set once the listening machinery exists (it is declared further down).
+  const resumeAfterDeclineRef = useRef<(() => void) | null>(null);
   // Persists past voiceOriginatedRef's reset-at-send-time so the
   // continuous-conversation effect (which fires once the reply's audio
   // finishes, well after send) can still tell whether that exchange was
@@ -426,6 +433,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (fluxActive) {
         clearContinuationWindow();
         setFluxTurnActive(true);
+        listenKindRef.current = 'mic';
         flux.beginTurn();
         return;
       }
@@ -566,6 +574,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     const wasVoice = voiceOriginatedRef.current;
     voiceOriginatedRef.current = false;
     lastReplyWasVoiceRef.current = wasVoice;
+    const wasFollowUp = wasVoice && voiceFollowUpRef.current;
+    voiceFollowUpRef.current = false;
+    let declined = false;
 
     let convId = activeId;
     if (!convId) {
@@ -994,6 +1005,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           temperature,
           max_tokens: maxTokens,
           voice: wasVoice,
+          voice_followup: wasFollowUp || undefined,
           diagrams: diagramMode(diagramsEnabled, diagramsAutomatic),
         },
         controller.signal,
@@ -1008,6 +1020,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             timestamp: Date.now(), level: 'info', category: 'chat',
             message: `Generating with ${selectedModel}...`,
           });
+        } else if (eventName === 'ignored') {
+          // Not meant for Sage: nothing was shown or said, and nothing of it
+          // should remain. The finally block takes the exchange back.
+          declined = true;
+          break;
         } else if (eventName === 'text_retract') {
           // The model wrote this in the same round as a tool call: a
           // preamble, not the answer. Take it off the message (the answer
@@ -1152,6 +1169,20 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }
       resetStream();
       abortRef.current = null;
+
+      if (declined) {
+        incrementalSpeech?.cancel();
+        const heard = String(apiMessages[apiMessages.length - 1]?.content ?? '');
+        if (convId) useAppStore.getState().retractLastExchange(convId);
+        voiceTrace('addressee.declined', { chars: heard.length });
+        useAppStore.getState().addLogEntry({
+          timestamp: Date.now(), level: 'info', category: 'voice',
+          message: `Not for Sage, let it pass: "${heard.slice(0, 120)}"`,
+        });
+        resumeAfterDeclineRef.current?.();
+        // eslint-disable-next-line no-unsafe-finally
+        return;
+      }
 
       if (!accumulatedContent) {
         accumulatedContent = 'No response was generated. Please try again.';
@@ -1689,6 +1720,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         return;
       }
       voiceOriginatedRef.current = true;
+      // Saying the name is speaking to Sage, whatever opened the microphone.
+      voiceFollowUpRef.current =
+        listenKindRef.current === 'followUp' && !/\bsage\b/i.test(spoken);
+      listenKindRef.current = 'followUp';
 
       const text = spoken;
       // A released answer arrives only on a confirmed final, already checked
@@ -1755,6 +1790,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   useEffect(() => clearFluxSilenceTimer, [clearFluxSilenceTimer]);
 
   const armFluxSilenceTimer = useCallback((kind: 'wake' | 'followUp') => {
+    listenKindRef.current = kind;
     clearFluxSilenceTimer();
     fluxSilenceTimerRef.current = setTimeout(() => {
       fluxSilenceTimerRef.current = null;
@@ -1772,6 +1808,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }, listenMs(kind));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clearFluxSilenceTimer]);
+
+  // After a declined turn, listen again as if the reply had just ended.
+  useEffect(() => {
+    resumeAfterDeclineRef.current = () => {
+      clearContinuationWindow();
+      setFluxTurnActive(true);
+      flux.beginTurn();
+      armFluxSilenceTimer('followUp');
+    };
+    // flux is stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clearContinuationWindow, armFluxSilenceTimer]);
 
   const flux = useFluxSpeech({
     enabled: fluxActive,
@@ -2169,6 +2217,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         clearFluxSilenceTimer();
         bargeListeningRef.current = true;
         bargeTriggeredRef.current = false;
+        listenKindRef.current = 'followUp';
         voiceTrace('barge.listening');
       } else if (fluxTurnActive) {
         voiceTrace('audio.closesTurn');
