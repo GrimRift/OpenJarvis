@@ -27,6 +27,8 @@ export type IncrementalTtsOutcome =
 
 export interface IncrementalTtsSession {
   push(delta: string): boolean;
+  /** Speak the held text now: the model has stopped writing for a while. */
+  flush?(): void;
   finish(): Promise<IncrementalTtsOutcome>;
   cancel(): void;
 }
@@ -346,6 +348,7 @@ function createStreamingTtsPlayer() {
         if (!accepted && outbox.overflowed) failStream();
         return accepted;
       },
+      flush: () => outbox.flush(),
       finish: () => {
         outbox.finish();
         return outcome;

@@ -247,6 +247,16 @@ class SpokenTextStream:
             raise SpokenTextOverflow("unfinished speech segment too long")
         return segments
 
+    def flush(self) -> list[str]:
+        """Release what is held as if the text ended, and keep accepting
+        more: the model has paused to run a tool, not finished."""
+        if self._finished:
+            return []
+        raw = _safe_final_text(self._pending).strip()
+        self._pending = ""
+        spoken = to_spoken_text(raw)
+        return [spoken] if spoken and _is_speakable(spoken) else []
+
     def finish(self) -> list[str]:
         if self._finished:
             return []

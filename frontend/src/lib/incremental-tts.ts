@@ -1,5 +1,6 @@
 export type IncrementalTtsMessage =
   | { type: 'text'; delta: string }
+  | { type: 'flush' }
   | { type: 'finish' }
   | { type: 'cancel' };
 
@@ -10,7 +11,8 @@ export type IncrementalTtsMessage =
  * a browser-side sanitizer.
  */
 export class IncrementalTtsOutbox {
-  private readonly pending: string[] = [];
+  /** Deltas, and ``null`` for a flush asked for before the socket opened. */
+  private readonly pending: (string | null)[] = [];
   private pendingChars = 0;
   private ready = false;
   private finishRequested = false;
@@ -46,6 +48,17 @@ export class IncrementalTtsOutbox {
     return true;
   }
 
+  /**
+   * Speak what is held now rather than when the next sentence confirms it
+   * ended: the line before a tool call ("Searching the web, Sir.") is the
+   * last text for as long as the tool runs, and was heard only after it.
+   */
+  flush(): void {
+    if (this.finishRequested || this.cancelRequested || this.overflowed) return;
+    if (this.ready) this.send({ type: 'flush' });
+    else this.pending.push(null);
+  }
+
   finish(): void {
     if (this.finishRequested || this.cancelRequested || this.overflowed) return;
     this.finishRequested = true;
@@ -68,7 +81,7 @@ export class IncrementalTtsOutbox {
       return;
     }
     for (const delta of this.pending) {
-      this.send({ type: 'text', delta });
+      this.send(delta === null ? { type: 'flush' } : { type: 'text', delta });
     }
     this.pending.length = 0;
     this.pendingChars = 0;

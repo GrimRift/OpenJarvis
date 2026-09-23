@@ -743,9 +743,19 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (fillerPlaying) heldDeltas.push(delta);
       else speakNow(delta);
     };
+    let flushHeld = false;
     const releaseHeld = () => {
       fillerPlaying = null;
       for (const delta of heldDeltas.splice(0)) speakNow(delta);
+      if (flushHeld) {
+        flushHeld = false;
+        incrementalSpeech?.flush?.();
+      }
+    };
+    // A tool is about to run: say the line before it now, not after it.
+    const flushSpeech = () => {
+      if (fillerPlaying) flushHeld = true;
+      else incrementalSpeech?.flush?.();
     };
     const scheduleFiller = () => {
       if (!filler.spoken) return;
@@ -1010,6 +1020,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
             }
             const said = String(data.text ?? '').trim();
+            if (said) flushSpeech();
             if (said) setStreamState({ phase: said.length > 80 ? `${said.slice(0, 77)}...` : said });
           } catch {
             /* skip */

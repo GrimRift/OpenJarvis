@@ -231,3 +231,34 @@ def test_pre_audio_failure_is_recoverable_but_post_audio_failure_is_not() -> Non
         error = ws.receive_json()
     assert error["type"] == "error"
     assert error["started"] is True
+
+
+def test_flush_speaks_the_line_before_a_tool_call_without_waiting() -> None:
+    # "Searching the web, Sir." is the last text while the tool runs; with
+    # nothing after it to show the sentence ended, it was heard after the
+    # search, just before the answer.
+    _FakeCartesiaContext.instances.clear()
+    with (
+        patch.dict("os.environ", {"CARTESIA_API_KEY": "k"}, clear=False),
+        patch.object(tts_stream_routes, "CartesiaTTSContext", _FakeCartesiaContext),
+        TestClient(_app()) as client,
+        _connect(client) as ws,
+    ):
+        ws.send_json({"type": "begin", "voice_id": "voice"})
+        assert ws.receive_json()["type"] == "ready"
+
+        ws.send_json({"type": "text", "delta": "Searching the web, Sir."})
+        ws.send_json({"type": "flush"})
+        assert ws.receive_json()["type"] == "start"
+        assert ws.receive_bytes() == b"Searching the web, Sir. "
+
+        ws.send_json({"type": "text", "delta": "Found it. Done"})
+        ws.send_json({"type": "finish"})
+        audio = []
+        while True:
+            message = ws.receive()
+            if message.get("bytes") is not None:
+                audio.append(message["bytes"])
+            elif '"done"' in (message.get("text") or ""):
+                break
+        assert audio == [b"Found it. ", b"Done"]

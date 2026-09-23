@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type IncrementalTtsMessage,
   IncrementalTtsOutbox,
   shouldFallbackAfterTtsFailure,
 } from './incremental-tts';
@@ -58,5 +59,31 @@ describe('TTS fallback', () => {
   it('falls back before audio but never replays after audio started', () => {
     expect(shouldFallbackAfterTtsFailure(false)).toBe(true);
     expect(shouldFallbackAfterTtsFailure(true)).toBe(false);
+  });
+});
+
+describe('IncrementalTtsOutbox flush', () => {
+  it('keeps a flush asked for before the socket opened in its place', () => {
+    const sent: IncrementalTtsMessage[] = [];
+    const outbox = new IncrementalTtsOutbox((message) => sent.push(message));
+    outbox.push('Searching the web, Sir.');
+    outbox.flush();
+    outbox.push(' Found it.');
+    outbox.markReady();
+    expect(sent).toEqual([
+      { type: 'text', delta: 'Searching the web, Sir.' },
+      { type: 'flush' },
+      { type: 'text', delta: ' Found it.' },
+    ]);
+  });
+
+  it('sends a flush straight away once ready, and none after finish', () => {
+    const sent: IncrementalTtsMessage[] = [];
+    const outbox = new IncrementalTtsOutbox((message) => sent.push(message));
+    outbox.markReady();
+    outbox.flush();
+    outbox.finish();
+    outbox.flush();
+    expect(sent).toEqual([{ type: 'flush' }, { type: 'finish' }]);
   });
 });

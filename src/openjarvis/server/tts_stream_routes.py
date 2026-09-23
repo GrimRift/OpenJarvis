@@ -304,6 +304,14 @@ async def _stream_incremental_turn(
                     # Stop must still cancel this context after model text has
                     # finished but while queued speech remains audible.
                     continue
+                if kind == "flush":
+                    # The model stopped writing to run a tool: its last
+                    # sentence has nothing after it to confirm it ended, and
+                    # waited out the whole tool call unsaid.
+                    if not inputs_finished:
+                        for tail in segmenter.flush():
+                            await segment_queue.put((tail + " ", False))
+                    continue
                 if kind != "text":
                     continue
                 if inputs_finished:
