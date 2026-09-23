@@ -213,7 +213,11 @@ export const PLEXUS_LOOK = {
   // 16 px blocks averaging over 200 are 3-4% of its disc -- they were 16%
   // when syllables lit whole patches at once.
   states: {
-    idle: { exposure: 3.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1, energy: 0, lobes: 1 },
+    // Standing by draws 75% of its lines -- about 3,350 a frame against
+    // 4,200, asked for as a lighter web -- and exposure makes up the light
+    // they carried: mean 39.9 inside the shell, against 37-41 before (it
+    // varies that much between particle layouts).
+    idle: { exposure: 4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 0.75, energy: 0, lobes: 1 },
     away: { exposure: 2.4, curve: 0.45, white: 0.25, bloom: 1.05, glow: 2, soft: 0.45, dots: 0.4, haze: 0.5, rampTop: 1, red: 1, wires: 1, energy: 0, lobes: 1 },
     listening: { exposure: 2.9, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.55, haze: 0.35, rampTop: 1, red: 1, wires: 1, energy: 0, lobes: 1 },
     speaking: { exposure: 2.2, curve: 0.6, white: 0.35, bloom: 1.1, glow: 2, soft: 0.3, dots: 0.85, haze: 0.35, rampTop: 1, red: 0.5, wires: 0.9, energy: 1, lobes: 0.2 },

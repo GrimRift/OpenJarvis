@@ -67,11 +67,12 @@ describe('syllables', () => {
 
 describe('a state is never dimmer than a calmer one', () => {
   it('orders the calm states: an empty desk, standing by, listening', () => {
-    // A first-order model: marks scale with brightness, wiring and patch
-    // level, the finished frame with exposure.
+    // A first-order model: marks scale with brightness, wiring, the share
+    // of lines drawn and patch level, the finished frame with exposure.
     const level = (state: 'idle' | 'away' | 'listening') => {
       const cfg = PLEXUS_STATES[state];
-      return cfg.bright * cfg.links * PLEXUS_PATCHES[state].base * PLEXUS_LOOK.states[state].exposure;
+      const look = PLEXUS_LOOK.states[state];
+      return cfg.bright * cfg.links * look.wires * PLEXUS_PATCHES[state].base * look.exposure;
     };
     expect(level('away')).toBeLessThan(level('idle'));
     expect(level('idle')).toBeLessThan(level('listening'));
