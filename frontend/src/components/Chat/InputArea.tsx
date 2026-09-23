@@ -45,10 +45,12 @@ import {
   type BargeVerdict,
   describeVerdict,
   INTERRUPTED_MARK,
+  isEchoOf,
   isEchoTurn,
   isLoopedBack,
   isStopCommand,
   judge,
+  STOP_ECHO_WINDOW_CHARS,
 } from '../../lib/barge-in';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
@@ -1605,6 +1607,33 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           triggered: bargeTriggeredRef.current,
         })
       ) {
+        // Only a "stop", arriving whole at the end of the turn with no
+        // partial before it to judge: it never cut, and was dropped here as
+        // Sage's own voice (24 September, "stop" said three or four times).
+        const tail = spokenTextRef.current.slice(-STOP_ECHO_WINDOW_CHARS);
+        const heard = spoken.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: 1 }));
+        if (isStopCommand(spoken) && !isEchoOf(heard, tail)) {
+          voiceTrace('barge.stopAtEnd', { chars: spoken.length });
+          bargeVerdictRef.current = null;
+          bargeListeningRef.current = false;
+          useAppStore.getState().addLogEntry({
+            timestamp: Date.now(), level: 'info', category: 'voice',
+            message: `You stopped Sage: "${spoken}"`,
+          });
+          stopSpeaking();
+          const store = useAppStore.getState();
+          if (store.streamState.isStreaming) {
+            interruptedRef.current = true;
+            stopStreaming();
+          } else if (store.activeId) {
+            const last = store.messages[store.messages.length - 1];
+            if (last?.role === 'assistant' && !last.content.endsWith(INTERRUPTED_MARK)) {
+              updateLastAssistant(store.activeId, last.content + INTERRUPTED_MARK);
+            }
+          }
+          setFluxTurnActive(false);
+          return;
+        }
         voiceTrace('barge.echoDropped', {
           chars: spoken.length,
           reason: bargeVerdictRef.current?.reason ?? 'no-words',
@@ -1681,6 +1710,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       clearContinuationWindow,
       openContinuationWindow,
       activeId,
+      stopSpeaking,
+      stopStreaming,
     ],
   );
 
