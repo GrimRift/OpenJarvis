@@ -16,6 +16,7 @@ import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
 import { useAppStore } from './lib/store';
 import { useMomentsFeed, usePresenceState } from './hooks/useMomentsFeed';
+import { useServerVoice } from './hooks/useServerVoice';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri, fetchToolCredentialStatus } from './lib/api';
 import { OptInModal } from './components/OptInModal';
 import { DiagramLayer } from './components/Diagram/DiagramLayer';
@@ -71,6 +72,7 @@ export default function App() {
   // What Sage said aloud on its own, added to the transcript (M36).
   useMomentsFeed();
   usePresenceState();
+  useServerVoice();
 
   // Sync overlay conversations into the main app
   const importOverlay = useAppStore((s) => s.importOverlayConversation);

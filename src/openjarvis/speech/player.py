@@ -9,10 +9,16 @@ association, which always works but opens a visible player.
 
 from __future__ import annotations
 
+import array
+import itertools
+import math
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import wave
+from typing import Any, Dict, List, Optional
 
 _PLAYERS = ["ffplay -nodisp -autoexit -loglevel quiet", "aplay", "afplay", "paplay"]
 
@@ -96,6 +102,141 @@ def is_speaking(now: float | None = None) -> bool:
         return current - _last_spoke_at < ECHO_TAIL_SECONDS
 
 
+# -- What the server is saying, for the orb --------------------------------
+#
+# Reminders, schedule notices and moments are spoken here, not in the
+# browser, so the page had no idea Sage was talking: the orb sat in standing
+# by through every one of them. The page follows this instead. It is kept
+# apart from the speaking lock on purpose -- the lock is about the floor and
+# the microphone; this is only about what the orb shows.
+
+#: Width of one envelope step. The orb draws at 60 a second; 20 ms is finer
+#: than a syllable and coarse enough that a minute of speech is 3,000 numbers.
+ENVELOPE_STEP_MS = 20
+
+#: Not speech: a chime playing is not Sage talking.
+_SILENT_CHANNELS = frozenset({"chime"})
+
+_voice_lock = threading.Lock()
+_voice: Optional[Dict[str, Any]] = None
+_voice_ids = itertools.count(1)
+
+
+def voice_envelope(audio_path: str) -> Optional[List[float]]:
+    """Loudness of *audio_path* every ``ENVELOPE_STEP_MS``, 0..1, or None.
+
+    Scaled against the clip's own loud end, so ordinary syllables land near
+    0.9 whatever volume the voice was synthesised at -- the range the orb's
+    speaking state is tuned to, and what the browser's own level reads for
+    the same voice.
+    """
+    decoded = _decode_mono(audio_path)
+    if decoded is None:
+        return None
+    samples, rate = decoded
+    step = max(1, int(rate * ENVELOPE_STEP_MS / 1000))
+    rms: List[float] = []
+    for start in range(0, len(samples), step):
+        chunk = samples[start : start + step]
+        if not chunk:
+            break
+        rms.append(math.sqrt(sum(v * v for v in chunk) / len(chunk)))
+    voiced = sorted(v for v in rms if v > 1e-4)
+    if not voiced:
+        return [0.0] * len(rms)
+    loud = voiced[min(len(voiced) - 1, int(len(voiced) * 0.95))]
+    return [round(min(1.0, 0.9 * v / loud), 3) for v in rms]
+
+
+def _decode_mono(audio_path: str) -> Optional[tuple]:
+    """Mono samples in -1..1 and their rate. PCM wav directly; anything
+    else -- float wav, mp3 -- through ffmpeg, which ships beside ffplay."""
+    try:
+        with wave.open(audio_path, "rb") as handle:
+            width = handle.getsampwidth()
+            channels = handle.getnchannels()
+            rate = handle.getframerate()
+            raw = handle.readframes(handle.getnframes())
+        if width == 2:
+            values = array.array("h")
+            values.frombytes(raw)
+            if sys.byteorder != "little":
+                values.byteswap()
+            mono = values[::channels] if channels > 1 else values
+            return [v / 32768.0 for v in mono], rate
+    except (wave.Error, EOFError, OSError):
+        pass
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    rate = 8000
+    try:
+        out = subprocess.run(
+            [ffmpeg, "-v", "quiet", "-i", audio_path, "-f", "s16le"]
+            + ["-ac", "1", "-ar", str(rate), "-"],
+            capture_output=True,
+            timeout=15,
+            check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    values = array.array("h")
+    values.frombytes(out[: len(out) - len(out) % 2])
+    if sys.byteorder != "little":
+        values.byteswap()
+    return [v / 32768.0 for v in values], rate
+
+
+class voice:
+    """Mark the server as saying something, for as long as it plays."""
+
+    def __init__(self, channel: str, envelope: Optional[List[float]] = None) -> None:
+        self._channel = channel
+        self._envelope = envelope
+        self._id: Optional[int] = None
+
+    def __enter__(self) -> "voice":
+        global _voice
+        if self._channel in _SILENT_CHANNELS:
+            return self
+        with _voice_lock:
+            self._id = next(_voice_ids)
+            _voice = {
+                "id": self._id,
+                "channel": self._channel,
+                "started": time.monotonic(),
+                "envelope": self._envelope,
+            }
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        global _voice
+        with _voice_lock:
+            if _voice is not None and _voice["id"] == self._id:
+                _voice = None
+
+
+def current_voice(now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """What the server is saying right now, or None.
+
+    ``elapsed_ms`` is how far into it the voice is, so a page that tunes in
+    part-way lines its envelope up with the sound rather than restarting it.
+    """
+    with _voice_lock:
+        if _voice is None:
+            return None
+        current = time.monotonic() if now is None else now
+        return {
+            "speaking": True,
+            "id": _voice["id"],
+            "channel": _voice["channel"],
+            "elapsed_ms": round((current - _voice["started"]) * 1000),
+            "step_ms": ENVELOPE_STEP_MS,
+            "envelope": _voice["envelope"],
+        }
+
+
 def play_file(audio_path: str, *, duck: bool = True, channel: str = "moments") -> bool:
     """Play *audio_path* to completion. Returns whether a silent player ran.
 
@@ -108,11 +249,15 @@ def play_file(audio_path: str, *, duck: bool = True, channel: str = "moments") -
     from openjarvis.speech.volume import gain
 
     volume = gain(channel)
+    # Measured before taking the floor, so the voice is not held up by it
+    # once it has the floor.
+    envelope = None if channel in _SILENT_CHANNELS else voice_envelope(audio_path)
     with speaking():
-        if not duck:
-            return _play(audio_path, volume)
-        with ducked():
-            return _play(audio_path, volume)
+        with voice(channel, envelope):
+            if not duck:
+                return _play(audio_path, volume)
+            with ducked():
+                return _play(audio_path, volume)
 
 
 def _volume_filter(volume: float) -> str:
@@ -150,10 +295,14 @@ def _play(audio_path: str, volume: float = 1.0) -> bool:
 
 
 __all__ = [
+    "ENVELOPE_STEP_MS",
     "ECHO_TAIL_SECONDS",
     "FLOOR_WAIT_SECONDS",
     "SPEAKING",
+    "current_voice",
     "is_speaking",
     "play_file",
     "speaking",
+    "voice",
+    "voice_envelope",
 ]

@@ -1566,6 +1566,65 @@ async def presence_state(request: Request):
     return monitor.snapshot().to_dict()
 
 
+@presence_router.get("/voice")
+async def presence_voice():
+    """What the server is saying aloud right now -- a reminder, a schedule
+    notice, a moment -- or ``{"speaking": false}``."""
+    from openjarvis.speech.player import current_voice  # noqa: PLC0415
+
+    return current_voice() or {"speaking": False}
+
+
+#: How often the stream looks for a change. A voice is heard within this of
+#: starting; it costs a lock and a comparison.
+_VOICE_POLL_SECONDS = 0.1
+#: A comment line this often, so a proxy never takes a quiet stream for dead.
+_VOICE_KEEPALIVE_SECONDS = 15.0
+
+
+@presence_router.get("/voice/stream")
+async def presence_voice_stream(request: Request):
+    """The same, pushed as server-sent events when it changes.
+
+    The orb follows this to speak while the server does. A stream rather
+    than the page polling: the server logs every request, and a poll fast
+    enough for the orb to catch a voice as it starts would be several lines
+    a second, all day.
+    """
+    from fastapi.responses import StreamingResponse  # noqa: PLC0415
+
+    from openjarvis.speech.player import current_voice  # noqa: PLC0415
+
+    async def events():
+        last: Optional[int] = -1
+        quiet = 0.0
+        yield "retry: 2000\n\n"
+        while not await request.is_disconnected():
+            now = current_voice()
+            key = now["id"] if now else None
+            if key != last:
+                last = key
+                quiet = 0.0
+                payload = json.dumps(now or {'speaking': False})
+                yield f"data: {payload}\n\n"
+            else:
+                quiet += _VOICE_POLL_SECONDS
+                if quiet >= _VOICE_KEEPALIVE_SECONDS:
+                    quiet = 0.0
+                    yield ": keepalive\n\n"
+            await asyncio.sleep(_VOICE_POLL_SECONDS)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @presence_router.get("/settings")
 async def presence_settings():
     from openjarvis.core.presence import load_settings  # noqa: PLC0415

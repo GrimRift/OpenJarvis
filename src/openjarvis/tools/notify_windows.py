@@ -359,9 +359,10 @@ def _run_hidden(script: str) -> bool:
 
     def _play_when_free() -> None:
         from openjarvis.speech.ducking import ducked
-        from openjarvis.speech.player import speaking
+        from openjarvis.speech.player import speaking, voice
 
-        with speaking():
+        # No file to measure: the orb still speaks, on its own rhythm.
+        with speaking(), voice("reminders"):
             try:
                 process = subprocess.Popen(
                     [

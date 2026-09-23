@@ -249,6 +249,27 @@ describe('pre-rendered clips never claim audio playback', () => {
   });
 });
 
+describe("the server's voice never claims audio playback", () => {
+  /**
+   * The server speaks reminders and moments through the machine's speakers,
+   * and the orb follows it. audioPlaying's falling edge re-arms the
+   * microphone for a follow-up, so if the server's voice claimed it, the mic
+   * would open on Sage's own last words and take them for the user's next
+   * question. It moves the orb through serverSpeaking and nothing else.
+   */
+  const files = [join(SRC, 'lib', 'server-voice.ts'), join(SRC, 'hooks', 'useServerVoice.ts')];
+
+  it('the server-voice modules never touch setAudioPlayback', () => {
+    for (const file of files) {
+      expect(readFileSync(file, 'utf8'), file).not.toContain('setAudioPlayback');
+    }
+  });
+
+  it('still drives the orb through serverSpeaking', () => {
+    expect(readFileSync(files[1], 'utf8')).toContain('setServerSpeaking');
+  });
+});
+
 describe('audioPlaying has a single writer', () => {
   /**
    * It is a derived value: the store computes it from the owners map. Any

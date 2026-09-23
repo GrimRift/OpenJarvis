@@ -6,6 +6,7 @@ import {
   stepRotation,
 } from '../../lib/orb-motion';
 import { getSpeechLevel } from '../../lib/audio-level';
+import { serverVoiceLevel } from '../../lib/server-voice';
 import {
   createPlexusState,
   drawPlexus,
@@ -26,6 +27,7 @@ export function useOrbState(): OrbState {
   const voiceState = useAppStore((s) => s.voiceState);
   const audioPlaying = useAppStore((s) => s.audioPlaying);
   const presenceState = useAppStore((s) => s.presenceState);
+  const serverSpeaking = useAppStore((s) => s.serverSpeaking);
   const isCurrentChatStreaming = streamState.isStreaming && streamState.conversationId === activeId;
   // "speaking" is reserved for actually speaking. Generating text used to
   // claim it too, so the orb looked identical whether Sage was thinking or
@@ -33,6 +35,7 @@ export function useOrbState(): OrbState {
   // most of a turn.
   return resolveOrbState({
     audioPlaying,
+    serverSpeaking,
     streamingHere: isCurrentChatStreaming,
     voiceState,
     presenceState,
@@ -153,7 +156,8 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
             stateRef.current,
             tRef.current,
             sinceDrawRef.current,
-            stateRef.current === 'speaking' ? getSpeechLevel() : 0,
+            // The tab's own voice or the server's, whichever is sounding.
+            stateRef.current === 'speaking' ? Math.max(getSpeechLevel(), serverVoiceLevel(now)) : 0,
           );
           sinceDrawRef.current = 0;
           lastDrawRef.current = now;

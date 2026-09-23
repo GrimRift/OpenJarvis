@@ -9,13 +9,15 @@ export type OrbState = 'idle' | 'listening' | 'speaking' | 'away';
 
 export interface OrbInputs {
   audioPlaying: boolean;
+  /** The server is speaking aloud: a reminder, a schedule notice, a moment. */
+  serverSpeaking?: boolean;
   streamingHere: boolean;
   voiceState: string;
   presenceState: string;
 }
 
 export function resolveOrbState(inputs: OrbInputs): OrbState {
-  if (inputs.audioPlaying) return 'speaking';
+  if (inputs.audioPlaying || inputs.serverSpeaking) return 'speaking';
   if (
     inputs.streamingHere ||
     inputs.voiceState === 'recording' ||

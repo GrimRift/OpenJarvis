@@ -454,6 +454,10 @@ interface AppState {
   audioPlaying: boolean;
   /** What the server believes about the desk (M36): 'present', 'away', 'disabled', 'unknown'. */
   presenceState: string;
+  /** The server is saying something aloud -- a reminder, a schedule notice,
+   * a moment. Moves the orb only: unlike audioPlaying it never re-arms the
+   * microphone (see lib/server-voice.ts). */
+  serverSpeaking: boolean;
   /** ms timestamp: a spoken moment just ended and a reply may be listened for. */
   replyWindowAt: number | null;
   // Each playback path owns a separate claim. A boolean alone allowed an old
@@ -508,6 +512,7 @@ interface AppState {
   setCloudModelAvailable: (available: boolean) => void;
   setServerInfo: (info: ServerInfo | null) => void;
   setPresenceState: (state: string) => void;
+  setServerSpeaking: (speaking: boolean) => void;
   requestReplyWindow: (at: number) => void;
   setSavings: (data: SavingsData | null) => void;
   incrementSavings: (usage: TokenUsage) => void;
@@ -605,6 +610,7 @@ export const useAppStore = create<AppState>((set, get) => {
     voiceState: 'idle',
     audioPlaying: false,
     presenceState: 'unknown',
+    serverSpeaking: false,
     replyWindowAt: null,
     audioPlaybackOwners: {},
 
@@ -902,6 +908,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }),
     setServerInfo: (info: ServerInfo | null) => set({ serverInfo: info }),
     setPresenceState: (state: string) => set({ presenceState: state }),
+    setServerSpeaking: (speaking: boolean) => set({ serverSpeaking: speaking }),
     requestReplyWindow: (at: number) => set({ replyWindowAt: at }),
     setSavings: (data: SavingsData | null) => set({ savings: data }),
     incrementSavings: (usage: TokenUsage) => {
