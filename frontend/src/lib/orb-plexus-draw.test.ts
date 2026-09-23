@@ -434,19 +434,26 @@ describe('speaking lights', () => {
   }
 
   it('sparks on a sharp onset, rising and falling rather than popping', () => {
+    // The lit patch is random and now and then mostly round the back, with
+    // no front node to spark; so this is judged over several bodies.
     const end = 90 + PLEXUS_SPARKS.length + 2;
-    let lit = 0;
-    let first = 1;
+    let sparked = 0;
+    let first = 0;
     let top = 0;
-    let after = -1;
-    speakState((f) => (f < 90 ? 0 : 0.8), end + 1, (S, f) => {
-      const sparks = S.particles.filter((p) => p.spark > 0);
-      const strength = Math.max(0, ...sparks.map((p) => Math.sin(Math.PI * p.spark)));
-      if (f === 90) { lit = sparks.length; first = strength; }
-      top = Math.max(top, strength);
-      if (f === end) after = sparks.length;
-    });
-    expect(lit).toBeGreaterThanOrEqual(PLEXUS_SPARKS.count[0]);
+    let after = 0;
+    for (let body = 0; body < 5; body++) {
+      speakState((f) => (f < 90 ? 0 : 0.8), end + 1, (S, f) => {
+        const sparks = S.particles.filter((p) => p.spark > 0);
+        const strength = Math.max(0, ...sparks.map((p) => Math.sin(Math.PI * p.spark)));
+        if (f === 90) {
+          if (sparks.length >= PLEXUS_SPARKS.count[0]) sparked++;
+          first = Math.max(first, strength);
+        }
+        top = Math.max(top, strength);
+        if (f === end) after += sparks.length;
+      });
+    }
+    expect(sparked).toBeGreaterThanOrEqual(3);
     // A glitch is full strength in one frame; a glint builds.
     expect(first).toBeLessThan(0.4);
     expect(top).toBeGreaterThan(0.9);
