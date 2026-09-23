@@ -80,7 +80,11 @@ def _to_messages(chat_messages) -> list[Message]:
 
 
 def _ensure_identity_prompt(
-    messages: list[Message], app_config, diagrams: str = "off"
+    messages: list[Message],
+    app_config,
+    diagrams: str = "off",
+    *,
+    turn_context: bool = False,
 ) -> list[Message]:
     """Prepend OpenJarvis's identity system prompt when the client omits one.
 
@@ -130,7 +134,11 @@ def _ensure_identity_prompt(
             memory_files_config=getattr(cfg, "memory_files", None),
             system_prompt_config=getattr(cfg, "system_prompt", None),
         )
-        prompt = builder.build()
+        # With turn_context, the clock goes in the per-turn context message
+        # rather than here, so the system prompt stays identical and the
+        # provider can serve it from its cache (tools/storage/context.py).
+        prompt = builder.build(include_volatile=not turn_context)
+        volatile = builder.volatile_text() if turn_context else ""
         # Appended rather than built in: the frozen prefix is what keeps the
         # prompt cacheable, and this section changes with a Settings switch.
         from openjarvis.prompt.diagrams import instruction
@@ -149,7 +157,12 @@ def _ensure_identity_prompt(
     if not prompt:
         return messages
 
-    return [Message(role=Role.SYSTEM, content=prompt), *messages]
+    out = [Message(role=Role.SYSTEM, content=prompt), *messages]
+    if volatile:
+        from openjarvis.tools.storage.context import add_turn_context
+
+        out = add_turn_context(out, volatile)
+    return out
 
 
 # Same pattern as system/orchestrator.py's QueryOrchestrator._detect_agent_intent
@@ -301,9 +314,46 @@ def _run_spotify_transport(action: str) -> str:
     return result.content
 
 
+#: When each streaming turn arrived and its context was ready, keyed by the
+#: request body: the streaming handler runs in another task, and the log line
+#: that says where a turn's time went needs both ends. Taken on use.
+_TURN_CLOCKS: dict[int, dict[str, float]] = {}
+
+
+def _log_turn_timing(clock: dict[str, float], rounds: list, end: float) -> None:
+    """One line per streamed turn: where its time went. The latency work of
+    23 September started from a 3.5 s median from the end of speech to
+    Sage's voice with nothing to say which part was slow."""
+    start = clock.get("start", end)
+    context = clock.get("context", start)
+    first_call = rounds[0][0] if rounds else end
+    first_words = clock.get("first_words")
+    tools = sum(rounds[i + 1][0] - rounds[i][1] for i in range(len(rounds) - 1))
+    logging.getLogger("openjarvis.timing").info(
+        "Turn timing: context %.2fs, to model %.2fs, first words %s, "
+        "model rounds %d, tools %.2fs, total %.2fs, prompt %d tokens (%d cached)",
+        context - start,
+        first_call - context,
+        f"{first_words - start:.2f}s" if first_words else "none",
+        len(rounds),
+        tools,
+        end - start,
+        int(clock.get("prompt_tokens", 0)),
+        int(clock.get("cached_tokens", 0)),
+    )
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
     """Handle chat completion requests (streaming and non-streaming)."""
+    import time as _time
+
+    turn_clock = {"start": _time.perf_counter()}
+    if request_body.stream:
+        # A streamed turn that takes another path never collects its clock.
+        if len(_TURN_CLOCKS) > 64:
+            _TURN_CLOCKS.clear()
+        _TURN_CLOCKS[id(request_body)] = turn_clock
     # The user is talking to Sage: initiative (M37) waits for a lull.
     activity.note_user_turn()
     # Bind this turn before anything touches the messages: a tool that needs
@@ -350,7 +400,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
             if query_text:
                 messages = _to_messages(request_body.messages)
                 messages = _ensure_identity_prompt(
-                    messages, config, request_body.diagrams
+                    messages, config, request_body.diagrams, turn_context=True
                 )
                 ctx_cfg = ContextConfig(
                     top_k=config.memory.context_top_k,
@@ -393,6 +443,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     config=ctx_cfg,
                     facts=facts,
                     recent_days=recent_days,
+                    placement="turn",
                 )
                 # Rebuild after identity/context merging so downstream engine
                 # adapters always receive exactly one system message.
@@ -431,6 +482,8 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                 "Memory context injection failed",
                 exc_info=True,
             )
+
+    turn_clock["context"] = _time.perf_counter()
 
     # Run complexity analysis on the last user message
     complexity_info = None
@@ -1131,6 +1184,10 @@ async def _handle_streaming_orchestrator(
     telemetry_engine = _engine_key_for_model(agent._engine, model) or getattr(
         agent._engine, "engine_id", ""
     )
+    clock = _TURN_CLOCKS.pop(id(req), None) or {"start": time.perf_counter()}
+    clock.setdefault("context", clock["start"])
+    #: (start, end) of each model round, for the timing line.
+    rounds: list[tuple[float, float]] = []
 
     async def generate():
         started_at = time.time()
@@ -1170,6 +1227,7 @@ async def _handle_streaming_orchestrator(
                 if active_tools:
                     stream_kwargs["tools"] = active_tools
 
+                round_start = time.perf_counter()
                 async for stream_chunk in agent._engine.stream_full(
                     messages,
                     model=model or agent._model,
@@ -1178,6 +1236,7 @@ async def _handle_streaming_orchestrator(
                     **stream_kwargs,
                 ):
                     if stream_chunk.content:
+                        clock.setdefault("first_words", time.perf_counter())
                         turn_content += stream_chunk.content
                         content_chunk = ChatCompletionChunk(
                             id=chunk_id,
@@ -1199,6 +1258,13 @@ async def _handle_streaming_orchestrator(
                     if stream_chunk.usage:
                         turn_usage = stream_chunk.usage
 
+                rounds.append((round_start, time.perf_counter()))
+                clock["prompt_tokens"] = clock.get("prompt_tokens", 0) + float(
+                    turn_usage.get("prompt_tokens", 0) or 0
+                )
+                clock["cached_tokens"] = clock.get("cached_tokens", 0) + float(
+                    turn_usage.get("cached_tokens", 0) or 0
+                )
                 total_prompt_tokens += int(turn_usage.get("prompt_tokens", 0) or 0)
                 total_completion_tokens += int(
                     turn_usage.get("completion_tokens", 0) or 0
@@ -1461,6 +1527,7 @@ async def _handle_streaming_orchestrator(
             return
 
         agent._emit_turn_end(turns=turns, content_length=len(full_content))
+        _log_turn_timing(clock, rounds, time.perf_counter())
         ended_at = time.time()
         if trace_store is not None and full_content:
             from openjarvis.traces.collector import record_response_trace

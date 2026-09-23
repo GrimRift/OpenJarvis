@@ -170,6 +170,11 @@ def serve(
     # credential store. Restore them before engines and tools are constructed
     # so availability checks and tool instances see the same environment.
     inject_credentials()
+    # IPv6 to OpenAI takes 0.45-4 s to connect here against ~80 ms over
+    # IPv4, paid on most turns (see core/net.py).
+    from openjarvis.core.net import prefer_ipv4
+
+    prefer_ipv4()
 
     config = load_config()
 
@@ -1037,6 +1042,23 @@ def serve(
             "enabled on non-loopback interface. This allows any website to make "
             "authenticated requests to your instance."
         )
+
+    # Imported here, not on the first chat turn: the chat route imports the
+    # complexity scorer lazily, and openjarvis.learning's package import takes
+    # ~3.5 s -- the first turn after every start sat that long before the
+    # model was called, on the event loop (23 September).
+    import openjarvis.learning.routing.complexity  # noqa: F401
+
+    # Per-turn timing lines (routes._log_turn_timing) reach the log. Sage's
+    # own loggers have no handler, so their INFO would be dropped; this one
+    # is named on its own rather than switching them all on.
+    _timing = logging.getLogger("openjarvis.timing")
+    if not _timing.handlers:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        _timing.addHandler(_handler)
+        _timing.setLevel(logging.INFO)
+        _timing.propagate = False
 
     # Binding 0.0.0.0 serves IPv4 only, but "localhost" resolves AAAA (::1)
     # before A on Windows, so every client that uses the name pays ~2s failing

@@ -52,11 +52,32 @@ class SystemPromptBuilder:
         self._frozen_prefix: Optional[str] = None
         self._frozen_sections: Optional[list[PromptSection]] = None
 
-    def build(self) -> str:
+    #: Sections that change from one request to the next. ``build(
+    #: include_volatile=False)`` leaves them out for a caller that sends them
+    #: separately (see ``volatile_text``): the provider's prompt cache only
+    #: serves a system prompt that is identical to the last, and the clock
+    #: alone changed this one every minute.
+    VOLATILE_SECTIONS = frozenset(
+        {"current_datetime", "datetime_reminder", "session_context", "previous_state"}
+    )
+
+    def build(self, *, include_volatile: bool = True) -> str:
         # Derived from sections() rather than assembled separately, so the
         # two can never drift out of sync with each other (see
         # test_sections_expose_prompt_metadata's invariant).
-        return "\n\n".join(section.content for section in self.sections())
+        return "\n\n".join(
+            section.content
+            for section in self.sections()
+            if include_volatile or section.name not in self.VOLATILE_SECTIONS
+        )
+
+    def volatile_text(self) -> str:
+        """The sections ``build(include_volatile=False)`` leaves out."""
+        return "\n\n".join(
+            section.content
+            for section in self.sections()
+            if section.name in self.VOLATILE_SECTIONS
+        )
 
     @staticmethod
     def _current_datetime_content() -> str:

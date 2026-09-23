@@ -251,3 +251,18 @@ class TestOrchestratorWiring:
     def test_switching_routing_off_sends_everything(self):
         names = self._run_and_capture_tools("who are you?", route=False)
         assert set(names) == set(ALL_NAMES)
+
+
+def test_the_turn_context_message_does_not_route_tools() -> None:
+    """It is user-role, but it is memory: counted, it matched every group."""
+    from openjarvis.agents.tool_routing import routing_text
+    from openjarvis.core.types import Message, Role
+    from openjarvis.tools.storage.context import TURN_CONTEXT_HEADER
+
+    prior = [
+        Message(role=Role.USER, content="open spotify"),
+        Message(role=Role.USER, content=f"{TURN_CONTEXT_HEADER}\n\nemail, calendar"),
+    ]
+    text = routing_text("next one", prior)
+    assert "open spotify" in text
+    assert "calendar" not in text

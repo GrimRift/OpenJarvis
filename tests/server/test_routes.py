@@ -1396,7 +1396,11 @@ class TestIdentityPromptInjection:
         assert len(system_msgs) == 1
         assert system_msgs[0].content == "Be terse."
 
-    def test_direct_merges_identity_and_auto_memory_into_one_system_message(self):
+    def test_memory_and_the_clock_ride_a_turn_message_not_the_system_prompt(self):
+        """The system prompt must be identical turn to turn for the provider
+        to serve it from its cache; memory chosen per question and the time
+        of day changed it every turn (23 September: 7,800 tokens, none ever
+        cached)."""
         from openjarvis.memory.store import Fact
 
         class _MemoryService:
@@ -1429,7 +1433,17 @@ class TestIdentityPromptInjection:
         system_messages = [m for m in messages if m.role == Role.SYSTEM]
         assert len(system_messages) == 1
         assert "OpenJarvis" in system_messages[0].content
-        assert "favorite color is blue" in system_messages[0].content
+        assert "favorite color is blue" not in system_messages[0].content
+        assert "Current Date and Time" not in system_messages[0].content
+        from openjarvis.tools.storage.context import TURN_CONTEXT_HEADER
+
+        *_, context, question = messages
+        assert question.role == Role.USER
+        assert question.content == "What is my favorite color?"
+        assert context.role == Role.USER
+        assert context.content.startswith(TURN_CONTEXT_HEADER)
+        assert "favorite color is blue" in context.content
+        assert "Current Date and Time" in context.content
 
     def test_direct_never_sends_quarantined_fact_to_engine(self):
         from openjarvis.memory.store import Fact

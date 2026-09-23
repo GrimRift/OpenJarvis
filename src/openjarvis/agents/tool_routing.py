@@ -173,10 +173,17 @@ def routing_text(message: str, prior: Iterable[Any] = ()) -> str:
     every request and made routing a no-op. Assistant turns are excluded for
     the same reason: what Sage said is not what the user asked for.
     """
+    # The per-turn context message is user-role too (it keeps the system
+    # prompt cacheable) but it is memory, not the user: counted, it matched
+    # every group and sent all 51 tools again.
+    from openjarvis.tools.storage.context import TURN_CONTEXT_HEADER
+
     user_turns = [
         _content_of(item)
         for item in prior
-        if _role_of(item) == "user" and _content_of(item)
+        if _role_of(item) == "user"
+        and _content_of(item)
+        and not _content_of(item).startswith(TURN_CONTEXT_HEADER)
     ]
     parts = user_turns[-_CONTEXT_MESSAGES:]
     parts.append(message or "")

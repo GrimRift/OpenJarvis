@@ -156,6 +156,47 @@ def _merge_context_message(
     return merged
 
 
+#: Heads the per-turn context message. Plain about what it is: it sits in a
+#: user-role message, and the model must not read it as the user's words.
+TURN_CONTEXT_HEADER = (
+    "[Context for this turn, from Sage's own clock and memory. The user did "
+    "not write this; use it as background.]"
+)
+
+
+def add_turn_context(messages: List[Message], text: str) -> List[Message]:
+    """Put *text* in the per-turn context message, just before the user's
+    latest message, creating it if needed. Returns a new list.
+
+    Why not the system prompt: the provider serves a prompt from its cache
+    only when the system prompt is identical to the last one, and the date,
+    the time and the memory chosen for each question changed it on every
+    turn. Measured 23 September: 7,800 prompt tokens, none ever cached; the
+    same prompt repeated came back 1.9 s sooner. A separate user-role
+    message after the history keeps everything before it cacheable.
+    """
+    if not text.strip():
+        return list(messages)
+    out = list(messages)
+    for i, message in enumerate(out):
+        if message.metadata.get("turn_context"):
+            out[i] = replace(message, content=f"{message.text}\n\n{text.strip()}")
+            return out
+    last_user = max(
+        (i for i, m in enumerate(out) if m.role == Role.USER),
+        default=len(out),
+    )
+    out.insert(
+        last_user,
+        Message(
+            role=Role.USER,
+            content=f"{TURN_CONTEXT_HEADER}\n\n{text.strip()}",
+            metadata={"turn_context": True},
+        ),
+    )
+    return out
+
+
 def inject_context(
     query: str,
     messages: List[Message],
@@ -164,8 +205,12 @@ def inject_context(
     config: Optional[ContextConfig] = None,
     facts: Sequence[Fact] = (),
     recent_days: str = "",
+    placement: str = "system",
 ) -> List[Message]:
     """Retrieve relevant context and prepend it to *messages*.
+
+    ``placement="turn"`` puts it in the per-turn context message instead
+    of the system prompt (see ``add_turn_context``).
 
     Returns a **new** list — the original list is not mutated.
     Automatic-memory facts are included independently of the retrieval
@@ -253,6 +298,8 @@ def inject_context(
 
     # Build context message and prepend
     ctx_msg = build_context_message(truncated, selected_facts, recent_days)
+    if placement == "turn":
+        return add_turn_context(messages, ctx_msg.text)
     return _merge_context_message(messages, ctx_msg)
 
 
