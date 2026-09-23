@@ -186,6 +186,14 @@ next time. Changes:
   words confirm, not the shape -- a lyric can have the shape, and a user
   with music on says the name clearly. `strict` rides on the verdict and
   the trace.
+- **The shape must start the transcript** (2026-09-23). "Look, he's in."
+  from a conversation downstairs confirmed: the sound rule only read the
+  last 12 letters. At most three letters may precede a sound match
+  (`_PHONETIC_MAX_LEAD`, "oh, he's in"), unless the transcript ends in a
+  sage-word ("Peace Sage."). Every recorded mishearing already started the
+  transcript. Distant speech that is heard as a whole short phrase
+  ("Easy.") still passes; loudness does not separate it (peak 4,821 against
+  1,431-7,952 for genuine takes).
 - **Threshold 0.79 → 0.65.** With a second stage that rejected noise 14/14,
   the detector's job is recall; a firing costs ~200 ms of GPU, a miss costs
   the user a repeat.

@@ -182,6 +182,8 @@ class TestPhonetic:
             "hazy",
             "acid",
             "Peace",
+            # One short word ahead is still the phrase.
+            "Oh, he's in.",
         ],
     )
     def test_the_recorded_shapes_pass(self, text):
@@ -198,6 +200,10 @@ class TestPhonetic:
             "He changed.",
             "I see you soon.",
             "Sage",
+            # 23 September, a conversation downstairs: the shape at the end
+            # of a sentence, not the start.
+            "Look, he's in.",
+            "I think he said",
         ],
     )
     def test_other_words_do_not(self, text):

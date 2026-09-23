@@ -117,6 +117,12 @@ _BARE_END = re.compile(r"(?:h[aeiy]{1,2}|ea)[scz][aeiy]+(?:you)?$")
 #: Letters of transcript the phonetic rule may look at, so a long sentence
 #: that happens to end in the shape is not mistaken for the phrase.
 _PHONETIC_LETTERS = 12
+#: Letters of transcript allowed ahead of a sound match: one short word ("oh,
+#: he's in"). Every recorded mishearing starts the transcript, and a sound
+#: match further in is a sentence that happens to end in the shape -- "Look,
+#: he's in." from a conversation downstairs, 23 September. Not applied when
+#: the name itself ends it ("Peace Sage."): the hey was misheard, not made up.
+_PHONETIC_MAX_LEAD = 3
 
 
 def _tokens(text: str) -> list[str]:
@@ -146,9 +152,13 @@ def heard_wake_phrase(text: str, *, strict: bool = False) -> bool:
         for j in (i + 1, i + 2):
             if j < len(words) and words[j] in _SAGE:
                 return True
-    letters = re.sub(r"[^a-z]", "", text.lower())[-_PHONETIC_LETTERS:]
+    full = re.sub(r"[^a-z]", "", text.lower())
+    letters = full[-_PHONETIC_LETTERS:]
     match = _PHONETIC_TAIL.search(letters)
     if not match:
+        return False
+    named = bool(words) and words[-1] in _SAGE
+    if not named and len(full) - len(letters) + match.start() > _PHONETIC_MAX_LEAD:
         return False
     if re.search(r"[scz][aeiy]+(?:you)?$", match.group(0)):
         return bool(_BARE_END.search(letters))
