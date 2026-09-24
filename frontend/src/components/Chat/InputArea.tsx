@@ -45,8 +45,10 @@ import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/fill
 import {
   type BargeVerdict,
   describeVerdict,
+  AMEND_SEPARATOR,
   INTERRUPTED_MARK,
   isEchoOf,
+  isIdleSpeech,
   isEchoTurn,
   isLoopedBack,
   isStopCommand,
@@ -288,6 +290,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     text: '',
   });
   const continuingRef = useRef(false);
+  // Listening on while Sage prepares an answer, after the continuation
+  // window: "stop" there cancels the reply (and what its tools did, on the
+  // server), anything else is added to the question (24 September -- the
+  // mic closed four seconds after the question, and a long tool call could
+  // not be stopped).
+  const generatingListenRef = useRef<{ active: boolean; question: string }>({
+    active: false,
+    question: '',
+  });
+  const amendNextRef = useRef(false);
   const continuationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The executing end-of-turn handler holds a stale sendMessage after the
   // abort re-renders; the ref always points at the current one.
@@ -580,6 +592,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     voiceOriginatedRef.current = false;
     lastReplyWasVoiceRef.current = wasVoice;
     const wasFollowUp = wasVoice && voiceFollowUpRef.current;
+    const wasAmend = wasVoice && amendNextRef.current;
+    amendNextRef.current = false;
     voiceFollowUpRef.current = false;
     let declined = false;
 
@@ -1016,6 +1030,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           max_tokens: maxTokens,
           voice: wasVoice,
           voice_followup: wasFollowUp || undefined,
+          voice_amend: wasAmend || undefined,
           diagrams: diagramMode(diagramsEnabled, diagramsAutomatic),
         },
         controller.signal,
@@ -1567,6 +1582,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           voiceTrace('window.timer.stale');
           return;
         }
+        const { streamState, audioPlaying: playing } = useAppStore.getState();
+        if (streamState.isStreaming && !playing) {
+          // Still working on the answer: keep the microphone on, so the
+          // user can stop it or add to the question.
+          voiceTrace('window.generatingListen');
+          generatingListenRef.current = { active: true, question: text };
+          continuationRef.current = { submittedAt: null, text: '' };
+          return;
+        }
         voiceTrace('window.timer.close');
         continuationRef.current = { submittedAt: null, text: '' };
         flux.endTurn();
@@ -1666,6 +1690,42 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           void sendMessageRef.current(text).catch(() => {});
           openContinuationWindow(text);
         }
+        return;
+      }
+
+      // Said while Sage was still preparing the answer.
+      if (generatingListenRef.current.active) {
+        const { question } = generatingListenRef.current;
+        if (isIdleSpeech(spoken)) {
+          voiceTrace('gen.ignored', { chars: spoken.length });
+          flux.beginTurn();
+          return;
+        }
+        generatingListenRef.current = { active: false, question: '' };
+        stopSpeaking();
+        if (isStopCommand(spoken)) {
+          voiceTrace('gen.stop', { chars: spoken.length });
+          useAppStore.getState().addLogEntry({
+            timestamp: Date.now(), level: 'info', category: 'voice',
+            message: `You stopped Sage: "${spoken}"`,
+          });
+          interruptedRef.current = true;
+          stopStreaming();
+          setFluxTurnActive(false);
+          return;
+        }
+        // Added to the question, or a new one, or noise: sent together,
+        // and the model decides (server/addressee.py AMEND_NOTE).
+        voiceTrace('gen.amend', { chars: spoken.length });
+        stopStreaming();
+        setFluxTurnActive(false);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (activeId) useAppStore.getState().retractLastExchange(activeId);
+        const text = `${question}${AMEND_SEPARATOR}${spoken}`;
+        voiceOriginatedRef.current = true;
+        amendNextRef.current = true;
+        void sendMessageRef.current(text).catch(() => {});
+        openContinuationWindow(text);
         return;
       }
 
@@ -1852,6 +1912,22 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }, listenMs(kind));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clearFluxSilenceTimer]);
+
+  // A reply that finished without a sound (text only, or its voice failed)
+  // never hands the microphone to the speaking turn: close it here.
+  useEffect(() => {
+    if (streamState.isStreaming || !generatingListenRef.current.active) return;
+    const timer = setTimeout(() => {
+      if (!generatingListenRef.current.active || useAppStore.getState().audioPlaying) return;
+      generatingListenRef.current = { active: false, question: '' };
+      voiceTrace('gen.closeNoAudio');
+      flux.endTurn();
+      setFluxTurnActive(false);
+    }, 5000);
+    return () => clearTimeout(timer);
+    // flux is stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamState.isStreaming]);
 
   // After a declined turn, listen again as if the reply had just ended.
   useEffect(() => {
@@ -2251,6 +2327,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // Sage is audibly speaking: anything said now is a new turn, not the
       // rest of the last one.
       clearContinuationWindow();
+      generatingListenRef.current = { active: false, question: '' };
       const bargeIn =
         fluxActive &&
         useAppStore.getState().settings.bargeInEnabled &&

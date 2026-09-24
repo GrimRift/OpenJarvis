@@ -321,3 +321,19 @@ describe('Sage hearing its own greeting back (24 September)', () => {
     expect(judge(say('so what about tomorrow'), REPLY)).toEqual({ decision: 'cut', reason: 'words' });
   });
 });
+
+describe('speech while Sage prepares the answer (24 September)', () => {
+  it('lets noise, one stray word and its own filler pass', async () => {
+    const { isIdleSpeech } = await import('./barge-in');
+    expect(isIdleSpeech('')).toBe(true);
+    expect(isIdleSpeech('um')).toBe(true);
+    expect(isIdleSpeech('One moment, sir.')).toBe(true);
+    expect(isIdleSpeech('Still working on it.')).toBe(true);
+  });
+
+  it('never lets a stop or a real sentence pass', async () => {
+    const { isIdleSpeech } = await import('./barge-in');
+    expect(isIdleSpeech('stop')).toBe(false);
+    expect(isIdleSpeech('and also the weather')).toBe(false);
+  });
+});

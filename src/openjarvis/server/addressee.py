@@ -30,6 +30,21 @@ FOLLOWUP_NOTE = (
 )
 
 
+#: Between the two parts of an amended question (see AMEND_NOTE).
+AMEND_SEPARATOR = "\n\n(Then, while you were answering:) "
+
+AMEND_NOTE = (
+    "Amended question: the user's message is what they first asked, then "
+    "what they said while you were still preparing the answer, after "
+    '"(Then, while you were answering:)". Nothing of the first answer was '
+    "given. If the later words add to or correct the first request, answer "
+    "the combined request. If they are a separate new request, answer only "
+    "the new one. If they are garbled, a fragment, or plainly not said to "
+    "you -- someone else talking, noise -- ignore them and answer the first "
+    "request as if they had not been said. Do not mention this note."
+)
+
+
 class IgnoreWatch:
     """Hold a reply's first words until they are, or cannot be, the marker."""
 
@@ -64,4 +79,10 @@ class IgnoreWatch:
         return released
 
 
-__all__ = ["FOLLOWUP_NOTE", "IGNORE_MARKER", "IgnoreWatch"]
+__all__ = [
+    "AMEND_NOTE",
+    "AMEND_SEPARATOR",
+    "FOLLOWUP_NOTE",
+    "IGNORE_MARKER",
+    "IgnoreWatch",
+]

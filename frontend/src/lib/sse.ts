@@ -29,6 +29,8 @@ export interface ChatRequest {
   voice?: boolean;
   /** Heard in the follow-up window, so Sage may decline it (server/addressee.py). */
   voice_followup?: boolean;
+  /** Words added while Sage prepared the answer ride with the question. */
+  voice_amend?: boolean;
   /** Whether Sage may draw a diagram this turn, and unasked: "auto",
    * "on-request" or "off" (openjarvis/prompt/diagrams.py). */
   diagrams?: 'auto' | 'on-request' | 'off';

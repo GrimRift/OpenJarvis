@@ -449,3 +449,29 @@ export function isStopCommand(transcript: string): boolean {
   const vocab = new Set(STOP_PHRASES.flatMap((p) => p.split(' ')));
   return words.every((w) => vocab.has(w));
 }
+
+/** Between the question and words added while Sage prepared the answer.
+ * Must match server/addressee.py AMEND_SEPARATOR, which the note names. */
+export const AMEND_SEPARATOR = '\n\n(Then, while you were answering:) ';
+
+const FILLER_WORDS = new Set([
+  'one', 'moment', 'sir', 'checking', 'let', 'me', 'look', 'working', 'on', 'it', 'still',
+]);
+
+/**
+ * Whether speech heard while Sage prepares an answer should be let pass
+ * without touching the reply: nothing, a single stray word, or Sage's own
+ * "One moment, Sir" coming back through the speakers. "Stop" is never
+ * this -- one word is enough for that.
+ */
+export function isIdleSpeech(transcript: string): boolean {
+  const words = transcript
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return true;
+  if (isStopCommand(transcript)) return false;
+  if (words.length < 2) return true;
+  return words.every((w) => FILLER_WORDS.has(w));
+}

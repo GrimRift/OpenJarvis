@@ -861,6 +861,7 @@ class WebOpenTool(_OperaTool):
         monitor = params.get("monitor")
         try:
             with opera_session(own_window=monitor is not None) as session:
+                target_id = str(getattr(session.page, "target_id", "") or "")
                 session.page.navigate(url, timeout=_NAV_TIMEOUT)
                 title = session.page.title()
                 where = session.move_to_monitor(monitor)
@@ -870,6 +871,8 @@ class WebOpenTool(_OperaTool):
             tool_name=self.tool_id,
             content=f"Opened {title or url}.{where}",
             success=True,
+            # What a stopped reply closes again (server/undo.py).
+            metadata={"target_id": target_id},
         )
 
 
@@ -961,11 +964,13 @@ class YouTubePlayTool(_OperaTool):
         request = str(params.get("request") or "").strip() or query
         video_id = str(params.get("video_id") or "").strip()
         others: list = []
+        target_id = ""
         # Showing it is opt-in. Naming a monitor is itself a request to watch.
         wants_to_watch = monitor is not None or bool(params.get("fullscreen", False))
         try:
             with opera_session(own_window=True) as session:
                 page = session.page
+                target_id = str(getattr(page, "target_id", "") or "")
                 if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
                     href, known_title = f"/watch?v={video_id}", ""
                 else:
@@ -1015,6 +1020,8 @@ class YouTubePlayTool(_OperaTool):
                 "latest": latest,
                 "ad": ad,
                 "others": [other.video_id for other in others],
+                # What a stopped reply closes again (server/undo.py).
+                "target_id": target_id,
             },
         )
 

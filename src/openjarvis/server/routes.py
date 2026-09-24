@@ -33,6 +33,7 @@ from openjarvis.server.models import (
     StreamChoice,
     UsageInfo,
 )
+from openjarvis.server.undo import TurnLedger
 
 router = APIRouter()
 
@@ -456,6 +457,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     from openjarvis.tools.storage.context import add_turn_context
 
                     enriched = add_turn_context(enriched, FOLLOWUP_NOTE)
+                if request_body.voice_amend:
+                    from openjarvis.server.addressee import AMEND_NOTE
+                    from openjarvis.tools.storage.context import add_turn_context
+
+                    enriched = add_turn_context(enriched, AMEND_NOTE)
                 # Rebuild after identity/context merging so downstream engine
                 # adapters always receive exactly one system message.
                 from openjarvis.server.models import ChatMessage
@@ -1220,6 +1226,12 @@ async def _handle_streaming_orchestrator(
         # A follow-up voice turn may be declined with the marker; its first
         # words are held until they show whether they are it.
         watch = IgnoreWatch() if getattr(req, "voice_followup", False) else None
+        # What this turn's tools did, so a stop can take it back.
+        ledger = TurnLedger(lambda name: agent._executor._tools.get(name))
+        # Whether the answer has begun since the last tools ran. A stop
+        # before it is a stop of the work, and the tools are undone; a stop
+        # while Sage is saying "Playing it now, Sir" only stops the talking.
+        answering = True
         # The agent's own ceiling is the config default, 1,024: every web
         # reply, deep research included, stopped there -- thinking tokens
         # counted -- while Settings asked for 4,096 and the complexity score
@@ -1271,6 +1283,7 @@ async def _handle_streaming_orchestrator(
                             if watch.ignored:
                                 break
                         if release:
+                            answering = True
                             content_chunk = ChatCompletionChunk(
                                 id=chunk_id,
                                 model=model,
@@ -1353,6 +1366,7 @@ async def _handle_streaming_orchestrator(
                         )
                     )
 
+                    answering = False
                     results_by_index: dict[int, ToolResult] = {}
                     pending: list[tuple[int, ToolCall]] = []
                     for index, tool_call in enumerate(tool_calls):
@@ -1381,7 +1395,9 @@ async def _handle_streaming_orchestrator(
                     if agent._parallel_tools and len(pending) > 1:
                         executed = await asyncio.gather(
                             *[
-                                asyncio.to_thread(agent._executor.execute, tool_call)
+                                asyncio.to_thread(
+                                    ledger.run, agent._executor.execute, tool_call
+                                )
                                 for _, tool_call in pending
                             ]
                         )
@@ -1392,6 +1408,7 @@ async def _handle_streaming_orchestrator(
                     else:
                         for index, tool_call in pending:
                             results_by_index[index] = await asyncio.to_thread(
+                                ledger.run,
                                 agent._executor.execute,
                                 tool_call,
                             )
@@ -1567,6 +1584,13 @@ async def _handle_streaming_orchestrator(
                     )
                     yield f"data: {content_chunk.model_dump_json()}\n\n"
 
+        except (asyncio.CancelledError, GeneratorExit):
+            # The browser dropped the stream: the user said stop (or spoke
+            # again) while Sage was still working. What the tools did is
+            # taken back (server/undo.py).
+            if not answering:
+                ledger.stop()
+            raise
         except Exception as exc:
             logging.getLogger("openjarvis.server").error(
                 "Orchestrator stream error: %s",

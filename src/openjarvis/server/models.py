@@ -44,6 +44,10 @@ class ChatCompletionRequest(BaseModel):
     # user opened with the wake word or the mic button: it may be people
     # nearby talking to each other, so Sage may decline it (addressee.py).
     voice_followup: bool = False
+    # Words the user said while Sage was still preparing the answer, sent
+    # together with the question they followed: the model decides whether
+    # they add to it or are a new request (addressee.AMEND_NOTE).
+    voice_amend: bool = False
     tools: Optional[List[Dict[str, Any]]] = None
 
 
