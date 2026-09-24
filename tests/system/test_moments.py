@@ -1062,3 +1062,33 @@ class TestNothingWaitsOnAMomentBeingSpoken:
             adder.join(5)
         # The tick carried on with the reminder added mid-speech intact.
         assert [w.what for w in rig.engine.list_watches()] == ["prepare for class"]
+
+
+class TestOneTickAtATime:
+    """24 September: the same initiative was said twice at 12:10:28, two
+    versions of one line. The loop's tick and the presence listener's ran
+    together while the first was writing its line."""
+
+    def test_a_tick_during_another_is_skipped(self, tmp_path) -> None:
+        import threading
+
+        rig = _Rig(tmp_path)
+        speaking = threading.Event()
+        finish = threading.Event()
+
+        def slow_speak(text, before=None):
+            speaking.set()
+            finish.wait(5)
+            rig.spoken.append(text)
+            return True
+
+        rig.engine._speaker = slow_speak
+        first = threading.Thread(target=rig.tick, args=(_at(8), 1.0))
+        first.start()
+        assert speaking.wait(5)
+        try:
+            assert rig.engine.tick() == []
+        finally:
+            finish.set()
+            first.join(5)
+        assert rig.spoken == ["[greeting]"]

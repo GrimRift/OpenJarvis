@@ -1252,6 +1252,11 @@ class MomentEngine:
         self._startup_hook = startup_hook
         self._state = load_state(config_dir)
         self._lock = threading.Lock()
+        # One tick at a time. The state lock is let go while a line is
+        # written and spoken (_outside_lock), and a second tick -- the
+        # presence listener's, beside the loop's -- got in, saw nothing said
+        # yet, and said a second version of the same line (24 September).
+        self._tick_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._last_reason = ""
@@ -1414,7 +1419,18 @@ class MomentEngine:
     # -- the loop ----------------------------------------------------------
 
     def tick(self) -> List[MomentRecord]:
-        """One poll: decide, and speak what is due. Returns what was said."""
+        """One poll: decide, and speak what is due. Returns what was said.
+
+        A tick that arrives while another is running is skipped: that one is
+        already deciding with the same facts."""
+        if not self._tick_lock.acquire(blocking=False):
+            return []
+        try:
+            return self._tick()
+        finally:
+            self._tick_lock.release()
+
+    def _tick(self) -> List[MomentRecord]:
         now = self._clock()
         settings = self._monitor.settings()
         snapshot = self._monitor.snapshot()
