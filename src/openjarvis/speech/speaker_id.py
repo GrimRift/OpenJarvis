@@ -84,6 +84,35 @@ def pcm_rms(pcm: bytes) -> float:
     return float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
 
 
+#: A wake clip with less speech than this in it teaches nothing.
+LEARN_SECONDS = 0.5
+FRAME = 320  # 20 ms
+#: A frame is speech when louder than this share of the turn's loud frames.
+VOICED_SHARE = 0.25
+
+
+def voiced(pcm: bytes) -> bytes:
+    """Only the frames with someone speaking in them.
+
+    A turn's window runs from when it opened to when it closed: "please"
+    arrived as 11 s of mostly fan hum, and fingerprinted at 0.47 against
+    both voices (24 September). The hum is steady and quiet, speech is not,
+    so frames well below the turn's loud ones are dropped.
+    """
+    samples = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype="<i2")
+    n = samples.size // FRAME
+    if n == 0:
+        return b""
+    frames = samples[: n * FRAME].reshape(n, FRAME).astype(np.float64)
+    rms = np.sqrt(np.mean(frames**2, axis=1))
+    # The 99th percentile, not the 90th: a word in eleven seconds is under a
+    # tenth of the frames, and the 90th was the hum itself.
+    loud = float(np.percentile(rms, 99))
+    floor = max(MIN_RMS, VOICED_SHARE * loud)
+    keep = rms >= floor
+    return samples[: n * FRAME].reshape(n, FRAME)[keep].tobytes()
+
+
 def _unit(vector: Any) -> Optional[np.ndarray]:
     arr = np.asarray(vector, dtype=np.float64).reshape(-1)
     norm = float(np.linalg.norm(arr))
@@ -157,7 +186,10 @@ class SpeakerId:
 
     def learn_user(self, pcm: bytes, key: str) -> bool:
         """Add one clip of the user's voice. False when it could not be read."""
-        if key in self._clips or pcm_rms(pcm) < MIN_RMS:
+        if key in self._clips:
+            return False
+        pcm = voiced(pcm)
+        if len(pcm) < LEARN_SECONDS * SAMPLE_RATE * 2:
             return False
         vector = self._embed(pcm)
         if not vector:
@@ -190,8 +222,9 @@ class SpeakerId:
     def score(self, pcm: bytes) -> Optional[Dict[str, Any]]:
         """Similarities and verdict for one turn's audio, or None when there
         is nothing to judge with (too short, silent, no profile yet)."""
+        pcm = voiced(pcm)
         seconds = len(pcm) / 2 / SAMPLE_RATE
-        if seconds < MIN_SECONDS or pcm_rms(pcm) < MIN_RMS:
+        if seconds < MIN_SECONDS:
             return None
         user = self._user()
         if user is None:

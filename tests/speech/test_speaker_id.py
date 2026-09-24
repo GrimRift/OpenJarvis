@@ -176,3 +176,14 @@ def test_seeding_is_tried_again_when_the_sidecar_was_not_up(tmp_path, monkeypatc
     clock["t"] += speaker_id.SEED_RETRY + 1
     speaker_id._maybe_seed(sid)
     assert sid.user_clips == MIN_USER_CLIPS
+
+
+def test_only_the_speech_in_a_long_quiet_turn_is_fingerprinted():
+    from openjarvis.speech.speaker_id import voiced
+
+    hum = np.full(16000 * 10, 60, dtype="<i2")
+    word = (3000 * np.sin(np.arange(16000) / 5)).astype("<i2")
+    kept = voiced(np.concatenate([hum, word]).tobytes())
+    # About the one second of speech survives, not the ten of hum.
+    assert 0.6 * 16000 * 2 < len(kept) < 1.05 * 16000 * 2
+    assert voiced(b"") == b""
