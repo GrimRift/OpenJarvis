@@ -23,7 +23,7 @@ describe('externalLinkAttributes', () => {
 });
 
 describe('selectLinkPreview', () => {
-  it('prefers a source linked in the final response', () => {
+  it('does not repeat a source the answer already links', () => {
     const message: ChatMessage = {
       id: 'm1',
       role: 'assistant',
@@ -49,13 +49,32 @@ describe('selectLinkPreview', () => {
       }],
     };
 
-    expect(selectLinkPreview(message)).toEqual({
-      title: 'Second',
-      url: 'https://second.example/icl',
-      summary: 'ICL information',
-      imageUrl: 'https://images.example/eye.jpg',
-      publishedDate: '2026-08-31',
-    });
+    // The answer links "Second" itself; the card shows what it did not.
+    expect(selectLinkPreview(message)?.title).toBe('First');
+    expect(selectSources(message, selectLinkPreview(message))).toEqual([]);
+  });
+
+  it('shows nothing extra when the answer links every source', () => {
+    const message: ChatMessage = {
+      id: 'm3',
+      role: 'assistant',
+      timestamp: 1,
+      content: 'Sources:\n- https://www.reddit.com/r/a/comments/1/x/\n- https://reddit.com/r/b.',
+      toolCalls: [{
+        id: 't1',
+        tool: 'web_search',
+        arguments: '{}',
+        status: 'success',
+        metadata: {
+          sources: [
+            { title: 'A', url: 'https://www.reddit.com/r/a/comments/1/x' },
+            { title: 'B', url: 'https://www.reddit.com/r/b' },
+          ],
+        },
+      }],
+    };
+    expect(selectLinkPreview(message)).toBeUndefined();
+    expect(selectSources(message)).toEqual([]);
   });
 
   it('ignores invalid preview URLs', () => {

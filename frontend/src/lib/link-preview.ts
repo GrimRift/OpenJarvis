@@ -95,16 +95,29 @@ export function selectSearchImages(message: ChatMessage): SearchImage[] {
 }
 
 export function selectLinkPreview(message: ChatMessage): LinkPreview | undefined {
-  const previews = (message.toolCalls ?? []).flatMap(previewsFromToolCall);
+  // A source the answer already links is not shown again: its own
+  // "Sources:" list, then the card and the list below repeated the same
+  // three threads (24 September). Of the rest, a page Sage read (what the
+  // answer rests on) first, then the search's highest-ranked result.
+  const cited = citedKeys(message.content);
+  const previews = (message.toolCalls ?? [])
+    .flatMap(previewsFromToolCall)
+    .filter((preview) => !cited.has(sourceKey(preview.url)));
   if (previews.length === 0) return undefined;
+  return previews.find((preview) => preview.read) ?? previews[0];
+}
 
-  // Prefer a source the final answer actually linked, then a page Sage read
-  // (what the answer rests on), then Tavily's highest-ranked result.
-  return (
-    previews.find((preview) => message.content.includes(preview.url))
-    ?? previews.find((preview) => preview.read)
-    ?? previews[0]
-  );
+/** The pages an answer links in its own text, keyed like sources. */
+function citedKeys(content: string): Set<string> {
+  const keys = new Set<string>();
+  for (const match of content.matchAll(/https?:\/\/[^\s)\]>"'<]+/g)) {
+    try {
+      keys.add(sourceKey(match[0].replace(/[.,;:!?]+$/, '')));
+    } catch {
+      /* not a URL after all */
+    }
+  }
+  return keys;
 }
 
 /** Most sources listed under an answer. */
@@ -121,7 +134,8 @@ export function selectSources(
 ): LinkPreview[] {
   const previews = (message.toolCalls ?? []).flatMap(previewsFromToolCall);
   const ordered = [...previews.filter((p) => p.read), ...previews.filter((p) => !p.read)];
-  const seen = new Set<string>(shown ? [sourceKey(shown.url)] : []);
+  const seen = citedKeys(message.content);
+  if (shown) seen.add(sourceKey(shown.url));
   const listed: LinkPreview[] = [];
   for (const preview of ordered) {
     const key = sourceKey(preview.url);
