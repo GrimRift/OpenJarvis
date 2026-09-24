@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import types
 
 import numpy as np
@@ -21,9 +22,14 @@ SAGE = np.eye(4)[1]
 
 
 def _pcm(seconds: float, level: int = 2000, tag: int = 0) -> bytes:
+    """A quarter of room hum, then speech; the first spoken sample carries
+    `tag`, so clips of equal length are distinguishable."""
     n = int(seconds * 16000)
+    quiet = n // 4 // 320 * 320
     samples = np.full(n, level, dtype="<i2")
-    samples[0] = tag  # makes clips of equal length distinguishable
+    samples[:quiet] = level // 20
+    if quiet < n:
+        samples[quiet] = tag
     return samples.tobytes()
 
 
@@ -114,7 +120,7 @@ def test_the_timeline_follows_the_session_clock_after_trimming():
     # Seconds 3-4 are still held and start where the session clock says.
     held = timeline.slice(3.0, 4.0)
     assert len(held) == 32000
-    assert np.frombuffer(held[:2], dtype="<i2")[0] == 4
+    assert np.frombuffer(held, dtype="<i2")[16000 // 4 // 320 * 320] == 4
     # Trimmed audio is gone, not misplaced.
     assert timeline.slice(0.0, 1.0) == b""
     assert timeline.slice(2.0, 2.0) == b""
@@ -179,11 +185,48 @@ def test_seeding_is_tried_again_when_the_sidecar_was_not_up(tmp_path, monkeypatc
 
 
 def test_only_the_speech_in_a_long_quiet_turn_is_fingerprinted():
-    from openjarvis.speech.speaker_id import voiced
+    from openjarvis.speech.speaker_id import KEEP_SECONDS, voiced_with_speech
 
-    hum = np.full(16000 * 10, 60, dtype="<i2")
-    word = (3000 * np.sin(np.arange(16000) / 5)).astype("<i2")
-    kept = voiced(np.concatenate([hum, word]).tobytes())
-    # About the one second of speech survives, not the ten of hum.
-    assert 0.6 * 16000 * 2 < len(kept) < 1.05 * 16000 * 2
-    assert voiced(b"") == b""
+    rng = np.random.default_rng(0)
+    hum = rng.normal(0, 1500, 16000 * 10).astype("<i2")
+    word = (8000 * np.sin(np.arange(8000) / 5)).astype("<i2")
+    kept, speech = voiced_with_speech(np.concatenate([hum, word]).tobytes())
+    # Half a second of speech is counted, not the ten of hum; the encoder
+    # still gets the loudest 1.5 s.
+    assert 0.4 < speech < 0.7
+    assert len(kept) == int(KEEP_SECONDS * 16000 / 320) * 320 * 2
+    assert voiced_with_speech(b"") == (b"", 0.0)
+
+
+def test_sages_fingerprint_follows_the_selected_voice(monkeypatch):
+    from openjarvis.speech import voice_choice
+
+    selected = {"id": "chatterbox:jarvis"}
+    monkeypatch.setattr(voice_choice, "chosen_voice_id", lambda cfg: selected["id"])
+    asked = []
+
+    class Reply:
+        def __init__(self, name):
+            self.name = name
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"embedding": [len(self.name)]}).encode()
+
+    def urlopen(url, timeout):
+        asked.append(url)
+        return Reply(url.rsplit("/", 1)[1])
+
+    monkeypatch.setattr(speaker_id.urllib.request, "urlopen", urlopen)
+    fetch = speaker_id._sidecar_voice("http://sidecar", None)
+    assert fetch() == [6]
+    assert fetch() == [6] and len(asked) == 1  # cached per voice
+    selected["id"] = "chatterbox:jarvis-mix-a"
+    assert fetch() == [12]
+    selected["id"] = "cartesia:some-voice"
+    assert fetch() is None
