@@ -793,6 +793,15 @@ async def wake_word_stream(websocket: WebSocket):
                         "since_firing_ms": since_firing_ms,
                     }
                 )
+                # A "Hey Sage" confirmed by its words is the user's voice.
+                # Not while other audio plays (strict), nor a muffled one.
+                if verdict is not None and verdict.confirmed and not verdict.note:
+                    if not verdict.strict:
+                        from openjarvis.speech import speaker_id
+
+                        speaker_id.learn_in_background(
+                            getattr(websocket.app.state, "config", None), ring.pcm()
+                        )
                 ring.clear()
                 # One utterance must produce one detection. The model scores a
                 # rolling window, so a single "Hey Sage" stays above threshold

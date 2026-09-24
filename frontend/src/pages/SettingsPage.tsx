@@ -1231,6 +1231,9 @@ export function SettingsPage() {
                 <SettingRow label="Listen while Sage speaks" description="Keep the microphone on while Sage talks. 'Stop', 'wait' or 'hold on' cuts at once; anything else is judged while Sage keeps talking: an addition or a new question stops it and is answered, noise and background talk are ignored. Sage's own voice is never taken for you.">
                   <Switch on={settings.bargeInEnabled} onClick={() => { updateSettings({ bargeInEnabled: !settings.bargeInEnabled }); showSaved(); }} />
                 </SettingRow>
+                <SettingRow label="Recognise my voice" description="While Sage speaks, check each thing heard against your voice (learnt from your 'Hey Sage's) and Sage's own, so Sage's voice coming back through the speakers is not taken for you, and what you say over it is not thrown away. Sage's words mixed into your sentence are cut out either way. Needs the local voice running; short words like 'stop' are judged by the words alone.">
+                  <Switch on={settings.recogniseMyVoice} onClick={() => { updateSettings({ recogniseMyVoice: !settings.recogniseMyVoice }); showSaved(); }} />
+                </SettingRow>
                 <SettingRow label="Speak Typed Replies" description={`Also read answers aloud when you typed the question, not just when you spoke it. Code blocks are skipped and very long answers are cut short, because neither is listenable.${settings.voiceRepliesEnabled ? '' : ' Currently silent: Speak Replies above is off, and it overrides this.'}`}>
                   <button
                     onClick={() => { updateSettings({ speakTypedReplies: !settings.speakTypedReplies }); showSaved(); }}

@@ -1,7 +1,7 @@
 import { voiceTrace } from '../lib/voice-trace';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
-import type { FluxWord } from '../lib/barge-in';
+import type { FluxWord, SpeakerCheck } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
 import {
   SPEAKING_MAX_GAIN,
@@ -101,6 +101,7 @@ export interface UseFluxSpeechOptions {
     transcript: string,
     turnIndex: number,
     speculativeAnswer?: string,
+    detail?: EndOfTurnDetail,
   ) => void;
   onEagerEndOfTurn?: (transcript: string, turnIndex: number) => void;
   /**
@@ -162,7 +163,26 @@ export type FluxAction =
        * tool-shaped, so it never arrives unless it is safe to use.
        */
       speculativeAnswer?: string;
-    };
+    } & EndOfTurnDetail;
+
+/** What a final carries besides its text: its words with Deepgram's
+ * confidence, and the server's voice check of who said them. */
+export interface EndOfTurnDetail {
+  words?: FluxWord[];
+  speaker?: SpeakerCheck;
+}
+
+function speakerCheck(raw: unknown): SpeakerCheck | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { verdict, user, sage, seconds } = raw as Record<string, unknown>;
+  if (verdict !== 'user' && verdict !== 'sage' && verdict !== 'unsure') return undefined;
+  return {
+    verdict,
+    user: typeof user === 'number' ? user : 0,
+    sage: typeof sage === 'number' ? sage : null,
+    seconds: typeof seconds === 'number' ? seconds : 0,
+  };
+}
 
 /**
  * Interpret one server message.
@@ -219,10 +239,13 @@ export function interpretFluxMessage(
         return { kind: 'ignore' };
       }
       const released = data.speculative_answer;
+      const speaker = speakerCheck(data.speaker);
       return {
         kind: 'endTurn',
         turnIndex,
         transcript,
+        words: fluxWords(data.words),
+        ...(speaker ? { speaker } : {}),
         ...(typeof released === 'string' && released.trim()
           ? { speculativeAnswer: released }
           : {}),
@@ -439,6 +462,14 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
             turn: action.turnIndex,
             chars: action.transcript.length,
             speculative: Boolean(action.speculativeAnswer),
+            ...(action.speaker
+              ? {
+                  voice: action.speaker.verdict,
+                  user: action.speaker.user,
+                  sage: action.speaker.sage,
+                  seconds: action.speaker.seconds,
+                }
+              : {}),
           });
           lastFinalTurnRef.current = action.turnIndex;
           // Stop transmitting at once: anything after this is idle audio
@@ -449,6 +480,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
             action.transcript,
             action.turnIndex,
             action.speculativeAnswer,
+            { words: action.words, speaker: action.speaker },
           );
           break;
         default:

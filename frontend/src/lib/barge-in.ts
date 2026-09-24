@@ -305,6 +305,97 @@ export function isLoopedBack(words: readonly FluxWord[], spokenText: string): bo
   return echoOverlap(words, spokenText) >= ECHO_SEND_SHARE;
 }
 
+/**
+ * A run of Sage's own words this long, inside what was heard, is Sage's
+ * voice mixed into the user's sentence. Three, not two: "the weather" is
+ * something a person says too; "sunny with a" arriving in the order Sage
+ * said it, while Sage said it, is not.
+ */
+export const STRIP_RUN = 3;
+/** Only what Sage said recently can be mixed in: what is playing now. */
+export const STRIP_WINDOW_CHARS = 400;
+
+/**
+ * Cut runs of Sage's own words out of a turn, keeping the rest.
+ *
+ * `isEchoOf` answers for the whole turn: all Sage, or the user. Talking over
+ * Sage gives neither -- "sunny with a stop what about tomorrow" is three of
+ * Sage's words and four of the user's. Judged whole it was either dropped
+ * (the user ignored) or sent garbled; cut, it is "stop what about tomorrow".
+ */
+export function stripEcho(
+  words: readonly FluxWord[],
+  spokenText: string,
+): { kept: FluxWord[]; removed: FluxWord[] } {
+  const said = spokenText.split(/\s+/).flatMap(echoTokens);
+  const tokens: { token: string; word: number }[] = [];
+  words.forEach((w, i) => echoTokens(w.word).forEach((token) => tokens.push({ token, word: i })));
+  const dropped = new Array<boolean>(tokens.length).fill(false);
+  if (said.length >= STRIP_RUN) {
+    let i = 0;
+    while (i < tokens.length) {
+      let best = 0;
+      for (let at = 0; at < said.length; at++) {
+        let n = 0;
+        while (i + n < tokens.length && at + n < said.length && tokens[i + n].token === said[at + n]) {
+          n += 1;
+        }
+        if (n > best) best = n;
+      }
+      if (best >= STRIP_RUN) {
+        for (let k = 0; k < best; k++) dropped[i + k] = true;
+        i += best;
+      } else {
+        i += 1;
+      }
+    }
+  }
+  // A word goes only when every token of it was Sage's.
+  const kept: FluxWord[] = [];
+  const removed: FluxWord[] = [];
+  words.forEach((w, i) => {
+    const own = tokens.map((t, k) => (t.word === i ? k : -1)).filter((k) => k >= 0);
+    if (own.length > 0 && own.every((k) => dropped[k])) removed.push(w);
+    else kept.push(w);
+  });
+  return { kept, removed };
+}
+
+/**
+ * Who the server's voice fingerprint says spoke a finished turn
+ * (speech/speaker_id.py). Only "user" and "sage" are verdicts; "unsure"
+ * and a missing check leave the decision to the words, as before.
+ */
+export type SpeakerVerdict = 'user' | 'sage' | 'unsure';
+
+export interface SpeakerCheck {
+  verdict: SpeakerVerdict;
+  user: number;
+  sage: number | null;
+  seconds: number;
+}
+
+/**
+ * A turn heard over Sage with Sage's own words cut out of it. `text` is
+ * empty when every word was Sage's -- unless the voice check says the user
+ * spoke, in which case they repeated Sage on purpose and keep their words.
+ */
+export function cleanOverSage(
+  spoken: string,
+  words: readonly FluxWord[] | undefined,
+  spokenText: string,
+  voice?: SpeakerVerdict,
+): { text: string; removed: number } {
+  const heard = words && words.length
+    ? words
+    : spoken.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: 1 }));
+  const { kept, removed } = stripEcho(heard, spokenText.slice(-STRIP_WINDOW_CHARS));
+  if (removed.length === 0) return { text: spoken, removed: 0 };
+  const text = kept.map((w) => w.word).join(' ').trim();
+  if (!text && voice === 'user') return { text: spoken, removed: 0 };
+  return { text, removed: removed.length };
+}
+
 /** One token said over and over is the recogniser stuttering, not a person. */
 export function isGarbled(words: readonly FluxWord[]): boolean {
   const heard = words.map((w) => normalise(w.word)).filter(Boolean);

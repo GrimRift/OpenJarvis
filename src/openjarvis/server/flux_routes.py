@@ -22,7 +22,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from openjarvis.core import activity
-from openjarvis.speech import flux
+from openjarvis.speech import flux, speaker_id
 from openjarvis.speech.player import is_speaking
 from openjarvis.speech.speculative import SpeculativeManager, generate_speculative
 
@@ -332,6 +332,11 @@ async def _relay_turns(
 ) -> None:
     """Pump audio in and turn events out until either side stops."""
 
+    # What was sent, on the session's clock, so a finished turn's own audio
+    # can be fingerprinted (speech/speaker_id.py).
+    timeline = speaker_id.AudioTimeline()
+    speakers = speaker_id.get(config)
+
     async def pump_audio() -> None:
         """Browser -> Deepgram. Ends when the client stops or disconnects."""
         while True:
@@ -347,6 +352,7 @@ async def _relay_turns(
                 # window once came back as the user's answer.
                 if is_speaking():
                     data = bytes(len(data))
+                timeline.append(data)
                 await session.send_audio(data)
                 continue
             text = message.get("text")
@@ -450,6 +456,9 @@ async def _relay_turns(
                 spec_task = None
                 if answer:
                     payload["speculative_answer"] = answer
+                speaker = await _who_spoke(speakers, timeline, event)
+                if speaker is not None:
+                    payload["speaker"] = speaker
 
             await websocket.send_json(payload)
 
@@ -478,6 +487,27 @@ async def _relay_turns(
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         await session.close()
+
+
+#: A fingerprint is ~15 ms on the sidecar; past this, the turn goes on
+#: without one rather than keeping the user waiting.
+SPEAKER_TIMEOUT = 0.4
+
+
+async def _who_spoke(speakers: Any, timeline: Any, event: Any) -> Optional[dict]:
+    """The turn's voice verdict, or None when it cannot be had in time."""
+    if speakers is None:
+        return None
+    pcm = timeline.slice(event.audio_window_start, event.audio_window_end)
+    if not pcm:
+        return None
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(speakers.score, pcm), timeout=SPEAKER_TIMEOUT
+        )
+    except Exception:  # noqa: BLE001 -- no verdict is the fail-open answer
+        logger.debug("Speaker check skipped", exc_info=True)
+        return None
 
 
 def _configured_temperature(config: Any) -> float:

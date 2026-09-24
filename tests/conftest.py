@@ -63,6 +63,18 @@ def _no_real_voice_choice(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_speaker_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The voice fingerprint learns from every confirmed wake word and asks
+    the real sidecar: left on, the route tests' fake audio was taught to
+    this machine's profile of the user's voice."""
+    try:
+        from openjarvis.speech import speaker_id
+    except Exception:
+        return
+    monkeypatch.setattr(speaker_id, "get", lambda config: None)
+
+
+@pytest.fixture(autouse=True)
 def _nobody_speaking() -> None:
     """Any test that plays sound leaves the server "speaking" for the echo
     tail (2 s), and the wake-word socket and Flux relay go deaf for it --

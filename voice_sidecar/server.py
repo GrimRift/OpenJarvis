@@ -36,6 +36,8 @@ MAX_SEGMENT_CHARS = 1200
 # first audio of a reply.
 SHORT_SEGMENT_CHARS = 14
 SHORT_SEGMENT_WAIT = 0.2
+# 30 s of 16 kHz 16-bit audio: far longer than any one spoken turn.
+MAX_EMBED_BYTES = 30 * 16000 * 2
 
 
 def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
@@ -125,6 +127,29 @@ def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
         return Response(content=_wav_bytes(audio), media_type="audio/wav")
+
+    @app.post("/speaker/embed")
+    async def speaker_embed(request: Request) -> Dict[str, Any]:
+        """Raw 16 kHz 16-bit mono PCM in, its voice fingerprint out."""
+        if not engine.loaded:
+            raise HTTPException(503, "model not loaded")
+        data = await request.body()
+        if len(data) < 2 or len(data) > MAX_EMBED_BYTES:
+            raise HTTPException(400, "expected 16 kHz 16-bit PCM, up to 30 s")
+        samples = np.frombuffer(data[: len(data) // 2 * 2], dtype="<i2")
+        samples = samples.astype(np.float32) / 32768.0
+        embedding = await asyncio.to_thread(engine.speaker_embedding, samples, 16000)
+        return {"embedding": embedding, "seconds": round(samples.size / 16000, 2)}
+
+    @app.get("/speaker/voice/{name}")
+    async def speaker_voice(name: str) -> Dict[str, Any]:
+        if not engine.loaded:
+            raise HTTPException(503, "model not loaded")
+        try:
+            embedding = await asyncio.to_thread(engine.voice_embedding, name)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"embedding": embedding, "voice": name}
 
     @app.websocket("/stream")
     async def stream(websocket: WebSocket) -> None:

@@ -46,6 +46,7 @@ import {
   type BargeVerdict,
   describeVerdict,
   AMEND_SEPARATOR,
+  cleanOverSage,
   INTERRUPTED_MARK,
   isEchoOf,
   isIdleSpeech,
@@ -54,6 +55,7 @@ import {
   isStopCommand,
   judge,
   STOP_ECHO_WINDOW_CHARS,
+  wordCount,
 } from '../../lib/barge-in';
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
@@ -71,7 +73,7 @@ import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
 import { useVoiceOwner } from '../../hooks/useVoiceOwner';
-import { turnSurvivesStatus, useFluxSpeech } from '../../hooks/useFluxSpeech';
+import { type EndOfTurnDetail, turnSurvivesStatus, useFluxSpeech } from '../../hooks/useFluxSpeech';
 import {
   CONTINUATION_WINDOW_MS,
   isContinuation,
@@ -1639,7 +1641,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   }, [micBoost]);
 
   const handleFluxEndOfTurn = useCallback(
-    async (transcript: string, turnIndex: number, speculativeAnswer?: string) => {
+    async (
+      transcript: string,
+      turnIndex: number,
+      speculativeAnswer?: string,
+      detail?: EndOfTurnDetail,
+    ) => {
       clearFluxSilenceTimer();
       // Deepgram can repeat a final event; one confirmed turn sends once.
       if (lastFluxTurnRef.current === turnIndex) return;
@@ -1769,6 +1776,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         return;
       }
 
+      // Who the server's voice check says spoke this turn: only consulted
+      // for turns heard over Sage's voice.
+      const voice = useAppStore.getState().settings.recogniseMyVoice
+        ? detail?.speaker?.verdict
+        : undefined;
+
       // A turn that ended while Sage was still speaking and never reached
       // the interruption threshold is Sage's own voice leaking past echo
       // cancellation, not the user. Keep listening for a real one.
@@ -1781,6 +1794,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           triggered: bargeTriggeredRef.current,
         })
       ) {
+        // Sage's own words mixed into the user's sentence come out first:
+        // "sunny with a stop what about tomorrow" is judged, and answered,
+        // as "stop what about tomorrow".
+        const over = cleanOverSage(spoken, detail?.words, spokenTextRef.current, voice);
+        if (over.removed) {
+          voiceTrace('barge.echoStripped', {
+            removed: over.removed,
+            kept: wordCount(over.text),
+            voice: voice ?? 'none',
+          });
+          spoken = over.text;
+        }
         // Only a "stop", arriving whole at the end of the turn with no
         // partial before it to judge: it never cut, and was dropped here as
         // Sage's own voice (24 September, "stop" said three or four times).
@@ -1811,10 +1836,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // Not a stop and not Sage's own voice: judged while Sage carries on
         // talking -- noise and background talk pass, an addition or a new
         // request stops it and is answered (24 September).
+        // The voice check settles it when it can: Sage's voice is dropped
+        // however the words read, and the user's is kept even when their
+        // words are Sage's. Unsure, the words decide as before -- judged on
+        // the partials unless Sage's words were just cut out of them.
         const lastVerdict = bargeVerdictRef.current;
+        const partialSaidEcho =
+          !over.removed &&
+          lastVerdict?.decision === 'reject' &&
+          lastVerdict.reason !== 'low-confidence';
         const echo =
-          (lastVerdict?.decision === 'reject' && lastVerdict.reason !== 'low-confidence') ||
-          isEchoOf(heard, spokenTextRef.current);
+          voice === 'sage' ||
+          (voice !== 'user' && (partialSaidEcho || isEchoOf(heard, spokenTextRef.current)));
         if (spoken && !echo && !isIdleSpeech(spoken)) {
           bargeVerdictRef.current = null;
           const messages = useAppStore.getState().messages;
@@ -1830,7 +1863,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             flux.beginTurn();
             return;
           }
-          voiceTrace('speak.decided', { kind, chars: spoken.length });
+          voiceTrace('speak.decided', { kind, chars: spoken.length, voice: voice ?? 'none' });
           bargeListeningRef.current = false;
           stopSpeaking();
           const store = useAppStore.getState();
@@ -1858,12 +1891,17 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         }
         voiceTrace('barge.echoDropped', {
           chars: spoken.length,
-          reason: bargeVerdictRef.current?.reason ?? 'no-words',
+          reason: voice === 'sage' ? 'voice' : (bargeVerdictRef.current?.reason ?? 'no-words'),
+          voice: voice ?? 'none',
         });
         const verdict = bargeVerdictRef.current;
         bargeVerdictRef.current = null;
         const line =
-          verdict && verdict.decision === 'reject' ? describeVerdict(verdict, spoken) : null;
+          voice === 'sage' && spoken
+            ? `Ignored Sage's own voice heard back: "${spoken.slice(0, 60)}" (voice check)`
+            : verdict && verdict.decision === 'reject'
+              ? describeVerdict(verdict, spoken)
+              : null;
         if (line) {
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice', message: line,
@@ -1876,6 +1914,19 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       const wasBargeIn = bargeTriggeredRef.current;
       bargeListeningRef.current = false;
       bargeTriggeredRef.current = false;
+
+      // This turn began over Sage's voice, so Sage's words may be in it.
+      if (wasBargeIn && spoken) {
+        const over = cleanOverSage(spoken, detail?.words, spokenTextRef.current, voice);
+        if (over.removed) {
+          voiceTrace('barge.echoStripped', {
+            removed: over.removed,
+            kept: wordCount(over.text),
+            voice: voice ?? 'none',
+          });
+          spoken = over.text;
+        }
+      }
 
       if (!spoken) {
         // Deepgram ended the turn with nothing in it. The microphone closes
@@ -1890,10 +1941,17 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // each one an answer to the garbled tail of the last. Only turns that
       // arrived over Sage's own voice are judged this way -- a turn the user
       // opened is never discarded.
-      if (wasBargeIn && isLoopedBack(lastBargeWordsRef.current, spokenTextRef.current)) {
+      // The voice check overrides the words both ways: the user's own voice
+      // is never discarded as a loop, Sage's always is.
+      if (
+        wasBargeIn &&
+        voice !== 'user' &&
+        (voice === 'sage' || isLoopedBack(lastBargeWordsRef.current, spokenTextRef.current))
+      ) {
         voiceTrace('barge.loopGuard', {
           heard: spoken.slice(0, 60),
           spokenChars: spokenTextRef.current.length,
+          voice: voice ?? 'none',
         });
         useAppStore.getState().addLogEntry({
           timestamp: Date.now(), level: 'info', category: 'voice',

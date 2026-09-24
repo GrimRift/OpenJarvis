@@ -183,6 +183,8 @@ class ChatterboxEngine:
         self.generations = 0
         # The graphed speech-token loop (fast_t3.py); None means stock.
         self.fast_t3 = None
+        self._ve = None
+        self._ve_lock = threading.Lock()
 
     # ------------------------------------------------------------ loading
 
@@ -442,6 +444,51 @@ class ChatterboxEngine:
         wav = wav.squeeze(0).detach().cpu().numpy()
         wav = model.watermarker.apply_watermark(wav, sample_rate=model.sr)
         return np.asarray(wav, dtype=np.float32).reshape(-1)
+
+    # ------------------------------------------------------ who is talking
+
+    def _speaker_encoder(self):
+        """A CPU copy of the model's voice encoder, taken once.
+
+        Its own copy because the model's is moved to the card and back by
+        `use_voice`, and a fingerprint asked for mid-move would run on the
+        wrong device. On the CPU it is 12 ms for two seconds of speech
+        (measured 24 September), so it never waits for generation's lock.
+        """
+        if self._ve is None:
+            with self._ve_lock:
+                if self._ve is None:
+                    if self.model is None:
+                        raise RuntimeError("model not loaded")
+                    import copy
+
+                    ve = copy.deepcopy(self.model.ve).to("cpu").float()
+                    ve.eval()
+                    self._ve = ve
+        return self._ve
+
+    def speaker_embedding(self, samples: np.ndarray, sample_rate: int) -> List[float]:
+        """The voice fingerprint of *samples* (mono float), L2-normalised."""
+        ve = self._speaker_encoder()
+        with self._ve_lock:
+            embedding = ve.embeds_from_wavs(
+                [np.asarray(samples, dtype=np.float32)],
+                sample_rate,
+                as_spk=True,
+                trim_top_db=None,
+            )
+        return [float(x) for x in np.asarray(embedding).reshape(-1)]
+
+    def voice_embedding(self, name: str) -> List[float]:
+        """The fingerprint of a voice's reference recording: what Sage sounds
+        like when it speaks with that voice."""
+        import librosa
+
+        ref = self.voices.path(name) / REFERENCE_FILE
+        if not ref.exists():
+            raise FileNotFoundError(f"voice {name!r} has no reference recording")
+        samples, rate = librosa.load(str(ref), sr=16000, mono=True)
+        return self.speaker_embedding(samples, rate)
 
     def warm_up(self, voice: str) -> None:
         try:

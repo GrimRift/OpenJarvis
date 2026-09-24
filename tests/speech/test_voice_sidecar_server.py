@@ -111,3 +111,27 @@ def test_a_long_sentence_is_held_whole_when_the_queue_covers_it(caplog):
     kinds = [kind for kind, _ in events]
     assert kinds.count("segment_done") == 2
     assert kinds.index("audio") < kinds.index("segment_done")
+
+
+class FingerprintEngine(FakeEngine):
+    def speaker_embedding(self, samples, sample_rate):
+        self.heard = (samples.size, sample_rate, float(samples.max()))
+        return [1.0, 0.0]
+
+    def voice_embedding(self, name):
+        if name != "v":
+            raise FileNotFoundError(name)
+        return [0.0, 1.0]
+
+
+def test_the_fingerprint_endpoints_read_16_bit_pcm_and_name_the_voice():
+    engine = FingerprintEngine()
+    engine.voices = FakeStore()
+    client = TestClient(server.create_app(engine, "v"))
+    pcm = np.full(16000, 16384, dtype="<i2").tobytes()
+    got = client.post("/speaker/embed", content=pcm).json()
+    assert got == {"embedding": [1.0, 0.0], "seconds": 1.0}
+    assert engine.heard == (16000, 16000, 0.5)
+    assert client.post("/speaker/embed", content=b"").status_code == 400
+    assert client.get("/speaker/voice/v").json()["embedding"] == [0.0, 1.0]
+    assert client.get("/speaker/voice/nobody").status_code == 404

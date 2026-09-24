@@ -421,6 +421,9 @@ interface Settings {
   /** "Listen while Sage works": the microphone stays on while the answer
    * is prepared; "stop" cancels it, other speech is judged. */
   listenWhileWorking: boolean;
+  /** "Recognise my voice": while Sage speaks, the server's voice check of
+   * each turn decides whether it was the user or Sage heard back. */
+  recogniseMyVoice: boolean;
   /** How sure the words must be before they cut (lib/barge-in.ts). */
   bargeInMode: BargeMode;
   ttsVoiceId: string;
@@ -459,6 +462,7 @@ function loadSettings(): Settings {
     speakTypedReplies: false,
     bargeInEnabled: true,
     listenWhileWorking: true,
+    recogniseMyVoice: true,
     bargeInMode: DEFAULT_BARGE_MODE,
     wakeWordVerify: 'local',
     wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,

@@ -19,7 +19,27 @@ describe('Flux message interpretation', () => {
         kind: 'endTurn',
         turnIndex: 1,
         transcript: 'what is the capital of France',
+        words: [],
       });
+    });
+
+    it("carries the final's words and the server's voice check", () => {
+      const action = interpretFluxMessage(
+        turnInfo('EndOfTurn', {
+          words: [{ word: 'hello', confidence: 0.9 }],
+          speaker: { verdict: 'sage', user: 0.51, sage: 0.88, seconds: 2.1 },
+        }),
+        null,
+      );
+      expect(action.kind === 'endTurn' && action.words).toEqual([{ word: 'hello', confidence: 0.9 }]);
+      expect(action.kind === 'endTurn' && action.speaker).toEqual({
+        verdict: 'sage', user: 0.51, sage: 0.88, seconds: 2.1,
+      });
+    });
+
+    it('ignores a voice check it cannot read', () => {
+      const action = interpretFluxMessage(turnInfo('EndOfTurn', { speaker: { verdict: 'maybe' } }), null);
+      expect(action.kind === 'endTurn' && 'speaker' in action).toBe(false);
     });
 
     it('treats EagerEndOfTurn as speculative only, never a send', () => {
