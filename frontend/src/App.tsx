@@ -25,7 +25,8 @@ import { DiagramLayer } from './components/Diagram/DiagramLayer';
 import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
-import { apiFetch } from './lib/api';
+import { apiFetch, fetchSpeechVoices } from './lib/api';
+import { ORB_NEUTRAL, setOrbShaping } from './lib/audio-level';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -77,6 +78,25 @@ export default function App() {
       }),
     }).catch(() => undefined);
   }, [settings.preferCloudModel, settings.cloudModel]);
+
+  // The orb reads each local voice through that voice's own shaping (its
+  // meta.json): fetched on load and whenever the voice changes. Anything
+  // else -- the cloud voice, a voice the server has not listed -- is neutral.
+  useEffect(() => {
+    let current = true;
+    setOrbShaping(ORB_NEUTRAL);
+    if (settings.ttsProvider !== 'chatterbox') return;
+    const name = settings.ttsVoiceId.startsWith('chatterbox:') ? settings.ttsVoiceId.slice(11) : '';
+    void fetchSpeechVoices()
+      .then((voices) => {
+        if (!current) return;
+        setOrbShaping(voices.chatterbox.voices.find((v) => v.name === name)?.orb ?? ORB_NEUTRAL);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [settings.ttsProvider, settings.ttsVoiceId]);
 
   // Apply theme class to <html>
   useEffect(() => {

@@ -3,7 +3,9 @@ import {
   ATTACK,
   RELEASE,
   getSpeechLevel,
+  ORB_NEUTRAL,
   resetSpeechLevel,
+  setOrbShaping,
   rmsFromTimeDomain,
   setSpeechLevel,
   smoothLevel,
@@ -103,5 +105,36 @@ describe('the shared level', () => {
     setSpeechLevel(0.8);
     resetSpeechLevel();
     expect(getSpeechLevel()).toBe(0);
+  });
+});
+
+describe('per-voice orb shaping', () => {
+  const tone = (amplitude: number) =>
+    Uint8Array.from({ length: 512 }, (_, i) => Math.round(128 + amplitude * 127 * Math.sin(i / 3)));
+
+  beforeEach(() => setOrbShaping(ORB_NEUTRAL));
+
+  it('leaves the level alone when neutral, as for Nano Jarvis', () => {
+    const plain = rmsFromTimeDomain(tone(0.15));
+    setOrbShaping({ gain: 1, contrast: 1 });
+    expect(rmsFromTimeDomain(tone(0.15))).toBeCloseTo(plain, 6);
+  });
+
+  it('deepens the dips more than it lifts the peaks', () => {
+    const quiet = rmsFromTimeDomain(tone(0.08));
+    const loud = rmsFromTimeDomain(tone(0.2));
+    setOrbShaping({ gain: 1.2, contrast: 1.5 });
+    const quietShaped = rmsFromTimeDomain(tone(0.08));
+    const loudShaped = rmsFromTimeDomain(tone(0.2));
+    // A wider swing between syllable peaks and the dips between them.
+    expect(loudShaped - quietShaped).toBeGreaterThan(loud - quiet);
+    expect(loudShaped).toBeLessThanOrEqual(1);
+  });
+
+  it('bounds a bad value instead of trusting it', () => {
+    setOrbShaping({ gain: Number.NaN, contrast: 99 });
+    const shaped = rmsFromTimeDomain(tone(0.15));
+    expect(shaped).toBeGreaterThanOrEqual(0);
+    expect(shaped).toBeLessThanOrEqual(1);
   });
 });

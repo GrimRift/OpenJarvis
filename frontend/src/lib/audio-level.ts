@@ -42,7 +42,33 @@ export function resetSpeechLevel(): void {
 export const SPEECH_LEVEL_SCALE = 3.5;
 
 /**
- * RMS of a time-domain byte buffer, scaled by SPEECH_LEVEL_SCALE.
+ * How the orb reads the voice speaking now: level = min(1, RMS x scale x
+ * gain) ** contrast. Neutral (1, 1) for Nano Jarvis, the voice every other
+ * one is fitted against: Turbo speaks more smoothly, with shallower dips
+ * between syllables, and its orb "moved too little" (24 September). The pair
+ * comes from the voice's meta.json; speech/player.py applies the same one
+ * to what the server speaks.
+ */
+export interface OrbShaping {
+  gain: number;
+  contrast: number;
+}
+export const ORB_NEUTRAL: OrbShaping = { gain: 1, contrast: 1 };
+let shaping: OrbShaping = ORB_NEUTRAL;
+
+export function setOrbShaping(next?: Partial<OrbShaping> | null): void {
+  const clamp = (v: unknown, fallback: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(3, Math.max(0.5, v)) : fallback;
+  shaping = { gain: clamp(next?.gain, 1), contrast: clamp(next?.contrast, 1) };
+}
+
+export function getOrbShaping(): OrbShaping {
+  return shaping;
+}
+
+/**
+ * RMS of a time-domain byte buffer, scaled by SPEECH_LEVEL_SCALE and shaped
+ * for the voice speaking (setOrbShaping).
  *
  * AnalyserNode centres silence at 128. RMS rather than peak because peak
  * tracks single plosives and reads as twitching; RMS follows syllables.
@@ -55,7 +81,7 @@ export function rmsFromTimeDomain(data: Uint8Array): number {
     sum += centred * centred;
   }
   const rms = Math.sqrt(sum / data.length);
-  return Math.min(1, rms * SPEECH_LEVEL_SCALE);
+  return Math.min(1, rms * SPEECH_LEVEL_SCALE * shaping.gain) ** shaping.contrast;
 }
 
 /** Attack and release per 60Hz frame — articulate syllables without jitter. */
@@ -78,3 +104,7 @@ export function smoothLevel(
   const coef = target > current ? attack : release;
   return current + (target - current) * Math.min(1, coef * dt);
 }
+
+// Module-level state (the level, the shaping) read by the orb and written
+// by the analyser: a hot-swapped copy splits them, so reload instead.
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload());

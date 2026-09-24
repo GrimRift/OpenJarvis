@@ -56,6 +56,12 @@ PARAMS_FILE = "voice.json"
 #: Which model a voice belongs to and the name shown for it. Kept apart from
 #: voice.json, which is the sampling and is rewritten whole by save_params.
 META_FILE = "meta.json"
+#: How the orb reads a voice: level = min(1, (RMS x scale x gain) ** contrast).
+#: Turbo speaks more smoothly than Nano -- shallower dips between syllables,
+#: 25% less of the 3-8 Hz pulse the eye reads as talking (measured 24
+#: September) -- and its orb "moved too little". Each voice's pair is fitted
+#: so its orb moves as Nano Jarvis's does; neutral changes nothing.
+ORB_NEUTRAL = {"gain": 1.0, "contrast": 1.0}
 
 
 # Generation controls Chatterbox Turbo/Nano actually honour. (cfg_weight,
@@ -113,6 +119,18 @@ class VoiceInfo:
     params: Dict[str, Any] = field(default_factory=dict)
     engine: str = DEFAULT_MODEL
     label: str = ""
+    orb: Dict[str, float] = field(default_factory=lambda: dict(ORB_NEUTRAL))
+
+
+def _orb_shaping(raw: Any) -> Dict[str, float]:
+    shaping = dict(ORB_NEUTRAL)
+    if isinstance(raw, dict):
+        for key, low, high in (("gain", 0.5, 3.0), ("contrast", 0.5, 3.0)):
+            try:
+                shaping[key] = min(high, max(low, float(raw.get(key, shaping[key]))))
+            except (TypeError, ValueError):
+                pass
+    return shaping
 
 
 class VoiceStore:
@@ -158,10 +176,11 @@ class VoiceStore:
         return {
             "engine": engine if engine in MODELS else DEFAULT_MODEL,
             "label": str(data.get("label") or ""),
+            "orb": _orb_shaping(data.get("orb")),
         }
 
     def engine(self, name: str) -> str:
-        return self.meta(name)["engine"]
+        return str(self.meta(name)["engine"])
 
     def save_meta(
         self, name: str, *, engine: Optional[str] = None, label: Optional[str] = None

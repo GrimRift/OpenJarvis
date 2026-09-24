@@ -368,6 +368,8 @@ export interface LocalVoiceInfo {
   engine?: string;
   /** The name shown for it ("J.A.R.V.I.S."); the folder name when empty. */
   label?: string;
+  /** How the orb reads this voice (lib/audio-level.ts setOrbShaping). */
+  orb?: { gain?: number; contrast?: number };
 }
 
 export interface SpeechVoices {

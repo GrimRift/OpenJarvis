@@ -23,7 +23,11 @@ class TestVoiceMeta:
     def test_a_voice_without_meta_is_a_nano_voice(self, tmp_path):
         store = engine_mod.VoiceStore(tmp_path)
         _voice(tmp_path, "jarvis")
-        assert store.meta("jarvis") == {"engine": "nano", "label": ""}
+        assert store.meta("jarvis") == {
+            "engine": "nano",
+            "label": "",
+            "orb": {"gain": 1.0, "contrast": 1.0},
+        }
 
     def test_meta_is_kept_apart_from_the_sampling(self, tmp_path):
         store = engine_mod.VoiceStore(tmp_path)
@@ -45,6 +49,30 @@ class TestVoiceMeta:
         assert store.engine("odd") == "nano"
         (folder / "meta.json").write_text('{"engine": "huge"}', encoding="utf-8")
         assert store.engine("odd") == "nano"
+
+
+class TestOrbShaping:
+    def test_a_voice_without_one_is_neutral(self, tmp_path):
+        store = engine_mod.VoiceStore(tmp_path)
+        _voice(tmp_path, "jarvis", {"engine": "nano", "label": "Jarvis"})
+        assert store.meta("jarvis")["orb"] == {"gain": 1.0, "contrast": 1.0}
+
+    def test_the_fitted_pair_is_read_and_bounded(self, tmp_path):
+        store = engine_mod.VoiceStore(tmp_path)
+        _voice(
+            tmp_path, "t", {"engine": "turbo", "orb": {"gain": 1.2, "contrast": 1.5}}
+        )
+        _voice(tmp_path, "wild", {"orb": {"gain": 99, "contrast": "loud"}})
+        assert store.info("t").orb == {"gain": 1.2, "contrast": 1.5}
+        assert store.meta("wild")["orb"] == {"gain": 3.0, "contrast": 1.0}
+
+    def test_saving_the_name_keeps_the_shaping(self, tmp_path):
+        store = engine_mod.VoiceStore(tmp_path)
+        _voice(
+            tmp_path, "t", {"engine": "turbo", "orb": {"gain": 1.2, "contrast": 1.5}}
+        )
+        store.save_meta("t", label="J.A.R.V.I.S.")
+        assert store.meta("t")["orb"] == {"gain": 1.2, "contrast": 1.5}
 
 
 class FakeLoading(engine_mod.ChatterboxEngine):

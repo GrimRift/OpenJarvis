@@ -279,16 +279,43 @@ def list_voices(speech_cfg: Any) -> Dict[str, Any]:
 def voice_meta(name: str) -> Dict[str, str]:
     """A voice's model and display name (voice_sidecar/engine.py META_FILE),
     read from disk: the Settings list needs them while the sidecar loads."""
-    engine, label = "nano", ""
+    engine, label, orb = "nano", "", dict(ORB_NEUTRAL)
     try:
         data = json.loads(
             (sidecar.voices_dir() / name / "meta.json").read_text(encoding="utf-8")
         )
         engine = str(data.get("engine") or "nano")
         label = str(data.get("label") or "")
-    except (OSError, ValueError, AttributeError):
+        raw = data.get("orb")
+        if isinstance(raw, dict):
+            for key in orb:
+                orb[key] = min(3.0, max(0.5, float(raw.get(key, orb[key]))))
+    except (OSError, ValueError, AttributeError, TypeError):
         pass
-    return {"engine": engine if engine in ("nano", "turbo") else "nano", "label": label}
+    return {
+        "engine": engine if engine in ("nano", "turbo") else "nano",
+        "label": label,
+        "orb": orb,
+    }
+
+
+#: The orb reads a voice as min(1, (RMS x scale x gain) ** contrast); see
+#: voice_sidecar/engine.py ORB_NEUTRAL for why voices differ.
+ORB_NEUTRAL = {"gain": 1.0, "contrast": 1.0}
+
+
+def orb_shaping(speech_cfg: Any = None) -> Dict[str, float]:
+    """The chosen voice's orb shaping: server-spoken lines (moments,
+    reminders) move the orb as that voice's chat replies do."""
+    from openjarvis.speech.voice_choice import chosen_voice_id
+
+    try:
+        voice = chosen_voice_id(speech_cfg)
+    except Exception:
+        return dict(ORB_NEUTRAL)
+    if not voice.startswith("chatterbox:"):
+        return dict(ORB_NEUTRAL)
+    return voice_meta(voice.split(":", 1)[1])["orb"]
 
 
 def prepare_engine(speech_cfg: Any, voice: str) -> Optional[Dict[str, Any]]:

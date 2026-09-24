@@ -162,7 +162,20 @@ def voice_envelope(audio_path: str) -> Optional[List[float]]:
         if not chunk:
             break
         rms.append(math.sqrt(sum(v * v for v in chunk) / len(chunk)))
-    return [round(min(1.0, v * SPEECH_LEVEL_SCALE), 3) for v in rms]
+    gain, contrast = _orb_shaping()
+    return [round(min(1.0, v * SPEECH_LEVEL_SCALE * gain) ** contrast, 3) for v in rms]
+
+
+def _orb_shaping() -> tuple:
+    """The chosen voice's (gain, contrast) for the orb, as the page applies
+    it to the same voice (frontend audio-level.ts)."""
+    try:
+        from openjarvis.speech.chatterbox_tts import orb_shaping
+
+        shaping = orb_shaping()
+        return float(shaping["gain"]), float(shaping["contrast"])
+    except Exception:
+        return 1.0, 1.0
 
 
 def _decode_mono(audio_path: str) -> Optional[tuple]:

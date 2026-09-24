@@ -60,13 +60,28 @@ class TestEnvelope:
         # reply at the same loudness does. Scaled to each clip's own loud
         # end instead, real reminders sat at 0.50 while replies sat at 0.83.
         # A sine's RMS is its amplitude / sqrt 2.
-        amp = 0.134 * 2 ** 0.5  # the measured median RMS of real speech
+        amp = 0.134 * 2**0.5  # the measured median RMS of real speech
         env = player.voice_envelope(str(_wav(tmp_path / "m.wav", [(0.3, amp)])))
         assert env is not None
         expected = 0.134 * player.SPEECH_LEVEL_SCALE
         assert abs(sorted(env)[len(env) // 2] - expected) < 0.03
         quiet = player.voice_envelope(str(_wav(tmp_path / "q.wav", [(0.3, amp / 2)])))
         assert quiet is not None and max(quiet) < max(env) * 0.6
+
+    def test_the_chosen_voices_orb_shaping_applies_as_on_the_page(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # The same (gain, contrast) the page applies to that voice, so a
+        # reminder in Turbo J.A.R.V.I.S. moves the orb as its replies do.
+        amp = 0.134 * 2**0.5
+        clip = str(_wav(tmp_path / "s.wav", [(0.3, amp)]))
+        neutral = player.voice_envelope(clip)
+        monkeypatch.setattr(player, "_orb_shaping", lambda: (1.2, 1.5))
+        shaped = player.voice_envelope(clip)
+        assert neutral is not None and shaped is not None
+        mid = len(neutral) // 2
+        expected = min(1.0, neutral[mid] * 1.2) ** 1.5
+        assert abs(shaped[mid] - expected) < 0.01
 
     def test_unreadable_audio_gives_none_not_an_error(
         self, tmp_path, monkeypatch
