@@ -146,3 +146,34 @@ class TestSwitching:
             engine_mod.MEMORY_FRACTIONS["turbo"] > engine_mod.MEMORY_FRACTIONS["nano"]
         )
         assert set(engine_mod.MEMORY_FRACTIONS) == set(engine_mod.MODELS)
+
+
+class TestIdleCaches:
+    """Long-sentence caches go back to the card after a minute unused; the
+    three nearly every piece fits stay."""
+
+    def _graphed(self, ages):
+        fast_t3 = pytest.importorskip("voice_sidecar.fast_t3")
+        graphed = fast_t3.GraphedT3.__new__(fast_t3.GraphedT3)
+        graphed.cache = None
+
+        class Bucket:
+            def __init__(self, age):
+                self.last_used = 1000.0 - age
+                self.cache = object()
+                self.graph = object()
+
+        graphed.buckets = {length: Bucket(age) for length, age in ages.items()}
+        return fast_t3, graphed
+
+    def test_only_long_idle_caches_are_released(self):
+        fast_t3, graphed = self._graphed({512: 500, 768: 500, 1024: 90, 1536: 10})
+        assert graphed.release_idle(now=1000.0) == 1
+        assert sorted(graphed.buckets) == [512, 768, 1536]
+        assert set(fast_t3.KEEP_BUCKETS) >= {512, 640, 768}
+
+    def test_the_cache_in_use_is_let_go_with_its_bucket(self):
+        _, graphed = self._graphed({1024: 90})
+        graphed.cache = graphed.buckets[1024].cache
+        graphed.release_idle(now=1000.0)
+        assert graphed.cache is None and graphed.buckets == {}

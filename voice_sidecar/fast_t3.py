@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("voice_sidecar")
@@ -43,6 +44,13 @@ TOKENS_PER_SECOND = 25
 #: after the prompt); 1536 about 44 s. A piece that could need more goes to
 #: the stock loop.
 CACHE_BUCKETS = (512, 640, 768, 1024, 1536)
+#: The caches almost every piece fits, kept captured for good. The longer
+#: ones exist for the odd long sentence: once made they held 180 MB (Nano)
+#: to 480 MB (Turbo) of the card for the rest of the process, plus their
+#: graphs' private memory, and the live sidecar sat ~460 MB above a fresh
+#: one (24 September). They are released after IDLE_RELEASE_SECONDS unused.
+KEEP_BUCKETS = (512, 640, 768)
+IDLE_RELEASE_SECONDS = 60.0
 
 
 class PieceTooLong(ValueError):
@@ -59,6 +67,7 @@ class _Bucket:
         self.length = length
         self.cache = StaticCache(config=config, max_cache_len=length)
         self.graph: Optional[Any] = None
+        self.last_used = time.monotonic()
 
 
 class GraphedT3:
@@ -177,6 +186,25 @@ class GraphedT3:
             if bucket.graph is None:
                 self._capture(bucket)
 
+    def release_idle(self, now: Optional[float] = None) -> int:
+        """Drop long-piece caches unused for IDLE_RELEASE_SECONDS, with
+        their graphs; returns how many. Caller holds the engine's lock, so
+        no piece is running over them. A later long piece captures again."""
+        now = time.monotonic() if now is None else now
+        idle = [
+            length
+            for length, bucket in self.buckets.items()
+            if length not in KEEP_BUCKETS
+            and now - bucket.last_used > IDLE_RELEASE_SECONDS
+        ]
+        for length in idle:
+            bucket = self.buckets.pop(length)
+            if self.cache is bucket.cache:
+                self.cache = None
+            bucket.graph = None
+            bucket.cache = None
+        return len(idle)
+
     # ---------------------------------------------------------- generation
 
     def _prefill(self, bucket: _Bucket, embeds: Any) -> Any:
@@ -231,6 +259,7 @@ class GraphedT3:
             # below starts this piece's cache over from the prompt.
             self._capture(bucket)
         self.cache = bucket.cache
+        bucket.last_used = time.monotonic()
         first_logits = self._prefill(bucket, embeds)
         # The first draw penalises the start token, as the stock loop's first
         # call does (its "input ids" are the start token alone); every later

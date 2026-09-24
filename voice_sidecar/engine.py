@@ -273,6 +273,7 @@ class ChatterboxEngine:
         self.fast_t3 = None
         self._ve = None
         self._ve_lock = threading.Lock()
+        self._janitor: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------ loading
 
@@ -314,12 +315,50 @@ class ChatterboxEngine:
 
             self.fast_t3 = GraphedT3(self.model.t3, self.device)
         self.load_seconds = round(time.monotonic() - started, 1)
+        if self.fast_t3 is not None and self._janitor is None:
+            self._janitor = threading.Thread(
+                target=self._release_idle_caches, name="cache-janitor", daemon=True
+            )
+            self._janitor.start()
         logger.info(
             "Chatterbox %s loaded on %s in %.1fs",
             self.kind.title(),
             self.device,
             self.load_seconds,
         )
+
+    def _release_idle_caches(self) -> None:
+        """Every 20 s, free the long-sentence caches nobody has used for a
+        minute (fast_t3.release_idle) -- only when no piece is generating:
+        the lock is tried, never waited on."""
+        while True:
+            time.sleep(20)
+            if not self.lock.acquire(blocking=False):
+                continue
+            try:
+                graphed = self.fast_t3
+                if graphed is not None and graphed.release_idle():
+                    import torch
+
+                    torch.cuda.empty_cache()
+                    logger.info("released idle speech-token caches")
+            except Exception:
+                logger.debug("cache release failed", exc_info=True)
+            finally:
+                self.lock.release()
+
+    def gpu_memory(self) -> Dict[str, Any]:
+        """What this process holds on the card, for /health."""
+        if not self.device.startswith("cuda"):
+            return {}
+        import torch
+
+        buckets = sorted(self.fast_t3.buckets) if self.fast_t3 is not None else []
+        return {
+            "allocated_mb": round(torch.cuda.memory_allocated() / 2**20),
+            "reserved_mb": round(torch.cuda.memory_reserved() / 2**20),
+            "cache_buckets": buckets,
+        }
 
     def switch(self, kind: str) -> None:
         """Put model *kind* on the card in place of the current one.

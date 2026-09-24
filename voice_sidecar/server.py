@@ -68,6 +68,7 @@ def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
             "model": f"chatterbox-{engine.kind}",
             "engine": engine.kind,
             "switch_seconds": engine.switch_seconds,
+            "gpu": engine.gpu_memory() if engine.loaded else {},
             "version": __version__,
             "device": engine.device,
             "requested_device": engine.requested_device,
