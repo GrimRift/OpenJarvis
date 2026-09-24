@@ -415,8 +415,12 @@ interface Settings {
   // default: someone typing in a quiet room has not asked to be talked at.
   // voiceRepliesEnabled still wins, so muting silences this as well.
   speakTypedReplies: boolean;
-  /** Talking over a spoken reply cuts it (Flux voice mode). */
+  /** "Listen while Sage speaks": the microphone stays on over a spoken
+   * reply; "stop" cuts it, other speech is judged (Flux voice mode). */
   bargeInEnabled: boolean;
+  /** "Listen while Sage works": the microphone stays on while the answer
+   * is prepared; "stop" cancels it, other speech is judged. */
+  listenWhileWorking: boolean;
   /** How sure the words must be before they cut (lib/barge-in.ts). */
   bargeInMode: BargeMode;
   ttsVoiceId: string;
@@ -454,6 +458,7 @@ function loadSettings(): Settings {
     voiceRepliesEnabled: true,
     speakTypedReplies: false,
     bargeInEnabled: true,
+    listenWhileWorking: true,
     bargeInMode: DEFAULT_BARGE_MODE,
     wakeWordVerify: 'local',
     wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,

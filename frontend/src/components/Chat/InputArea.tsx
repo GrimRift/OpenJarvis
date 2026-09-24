@@ -1610,8 +1610,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           voiceTrace('window.timer.stale');
           return;
         }
-        const { streamState, audioPlaying: playing } = useAppStore.getState();
-        if (streamState.isStreaming && !playing) {
+        const { streamState, audioPlaying: playing, settings } = useAppStore.getState();
+        if (settings.listenWhileWorking && streamState.isStreaming && !playing) {
           // Still working on the answer: keep the microphone on, so the
           // user can stop it or add to the question.
           voiceTrace('window.generatingListen');
@@ -1806,6 +1806,54 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             }
           }
           setFluxTurnActive(false);
+          return;
+        }
+        // Not a stop and not Sage's own voice: judged while Sage carries on
+        // talking -- noise and background talk pass, an addition or a new
+        // request stops it and is answered (24 September).
+        const lastVerdict = bargeVerdictRef.current;
+        const echo =
+          (lastVerdict?.decision === 'reject' && lastVerdict.reason !== 'low-confidence') ||
+          isEchoOf(heard, spokenTextRef.current);
+        if (spoken && !echo && !isIdleSpeech(spoken)) {
+          bargeVerdictRef.current = null;
+          const messages = useAppStore.getState().messages;
+          const question =
+            [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+          const kind = await checkAddition(question, spoken, selectedModel);
+          if (kind === 'noise') {
+            voiceTrace('speak.noise', { chars: spoken.length });
+            useAppStore.getState().addLogEntry({
+              timestamp: Date.now(), level: 'info', category: 'voice',
+              message: `Let pass while Sage spoke: "${spoken.slice(0, 80)}"`,
+            });
+            flux.beginTurn();
+            return;
+          }
+          voiceTrace('speak.decided', { kind, chars: spoken.length });
+          bargeListeningRef.current = false;
+          stopSpeaking();
+          const store = useAppStore.getState();
+          if (store.streamState.isStreaming) {
+            interruptedRef.current = true;
+            stopStreaming();
+          }
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          let text = spoken;
+          if (kind === 'add' && question) {
+            if (activeId) useAppStore.getState().retractLastExchange(activeId);
+            text = `${question}${AMEND_SEPARATOR}${spoken}`;
+            amendNextRef.current = true;
+          } else {
+            const now = useAppStore.getState();
+            const last = now.messages[now.messages.length - 1];
+            if (now.activeId && last?.role === 'assistant' && !last.content.endsWith(INTERRUPTED_MARK)) {
+              updateLastAssistant(now.activeId, last.content + INTERRUPTED_MARK);
+            }
+          }
+          voiceOriginatedRef.current = true;
+          void sendMessageRef.current(text).catch(() => {});
+          openContinuationWindow(text);
           return;
         }
         voiceTrace('barge.echoDropped', {
@@ -2009,21 +2057,19 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           Date.now(),
         )
       ) {
-        // The user was not finished. Stop the answer to the half-question:
-        // the stream, and the speech already being synthesised from it --
-        // aborting only the stream left the half-answer playing and its
-        // audio claim set, which is what kept the wake word from re-arming.
-        // The withdrawal itself waits for the resumed turn to end, after the
-        // aborted stream's own cleanup has run, so nothing writes into a
-        // message that is no longer there.
-        continuingRef.current = true;
+        // Speech right after the question. It used to stop the answer the
+        // moment it began, before a word was known: "Yeah. Yeah. Yeah. blah
+        // blah blah" cancelled it twice, undid the video it had opened, and
+        // the third try hung (24 September). Now it is judged when it ends,
+        // as speech while Sage works is: noise passes, "stop" stops, and an
+        // addition or a new request starts the answer over.
         voiceTrace('window.continuation');
         if (continuationTimerRef.current) {
           clearTimeout(continuationTimerRef.current);
           continuationTimerRef.current = null;
         }
-        stopSpeaking();
-        stopStreaming();
+        generatingListenRef.current = { active: true, question: state.text };
+        continuationRef.current = { submittedAt: null, text: '' };
       }
     },
     onUpdate: (transcript, turnIndex, words) => {
@@ -2075,7 +2121,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       lastBargeWordsRef.current = words;
       const verdict = judge(words, spokenTextRef.current, settings.bargeInMode);
       bargeVerdictRef.current = verdict;
-      if (verdict.decision !== 'cut') return;
+      // Only a stop word cuts at once. Anything else is judged when the
+      // user finishes, while Sage keeps talking (handleFluxEndOfTurn).
+      if (verdict.decision !== 'cut' || verdict.reason !== 'stop-word') return;
       // The user is talking over the reply: stop the voice and the model,
       // keep the microphone where it is. Deepgram's end-of-turn for what
       // they are saying arrives through the normal path.

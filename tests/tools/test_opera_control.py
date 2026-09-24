@@ -895,3 +895,37 @@ class TestTheVideoIsChosen:
         result = YouTubePlayTool().execute(query="lofi", video_id="bbbbbbbbbbb")
         assert result.success is True
         assert any("watch?v=bbbbbbbbbbb" in url for url in page.visited)
+
+
+class TestOneBrowserTaskAtATime:
+    """24 September: a stopped reply's video play and the retried one drove
+    the media window at once; the second hung for its whole timeout."""
+
+    def test_a_second_session_waits_for_the_first(self, monkeypatch):
+        import contextlib
+        import threading
+        import time
+
+        order = []
+
+        @contextlib.contextmanager
+        def fake(own_window=False, transient=False):
+            order.append("in")
+            time.sleep(0.2)
+            yield None
+            order.append("out")
+
+        monkeypatch.setattr(opera_control, "_opera_session", fake)
+
+        def use():
+            with opera_control.opera_session():
+                pass
+
+        first = threading.Thread(target=use)
+        second = threading.Thread(target=use)
+        first.start()
+        time.sleep(0.05)
+        second.start()
+        first.join(2)
+        second.join(2)
+        assert order == ["in", "out", "in", "out"]

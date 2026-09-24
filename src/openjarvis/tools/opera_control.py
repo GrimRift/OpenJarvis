@@ -44,6 +44,7 @@ import contextlib
 import json
 import os
 import re
+import threading
 import urllib.parse
 import urllib.request
 from datetime import date, timedelta
@@ -190,9 +191,27 @@ class Session:
         return f" Moved to {where}."
 
 
+#: One browser task at a time. A reply stopped or started over leaves its
+#: tool running, and two plays driving Sage's one media window at once hung
+#: the second for its whole 25 s navigation timeout (24 September).
+_SESSION_LOCK = threading.RLock()
+_SESSION_WAIT_SECONDS = 30.0
+
+
 @contextlib.contextmanager
 def opera_session(own_window: bool = False, transient: bool = False):
     """Attach to the running Opera GX and yield a :class:`Session`."""
+    held = _SESSION_LOCK.acquire(timeout=_SESSION_WAIT_SECONDS)
+    try:
+        with _opera_session(own_window=own_window, transient=transient) as session:
+            yield session
+    finally:
+        if held:
+            _SESSION_LOCK.release()
+
+
+@contextlib.contextmanager
+def _opera_session(own_window: bool = False, transient: bool = False):
     from openjarvis.tools.cdp import Browser
 
     global _MEDIA_HANDLE

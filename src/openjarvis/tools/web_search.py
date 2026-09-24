@@ -572,6 +572,12 @@ def _credits(response: dict[str, Any]) -> int | float:
     return value if isinstance(value, (int, float)) else 0
 
 
+def _card_text(text: str) -> str:
+    """*text* without table rules and cell bars, for a source card."""
+    text = re.sub(r"\|+|:?-{3,}:?", " ", text or "")
+    return " ".join(text.split())
+
+
 @ToolRegistry.register("web_search")
 class WebSearchTool(BaseTool):
     """Search the web via Tavily with at most one internal escalation."""
@@ -843,7 +849,9 @@ class WebSearchTool(BaseTool):
                 {
                     "title": title,
                     "url": source_url,
-                    "summary": content[:500],
+                    # A card is read, not parsed: a results table came through
+                    # as "| | | Pos | Driver | Team |" (24 September).
+                    "summary": _card_text(content)[:500],
                     "image_url": _source_image(result),
                     "published_date": published_date,
                     "score": score,

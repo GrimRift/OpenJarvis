@@ -981,3 +981,13 @@ class TestSearchResultsBecomeReadable:
             assert not page_access.is_allowed("https://elsewhere.example/page")
         finally:
             page_access.clear()
+
+
+def test_a_results_table_reads_as_words_on_a_card():
+    # 24 September: a card showed "| | | | --- --- | Pos | Driver | Team |".
+    from openjarvis.tools.web_search import _card_text
+
+    assert (
+        _card_text("| | --- --- | Pos | Driver | 1 | Lewis Hamilton | Ferrari |")
+        == "Pos Driver 1 Lewis Hamilton Ferrari"
+    )
