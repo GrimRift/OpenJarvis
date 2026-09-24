@@ -620,6 +620,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         restartsPause(level, roomThreshold, phraseLevelRef.current, Date.now() - turnOpenedAtRef.current)
       ) {
         lastSoundAtRef.current = Date.now();
+        lastSoundRef.current = {
+          level: Math.round(level),
+          gate: Math.round(Math.max(roomThreshold, phraseLevelRef.current * 0.25)),
+          sinceTurnMs: Date.now() - turnOpenedAtRef.current,
+        };
       }
       for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
 
@@ -658,6 +663,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // pause after it is judged against (lib/wake-follow.ts restartsPause).
     turnOpenedAtRef.current = Date.now();
     phraseLevelRef.current = phraseLoudness(preRoll);
+    lastSoundRef.current = null;
     pendingRef.current = [];
     fallbackRef.current = [];
     sendingRef.current = true;
@@ -696,6 +702,13 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const lastSoundAtRef = useRef(0);
   const turnOpenedAtRef = useRef(0);
   const phraseLevelRef = useRef(0);
+  // The last frame that restarted the pause clock, for the trace: what held
+  // a greeting when it had to wait for Deepgram's end of turn.
+  const lastSoundRef = useRef<{ level: number; gate: number; sinceTurnMs: number } | null>(null);
+  const pauseDetail = useCallback(
+    () => ({ ...(lastSoundRef.current ?? {}), phraseLevel: Math.round(phraseLevelRef.current) }),
+    [],
+  );
   const lastSoundAt = useCallback(() => lastSoundAtRef.current, []);
   const speechRmsRef = useRef(SPEECH_RMS_FLOOR);
   /** Set the speech level for the room: four times its ambient RMS, within
@@ -803,6 +816,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     endTurn,
     holdAudio,
     lastSoundAt,
+    pauseDetail,
     setSpeechLevel,
     setMicBoost,
     setSageSpeaking,

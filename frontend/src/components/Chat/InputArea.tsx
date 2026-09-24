@@ -2419,7 +2419,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     if (!state.active || state.greeted) return;
     state.greeted = true;
     clearGreetingTimer();
-    voiceTrace('wake.pauseGreeting', { why });
+    // What held it, when the timer did not decide: the last sound that
+    // restarted the pause clock (level against its gate, ms into the turn).
+    voiceTrace('wake.pauseGreeting', { why, ...(why === 'timer' ? {} : flux.pauseDetail()) });
     // Heard through, not held: the user may already be answering it.
     greetingInTurnRef.current = true;
     playGreeting({
