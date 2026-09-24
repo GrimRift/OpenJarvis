@@ -17,8 +17,9 @@ import {
   Search,
   Brain,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react';
-import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
+import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import type { BargeMode } from '../lib/barge-in';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
@@ -573,6 +574,19 @@ export function SettingsPage() {
     useAppStore.getState().loadConversations();
     setConfirmClear(false);
     showSaved();
+  };
+
+  const [confirmReset, setConfirmReset] = useState(false);
+  const handleReset = () => {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      setTimeout(() => setConfirmReset(false), 3000);
+      return;
+    }
+    // A reload, not a store update: every effect that tells the server a
+    // setting (voice, model preference) runs again from the defaults.
+    resetAllSettings();
+    window.location.reload();
   };
 
   return (
@@ -1451,6 +1465,21 @@ export function SettingsPage() {
                 onMouseLeave={(e) => { if (!confirmClear) e.currentTarget.style.background = 'transparent'; }}
               >
                 <Trash2 size={12} /> {confirmClear ? 'Click again to confirm' : 'Clear'}
+              </button>
+            </SettingRow>
+            <SettingRow label="Reset to defaults" description="Every setting back to how a new install has it, voice included (Jarvis (Local) on Nano). Conversations, memory, reminders, connectors and your voice fingerprint are kept.">
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                style={{
+                  color: confirmReset ? 'white' : 'var(--color-error)',
+                  background: confirmReset ? 'var(--color-error)' : 'transparent',
+                  border: '1px solid var(--color-error)',
+                }}
+                onMouseEnter={(e) => { if (!confirmReset) e.currentTarget.style.background = 'rgba(220,38,38,0.1)'; }}
+                onMouseLeave={(e) => { if (!confirmReset) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <RotateCcw size={12} /> {confirmReset ? 'Click again to confirm' : 'Reset'}
               </button>
             </SettingRow>
           </Section>

@@ -17,9 +17,31 @@ import numpy as np
 logger = logging.getLogger("voice_sidecar")
 
 SAMPLE_RATE = 24000
+#: The two Chatterbox models the engine can speak with. Nano is GPT-2 small;
+#: Turbo is GPT-2 medium over the same vocoder and voice encoder, and on 24
+#: September it carried a cloned voice's accent where Nano pulled it toward
+#: its own.
+MODELS = ("nano", "turbo")
+DEFAULT_MODEL = "nano"
 # Share of the card the allocator may hold: 0.3 of 8 GB is 2.4 GB, room for
-# fp32 weights plus one reply's activations, never the whole card.
-MEMORY_FRACTION = 0.3
+# Nano's fp32 weights plus one reply's activations, never the whole card.
+# Turbo's measured peak was 3.0 GB with the stock loop (24 September), plus
+# the graphed loop's caches.
+MEMORY_FRACTIONS = {"nano": 0.3, "turbo": 0.55}
+#: Turbo's own files; its vocoder and voice encoder are byte-identical to
+#: Nano's (same sha256), so those are linked rather than downloaded twice.
+TURBO_REPO = "ResembleAI/chatterbox-turbo"
+NANO_REPO = "ResembleAI/chatterbox-nano"
+TURBO_OWN_FILES = (
+    "t3_turbo_v1.safetensors",
+    "added_tokens.json",
+    "merges.txt",
+    "special_tokens_map.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "conds.pt",
+)
+TURBO_SHARED_FILES = ("s3gen_meanflow.safetensors", "ve.safetensors")
 # How many fresh samples a runaway generation gets before it is cut.
 RUNAWAY_RETRIES = 2
 # The library's own sampling, which a runaway is retried with: it never ran
@@ -31,6 +53,9 @@ WARM_BUCKETS = (512, 640, 768)
 REFERENCE_FILE = "reference.wav"
 CONDS_FILE = "conds.pt"
 PARAMS_FILE = "voice.json"
+#: Which model a voice belongs to and the name shown for it. Kept apart from
+#: voice.json, which is the sampling and is rewritten whole by save_params.
+META_FILE = "meta.json"
 
 
 # Generation controls Chatterbox Turbo/Nano actually honour. (cfg_weight,
@@ -86,6 +111,8 @@ class VoiceInfo:
     has_conditioning: bool
     reference_seconds: float
     params: Dict[str, Any] = field(default_factory=dict)
+    engine: str = DEFAULT_MODEL
+    label: str = ""
 
 
 class VoiceStore:
@@ -119,6 +146,36 @@ class VoiceStore:
             json.dumps(asdict(params), indent=2), encoding="utf-8"
         )
 
+    def meta(self, name: str) -> Dict[str, str]:
+        path = self.path(name) / META_FILE
+        data: Dict[str, Any] = {}
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                logger.warning("unreadable %s; treating it as a Nano voice", path)
+        engine = str(data.get("engine") or DEFAULT_MODEL)
+        return {
+            "engine": engine if engine in MODELS else DEFAULT_MODEL,
+            "label": str(data.get("label") or ""),
+        }
+
+    def engine(self, name: str) -> str:
+        return self.meta(name)["engine"]
+
+    def save_meta(
+        self, name: str, *, engine: Optional[str] = None, label: Optional[str] = None
+    ) -> None:
+        meta = self.meta(name)
+        if engine is not None:
+            if engine not in MODELS:
+                raise ValueError(f"unknown engine {engine!r}")
+            meta["engine"] = engine
+        if label is not None:
+            meta["label"] = label.strip()[:60]
+        self.path(name).mkdir(parents=True, exist_ok=True)
+        (self.path(name) / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
+
     def info(self, name: str) -> VoiceInfo:
         folder = self.path(name)
         ref = folder / REFERENCE_FILE
@@ -136,9 +193,12 @@ class VoiceStore:
             has_conditioning=(folder / CONDS_FILE).exists(),
             reference_seconds=round(seconds, 1),
             params=asdict(self.params(name)),
+            **self.meta(name),
         )
 
-    def store_reference(self, name: str, source: Path) -> Path:
+    def store_reference(
+        self, name: str, source: Path, engine: Optional[str] = None
+    ) -> Path:
         """Convert any audio file to the mono 24 kHz WAV Chatterbox reads,
         and drop stale conditioning so it is recomputed."""
         import librosa
@@ -154,6 +214,8 @@ class VoiceStore:
         conds = folder / CONDS_FILE
         if conds.exists():
             conds.unlink()
+        if engine is not None:
+            self.save_meta(name, engine=engine)
         return target
 
     def remove(self, name: str) -> bool:
@@ -169,18 +231,25 @@ class ChatterboxEngine:
     second reply must not interleave its sentences with the first."""
 
     def __init__(
-        self, device: str, voices: VoiceStore, precision: str = "fp32"
+        self,
+        device: str,
+        voices: VoiceStore,
+        precision: str = "fp32",
+        model: str = DEFAULT_MODEL,
     ) -> None:
         self.precision = precision if precision in ("fp16", "fp32") else "fp32"
         self.requested_device = device
         self.device = device
         self.voices = voices
+        self.kind = model if model in MODELS else DEFAULT_MODEL
         self.model = None
         self.current_voice: Optional[str] = None
         self.lock = threading.Lock()
         self.load_seconds = 0.0
         self.last_generation_seconds = 0.0
         self.generations = 0
+        # Seconds the last switch between models took, for /health.
+        self.switch_seconds = 0.0
         # The graphed speech-token loop (fast_t3.py); None means stock.
         self.fast_t3 = None
         self._ve = None
@@ -204,8 +273,15 @@ class ChatterboxEngine:
             # keeping every reply's peak activations. A hard fraction makes
             # the allocator free its cache before growing, so the process
             # stays near weights + context.
-            torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTION)
-        self.model = ChatterboxTurboTTS.from_pretrained(device=self.device, nano=True)
+            torch.cuda.set_per_process_memory_fraction(MEMORY_FRACTIONS[self.kind])
+        if self.kind == "turbo":
+            self.model = ChatterboxTurboTTS.from_local(
+                turbo_checkpoint_dir(), device=self.device, nano=False
+            )
+        else:
+            self.model = ChatterboxTurboTTS.from_pretrained(
+                device=self.device, nano=True
+            )
         if self.precision == "fp16" and self.device.startswith("cuda"):
             # Halves the resident weights, and the voice with them: compared
             # by ear on 22 September the half-precision vocoder sounded
@@ -220,18 +296,62 @@ class ChatterboxEngine:
             self.fast_t3 = GraphedT3(self.model.t3, self.device)
         self.load_seconds = round(time.monotonic() - started, 1)
         logger.info(
-            "Chatterbox Nano loaded on %s in %.1fs", self.device, self.load_seconds
+            "Chatterbox %s loaded on %s in %.1fs",
+            self.kind.title(),
+            self.device,
+            self.load_seconds,
         )
+
+    def switch(self, kind: str) -> None:
+        """Put model *kind* on the card in place of the current one.
+
+        One at a time, by the user's choice (24 September): both resident
+        would hold ~5.5 GB of an 8 GB card. The switch is paid once, when a
+        voice of the other model is chosen; generation waits on the lock
+        while the models change.
+        """
+        if kind not in MODELS:
+            raise ValueError(f"unknown engine {kind!r}")
+        if kind == self.kind and self.model is not None:
+            return
+        import gc
+
+        started = time.monotonic()
+        with self.lock:
+            if kind == self.kind and self.model is not None:
+                return
+            self.model = None
+            self.fast_t3 = None
+            with self._ve_lock:
+                self._ve = None
+            self.current_voice = None
+            gc.collect()
+            if self.device.startswith("cuda"):
+                import torch
+
+                torch.cuda.empty_cache()
+            self.kind = kind
+            self.load()
+        self.switch_seconds = round(time.monotonic() - started, 1)
+        logger.info("switched to %s in %.1fs", kind.title(), self.switch_seconds)
 
     @property
     def loaded(self) -> bool:
         return self.model is not None
 
     def use_voice(self, name: str) -> None:
-        """Make *name* the voice ``generate`` speaks with, computing and
-        caching its conditioning if needed. Cheap when already current."""
-        if self.model is None:
-            raise RuntimeError("model not loaded")
+        """Make *name* the voice ``generate`` speaks with, loading its model
+        if the other one is on the card and computing its conditioning if
+        needed. Cheap when already current."""
+        wanted = self.voices.engine(name)
+        if wanted != self.kind or self.model is None:
+            self.switch(wanted)
+            self._use_conditioning(name)
+            self.warm_up(name)
+            return
+        self._use_conditioning(name)
+
+    def _use_conditioning(self, name: str) -> None:
         if name == self.current_voice:
             return
         from chatterbox.tts_turbo import Conditionals
@@ -253,20 +373,81 @@ class ChatterboxEngine:
                     "cached conditioning for %s unreadable; recomputing", name
                 )
         started = time.monotonic()
-        with self.lock, self._conditioning_modules_on_device():
-            self.model.prepare_conditionals(str(ref))
-            self.model.conds.save(conds)
-            self.model.conds = self._cast_conds(self.model.conds)
+        with self.lock:
+            prepared = self._prepare_conditionals_cpu(ref)
+            prepared.save(conds)
+            self.model.conds = self._cast_conds(prepared.to(self.device))
         self.current_voice = folder.name
         logger.info(
             "conditioning for %s computed in %.1fs", name, time.monotonic() - started
         )
 
+    def prepare_voice(self, name: str) -> None:
+        """Compute and cache *name*'s conditioning without making it current
+        or loading its model: conditioning is the same for Nano and Turbo,
+        so a voice uploaded for the model not on the card is ready when it
+        is chosen."""
+        if self.model is None:
+            raise RuntimeError("model not loaded")
+        folder = self.voices.path(name)
+        ref = folder / REFERENCE_FILE
+        if not ref.exists():
+            raise FileNotFoundError(f"voice {name!r} has no reference recording")
+        with self.lock:
+            self._prepare_conditionals_cpu(ref).save(folder / CONDS_FILE)
+        if self.current_voice == folder.name:
+            self.current_voice = None
+
+    def _prepare_conditionals_cpu(self, ref: Path):
+        """``prepare_conditionals`` with every step on the CPU.
+
+        It used to move the speech tokenizer, speaker encoder and voice
+        encoder (0.5 GB) onto the card for the call, and on 24 September,
+        with the card near the process's memory cap, three of four uploads
+        failed with CUDA out of memory. On the CPU it takes 0.6-2.7 s and
+        the result matched the GPU's: identical speech tokens, embeddings
+        within float rounding (1e-4). The steps are the library's own, in
+        its order. Conditioning does not depend on the model: Nano and
+        Turbo share the tokenizer and both encoders.
+        """
+        import librosa
+        import torch
+        from chatterbox.tts_turbo import S3_SR, S3GEN_SR, Conditionals, T3Cond
+
+        model = self.model
+        wav, _ = librosa.load(str(ref), sr=S3GEN_SR)
+        wav = model.norm_loudness(wav, S3GEN_SR)
+        ref_16k = librosa.resample(wav, orig_sr=S3GEN_SR, target_sr=S3_SR)
+        modules = self._conditioning_module_list()
+        homes = [next(m.parameters()).device for m in modules]
+        for module in modules:
+            module.to("cpu")
+        try:
+            gen = model.s3gen.embed_ref(
+                wav[: model.DEC_COND_LEN], S3GEN_SR, device="cpu"
+            )
+            tokens, _ = model.s3gen.tokenizer.forward(
+                [ref_16k[: model.ENC_COND_LEN]],
+                max_len=model.t3.hp.speech_cond_prompt_len,
+            )
+            ve = torch.from_numpy(
+                model.ve.embeds_from_wavs([ref_16k], sample_rate=S3_SR)
+            ).mean(axis=0, keepdim=True)
+        finally:
+            for module, home in zip(modules, homes):
+                module.to(home)
+        t3 = T3Cond(
+            speaker_emb=ve,
+            cond_prompt_speech_tokens=torch.atleast_2d(tokens),
+            emotion_adv=0.5 * torch.ones(1, 1, 1),
+        )
+        return Conditionals(t3, gen)
+
     # The speech tokenizer (472 MB), speaker encoder and voice encoder are
     # used only to turn a reference recording into conditioning, which is
     # cached per voice. Resident on the card they were 30% of the weights
     # for something that runs once per uploaded voice, so they live on the
-    # CPU and visit the GPU for that one call.
+    # CPU, where the conditioning is computed.
     _CONDITIONING_MODULES = (
         ("s3gen", "tokenizer"),
         ("s3gen", "speaker_encoder"),
@@ -292,35 +473,11 @@ class ChatterboxEngine:
         # report "cpu" once parked and put the flow's noise there; the flow
         # is what generation runs, so read the device from it instead.
         if not getattr(s3gen_cls, "_sage_device_from_flow", False):
-            s3gen_cls.device = property(
-                lambda s3: next(s3.flow.parameters()).device
-            )
+            s3gen_cls.device = property(lambda s3: next(s3.flow.parameters()).device)
             s3gen_cls._sage_device_from_flow = True
         for module in self._conditioning_module_list():
             module.to("cpu")
         torch.cuda.empty_cache()
-
-    def _conditioning_modules_on_device(self):
-        import contextlib
-
-        if not self.device.startswith("cuda"):
-            return contextlib.nullcontext()
-
-        @contextlib.contextmanager
-        def visit():
-            import torch
-
-            modules = self._conditioning_module_list()
-            for module in modules:
-                module.to(self.device)
-            try:
-                yield
-            finally:
-                for module in modules:
-                    module.to("cpu")
-                torch.cuda.empty_cache()
-
-        return visit()
 
     def _cast_conds(self, conds):
         if self.precision != "fp16" or not self.device.startswith("cuda"):
@@ -363,7 +520,11 @@ class ChatterboxEngine:
         for attempt in range(RUNAWAY_RETRIES + 1):
             last = attempt == RUNAWAY_RETRIES
             with self.lock, torch.inference_mode(), self._autocast():
-                audio = self._synthesize(text, sampling, vocode_runaway=last)
+                try:
+                    audio = self._synthesize(text, sampling, vocode_runaway=last)
+                except Exception as exc:
+                    _exit_if_cuda_poisoned(exc)
+                    raise
             if audio is not None and not _ran_away(audio, text):
                 break
             if last:
@@ -405,7 +566,8 @@ class ChatterboxEngine:
         except PieceTooLong:
             wav = self.model.generate(text, **sampling)
             return wav.squeeze(0).detach().float().cpu().numpy().astype(np.float32)
-        except Exception:
+        except Exception as exc:
+            _exit_if_cuda_poisoned(exc)
             logger.warning(
                 "graphed speech tokens failed; using the stock loop from now on",
                 exc_info=True,
@@ -539,6 +701,50 @@ def _level(audio: np.ndarray, params: VoiceParams) -> np.ndarray:
         excess = (np.abs(scaled[over]) - knee) / (1.0 - knee)
         scaled[over] = np.sign(scaled[over]) * (knee + (1.0 - knee) * np.tanh(excess))
     return np.clip(scaled, -params.peak_limit, params.peak_limit).astype(np.float32)
+
+
+#: What a CUDA error that leaves the process's GPU context unusable says.
+_POISONED = ("device-side assert", "illegal memory access", "cudaErrorAssert")
+
+
+def _exit_if_cuda_poisoned(exc: BaseException) -> None:
+    """End the process after a CUDA error the context cannot recover from.
+
+    Every later GPU call fails the same way -- the stock-loop fallback
+    included -- so on 24 September the sidecar stayed up and silent for 20
+    minutes: greetings (static files) played, replies did not. Exiting lets
+    the server start a fresh one on the next reply.
+    """
+    if any(mark in str(exc) for mark in _POISONED):
+        logger.critical(
+            "CUDA context lost (%s); exiting so a fresh sidecar starts", exc
+        )
+        logging.shutdown()
+        os._exit(70)
+
+
+def turbo_checkpoint_dir() -> Path:
+    """Turbo's checkpoint folder, completed from what is already on disk.
+
+    Turbo's own files come from its repository (downloaded once, 1.9 GB for
+    the text model); the vocoder and voice encoder are Nano's, linked in,
+    since both repositories hold the same bytes and a second copy is 1 GB.
+    """
+    from huggingface_hub import hf_hub_download
+
+    folder = None
+    for name in TURBO_OWN_FILES:
+        folder = Path(hf_hub_download(TURBO_REPO, name)).parent
+    for name in TURBO_SHARED_FILES:
+        target = folder / name
+        if target.exists():
+            continue
+        source = Path(os.path.realpath(hf_hub_download(NANO_REPO, name)))
+        try:
+            os.link(source, target)
+        except OSError:
+            shutil.copyfile(source, target)
+    return folder
 
 
 def default_voices_dir() -> Path:

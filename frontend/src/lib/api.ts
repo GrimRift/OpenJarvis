@@ -364,6 +364,10 @@ export interface LocalVoiceInfo {
   has_conditioning?: boolean;
   reference_seconds?: number;
   params?: Record<string, number>;
+  /** The local model the voice belongs to: 'nano' or 'turbo'. */
+  engine?: string;
+  /** The name shown for it ("J.A.R.V.I.S."); the folder name when empty. */
+  label?: string;
 }
 
 export interface SpeechVoices {
@@ -377,10 +381,15 @@ export async function fetchSpeechVoices(): Promise<SpeechVoices> {
   return res.json();
 }
 
-export async function uploadSpeechVoice(name: string, file: File): Promise<LocalVoiceInfo> {
+export async function uploadSpeechVoice(
+  name: string,
+  file: File,
+  engine?: string,
+): Promise<LocalVoiceInfo> {
   const form = new FormData();
   form.append('file', file);
-  const res = await apiFetch(`/v1/speech/voices/${encodeURIComponent(name)}`, {
+  const query = engine ? `?engine=${encodeURIComponent(engine)}` : '';
+  const res = await apiFetch(`/v1/speech/voices/${encodeURIComponent(name)}${query}`, {
     method: 'POST',
     body: form,
   });

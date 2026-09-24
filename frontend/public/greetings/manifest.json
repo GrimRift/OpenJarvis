@@ -21,10 +21,20 @@
       "greetings/jarvis-mix-a-local/yes-sir-nano.wav",
       "greetings/jarvis-mix-a-local/sir-nano.wav"
     ],
-    "chatterbox:jarvis-mix-b": [
-      "greetings/jarvis-mix-b-local/hello-sir-nano.wav",
-      "greetings/jarvis-mix-b-local/yes-sir-nano.wav",
-      "greetings/jarvis-mix-b-local/sir-nano.wav"
+    "chatterbox:frieren": [
+      "greetings/frieren-local/hello-sir-nano.wav",
+      "greetings/frieren-local/yes-sir-nano.wav",
+      "greetings/frieren-local/sir-nano.wav"
+    ],
+    "chatterbox:turbo-jarvis": [
+      "greetings/turbo-jarvis-local/hello-sir-turbo.wav",
+      "greetings/turbo-jarvis-local/yes-sir-turbo.wav",
+      "greetings/turbo-jarvis-local/sir-turbo.wav"
+    ],
+    "chatterbox:turbo-frieren": [
+      "greetings/turbo-frieren-local/hello-sir-turbo.wav",
+      "greetings/turbo-frieren-local/yes-sir-turbo.wav",
+      "greetings/turbo-frieren-local/sir-turbo.wav"
     ]
   },
   "fillers": {
@@ -52,11 +62,23 @@
       "greetings/jarvis-mix-a-local/let-me-look-nano.wav",
       "greetings/jarvis-mix-a-local/working-on-it-nano.wav"
     ],
-    "chatterbox:jarvis-mix-b": [
-      "greetings/jarvis-mix-b-local/one-moment-nano.wav",
-      "greetings/jarvis-mix-b-local/checking-nano.wav",
-      "greetings/jarvis-mix-b-local/let-me-look-nano.wav",
-      "greetings/jarvis-mix-b-local/working-on-it-nano.wav"
+    "chatterbox:frieren": [
+      "greetings/frieren-local/one-moment-nano.wav",
+      "greetings/frieren-local/checking-nano.wav",
+      "greetings/frieren-local/let-me-look-nano.wav",
+      "greetings/frieren-local/working-on-it-nano.wav"
+    ],
+    "chatterbox:turbo-jarvis": [
+      "greetings/turbo-jarvis-local/one-moment-turbo.wav",
+      "greetings/turbo-jarvis-local/checking-turbo.wav",
+      "greetings/turbo-jarvis-local/let-me-look-turbo.wav",
+      "greetings/turbo-jarvis-local/working-on-it-turbo.wav"
+    ],
+    "chatterbox:turbo-frieren": [
+      "greetings/turbo-frieren-local/one-moment-turbo.wav",
+      "greetings/turbo-frieren-local/checking-turbo.wav",
+      "greetings/turbo-frieren-local/let-me-look-turbo.wav",
+      "greetings/turbo-frieren-local/working-on-it-turbo.wav"
     ]
   },
   "fillers_again": {
@@ -76,9 +98,17 @@
       "greetings/jarvis-mix-a-local/still-working-nano.wav",
       "greetings/jarvis-mix-a-local/almost-there-nano.wav"
     ],
-    "chatterbox:jarvis-mix-b": [
-      "greetings/jarvis-mix-b-local/still-working-nano.wav",
-      "greetings/jarvis-mix-b-local/almost-there-nano.wav"
+    "chatterbox:frieren": [
+      "greetings/frieren-local/still-working-nano.wav",
+      "greetings/frieren-local/almost-there-nano.wav"
+    ],
+    "chatterbox:turbo-jarvis": [
+      "greetings/turbo-jarvis-local/still-working-turbo.wav",
+      "greetings/turbo-jarvis-local/almost-there-turbo.wav"
+    ],
+    "chatterbox:turbo-frieren": [
+      "greetings/turbo-frieren-local/still-working-turbo.wav",
+      "greetings/turbo-frieren-local/almost-there-turbo.wav"
     ]
   }
 }

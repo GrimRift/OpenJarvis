@@ -139,6 +139,14 @@ class GraphedT3:
         import torch
 
         self.cache = bucket.cache
+        # The warm-up steps below write the cache at `pos`, which still holds
+        # the last piece's position. A capture of a smaller cache than that
+        # piece used wrote past its end: "index_copy_(): index out of
+        # bounds", a device-side assert, and the sidecar was silent until
+        # restarted (24 September, mid-reply). Slot 0 is inside every cache,
+        # and the prefill that follows overwrites it.
+        self.pos.zero_()
+        self.tok.zero_()
         stream = torch.cuda.Stream()
         stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(stream):

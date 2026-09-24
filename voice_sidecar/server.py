@@ -15,12 +15,26 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+)
 from fastapi.responses import JSONResponse, Response
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from voice_sidecar import __version__
-from voice_sidecar.engine import SAMPLE_RATE, ChatterboxEngine, VoiceParams, VoiceStore
+from voice_sidecar.engine import (
+    MODELS,
+    SAMPLE_RATE,
+    ChatterboxEngine,
+    VoiceParams,
+    VoiceStore,
+)
 
 logger = logging.getLogger("voice_sidecar")
 
@@ -51,7 +65,9 @@ def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
         current = engine.current_voice or default_voice
         return {
             "ok": engine.loaded,
-            "model": "chatterbox-nano",
+            "model": f"chatterbox-{engine.kind}",
+            "engine": engine.kind,
+            "switch_seconds": engine.switch_seconds,
             "version": __version__,
             "device": engine.device,
             "requested_device": engine.requested_device,
@@ -75,7 +91,18 @@ def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
         }
 
     @app.post("/voices/{name}")
-    async def upload_voice(name: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+    async def upload_voice(
+        name: str,
+        file: UploadFile = File(...),
+        engine_name: str = Query("", alias="engine"),
+    ) -> Dict[str, Any]:
+        """Store a reference as voice *name* for its model
+        (``?engine=`` nano or turbo; the loaded one when absent). Its conditioning is
+        computed now, on the CPU, whichever model is loaded: conditioning
+        is the same for both."""
+        kind = engine_name or engine.kind
+        if kind not in MODELS:
+            raise HTTPException(400, f"unknown engine {kind!r}")
         suffix = Path(file.filename or "reference.wav").suffix or ".wav"
         data = await file.read()
         if len(data) > 50 * 1024 * 1024:
@@ -84,7 +111,7 @@ def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
             tmp.write(data)
             tmp_path = Path(tmp.name)
         try:
-            await asyncio.to_thread(engine.voices.store_reference, name, tmp_path)
+            await asyncio.to_thread(engine.voices.store_reference, name, tmp_path, kind)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:
@@ -95,8 +122,24 @@ def create_app(engine: ChatterboxEngine, default_voice: str) -> FastAPI:
         if engine.current_voice == engine.voices.path(name).name:
             engine.current_voice = None
         if engine.loaded:
-            await asyncio.to_thread(engine.use_voice, name)
+            await asyncio.to_thread(engine.prepare_voice, name)
         return asdict(engine.voices.info(name))
+
+    @app.post("/engine/prepare")
+    async def prepare_engine(request: Request) -> Dict[str, Any]:
+        """Load the model *voice* belongs to, ahead of its first reply: the
+        server calls this when the voice is chosen, so the one-off switch
+        (~10 s) is not paid by the first answer."""
+        body = await request.json()
+        voice = str(body.get("voice") or "")
+        if voice not in engine.voices.names():
+            raise HTTPException(404, f"no voice {voice!r}")
+        await asyncio.to_thread(engine.use_voice, voice)
+        return {
+            "engine": engine.kind,
+            "voice": engine.current_voice,
+            "switch_seconds": engine.switch_seconds,
+        }
 
     @app.put("/voices/{name}/params")
     async def set_params(name: str, request: Request) -> Dict[str, Any]:
@@ -371,6 +414,8 @@ HOLD_MARGIN = 0.4
 
 def _gen_estimate(text: str) -> float:
     return len(text) * GEN_SECONDS_PER_CHAR
+
+
 _CLAUSE_BREAK = re.compile(r"(?<=[,;:])\s+|(?<=\s[-–—])\s+")
 
 
@@ -428,7 +473,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Sage voice sidecar (Chatterbox Nano)")
+    parser = argparse.ArgumentParser(
+        description="Sage voice sidecar (Chatterbox Nano / Turbo)"
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument(
         "--port", type=int, default=int(os.environ.get("VOICE_SIDECAR_PORT", 8791))
@@ -458,7 +505,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     voices = VoiceStore(
         Path(args.voices_dir) if args.voices_dir else default_voices_dir()
     )
-    engine = ChatterboxEngine(args.device, voices, precision=args.precision)
+    # The model the chosen voice belongs to, so the first reply needs no switch.
+    model = voices.engine(args.voice) if args.voice in voices.names() else "nano"
+    engine = ChatterboxEngine(
+        args.device, voices, precision=args.precision, model=model
+    )
     engine.load()
     if args.voice in voices.names():
         engine.use_voice(args.voice)

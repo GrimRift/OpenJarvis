@@ -13,9 +13,12 @@ import {
 import { useAppStore, type SttProvider, type TtsProvider } from '../../lib/store';
 import {
   CHATTERBOX_VOICE_PREFIX,
-  DEFAULT_VOICE_PROFILE,
+  DEFAULT_LOCAL_VOICE_PROFILE,
   getVoiceProfile,
+  localEngineOf,
   profilesFor,
+  voiceForEngine,
+  type LocalEngine,
 } from '../../lib/voice-profiles';
 import { getBase } from '../../lib/api';
 import { setBoostedVolume } from '../../lib/audio-out';
@@ -99,10 +102,13 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
   }, [chatterboxLoading]);
 
   const allLocal = settings.sttProvider === 'parakeet' && settings.ttsProvider === 'chatterbox';
-  const voiceNames = localVoices.map((v) => v.name);
-  const voiceProfiles = profilesFor(settings.ttsProvider, voiceNames);
   const currentVoice = getVoiceProfile(settings.ttsVoiceId, settings.ttsProvider);
   const currentLocal = localVoices.find((v) => CHATTERBOX_VOICE_PREFIX + v.name === currentVoice.id);
+  // The local model is not a setting of its own: it is whatever the chosen
+  // voice belongs to, and the server loads it when the voice is picked.
+  const localEngine: LocalEngine = localEngineOf(currentLocal);
+  const engineChoice = settings.ttsProvider === 'cartesia' ? 'cartesia' : localEngine;
+  const voiceProfiles = profilesFor(settings.ttsProvider, localVoices, localEngine);
 
   // Server-side speech (moments, reminders) cannot read localStorage, so
   // the choice is mirrored to the server whenever it changes here.
@@ -114,11 +120,22 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
     updateSettings({ sttProvider: value });
     onSaved();
   };
-  const setTts = (value: TtsProvider) => {
-    // Keep a voice that belongs to the new engine selected, so the next
-    // reply does not resolve to a default the user never chose.
-    const voice = getVoiceProfile(settings.ttsVoiceId, value);
-    updateSettings({ ttsProvider: value, ttsVoiceId: voice.id });
+  const setTts = (value: 'cartesia' | LocalEngine) => {
+    if (value === 'cartesia') {
+      // Keep a voice that belongs to the new engine selected, so the next
+      // reply does not resolve to a default the user never chose.
+      const voice = getVoiceProfile(settings.ttsVoiceId, 'cartesia');
+      updateSettings({ ttsProvider: 'cartesia', ttsVoiceId: voice.id });
+    } else {
+      const voiceId =
+        voiceForEngine(value, settings.ttsVoiceId, localVoices) ??
+        (value === 'nano' ? DEFAULT_LOCAL_VOICE_PROFILE.id : undefined);
+      if (!voiceId) {
+        setError('No Turbo voice yet: upload a reference recording with Turbo selected.');
+        return;
+      }
+      updateSettings({ ttsProvider: 'chatterbox', ttsVoiceId: voiceId });
+    }
     onSaved();
   };
 
@@ -135,7 +152,7 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
     setBusy('upload');
     setError('');
     try {
-      const info = await uploadSpeechVoice(clean, file);
+      const info = await uploadSpeechVoice(clean, file, localEngine);
       refreshVoices();
       updateSettings({ ttsProvider: 'chatterbox', ttsVoiceId: CHATTERBOX_VOICE_PREFIX + info.name });
       onSaved();
@@ -149,13 +166,13 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
 
   const remove = async () => {
     if (!currentLocal) return;
-    if (!window.confirm(`Remove the local voice "${currentLocal.name}" and its recording?`)) return;
+    if (!window.confirm(`Remove the local voice "${currentLocal.label || currentLocal.name}" and its recording?`)) return;
     setBusy('remove');
     setError('');
     try {
       await deleteSpeechVoice(currentLocal.name);
       refreshVoices();
-      updateSettings({ ttsVoiceId: DEFAULT_VOICE_PROFILE.id });
+      updateSettings({ ttsVoiceId: DEFAULT_LOCAL_VOICE_PROFILE.id });
       onRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -191,7 +208,7 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
     <>
       <Row
         label="Use local voice models"
-        description="Run speech-to-text (NVIDIA Parakeet) and the voice (Chatterbox Nano) on this machine. The language model is unchanged."
+        description="Run speech-to-text (NVIDIA Parakeet) and the voice (Chatterbox) on this machine. The language model is unchanged."
       >
         <Switch
           on={allLocal}
@@ -241,18 +258,21 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
         description={
           settings.ttsProvider === 'cartesia'
             ? `Cartesia — cloud. ${cartesia.text}`
-            : `Chatterbox Nano — local, cloned from your reference recording. ${chatterbox.text}`
+            : localEngine === 'turbo'
+              ? `Chatterbox Turbo — local, the larger model: closest to a cloned voice's accent, ~0.2 s slower to start speaking. Switching models takes about 10 s once. ${chatterbox.text}`
+              : `Chatterbox Nano — local and fastest. Switching models takes about 10 s once. ${chatterbox.text}`
         }
       >
         <select
           aria-label="Voice engine"
-          value={settings.ttsProvider}
-          onChange={(e) => setTts(e.target.value as TtsProvider)}
+          value={engineChoice}
+          onChange={(e) => setTts(e.target.value as 'cartesia' | LocalEngine)}
           className="px-2 py-1 rounded-lg text-sm"
           style={selectStyle}
         >
           <option value="cartesia" disabled={cartesia.ok === false}>Cartesia — Cloud</option>
-          <option value="chatterbox" disabled={chatterbox.ok === false}>Chatterbox Nano — Local</option>
+          <option value="nano" disabled={chatterbox.ok === false}>Chatterbox Nano — Local</option>
+          <option value="turbo" disabled={chatterbox.ok === false}>Chatterbox Turbo — Local</option>
         </select>
       </Row>
       <div className="text-xs px-1 -mt-1 mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
@@ -292,7 +312,7 @@ export function VoiceProviders({ health, checking, onRefresh, onSaved, Row, Swit
           label="Reference recording"
           description={
             currentLocal?.has_reference
-              ? `${currentLocal.name}: ${currentLocal.reference_seconds ?? '?'} s of reference audio${currentLocal.has_conditioning ? ', conditioning cached' : ''}. Ten seconds or more of clean speech works best.`
+              ? `${currentLocal.label || currentLocal.name} (${localEngine === 'turbo' ? 'Turbo' : 'Nano'}): ${currentLocal.reference_seconds ?? '?'} s of reference audio${currentLocal.has_conditioning ? ', conditioning cached' : ''}. Ten seconds or more of clean speech works best.`
               : 'No recording yet for this voice. Upload 10 s or more of clean speech (WAV, MP3 or FLAC).'
           }
         >

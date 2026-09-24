@@ -263,6 +263,7 @@ def list_voices(speech_cfg: Any) -> Dict[str, Any]:
                 "has_reference": True,
                 "has_conditioning": (root / name / "conds.pt").exists(),
                 "reference_seconds": seconds,
+                **voice_meta(name),
             }
         )
     return {
@@ -275,11 +276,45 @@ def list_voices(speech_cfg: Any) -> Dict[str, Any]:
     }
 
 
+def voice_meta(name: str) -> Dict[str, str]:
+    """A voice's model and display name (voice_sidecar/engine.py META_FILE),
+    read from disk: the Settings list needs them while the sidecar loads."""
+    engine, label = "nano", ""
+    try:
+        data = json.loads(
+            (sidecar.voices_dir() / name / "meta.json").read_text(encoding="utf-8")
+        )
+        engine = str(data.get("engine") or "nano")
+        label = str(data.get("label") or "")
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {"engine": engine if engine in ("nano", "turbo") else "nano", "label": label}
+
+
+def prepare_engine(speech_cfg: Any, voice: str) -> Optional[Dict[str, Any]]:
+    """Have the sidecar load *voice*'s model now (a switch takes 6-13 s),
+    so the first reply in a newly chosen voice does not wait for it."""
+    if not sidecar.fetch_health(speech_cfg):
+        return None
+    try:
+        return _http_json(
+            f"{sidecar.base_url(speech_cfg)}/engine/prepare",
+            method="POST",
+            body=json.dumps({"voice": voice}).encode("utf-8"),
+            timeout=120.0,
+            content_type="application/json",
+        )
+    except Exception:
+        logger.debug("sidecar engine prepare failed", exc_info=True)
+        return None
+
+
 def upload_voice(
-    speech_cfg: Any, name: str, filename: str, data: bytes
+    speech_cfg: Any, name: str, filename: str, data: bytes, engine: str = ""
 ) -> Dict[str, Any]:
     """Hand a reference recording to the sidecar, which converts it, stores
-    it under the voices directory and conditions the model on it."""
+    it under the voices directory for model *engine* (nano or turbo; the
+    loaded one when empty) and computes its conditioning."""
     health = sidecar.process().ensure_started(
         speech_cfg, wait=sidecar.START_TIMEOUT_SECONDS
     )
@@ -297,7 +332,8 @@ def upload_voice(
     body = head.encode("utf-8") + data + tail.encode("utf-8")
     try:
         return _http_json(
-            f"{sidecar.base_url(speech_cfg)}/voices/{name}",
+            f"{sidecar.base_url(speech_cfg)}/voices/{name}"
+            + (f"?engine={engine}" if engine else ""),
             method="POST",
             body=body,
             timeout=180.0,

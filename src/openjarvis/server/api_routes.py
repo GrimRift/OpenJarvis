@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1188,6 +1189,21 @@ async def put_voice_choice(request: Request):
         raise HTTPException(status_code=400, detail="Unknown tts_provider")
     voice_id = str(body.get("voice_id") or "").strip()[:200]
     save_choice(VoiceChoice(tts_provider=provider, voice_id=voice_id))
+    if provider == "chatterbox" and voice_id.startswith("chatterbox:"):
+        # Load the voice's model now, in the background: a Nano/Turbo switch
+        # is 6-13 s, and the page must not wait for it.
+        from openjarvis.speech import chatterbox_tts
+
+        cfg = getattr(request.app.state, "config", None)
+        threading.Thread(
+            target=chatterbox_tts.prepare_engine,
+            args=(
+                getattr(cfg, "speech", None) if cfg else None,
+                voice_id.split(":", 1)[1],
+            ),
+            name="voice-engine-prepare",
+            daemon=True,
+        ).start()
     return {"tts_provider": provider, "voice_id": voice_id}
 
 
@@ -1211,8 +1227,11 @@ async def list_speech_voices(request: Request):
 
 
 @speech_router.post("/voices/{name}")
-async def upload_speech_voice(name: str, request: Request):
-    """Store a reference recording as local voice *name* (multipart ``file``)."""
+async def upload_speech_voice(name: str, request: Request, engine: str = ""):
+    """Store a reference recording as local voice *name* (multipart ``file``)
+    for model ``?engine=`` (nano or turbo)."""
+    if engine and engine not in ("nano", "turbo"):
+        raise HTTPException(status_code=400, detail="Unknown engine")
     from openjarvis.speech import chatterbox_tts
 
     safe = "".join(c for c in name.lower() if c.isalnum() or c in "-_")
@@ -1234,6 +1253,7 @@ async def upload_speech_voice(name: str, request: Request):
             safe,
             getattr(upload, "filename", "") or "reference.wav",
             data,
+            engine,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1636,7 +1656,7 @@ async def presence_voice_stream(request: Request):
             if key != last:
                 last = key
                 quiet = 0.0
-                payload = json.dumps(now or {'speaking': False})
+                payload = json.dumps(now or {"speaking": False})
                 yield f"data: {payload}\n\n"
             else:
                 quiet += _VOICE_POLL_SECONDS

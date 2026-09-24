@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { DEFAULT_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
+import { DEFAULT_LOCAL_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
 import { type BargeMode, BARGE_MODES, DEFAULT_BARGE_MODE } from './barge-in';
 
 export type WakeWordVerify = 'local' | 'off';
@@ -438,8 +438,13 @@ interface Settings {
   fluxEagerEnabled: boolean;
 }
 
-function loadSettings(): Settings {
-  const defaults: Settings = {
+/**
+ * Every setting as a new install has it, and as "Reset to defaults" leaves
+ * it. The voice is Jarvis (Local) on Nano: the fastest to start speaking
+ * (0.45 s to first audio against Turbo's 0.68 s, measured 24 September).
+ */
+export function defaultSettings(): Settings {
+  return {
     theme: 'system',
     apiUrl: '',
     apiKey: '',
@@ -472,12 +477,42 @@ function loadSettings(): Settings {
     diagramsEnabled: true,
     diagramsAutomatic: true,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
-    ttsVoiceId: DEFAULT_VOICE_PROFILE.id,
+    ttsVoiceId: DEFAULT_LOCAL_VOICE_PROFILE.id,
     sttProvider: 'whisper',
-    ttsProvider: 'cartesia',
+    ttsProvider: 'chatterbox',
     fluxEnabled: false,
     fluxEagerEnabled: false,
   };
+}
+
+/** Memory options the Settings page keeps under keys of their own. */
+const MEMORY_SETTING_KEYS = [
+  'openjarvis-memory-enabled',
+  'openjarvis-memory-backend',
+  'openjarvis-memory-top-k',
+  'openjarvis-memory-min-score',
+  'openjarvis-memory-max-tokens',
+];
+
+/**
+ * Forget every saved setting, so the next load starts from
+ * `defaultSettings()`. Only settings: conversations, memory contents,
+ * reminders, connectors and the voice fingerprint are not settings and are
+ * left alone. The caller reloads the page, whose own effects then tell the
+ * server the default voice and model preference.
+ */
+export function resetAllSettings(): void {
+  for (const key of [SETTINGS_KEY, ...MEMORY_SETTING_KEYS]) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* private window: nothing was saved to forget */
+    }
+  }
+}
+
+function loadSettings(): Settings {
+  const defaults = defaultSettings();
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return defaults;

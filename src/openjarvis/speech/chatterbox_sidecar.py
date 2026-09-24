@@ -171,8 +171,10 @@ class SidecarProcess:
             str(getattr(speech_cfg, "chatterbox_device", "cuda") or "cuda"),
             "--voices-dir",
             str(voices_dir()),
+            # The voice chosen in Settings, not the config's: the sidecar loads
+            # that voice's model (Nano or Turbo) before its first reply.
             "--voice",
-            str(getattr(speech_cfg, "chatterbox_voice", "jarvis") or "jarvis"),
+            startup_voice(speech_cfg),
             "--precision",
             str(getattr(speech_cfg, "chatterbox_precision", "fp32") or "fp32"),
         ]
@@ -280,6 +282,21 @@ def _bind_lifetime_to_parent(proc: subprocess.Popen) -> None:
 
 
 _process = SidecarProcess()
+
+
+def startup_voice(speech_cfg: Any) -> str:
+    """The local voice to start on: the Settings choice when it is a local
+    voice, otherwise the configured one."""
+    from openjarvis.speech.voice_choice import chosen_voice_id
+
+    fallback = str(getattr(speech_cfg, "chatterbox_voice", "jarvis") or "jarvis")
+    try:
+        chosen = chosen_voice_id(speech_cfg)
+    except Exception:
+        return fallback
+    if chosen.startswith("chatterbox:") and chosen.split(":", 1)[1]:
+        return chosen.split(":", 1)[1]
+    return fallback
 
 
 def process() -> SidecarProcess:

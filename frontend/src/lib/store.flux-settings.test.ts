@@ -99,7 +99,8 @@ describe('speech providers', () => {
     const useAppStore = await loadStore();
     const { settings } = useAppStore.getState();
     expect(settings.sttProvider).toBe('flux');
-    expect(settings.ttsProvider).toBe('cartesia');
+    // The default voice engine is local Nano since 24 September.
+    expect(settings.ttsProvider).toBe('chatterbox');
     expect(settings.fluxEnabled).toBe(true);
     expect(settings.fluxEagerEnabled).toBe(true);
   });
@@ -126,6 +127,40 @@ describe('speech providers', () => {
     const useAppStore = await loadStore();
     const { settings } = useAppStore.getState();
     expect(settings.sttProvider).toBe('whisper');
-    expect(settings.ttsProvider).toBe('cartesia');
+    // The default voice engine is local Nano since 24 September.
+    expect(settings.ttsProvider).toBe('chatterbox');
+  });
+});
+
+describe('defaults and reset', () => {
+  it('starts a new install on Jarvis (Local), the Nano voice', async () => {
+    const { settings } = (await loadStore()).getState();
+    expect(settings.ttsProvider).toBe('chatterbox');
+    expect(settings.ttsVoiceId).toBe('chatterbox:jarvis');
+  });
+
+  it('keeps the last voice chosen, a Turbo one included, across a reload', async () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ ttsProvider: 'chatterbox', ttsVoiceId: 'chatterbox:turbo-jarvis', bargeInEnabled: false }),
+    );
+    const { settings } = (await loadStore()).getState();
+    expect(settings.ttsVoiceId).toBe('chatterbox:turbo-jarvis');
+    // A switch turned off stays off.
+    expect(settings.bargeInEnabled).toBe(false);
+  });
+
+  it('forgets settings on reset, and only settings', async () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ttsVoiceId: 'chatterbox:turbo-jarvis' }));
+    localStorage.setItem('openjarvis-memory-top-k', '9');
+    localStorage.setItem('openjarvis-conversations', '{"c1":{}}');
+    const { resetAllSettings, defaultSettings } = await import('./store');
+    resetAllSettings();
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull();
+    expect(localStorage.getItem('openjarvis-memory-top-k')).toBeNull();
+    expect(localStorage.getItem('openjarvis-conversations')).toBe('{"c1":{}}');
+    vi.resetModules();
+    const { settings } = (await loadStore()).getState();
+    expect(settings).toEqual(defaultSettings());
   });
 });
