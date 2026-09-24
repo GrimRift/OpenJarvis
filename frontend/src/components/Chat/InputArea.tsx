@@ -2621,19 +2621,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
 
   const { error: wakeWordError, takeRecentAudio, ambientRms } = useWakeWord(
     beginWakeWordRecording,
-    // !audioPlaying matters as much as speechState === 'idle' here:
-    // speechState returns to 'idle' as soon as transcription finishes,
-    // well before a reply is generated or its voice playback finishes.
-    // Without this, the wake-word mic starts listening again while Sage's
-    // own TTS reply is still playing through the speakers — echo
-    // cancellation isn't perfect, so it can hear (and re-trigger on)
-    // itself, independent of any toggle. wakeWordSettled adds the
-    // post-playback cooldown described above.
-    wakeWordEnabled &&
-      !micDisabled &&
-      effectiveSpeechState === 'idle' &&
-      !audioPlaying &&
-      wakeWordSettled,
+    // Arming (the last argument): !audioPlaying matters as much as
+    // speechState === 'idle', because speechState returns to 'idle' as soon
+    // as transcription finishes, well before a reply is generated or its
+    // voice playback finishes. Armed while Sage's own reply still played,
+    // the detector could hear (and re-trigger on) it -- echo cancellation
+    // isn't perfect. wakeWordSettled adds the post-playback cooldown
+    // described above. Paused, it still listens, so it is warm on re-arm.
+    // Live -- microphone, socket and detector kept warm -- whenever the
+    // wake word is on; armed only when it may fire (the last argument).
+    wakeWordEnabled && !micDisabled,
     // A firing the transcript did not back: the words were not there. One
     // line so a false trigger is readable afterwards instead of a mystery.
     (heard) =>
@@ -2645,6 +2642,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }),
     wakeWordVerify,
     noiseSuppression === 'all',
+    effectiveSpeechState === 'idle' && !audioPlaying && wakeWordSettled,
   );
   takeRecentAudioRef.current = takeRecentAudio;
   ambientRmsRef.current = ambientRms;

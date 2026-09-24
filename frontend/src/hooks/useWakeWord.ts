@@ -94,6 +94,15 @@ export function carriesSound(frame: number[]): boolean {
   return Math.sqrt(sum / frame.length) >= MIN_FRAME_RMS;
 }
 
+/** Tell the server whether a detection may fire ({"type": "arm" | "pause"}). */
+function sendArmState(ws: WebSocket, armed: boolean): void {
+  try {
+    ws.send(JSON.stringify({ type: armed ? 'arm' : 'pause' }));
+  } catch {
+    // A closing socket; the next one is told on open.
+  }
+}
+
 export function useWakeWord(
   onDetected: (info: { sinceFiringMs: number; verified: boolean }) => void,
   enabled: boolean,
@@ -110,6 +119,14 @@ export function useWakeWord(
    * them apart. Worth trying only where the room itself is the problem.
    */
   suppressNoise: boolean = false,
+  /**
+   * Whether a detection may fire now. The microphone, socket and detector
+   * live as long as `enabled`; `armed` only pauses them, so re-arming after
+   * a turn needs no reconnect and no 2 s detector warm-up (10 of 12 firings
+   * recorded on 24 September waited out that warm-up, 0.6-0.9 s after the
+   * phrase). The server keeps scoring while paused and never fires.
+   */
+  armed: boolean = true,
 ) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,10 +138,13 @@ export function useWakeWord(
   const verifyRef = useRef(verify);
   verifyRef.current = verify;
   const lastEnabledRef = useRef<boolean | null>(null);
-  if (lastEnabledRef.current !== enabled) {
-    lastEnabledRef.current = enabled;
-    voiceTrace(enabled ? 'wakeword.armed' : 'wakeword.disarmed');
+  const live = enabled && armed;
+  if (lastEnabledRef.current !== live) {
+    lastEnabledRef.current = live;
+    voiceTrace(live ? 'wakeword.armed' : 'wakeword.disarmed');
   }
+  const armedRef = useRef(armed);
+  armedRef.current = armed;
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -198,6 +218,11 @@ export function useWakeWord(
   // Creates (or re-creates) just the WebSocket leg of the pipeline. Kept
   // separate from `start` so an unexpected drop can reconnect without
   // re-requesting mic permission or tearing down the AudioContext.
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) sendArmState(ws, armed);
+  }, [armed]);
+
   const connectSocket = useCallback((sessionId: number) => {
     if (sessionIdRef.current !== sessionId) return;
     const ws = new WebSocket(buildWakeWordWsUrl(verifyRef.current), buildWsProtocols());
@@ -218,6 +243,7 @@ export function useWakeWord(
       lastResponseAtRef.current = Date.now();
       setError(null);
       setListening(true);
+      if (!armedRef.current) sendArmState(ws, false);
     };
     ws.onmessage = (event) => {
       if (
@@ -233,6 +259,9 @@ export function useWakeWord(
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'detected') {
+          // Paused between the firing and this reply: the turn it would
+          // start is already under way.
+          if (!armedRef.current) return;
           markWake();
           voiceTrace('wakeword.fired', {
             verified: Boolean(data.verified),

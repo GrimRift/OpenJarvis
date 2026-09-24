@@ -715,31 +715,65 @@ async def wake_word_stream(websocket: WebSocket):
     )
     ring = AudioRing()
     was_speaking = False
+    # The page pauses the wake word during a turn ({"type": "pause"}) and
+    # arms it again after ({"type": "arm"}), on the same socket. It used to
+    # close the socket instead, and the fresh detector's 2 s warm-up held
+    # every "Hey Sage" said soon after a reply: 10 of 12 recorded firings came
+    # 2.4-3.0 s after the stream reopened, 0.6-0.9 s after the phrase (24
+    # September). Paused, frames are still scored -- the window stays full
+    # -- but nothing fires.
+    armed = True
+    # After a pause, or the server's own voice, a detection counts only once
+    # the score has dipped below the threshold: a "Sage" still in the window
+    # from the question or the reply must not fire the moment it re-arms.
+    # (Resetting the detector did that too, and cost the warm-up again.)
+    needs_dip = False
+    threshold = float(getattr(detector, "threshold", 0.5))
+
+    async def next_frame() -> bytes:
+        nonlocal armed, needs_dip
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect(message.get("code", 1000))
+            if message.get("bytes") is not None:
+                return message["bytes"]
+            try:
+                kind = json.loads(message.get("text") or "{}").get("type")
+            except ValueError:
+                continue
+            if kind == "pause":
+                armed = False
+            elif kind == "arm" and not armed:
+                armed, needs_dip = True, True
 
     await websocket.accept(subprotocol=subprotocol)
     try:
         while True:
-            frame = await websocket.receive_bytes()
+            frame = await next_frame()
             ring.push(frame)
             score = await asyncio.to_thread(detector.score, frame)
-            if is_speaking():
+            if needs_dip and score <= threshold:
+                needs_dip = False
+            if is_speaking() or not armed:
                 # The server's own voice (a greeting, a reminder) is what
-                # the microphone hears now. Nothing it says is a wake word,
-                # and the window must not carry it into the next frames.
-                was_speaking = True
-                if detector.is_detection(score):
-                    await asyncio.to_thread(detector.reset)
-                    ring.clear()
+                # the microphone hears now, or the page is in a turn. Nothing
+                # here is a wake word, and the window must not carry it into
+                # the next frames.
+                was_speaking = was_speaking or is_speaking()
+                needs_dip = True
                 await websocket.send_json(
                     {"type": "score", "value": score, "muted": True}
                 )
                 continue
             if was_speaking:
-                # The voice just ended: whatever of it the window and the
-                # ring still hold must not become the next detection.
+                # The voice just ended: whatever of it the ring still holds
+                # must not become the next detection's pre-roll.
                 was_speaking = False
-                await asyncio.to_thread(detector.reset)
                 ring.clear()
+            if needs_dip:
+                await websocket.send_json({"type": "score", "value": score})
+                continue
             if detector.is_detection(score):
                 verdict = None
                 # The browser's pause timer counts from the end of the
@@ -772,7 +806,7 @@ async def wake_word_stream(websocket: WebSocket):
                                 if first.confirmed:
                                     verdict = first
                                     break
-                            ring.push(await websocket.receive_bytes())
+                            ring.push(await next_frame())
                         if verdict is not None and verdict.confirmed:
                             break
                         if early is not None:

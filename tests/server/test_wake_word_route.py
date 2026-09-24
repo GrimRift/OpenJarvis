@@ -184,3 +184,61 @@ def test_the_browser_picks_the_verifier_per_socket():
     out = _drive(app, path="/v1/speech/wake-word?verify=off")
     assert out[-1]["type"] == "detected"
     assert app.state.speech_backend.audio == []
+
+
+class _Scripted:
+    """Scores from a list, one per frame; fires on any score over 0.5."""
+
+    available = True
+    threshold = 0.5
+
+    def __init__(self, scores):
+        self.scores = list(scores)
+        self.resets = 0
+
+    def clone(self):
+        return self
+
+    def score(self, frame):
+        return self.scores.pop(0) if self.scores else 0.1
+
+    def is_detection(self, score):
+        return score > self.threshold
+
+    def reset(self):
+        self.resets += 1
+
+
+def _run(app, script):
+    """Send ("frame" | "pause" | "arm") steps; return the replies, in order."""
+    client = TestClient(app)
+    replies = []
+    with client.websocket_connect("/v1/speech/wake-word?verify=off") as ws:
+        for step in script:
+            if step == "frame":
+                ws.send_bytes(b"\x00" * 2560)
+                replies.append(ws.receive_json())
+            else:
+                ws.send_text('{"type": "%s"}' % step)
+    return replies
+
+
+def test_a_paused_wake_word_hears_but_never_fires():
+    app = _app("hey sage", verify="off")
+    app.state.wake_word_detector = _Scripted([0.9, 0.9, 0.9])
+    replies = _run(app, ["pause", "frame", "frame", "frame"])
+    assert [r["type"] for r in replies] == ["score"] * 3
+    assert all(r.get("muted") for r in replies)
+
+
+def test_rearmed_it_fires_only_after_the_score_dips():
+    # A "Sage" still in the window when it re-arms (0.9, 0.9) must not fire;
+    # after a dip, a real phrase does -- and no reset, so no warm-up.
+    app = _app("hey sage", verify="off")
+    detector = _Scripted([0.9, 0.9, 0.2, 0.9])
+    app.state.wake_word_detector = detector
+    replies = _run(app, ["pause", "arm", "frame", "frame", "frame", "frame"])
+    assert [r["type"] for r in replies] == ["score", "score", "score", "detected"]
+    # Re-arming never reset the detector (the reset is what cost the
+    # warm-up); the only reset is the one after the detection itself.
+    assert detector.resets == 1

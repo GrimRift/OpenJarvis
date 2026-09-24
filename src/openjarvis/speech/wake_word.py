@@ -152,6 +152,10 @@ class WakeWordDetector:
             self._consecutive_hits = 0
         return score
 
+    @property
+    def threshold(self) -> float:
+        return self._threshold
+
     def is_detection(self, score: float) -> bool:
         return (
             self._frames_since_reset > WARMUP_FRAMES
