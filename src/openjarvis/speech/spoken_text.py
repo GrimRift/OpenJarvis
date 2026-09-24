@@ -59,6 +59,19 @@ _LONG_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_-])[A-Za-z0-9][A-Za-z0-9_-]{18,}[A-Za-z0-9]"
     r"(?![A-Za-z0-9_-])"
 )
+#: An order number, tracking code or the like: 10+ characters mixing
+#: letters and digits, or 8+ digits, optionally after "#". Read letter by
+#: letter it ran past the voice's time limit and was cut mid-word ("Order
+#: 260920HXVD7SX ... by Sep-", 25 September); spoken as its last three
+#: characters, the screen keeps the whole of it.
+_CODE_LABEL = (
+    r"(?:order|tracking|invoice|booking|ticket|reference|ref|receipt|parcel"
+    r"|shipment|transaction|confirmation|code)"
+)
+_LONG_CODE = re.compile(
+    rf"(?i)(?P<label>\b{_CODE_LABEL}(?:\s+(?:no\.?|number|code|id))?\s*:?\s*)?"
+    r"#?(?P<code>(?=[A-Za-z0-9]*\d)(?:(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{10,19}|\d{8,19}))\b"
+)
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE)
 _BULLET = re.compile(r"^\s*[-*+•]\s+", re.MULTILINE)
 _BLOCKQUOTE = re.compile(r"^\s*>\s?", re.MULTILINE)
@@ -276,6 +289,13 @@ def _flatten_table_row(line: str) -> str:
     return spoken if spoken.endswith((".", "!", "?", ":")) else spoken + "."
 
 
+def _shorten_code(match: re.Match[str]) -> str:
+    """'Order #260920HXVD7SX' -> 'Order ending in 7 S X'."""
+    tail = " ".join(match.group("code")[-3:].upper())
+    label = (match.group("label") or "").strip().rstrip(":").strip()
+    return f"{label} ending in {tail}" if label else f"a code ending in {tail}"
+
+
 def _looks_like_identifier(value: str) -> bool:
     """Reject long ordinary words while retaining token-like values."""
     has_letter = any(char.isalpha() for char in value)
@@ -412,6 +432,7 @@ def to_spoken_text(markdown: str) -> str:
     text = _UUID.sub(lambda match: hide_value("sensitive", "an identifier"), text)
     text = _CONTEXT_IDENTIFIER.sub(replace_context_identifier, text)
     text = _LONG_IDENTIFIER.sub(replace_long_identifier, text)
+    text = _LONG_CODE.sub(_shorten_code, text)
 
     lines: list[str] = []
     for line in text.splitlines():

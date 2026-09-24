@@ -733,7 +733,18 @@ def _budget_samples(text: str) -> int:
     37-character line said twice (6.6 s) through as normal; this catches
     it with room for a slow, pause-heavy delivery.
     """
-    return int(SAMPLE_RATE * (len(text) * 0.09 + 1.0))
+    # A code read out letter by letter ("C E I T G D eleven D") takes ~0.4 s a
+    # character, not 0.09: at the word rate an order number ran past the
+    # budget three times and the line was cut mid-word (25 September).
+    spelled = sum(len(t) for t in _SPELLED.findall(text))
+    return int(SAMPLE_RATE * ((len(text) - spelled) * 0.09 + spelled * 0.4 + 1.0))
+
+
+#: Tokens a voice spells rather than says: letters and digits mixed, or
+#: runs of capitals ("7SX", "CEITGD11D", "NU").
+_SPELLED = __import__("re").compile(
+    r"\b(?:(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{2,}|[A-Z]{2,})\b"
+)
 
 
 def _ran_away(audio: np.ndarray, text: str) -> bool:
