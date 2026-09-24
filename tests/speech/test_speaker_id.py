@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import types
+import wave
 
 import numpy as np
 
@@ -31,6 +33,17 @@ def _pcm(seconds: float, level: int = 2000, tag: int = 0) -> bytes:
     if quiet < n:
         samples[quiet] = tag
     return samples.tobytes()
+
+
+def pcm_to_wav(pcm: bytes) -> bytes:
+    """16 kHz mono 16-bit WAV, as the kept wake clips are written."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(pcm)
+    return buf.getvalue()
 
 
 def _embedder(table):
@@ -98,8 +111,6 @@ def test_a_sidecar_that_cannot_embed_learns_nothing(tmp_path):
 
 
 def test_seeding_reads_only_confirmed_wake_clips(tmp_path):
-    from openjarvis.speech.wake_word_verify import pcm_to_wav
-
     clips = tmp_path / "clips"
     clips.mkdir()
     for i in range(3):
@@ -148,8 +159,6 @@ def test_the_relay_attaches_a_verdict_and_fails_open():
 
 
 def test_seeding_is_tried_again_when_the_sidecar_was_not_up(tmp_path, monkeypatch):
-    from openjarvis.speech.wake_word_verify import pcm_to_wav
-
     clips = tmp_path / "clips"
     clips.mkdir()
     for i in range(MIN_USER_CLIPS):
