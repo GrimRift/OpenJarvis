@@ -17,6 +17,9 @@ def store():
     with tempfile.TemporaryDirectory() as tmpdir:
         s = TraceStore(Path(tmpdir) / "traces.db")
         yield s
+        # Closed before the directory goes: Windows will not delete a
+        # database file that is still open (WinError 32 at teardown).
+        s.close()
 
 
 def _make_trace(trace_id: str, query: str, result: str, agent: str = "test") -> Trace:

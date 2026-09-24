@@ -63,6 +63,12 @@ def _no_small_model(monkeypatch):
     monkeypatch.setattr(
         "openjarvis.speech.wake_word_verify.local_verifier_backend", _unavailable
     )
+    # The route asks the machine whether media is playing and judges more
+    # strictly if so: left to the real machine, these tests passed or failed
+    # with whatever the user had playing (24 September, 2 runs in 5).
+    monkeypatch.setattr(
+        "openjarvis.speech.wake_word_verify.media_is_playing", lambda: False
+    )
 
 
 def _app(heard, verify="local"):

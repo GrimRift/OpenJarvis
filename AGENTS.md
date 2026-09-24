@@ -160,7 +160,8 @@ have failed since at least 2 September; until 17 September the whole
 Verified pre-existing on 2026-09-18 by running the same files in a git
 worktree at the commit before that day's work: `tests/evals/core/
 test_config_split_parsing.py` (5), `tests/traces/test_store_fts.py` (4
-errors), `tests/telemetry/` (5: phase energy, derived metrics, batch
+errors -- fixed 2026-09-24: the fixture never closed the store, and Windows
+will not delete an open SQLite file), `tests/telemetry/` (5: phase energy, derived metrics, batch
 throughput), `tests/pearl/test_model_converter.py` (2),
 `tests/sandbox/test_mount_security.py`, `tests/recipes/test_compose.py`,
 `tests/learning/test_trial_runner.py`, `test_device_selection.py`,
