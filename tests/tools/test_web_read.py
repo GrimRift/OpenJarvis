@@ -225,3 +225,30 @@ class TestYouTube:
 
     def test_other_sites_are_not_youtube(self):
         assert youtube_text("https://example.com/watch", '"title":"x"') is None
+
+
+class TestSourceSummary:
+    """24 September: a source card read "Skip to content (opens in a new
+    tab)(opens in a new tab)... Sign In Subscribe All videos Share"."""
+
+    def test_the_pages_own_description_is_used(self):
+        from openjarvis.tools.web_read import page_description, source_summary
+
+        markup = (
+            '<head><meta property="og:description" '
+            'content="Hamilton retired on Lap 7 with a brake problem."></head>'
+        )
+        description = page_description(markup)
+        assert description == "Hamilton retired on Lap 7 with a brake problem."
+        assert source_summary(description, "Skip to content ...") == description
+
+    def test_without_one_the_chrome_is_taken_out(self):
+        from openjarvis.tools.web_read import source_summary
+
+        body = (
+            "Skip to content (opens in a new tab)(opens in a new tab) Sign In "
+            "Subscribe All videos Share 2026 Spanish Grand Prix: Hamilton forced "
+            "to retire"
+        )
+        summary = source_summary("", body)
+        assert summary.startswith("2026 Spanish Grand Prix")

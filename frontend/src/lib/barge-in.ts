@@ -458,6 +458,12 @@ const FILLER_WORDS = new Set([
   'one', 'moment', 'sir', 'checking', 'let', 'me', 'look', 'working', 'on', 'it', 'still',
 ]);
 
+/** Sounds that are not words: "blah blah blah" restarted an answer. */
+const NONSENSE_WORDS = new Set([
+  'blah', 'um', 'umm', 'uh', 'uhh', 'hmm', 'mm', 'mhm', 'ah', 'eh', 'er', 'erm',
+  'la', 'na', 'da', 'huh', 'oh', 'ooh',
+]);
+
 /**
  * Whether speech heard while Sage prepares an answer should be let pass
  * without touching the reply: nothing, a single stray word, or Sage's own
@@ -473,5 +479,7 @@ export function isIdleSpeech(transcript: string): boolean {
   if (words.length === 0) return true;
   if (isStopCommand(transcript)) return false;
   if (words.length < 2) return true;
+  if (words.every((w) => w === words[0])) return true; // "blah blah blah"
+  if (words.every((w) => NONSENSE_WORDS.has(w))) return true;
   return words.every((w) => FILLER_WORDS.has(w));
 }

@@ -45,6 +45,50 @@ AMEND_NOTE = (
 )
 
 
+#: What words said while Sage was preparing an answer turned out to be.
+ADDITION_KINDS = ("noise", "add", "new")
+
+ADDITION_PROMPT = (
+    "The user asked a voice assistant a question, and while it was preparing "
+    "the answer the microphone heard more words. Classify those words.\n"
+    "noise: garbled, filler (blah, um), a fragment that means nothing, "
+    "or plainly someone else talking.\n"
+    "add: adds to, corrects or narrows the question.\n"
+    "new: a different request.\n"
+    "Reply with exactly one word: noise, add or new."
+)
+
+
+def classify_addition(engine, model: str, question: str, added: str) -> str:
+    """noise, add or new for *added*, said after *question*. When the check
+    cannot run, "add": the words then go to the model with the question,
+    which is told to ignore them if they are noise (AMEND_NOTE)."""
+    from openjarvis.core.types import Message, Role
+
+    try:
+        result = engine.generate(
+            [
+                Message(role=Role.SYSTEM, content=ADDITION_PROMPT),
+                Message(
+                    role=Role.USER,
+                    content=f"Question: {question}\nThen heard: {added}",
+                ),
+            ],
+            model=model,
+            temperature=0.0,
+            # A reasoning model spends tokens before its one word; a small
+            # budget comes back empty (see memory: reasoning headroom).
+            max_tokens=600,
+        )
+    except Exception:  # noqa: BLE001 -- the check is advisory
+        return "add"
+    reply = str((result or {}).get("content") or "").strip().lower()
+    for kind in ADDITION_KINDS:
+        if reply.startswith(kind):
+            return kind
+    return "add"
+
+
 class IgnoreWatch:
     """Hold a reply's first words until they are, or cannot be, the marker."""
 
@@ -80,7 +124,9 @@ class IgnoreWatch:
 
 
 __all__ = [
+    "ADDITION_KINDS",
     "AMEND_NOTE",
+    "classify_addition",
     "AMEND_SEPARATOR",
     "FOLLOWUP_NOTE",
     "IGNORE_MARKER",

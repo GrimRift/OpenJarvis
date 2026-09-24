@@ -194,6 +194,34 @@ function useResearchCorpusSync(enabled: boolean): {
  * same wake word, transcription, sending and streaming-speech logic that
  * lives in this component.
  */
+/**
+ * What words said while Sage prepared an answer are, asked of the server
+ * while the answer carries on. Anything but a clear "noise" sends them on:
+ * the model is told to ignore noise too, so a failed check costs a restart,
+ * never the user's words.
+ */
+async function checkAddition(
+  question: string,
+  added: string,
+  model: string,
+): Promise<'noise' | 'add' | 'new'> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await apiFetch('/v1/voice/addition', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, added, model }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const data = (await res.json()) as { kind?: string };
+    return data.kind === 'noise' || data.kind === 'new' ? data.kind : 'add';
+  } catch {
+    return 'add';
+  }
+}
+
 export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const [input, setInput] = useState('');
   // Ephemeral: images ride one request, show as a thumbnail while the tab is
@@ -1701,9 +1729,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           flux.beginTurn();
           return;
         }
-        generatingListenRef.current = { active: false, question: '' };
-        stopSpeaking();
         if (isStopCommand(spoken)) {
+          generatingListenRef.current = { active: false, question: '' };
+          stopSpeaking();
           voiceTrace('gen.stop', { chars: spoken.length });
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice',
@@ -1714,9 +1742,21 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           setFluxTurnActive(false);
           return;
         }
-        // Added to the question, or a new one, or noise: sent together,
-        // and the model decides (server/addressee.py AMEND_NOTE).
-        voiceTrace('gen.amend', { chars: spoken.length });
+        // Checked while the answer carries on: noise is let pass, and only an
+        // addition or a new question starts it over (server/addressee.py).
+        const kind = await checkAddition(question, spoken, selectedModel);
+        if (kind === 'noise') {
+          voiceTrace('gen.noise', { chars: spoken.length });
+          useAppStore.getState().addLogEntry({
+            timestamp: Date.now(), level: 'info', category: 'voice',
+            message: `Let pass while Sage worked: "${spoken.slice(0, 80)}"`,
+          });
+          flux.beginTurn();
+          return;
+        }
+        generatingListenRef.current = { active: false, question: '' };
+        stopSpeaking();
+        voiceTrace('gen.amend', { chars: spoken.length, kind });
         stopStreaming();
         setFluxTurnActive(false);
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1851,6 +1891,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       activeId,
       stopSpeaking,
       stopStreaming,
+      selectedModel,
     ],
   );
 

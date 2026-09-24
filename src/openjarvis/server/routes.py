@@ -350,6 +350,29 @@ def _log_turn_timing(clock: dict[str, float], rounds: list, end: float) -> None:
     )
 
 
+@router.post("/v1/voice/addition")
+async def voice_addition(request: Request):
+    """What words said while Sage prepared an answer are: noise, an addition
+    to the question, or a new request. Checked while the answer carries on,
+    so "blah blah blah" no longer throws it away and starts over (24
+    September)."""
+    from openjarvis.server.addressee import classify_addition
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    question = str(body.get("question") or "").strip()
+    added = str(body.get("added") or "").strip()
+    model = str(body.get("model") or "").strip()
+    if not added:
+        return {"kind": "noise"}
+    engine = request.app.state.engine
+    agent = getattr(request.app.state, "agent", None)
+    model = model or getattr(agent, "_model", "") or ""
+    kind = await asyncio.to_thread(classify_addition, engine, model, question, added)
+    return {"kind": kind}
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
     """Handle chat completion requests (streaming and non-streaming)."""

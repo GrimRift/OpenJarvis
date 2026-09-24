@@ -337,3 +337,16 @@ describe('speech while Sage prepares the answer (24 September)', () => {
     expect(isIdleSpeech('and also the weather')).toBe(false);
   });
 });
+
+describe('garbled words while Sage works (24 September: "blah blah blah")', () => {
+  it('lets repeated and nonsense words pass', async () => {
+    const { isIdleSpeech } = await import('./barge-in');
+    expect(isIdleSpeech('Blah blah blah blah blah.')).toBe(true);
+    expect(isIdleSpeech('um uh hmm')).toBe(true);
+  });
+
+  it('still hears a real addition', async () => {
+    const { isIdleSpeech } = await import('./barge-in');
+    expect(isIdleSpeech('on the second monitor')).toBe(false);
+  });
+});

@@ -190,6 +190,9 @@ class WebReadTool(BaseTool):
             )
         wait_for = str(params.get("wait_for") or "").strip()
         started = time.monotonic()
+        # The page's own one-line description, when it has one, for the
+        # source card (set by whichever read ran).
+        self._description = ""
         served = self._fetch_static(url, wait_for)
         if served is not None:
             text, title = served
@@ -232,7 +235,7 @@ class WebReadTool(BaseTool):
                     {
                         "title": (title or "").strip() or urlparse(url).netloc,
                         "url": url,
-                        "summary": " ".join(body.split())[:300],
+                        "summary": source_summary(self._description, body),
                     }
                 ],
             },
@@ -272,6 +275,7 @@ class WebReadTool(BaseTool):
             logger.debug("plain read failed for %s", url, exc_info=True)
             return None
         markup = b"".join(chunks).decode(encoding, errors="replace")
+        self._description = page_description(markup)
         video = youtube_text(url, markup)
         if video is not None:
             text, title = video
@@ -308,6 +312,8 @@ class WebReadTool(BaseTool):
             title = ""
             with _Ignore():
                 title = str(page.evaluate("document.title") or "")
+            with _Ignore():
+                self._description = str(page.evaluate(_DESCRIPTION_JS) or "")
         return str(text), time.monotonic() - started, title
 
     def _settle(self, page: Any, started: float) -> None:
@@ -376,6 +382,42 @@ def youtube_text(url: str, markup: str) -> Optional[Tuple[str, str]]:
     return "\n".join(line for line in lines if line is not None), page_title
 
 
+_DESCRIPTION_JS = (
+    "(() => { const m = document.querySelector("
+    "'meta[name=\"description\"], meta[property=\"og:description\"]'); "
+    "return m ? m.content : ''; })()"
+)
+
+_META_DESCRIPTION = re.compile(
+    r"<meta\b[^>]*(?:name|property)=[\"'](?:og:)?description[\"'][^>]*>", re.I
+)
+_CONTENT = re.compile(r"content=[\"']([^\"']*)[\"']", re.I)
+
+#: Page furniture that reached a source card as its summary (24 September:
+#: "Skip to content (opens in a new tab)(opens in a new tab)... Sign In").
+_FURNITURE = re.compile(
+    r"\(opens in a new (?:tab|window)\)|\bskip to (?:main )?content\b|"
+    r"\bsign in\b|\bsubscribe\b|\ball videos\b|\bshare\b",
+    re.I,
+)
+
+
+def page_description(markup: str) -> str:
+    """The page's own one-line description (meta description or og)."""
+    for tag in _META_DESCRIPTION.findall(markup or ""):
+        found = _CONTENT.search(tag)
+        if found and found.group(1).strip():
+            return _html.unescape(found.group(1)).strip()
+    return ""
+
+
+def source_summary(description: str, body: str, limit: int = 300) -> str:
+    """What a source card says about a page: its own description, or its
+    text with the navigation chrome taken out."""
+    text = description.strip() or _FURNITURE.sub(" ", body or "")
+    return " ".join(text.split())[:limit]
+
+
 def page_text(markup: str) -> Tuple[str, str]:
     """Readable text and title of served HTML, roughly as ``innerText`` would
     give it: the ``main``/``article`` part when there is one, without
@@ -401,6 +443,8 @@ __all__ = [
     "MAX_CHARS",
     "MAX_READS_PER_TURN",
     "WebReadTool",
+    "page_description",
     "page_text",
+    "source_summary",
     "youtube_text",
 ]
