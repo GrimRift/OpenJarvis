@@ -252,6 +252,7 @@ _verifier_state = {
     "running": 0,
     "warm_runs": 0,
     "last_warm_ms": None,
+    "last_skip": "",
 }
 _verifier_state_lock = threading.Lock()
 
@@ -266,6 +267,7 @@ def verifier_status() -> dict:
             "checks_running": _verifier_state["running"],
             "warm_runs": _verifier_state["warm_runs"],
             "last_warm_ms": _verifier_state["last_warm_ms"],
+            "last_skip": _verifier_state["last_skip"],
         }
 
 
@@ -333,9 +335,22 @@ class WakeWordVerifier:
             from openjarvis.speech.player import is_speaking
 
             snap = activity.snapshot()
-            if snap.exchange_live or snap.sage_mid_turn or is_speaking():
-                return None
-        except Exception:  # noqa: BLE001 -- unsure of the room: stay out of it
+            why = (
+                "exchange live"
+                if snap.exchange_live
+                else "reply audible"
+                if snap.reply_audible
+                else "microphone transmitting"
+                if snap.flux_transmitting
+                else "server speaking"
+                if is_speaking()
+                else ""
+            )
+        except Exception as exc:  # noqa: BLE001 -- unsure of the room: stay out
+            why = f"activity unknown: {exc}"
+        if why:
+            with _verifier_state_lock:
+                _verifier_state["last_skip"] = why
             return None
         with _verifier_state_lock:
             if _verifier_state["running"] > 0:
