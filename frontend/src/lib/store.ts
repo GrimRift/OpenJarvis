@@ -1151,3 +1151,9 @@ export const useAppStore = create<AppState>((set, get) => {
 });
 
 export { generateId };
+
+// A hot swap of this module leaves two copies alive: the voice player then
+// updates one store while the orb and the microphone read the other, and
+// Sage speaks with the orb on "standing by" and the mic closed (24
+// September, after an edit to the store). Reload the page instead.
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload());
