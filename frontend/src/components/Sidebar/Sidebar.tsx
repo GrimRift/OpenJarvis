@@ -107,6 +107,9 @@ export function Sidebar() {
             >
               <PanelLeftClose size={18} />
             </button>
+            <span className="sage-wordmark select-none" aria-label="Sage">
+              SAGE
+            </span>
             <div className="flex items-center gap-1">
               <button
                 onClick={() => updateSettings({ theme: nextTheme })}

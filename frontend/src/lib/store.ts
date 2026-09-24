@@ -587,6 +587,7 @@ interface AppState {
   startNewChat: () => void;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
+  togglePinConversation: (id: string) => void;
   loadMessages: (conversationId: string | null) => void;
   addMessage: (conversationId: string, message: ChatMessage) => void;
   /**
@@ -814,6 +815,22 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         activeId: id,
         messages: conv ? withoutAutoPlay(conv.messages) : [],
+      });
+    },
+
+    togglePinConversation: (id: string) => {
+      const store = loadConversations();
+      const conv = store.conversations[id];
+      if (!conv) return;
+      // A new object: the save reuses a conversation's last JSON while the
+      // object and its updatedAt are unchanged, and pinning is not an update
+      // (it must not move the chat to the top of its day).
+      store.conversations[id] = { ...conv, pinned: !conv.pinned };
+      saveConversations(store);
+      set({
+        conversations: Object.values(store.conversations).sort(
+          (a, b) => b.updatedAt - a.updatedAt,
+        ),
       });
     },
 

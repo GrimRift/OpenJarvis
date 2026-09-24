@@ -163,6 +163,8 @@ export interface Conversation {
   updatedAt: number;
   model: string;
   messages: ChatMessage[];
+  /** Kept at the top of the sidebar, above the dated history. */
+  pinned?: boolean;
 }
 
 export interface ConversationStore {
