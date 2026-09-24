@@ -95,3 +95,12 @@ def test_a_real_check_counts_as_use(monkeypatch):
     # Just used for real: the warm-up is not needed.
     assert asyncio.run(verifier.warm_if_idle()) is None
     assert wwv._verifier_state["running"] == 0
+
+
+def test_the_warm_up_is_visible_in_the_status(monkeypatch):
+    _idle(monkeypatch, wwv.IDLE_WARM_SECONDS + 1)
+    monkeypatch.setitem(wwv._verifier_state, "warm_runs", 0)
+    asyncio.run(wwv.WakeWordVerifier(Backend()).warm_if_idle())
+    status = wwv.verifier_status()
+    assert status["warm_runs"] == 1 and status["last_warm_ms"] is not None
+    assert status["idle_s"] < 5 and status["checks_running"] == 0

@@ -247,8 +247,26 @@ IDLE_WARM_SECONDS = 240.0
 _SILENCE = bytes(16000 * 2)
 # Shared by every socket's verifier (two open tabs share the one model):
 # when the model last ran, and how many real checks are running now.
-_verifier_state = {"last_used": time.monotonic(), "running": 0}
+_verifier_state = {
+    "last_used": time.monotonic(),
+    "running": 0,
+    "warm_runs": 0,
+    "last_warm_ms": None,
+}
 _verifier_state_lock = threading.Lock()
+
+
+def verifier_status() -> dict:
+    """For /v1/speech/health: how long the small model has been idle and
+    what the idle warm-up has done (its log line is INFO, which the server's
+    log does not keep)."""
+    with _verifier_state_lock:
+        return {
+            "idle_s": round(time.monotonic() - _verifier_state["last_used"], 1),
+            "checks_running": _verifier_state["running"],
+            "warm_runs": _verifier_state["warm_runs"],
+            "last_warm_ms": _verifier_state["last_warm_ms"],
+        }
 
 
 def _model_busy_or_recent(now: float) -> bool:
@@ -334,6 +352,9 @@ class WakeWordVerifier:
                 _verifier_state["running"] -= 1
                 _verifier_state["last_used"] = time.monotonic()
         ms = int((time.perf_counter() - started) * 1000)
+        with _verifier_state_lock:
+            _verifier_state["warm_runs"] += 1
+            _verifier_state["last_warm_ms"] = ms
         logger.info("Wake-word verifier kept warm (%d ms on silence)", ms)
         return ms
 

@@ -1617,7 +1617,17 @@ async def speech_health(request: Request):
         **({"flux_reason": flux_reason} if flux_reason else {}),
         **({"reason": reason} if reason else {}),
         **providers,
+        "wake_word_verifier": _wake_verifier_status(),
     }
+
+
+def _wake_verifier_status() -> Dict[str, Any]:
+    try:
+        from openjarvis.speech.wake_word_verify import verifier_status
+
+        return verifier_status()
+    except Exception:
+        return {}
 
 
 # ---- Feedback routes ----
