@@ -1020,3 +1020,45 @@ class TestTalkingToSageIsBeingPresent:
 
         assert combined_idle(None, None) is None
         assert decide_state(None, 300) == "unknown"
+
+
+class TestNothingWaitsOnAMomentBeingSpoken:
+    """24 September: "remind me in one minute" waited 157 s. A moment being
+    spoken holds the engine's lock while it waits for the floor, the
+    reminder needed that lock, and the exchange it came from could not end
+    to give up the floor."""
+
+    def test_a_reminder_is_added_while_a_greeting_is_being_said(self, tmp_path) -> None:
+        import threading
+
+        rig = _Rig(tmp_path)
+        speaking = threading.Event()
+        finish = threading.Event()
+
+        def slow_speak(text, before=None):
+            speaking.set()
+            finish.wait(5)
+            rig.spoken.append(text)
+            return True
+
+        rig.engine._speaker = slow_speak
+        ticker = threading.Thread(target=rig.tick, args=(_at(8), 1.0))
+        ticker.start()
+        assert speaking.wait(5), "the greeting never started"
+        added = threading.Event()
+
+        def add():
+            rig.engine.add_watch("prepare for class", due_at=_at(8, 1), anywhere=True)
+            added.set()
+
+        adder = threading.Thread(target=add)
+        adder.start()
+        try:
+            assert added.wait(1), "adding a reminder waited on the moment's speech"
+            assert rig.engine.list_watches()[0].what == "prepare for class"
+        finally:
+            finish.set()
+            ticker.join(5)
+            adder.join(5)
+        # The tick carried on with the reminder added mid-speech intact.
+        assert [w.what for w in rig.engine.list_watches()] == ["prepare for class"]

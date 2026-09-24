@@ -1310,6 +1310,23 @@ class MomentEngine:
             self._state.snoozed_day = ""
             self._save()
 
+    def _outside_lock(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Call *fn* with the engine's lock released, and take it back.
+
+        Only for use inside ``with self._lock`` in the tick. Writing a line
+        is a model call, and speaking waits for the floor -- up to 90 s while
+        the user's own exchange is live. Held through both, the lock
+        stalled everything else that needs it: a reminder asked for in that
+        exchange waited 157 s on it (24 September), and the exchange could
+        not end, so the floor never came. The state object is only ever
+        edited in place, so the tick carries on with it afterwards.
+        """
+        self._lock.release()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self._lock.acquire()
+
     def add_watch(
         self,
         what: str,
@@ -1458,7 +1475,9 @@ class MomentEngine:
                     state=state,
                 )
                 try:
-                    initiative_text = self._initiative_composer(context)
+                    initiative_text = self._outside_lock(
+                        self._initiative_composer, context
+                    )
                 except Exception as exc:
                     logger.warning("Initiative writer unavailable: %s", exc)
                     initiative_text = ""
@@ -1514,7 +1533,7 @@ class MomentEngine:
                         if category:
                             detail = f"category={category}"
                     else:
-                        text = self._composer(kind, context)
+                        text = self._outside_lock(self._composer, kind, context)
                 except Exception as exc:
                     logger.warning(
                         "Moment %s: model unavailable (%s); using fallback", kind, exc
@@ -1524,7 +1543,7 @@ class MomentEngine:
                     )
                     detail = f"model unavailable: {exc}"
                 try:
-                    played = bool(self._speaker(text, before=chime))
+                    played = bool(self._outside_lock(self._speaker, text, before=chime))
                     chime = None
                 except Exception as exc:
                     logger.warning("Moment %s could not be spoken: %s", kind, exc)
@@ -1618,7 +1637,9 @@ class MomentEngine:
         category, line = parse_initiative_reply(state.held_line)
         state.held_line, state.held_at = "", None
         try:
-            played = bool(self._speaker(line, before=self._chimer))
+            played = bool(
+                self._outside_lock(self._speaker, line, before=self._chimer)
+            )
         except Exception as exc:
             logger.warning("Held line could not be spoken: %s", exc)
             played = False
@@ -1693,7 +1714,7 @@ class MomentEngine:
             )
             line = random.choice(choices)
             try:
-                played = bool(self._speaker(line))
+                played = bool(self._outside_lock(self._speaker, line))
             except Exception as exc:
                 logger.warning("Follow-up could not be spoken: %s", exc)
                 played = False
