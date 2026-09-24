@@ -24,7 +24,8 @@ describe('resolveOrbState', () => {
     const replying = { ...base, streamingHere: true };
     expect(resolveOrbState(replying)).toBe('listening');
     expect(isGenerating(replying)).toBe(true);
-    expect(isGenerating({ ...replying, voiceState: 'recording' })).toBe(false);
+    // The mic stays open while the answer is prepared; still generating.
+    expect(isGenerating({ ...replying, voiceState: 'recording' })).toBe(true);
     expect(isGenerating({ ...base, voiceState: 'recording' })).toBe(false);
     expect(isGenerating({ ...replying, audioPlaying: true })).toBe(false);
     expect(orbStateLabel('listening', true)).toBe('Generating');

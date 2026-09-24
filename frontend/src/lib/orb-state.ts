@@ -29,10 +29,13 @@ export function resolveOrbState(inputs: OrbInputs): OrbState {
   return 'idle';
 }
 
-/** Listening, but no longer to the user: the mic is done and Sage is
- * writing its reply. The same orb state; only the label says so. */
+/** Listening, but no longer to the user: Sage is writing its reply. The
+ * same orb state; only the label says so. A reply streaming is generating
+ * even with the microphone open: it stays on now so the user can stop or
+ * add to the answer, and the label stuck on "Listening" (24 September). */
 export function isGenerating(inputs: OrbInputs): boolean {
-  return resolveOrbState(inputs) === 'listening' && inputs.voiceState !== 'recording';
+  if (resolveOrbState(inputs) !== 'listening') return false;
+  return inputs.streamingHere || inputs.voiceState !== 'recording';
 }
 
 export function orbStateLabel(state: OrbState, generating = false): string {
