@@ -1916,9 +1916,13 @@ def include_all_routes(app) -> None:
     app.include_router(system_router)
     app.include_router(presence_router)
     try:
+        from openjarvis.server.memory_routes import (
+            model_preference_router,
+        )
         from openjarvis.server.memory_routes import router as memory_page_router
 
         app.include_router(memory_page_router)
+        app.include_router(model_preference_router)
     except ImportError:
         pass
     app.include_router(feedback_router)

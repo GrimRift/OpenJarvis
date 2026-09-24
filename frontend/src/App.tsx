@@ -25,6 +25,7 @@ import { DiagramLayer } from './components/Diagram/DiagramLayer';
 import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
+import { apiFetch } from './lib/api';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -62,6 +63,20 @@ export default function App() {
   useEffect(() => {
     void fetchVolumes().catch(() => undefined);
   }, []);
+
+  // "Prefer cloud model" is a browser setting, and the server never saw it:
+  // a reminder it ran on its own used the local default and put 3.6 GB on
+  // the GPU (24 September). Told on every load and every change.
+  useEffect(() => {
+    void apiFetch('/v1/settings/model-preference', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prefer_cloud: settings.preferCloudModel,
+        cloud_model: settings.cloudModel,
+      }),
+    }).catch(() => undefined);
+  }, [settings.preferCloudModel, settings.cloudModel]);
 
   // Apply theme class to <html>
   useEffect(() => {

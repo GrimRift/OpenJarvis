@@ -370,6 +370,16 @@ class TaskScheduler:
                 # path, so a new column would silently skip existing databases.
                 if meta.get("model"):
                     ask_kwargs["model"] = meta["model"]
+                else:
+                    # A task with no model of its own ran on the configured
+                    # default, the local 4b, and a reminder at 08:00 put
+                    # 3.6 GB on the GPU (24 September). The user's "Prefer
+                    # cloud model" decides instead.
+                    from openjarvis.core.model_preference import background_model
+
+                    cloud = background_model()
+                    if cloud:
+                        ask_kwargs["model"] = cloud
                 result_text = _stringify_result(
                     self._system.ask(
                         task.prompt,
@@ -379,6 +389,12 @@ class TaskScheduler:
             else:
                 result_text = f"[dry-run] Would execute: {task.prompt}"
             success = True
+            if self._system is not None and not ask_kwargs.get("model"):
+                # Run locally: free the card now rather than after Ollama's
+                # five-minute keep-alive.
+                from openjarvis.core.model_preference import unload_local_model
+
+                unload_local_model(_default_model(self._system))
         except Exception as exc:
             error_text = str(exc)
             logger.error("Task %s failed: %s", task.id, exc)
@@ -491,3 +507,14 @@ __all__ = [
     "ScheduledTask",
     "TaskScheduler",
 ]
+
+
+def _default_model(system: Any) -> str:
+    """The model a task with none of its own ran on, if it is a local one."""
+    model = str(getattr(system, "model", "") or "")
+    try:
+        from openjarvis.engine.cloud import is_cloud_model
+
+        return "" if is_cloud_model(model) else model
+    except Exception:  # noqa: BLE001
+        return model

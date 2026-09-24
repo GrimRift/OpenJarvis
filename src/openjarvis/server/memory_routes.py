@@ -284,6 +284,45 @@ async def put_memory_settings(request: Request):
     return settings.to_dict()
 
 
+# -- the chat model preference, for work the server starts on its own --------
+
+model_preference_router = APIRouter(prefix="/v1/settings", tags=["settings"])
+
+
+@model_preference_router.get("/model-preference")
+async def get_model_preference():
+    from dataclasses import asdict
+
+    from openjarvis.core.model_preference import load_preference
+
+    return asdict(load_preference())
+
+
+@model_preference_router.put("/model-preference")
+async def put_model_preference(request: Request):
+    from dataclasses import asdict
+
+    from openjarvis.core.model_preference import load_preference, save_preference
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    pref = load_preference()
+    if "prefer_cloud" in body:
+        if not isinstance(body["prefer_cloud"], bool):
+            raise HTTPException(
+                status_code=400, detail="prefer_cloud must be a boolean"
+            )
+        pref.prefer_cloud = body["prefer_cloud"]
+    if "cloud_model" in body:
+        model = body["cloud_model"]
+        if not isinstance(model, str) or not model.strip():
+            raise HTTPException(status_code=400, detail="cloud_model must be a name")
+        pref.cloud_model = model.strip()
+    save_preference(pref)
+    return asdict(pref)
+
+
 @router.get("/hygiene")
 async def hygiene_runs():
     from openjarvis.memory.hygiene import load_runs

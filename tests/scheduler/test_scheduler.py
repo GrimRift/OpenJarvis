@@ -553,3 +553,60 @@ def test_a_task_from_chat_is_marked_to_deliver(store):
     assert result.success, result.content
     [task] = sched.list_tasks()
     assert task.metadata.get("deliver") is True
+
+
+class TestTheModelABackgroundTaskRunsOn:
+    """24 September: a reminder with no model of its own ran on the local
+    qwen3.5:4b default and put 3.6 GB on an 8 GB card already holding the
+    voice engine; the laptop lagged."""
+
+    def test_the_preferred_cloud_model_is_used(self, store, monkeypatch):
+        from openjarvis.core import model_preference
+
+        monkeypatch.setattr(
+            model_preference, "background_model", lambda: "gpt-5.6-luna"
+        )
+        system = MagicMock()
+        system.ask.return_value = "ok"
+        sched = TaskScheduler(store, system=system, poll_interval=1)
+        task = sched.create_task(
+            "check my calendar", "once", "2026-01-01T00:00:00+00:00"
+        )
+        sched._execute_task(task)
+        assert system.ask.call_args.kwargs["model"] == "gpt-5.6-luna"
+
+    def test_a_local_run_frees_the_gpu_at_once(self, store, _no_model_preference):
+        system = MagicMock()
+        system.model = "qwen3.5:4b"
+        system.ask.return_value = "ok"
+        sched = TaskScheduler(store, system=system, poll_interval=1)
+        task = sched.create_task(
+            "check my calendar", "once", "2026-01-01T00:00:00+00:00"
+        )
+        sched._execute_task(task)
+        assert "model" not in system.ask.call_args.kwargs
+        assert _no_model_preference == ["qwen3.5:4b"]
+
+    def test_a_task_that_names_its_model_keeps_it(self, store, _no_model_preference):
+        system = MagicMock()
+        system.ask.return_value = "ok"
+        sched = TaskScheduler(store, system=system, poll_interval=1)
+        task = sched.create_task(
+            "x", "once", "2026-01-01T00:00:00+00:00", metadata={"model": "gpt-5.6-sol"}
+        )
+        sched._execute_task(task)
+        assert system.ask.call_args.kwargs["model"] == "gpt-5.6-sol"
+        assert _no_model_preference == []
+
+
+class TestThePreferenceIsStored:
+    def test_it_round_trips_and_defaults_to_cloud(self, tmp_path):
+        from openjarvis.core.model_preference import (
+            ModelPreference,
+            load_preference,
+            save_preference,
+        )
+
+        assert load_preference(tmp_path).prefer_cloud is True
+        save_preference(ModelPreference(prefer_cloud=False, cloud_model="x"), tmp_path)
+        assert load_preference(tmp_path) == ModelPreference(False, "x")
