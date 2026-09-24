@@ -224,6 +224,9 @@ async function checkAddition(
   }
 }
 
+/** A turn ending this soon after Sage's reply finished may be Sage's tail. */
+const HANDOFF_ECHO_MS = 5000;
+
 export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const [input, setInput] = useState('');
   // Ephemeral: images ride one request, show as a thumbnail while the tab is
@@ -275,6 +278,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // end-of-turn from an echo's.
   const bargeListeningRef = useRef(false);
   const lastBargeWordsRef = useRef<FluxWord[]>([]);
+  /** When a reply finished with the user's turn still open (barge.handoff). */
+  const handoffAtRef = useRef(0);
   /** The Flux turn that was only "close the diagram", so it never becomes a
    * message and never counts as an interruption. */
   const diagramCommandTurnRef = useRef<number | null>(null);
@@ -1915,8 +1920,26 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       bargeListeningRef.current = false;
       bargeTriggeredRef.current = false;
 
+      // A turn that was open while Sage's reply finished: Sage's last words
+      // may be all it heard. On 24 September one came back as five letters,
+      // fingerprinted as Sage (0.68 against 0.55), and only the addressee
+      // check stopped it being answered.
+      const overHandoff =
+        !wasBargeIn && Date.now() - handoffAtRef.current < HANDOFF_ECHO_MS;
+      handoffAtRef.current = 0;
+      if (overHandoff && spoken && voice === 'sage') {
+        voiceTrace('handoff.voiceSage', { chars: spoken.length });
+        useAppStore.getState().addLogEntry({
+          timestamp: Date.now(), level: 'info', category: 'voice',
+          message: `Ignored Sage's own voice heard back: "${spoken.slice(0, 60)}" (voice check)`,
+        });
+        flux.beginTurn();
+        armFluxSilenceTimer('followUp');
+        return;
+      }
+
       // This turn began over Sage's voice, so Sage's words may be in it.
-      if (wasBargeIn && spoken) {
+      if ((wasBargeIn || overHandoff) && spoken) {
         const over = cleanOverSage(spoken, detail?.words, spokenTextRef.current, voice);
         if (over.removed) {
           voiceTrace('barge.echoStripped', {
@@ -2502,6 +2525,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       bargeListeningRef.current = false;
       if (continuousConversationEnabled && lastReplyWasVoiceRef.current) {
         voiceTrace('barge.handoff');
+        handoffAtRef.current = Date.now();
         armFluxSilenceTimer('followUp');
       } else if (fluxTurnActive) {
         voiceTrace('barge.closed');
