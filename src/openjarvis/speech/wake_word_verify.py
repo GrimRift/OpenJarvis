@@ -238,6 +238,27 @@ class AudioRing:
         self._frames.clear()
 
 
+#: The small model gone unused this long is transcribed once on silence.
+#: After two idle hours the first check of the night took 2,937 ms and the
+#: second 983 ms, against 340-620 ms warm (25 September) -- Windows pages
+#: out an idle GPU context, and 3 s is the verifier's limit.
+IDLE_WARM_SECONDS = 240.0
+#: A second of digital silence: nothing to hear, nothing kept.
+_SILENCE = bytes(16000 * 2)
+# Shared by every socket's verifier (two open tabs share the one model):
+# when the model last ran, and how many real checks are running now.
+_verifier_state = {"last_used": time.monotonic(), "running": 0}
+_verifier_state_lock = threading.Lock()
+
+
+def _model_busy_or_recent(now: float) -> bool:
+    with _verifier_state_lock:
+        return (
+            _verifier_state["running"] > 0
+            or now - _verifier_state["last_used"] < IDLE_WARM_SECONDS
+        )
+
+
 class WakeWordVerifier:
     """Runs a transcriber over the ring and decides."""
 
@@ -274,12 +295,56 @@ class WakeWordVerifier:
         muffled = bool(doubt) and max(doubt) >= MUFFLED_NO_SPEECH
         return str(getattr(result, "text", "") or "").strip(), muffled
 
+    async def warm_if_idle(self) -> Optional[int]:
+        """Run the model once on silence if it has sat unused for
+        IDLE_WARM_SECONDS, so the next real check is not the slow one.
+
+        Only when nothing else wants the card or the room: never during a
+        real check, a live exchange (the user talking, a reply being made or
+        heard) or the server's own voice. Nothing is kept or learnt -- the
+        transcript of silence is discarded. Returns the milliseconds it took,
+        or None when it did not run.
+        """
+        if self._backend is None:
+            return None
+        now = time.monotonic()
+        if _model_busy_or_recent(now):
+            return None
+        try:
+            from openjarvis.core import activity
+            from openjarvis.speech.player import is_speaking
+
+            snap = activity.snapshot()
+            if snap.exchange_live or snap.sage_mid_turn or is_speaking():
+                return None
+        except Exception:  # noqa: BLE001 -- unsure of the room: stay out of it
+            return None
+        with _verifier_state_lock:
+            if _verifier_state["running"] > 0:
+                return None
+            _verifier_state["running"] += 1
+        started = time.perf_counter()
+        try:
+            await asyncio.to_thread(self._transcribe, _SILENCE)
+        except Exception as exc:  # noqa: BLE001 -- warm-up is optional
+            logger.debug("Wake-word verifier idle warm-up failed: %s", exc)
+            return None
+        finally:
+            with _verifier_state_lock:
+                _verifier_state["running"] -= 1
+                _verifier_state["last_used"] = time.monotonic()
+        ms = int((time.perf_counter() - started) * 1000)
+        logger.info("Wake-word verifier kept warm (%d ms on silence)", ms)
+        return ms
+
     async def verify(self, pcm: bytes, *, strict: bool = False) -> Verdict:
         if self._backend is None:
             return Verdict(True, "", "no speech backend")
         if not pcm:
             return Verdict(True, "", "no audio buffered")
         started = time.perf_counter()
+        with _verifier_state_lock:
+            _verifier_state["running"] += 1
         try:
             heard, muffled = await asyncio.wait_for(
                 asyncio.to_thread(self._transcribe, pcm), timeout=self._timeout
@@ -291,6 +356,10 @@ class WakeWordVerifier:
         except Exception as exc:  # noqa: BLE001 -- fail open, by design
             logger.debug("Wake-word verification failed: %s", exc)
             return Verdict(True, "", f"verifier error: {exc}")
+        finally:
+            with _verifier_state_lock:
+                _verifier_state["running"] -= 1
+                _verifier_state["last_used"] = time.monotonic()
         ms = int((time.perf_counter() - started) * 1000)
         verdict = Verdict(
             heard_wake_phrase(heard, strict=strict, muffled=muffled),

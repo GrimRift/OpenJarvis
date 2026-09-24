@@ -244,12 +244,19 @@ class TestListenersAreDeafWhileTheServerSpeaks:
         app.state.wake_word_detector = _Detector()
         app.state.speech_backend = None
         client = TestClient(app)
-        with player.speaking():
-            with client.websocket_connect("/v1/speech/wake-word") as ws:
+        with client.websocket_connect("/v1/speech/wake-word") as ws:
+            with player.speaking():
                 ws.send_bytes(bytes(2560))
                 msg = ws.receive_json()
+            # The voice has ended, but the score never dipped: the window may
+            # still hold Sage's own words, so nothing fires yet. (No reset --
+            # that brought the detector's 2 s warm-up back after every
+            # reminder.)
+            ws.send_bytes(bytes(2560))
+            after = ws.receive_json()
         assert msg["type"] == "score" and msg["muted"] is True
-        assert app.state.wake_word_detector.resets == 1
+        assert after["type"] == "score"
+        assert app.state.wake_word_detector.resets == 0
 
 
 class TestAVoiceWaitsForTheUsersTurn:

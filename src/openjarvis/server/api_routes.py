@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -747,7 +748,20 @@ async def wake_word_stream(websocket: WebSocket):
             elif kind == "arm" and not armed:
                 armed, needs_dip = True, True
 
+    async def keep_verifier_warm() -> None:
+        # Every 30 s: the verifier decides whether it has been idle long
+        # enough and whether the room is quiet enough (warm_if_idle).
+        while True:
+            await asyncio.sleep(30)
+            with contextlib.suppress(Exception):
+                await verifier.warm_if_idle()
+
     await websocket.accept(subprotocol=subprotocol)
+    warmer = (
+        asyncio.create_task(keep_verifier_warm())
+        if verifier is not None and hasattr(verifier, "warm_if_idle")
+        else None
+    )
     try:
         while True:
             frame = await next_frame()
@@ -875,6 +889,9 @@ async def wake_word_stream(websocket: WebSocket):
                 await websocket.send_json({"type": "score", "value": score})
     except WebSocketDisconnect:
         pass
+    finally:
+        if warmer is not None:
+            warmer.cancel()
 
 
 @websocket_router.websocket("/v1/chat/stream")
