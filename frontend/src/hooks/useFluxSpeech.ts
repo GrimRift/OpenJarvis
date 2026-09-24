@@ -1,3 +1,4 @@
+import { phraseLoudness, restartsPause } from '../lib/wake-follow';
 import { voiceTrace } from '../lib/voice-trace';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
@@ -614,7 +615,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // Silence is judged on the RAW frame against a raw threshold (see
       // setSpeechLevel). Judging the boosted frame meant the threshold had
       // to be scaled too, and that pinned it at the ceiling.
-      if (level >= speechThreshold(noiseRef.current, gain, SPEECH_RMS_FLOOR, SPEECH_RMS_CEILING)) {
+      const roomThreshold = speechThreshold(noiseRef.current, gain, SPEECH_RMS_FLOOR, SPEECH_RMS_CEILING);
+      if (
+        restartsPause(level, roomThreshold, phraseLevelRef.current, Date.now() - turnOpenedAtRef.current)
+      ) {
         lastSoundAtRef.current = Date.now();
       }
       for (let i = 0; i < pcm.length; i++) pendingRef.current.push(pcm[i]);
@@ -650,6 +654,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   }, [eager, fail, handleMessage]);
 
   const beginTurn = useCallback((preRoll?: Int16Array) => {
+    // A wake turn carries the phrase as pre-roll: its level is what the
+    // pause after it is judged against (lib/wake-follow.ts restartsPause).
+    turnOpenedAtRef.current = Date.now();
+    phraseLevelRef.current = phraseLoudness(preRoll);
     pendingRef.current = [];
     fallbackRef.current = [];
     sendingRef.current = true;
@@ -686,6 +694,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   // greeting after the wake word is decided on this, not on Deepgram's
   // first partial, which arrives later than the greeting could be needed.
   const lastSoundAtRef = useRef(0);
+  const turnOpenedAtRef = useRef(0);
+  const phraseLevelRef = useRef(0);
   const lastSoundAt = useCallback(() => lastSoundAtRef.current, []);
   const speechRmsRef = useRef(SPEECH_RMS_FLOOR);
   /** Set the speech level for the room: four times its ambient RMS, within

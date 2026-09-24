@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { isOnlyWakePhrase, stripWakePhrase } from './wake-follow';
+import {
+  PHRASE_LOUDNESS_SHARE,
+  PRE_DETECTION_AUDIO_MS,
+  isOnlyWakePhrase,
+  phraseLoudness,
+  restartsPause,
+  stripWakePhrase,
+} from './wake-follow';
 
 describe('stripWakePhrase', () => {
   it('takes the phrase off the front, however Deepgram spelt it', () => {
@@ -196,5 +203,35 @@ describe('stripGreetingEcho (24 September: a question said over the greeting was
     expect(stripGreetingEcho('Tell me about sir Isaac Newton')).toBe(
       'Tell me about sir Isaac Newton',
     );
+  });
+});
+
+describe('the pause after the wake word', () => {
+  const tone = (amplitude: number, samples = 1600) =>
+    Int16Array.from({ length: samples }, (_, i) => Math.round(amplitude * Math.sin(i / 4)));
+
+  it('takes the wake phrase level from the loudest 100 ms of the pre-roll', () => {
+    const preRoll = new Int16Array([...tone(1000, 8000), ...tone(8000), ...tone(1000, 8000)]);
+    expect(phraseLoudness(preRoll)).toBeGreaterThan(5000);
+    expect(phraseLoudness(undefined)).toBe(0);
+  });
+
+  it('ignores what the turn hears before the detection could reach it', () => {
+    // The tail of "Sage", still in the microphone buffer.
+    expect(restartsPause(7000, 300, 7500, 100)).toBe(false);
+    expect(restartsPause(7000, 300, 7500, PRE_DETECTION_AUDIO_MS + 1)).toBe(true);
+  });
+
+  it('does not take fan residue or a breath for the user carrying on', () => {
+    // Fan ~1,400 against a phrase of 7,500: under a quarter of it.
+    expect(restartsPause(1400, 300, 7500, 600)).toBe(false);
+    // A follow-on question at speaking level does restart it.
+    expect(restartsPause(4000, 300, 7500, 600)).toBe(true);
+    expect(PHRASE_LOUDNESS_SHARE * 7500).toBeGreaterThan(1500);
+  });
+
+  it('leaves turns that are not wake turns as they were', () => {
+    expect(restartsPause(400, 350, 0, 0)).toBe(true);
+    expect(restartsPause(300, 350, 0, 5000)).toBe(false);
   });
 });

@@ -110,25 +110,53 @@ def test_a_firing_without_the_words_is_rejected_with_what_was_heard():
     assert [m["type"] for m in out] == ["score", "score", "rejected"]
     assert out[-1]["heard"] == "the stage"
     # The clip handed to the verifier is the ring, as WAV -- and it was read
-    # once per stage, since nothing confirmed it.
+    # at the firing and once per stage, since nothing confirmed it.
     assert app.state.speech_backend.audio[0][:4] == b"RIFF"
     from openjarvis.speech.wake_word_verify import VERIFY_STAGES
 
-    assert len(app.state.speech_backend.audio) == VERIFY_STAGES
+    assert len(app.state.speech_backend.audio) == VERIFY_STAGES + 1
     assert app.state.wake_word_detector.resets == 1
 
 
-def test_the_ring_grows_between_stages_and_a_confirmation_stops_them():
-    """The frames after the firing are what the second stage hears."""
+def test_a_phrase_already_whole_at_the_firing_is_confirmed_at_once():
+    """A late firing holds the whole phrase: the check at the firing
+    confirms it without waiting for more frames."""
     app = _app("hey sage")
     out = _drive(app)
     assert out[-1]["type"] == "detected"
-    # Confirmed at the first stage: one read, of a ring holding the three
-    # scored frames plus the first stage's extra ones.
+    # The first read confirmed, on the three scored frames alone. (The
+    # frames the drive sends after it are scored again and may fire the
+    # fake detector a second time; only the first firing is under test.)
+    clip = app.state.speech_backend.audio[0]
+    assert len(clip) == 44 + 3 * 2560
+
+
+class _Unfolding(_Backend):
+    """Hears "Hey." at the firing, the whole phrase once more has arrived."""
+
+    def transcribe(self, audio, **kwargs):
+        super().transcribe(audio, **kwargs)
+        self.text = "Hey Sage." if len(self.audio) > 1 else "Hey."
+
+        class R:
+            pass
+
+        r = R()
+        r.text = self.text
+        return r
+
+
+def test_a_phrase_still_being_said_waits_for_the_staged_check():
+    """The frames after the firing are what the first stage hears."""
     from openjarvis.speech.wake_word_verify import VERIFY_STAGE_FRAMES
 
-    [clip] = app.state.speech_backend.audio
-    assert len(clip) == 44 + (3 + VERIFY_STAGE_FRAMES) * 2560
+    app = _app("hey sage")
+    app.state.speech_backend = _Unfolding("")
+    out = _drive(app)
+    assert out[-1]["type"] == "detected"
+    first, second = app.state.speech_backend.audio[:2]
+    assert len(first) == 44 + 3 * 2560
+    assert len(second) == 44 + (3 + VERIFY_STAGE_FRAMES) * 2560
 
 
 def test_a_firing_with_the_words_is_detected_and_marked_verified():

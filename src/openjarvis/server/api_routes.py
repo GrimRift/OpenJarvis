@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -752,15 +753,39 @@ async def wake_word_stream(websocket: WebSocket):
                     # +320 ms for 38, at +640 ms for 51, and no negative
                     # was let through by the extra audio. So: a few more
                     # frames, judge; not confirmed, a few more, judge again.
+                    fired_at = time.monotonic()
                     strict = await asyncio.to_thread(media_is_playing)
+                    # And one check at the firing itself, run while those
+                    # frames arrive: when the detector fires late -- in fan
+                    # noise it fired ~0.8 s after the phrase (24 September)
+                    # -- the ring already holds all of it, and waiting for
+                    # four more frames before reading it was 0.3 s for
+                    # nothing. Not confirmed, and the staged checks decide
+                    # exactly as before.
+                    early = asyncio.create_task(
+                        verifier.verify(ring.pcm(), strict=strict)
+                    )
                     for _stage in range(VERIFY_STAGES):
                         for _ in range(VERIFY_STAGE_FRAMES):
+                            if early is not None and early.done():
+                                first, early = early.result(), None
+                                if first.confirmed:
+                                    verdict = first
+                                    break
                             ring.push(await websocket.receive_bytes())
-                            since_firing_ms += 80
+                        if verdict is not None and verdict.confirmed:
+                            break
+                        if early is not None:
+                            first, early = await early, None
+                            if first.confirmed:
+                                verdict = first
+                                break
                         verdict = await verifier.verify(ring.pcm(), strict=strict)
-                        since_firing_ms += verdict.ms
                         if verdict.confirmed:
                             break
+                    if early is not None:
+                        early.cancel()
+                    since_firing_ms = int((time.monotonic() - fired_at) * 1000)
                 if verdict is not None and not verdict.confirmed:
                     # Reset before saying so: told first, the page (and a
                     # test) could act on "rejected" while the detector still

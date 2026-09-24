@@ -207,3 +207,46 @@ export function stripGreetingEcho(transcript: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/**
+ * The first frames of the wake turn's own microphone are audio recorded
+ * before the detection reached the page -- its 4096-sample buffer holds up
+ * to ~0.2-0.3 s -- and often the tail of "Sage". Counted as fresh sound,
+ * they restarted the pause clock: half the greetings on 24 September came
+ * 1.3-1.6 s after the detection, from Deepgram's end of turn, instead of
+ * ~0.4 s from the timer. Sound in this long after the turn opens is not the
+ * user carrying on.
+ */
+export const PRE_DETECTION_AUDIO_MS = 300;
+/** A frame counts as the user carrying on only at this share of the wake
+ * phrase's own loudness: fan residue and breaths after the phrase sit far
+ * under it (fan ~1,200-1,500 against a phrase of 7,000-8,000, measured),
+ * a follow-on question does not. */
+export const PHRASE_LOUDNESS_SHARE = 0.25;
+
+/** The loudest 100 ms of the pre-roll: the wake phrase's own level. */
+export function phraseLoudness(preRoll: Int16Array | undefined, sampleRate = 16000): number {
+  if (!preRoll || preRoll.length === 0) return 0;
+  const step = Math.max(1, Math.round(sampleRate / 10));
+  let loudest = 0;
+  for (let at = 0; at + step <= preRoll.length; at += step) {
+    let sum = 0;
+    for (let i = at; i < at + step; i++) sum += preRoll[i] * preRoll[i];
+    loudest = Math.max(loudest, Math.sqrt(sum / step));
+  }
+  return loudest;
+}
+
+/**
+ * Whether a frame of the wake turn restarts the pause clock. Outside a wake
+ * turn (no phrase level) only the room threshold applies, as before.
+ */
+export function restartsPause(
+  level: number,
+  roomThreshold: number,
+  phraseLevel: number,
+  sinceTurnOpenedMs: number,
+): boolean {
+  if (phraseLevel > 0 && sinceTurnOpenedMs < PRE_DETECTION_AUDIO_MS) return false;
+  return level >= Math.max(roomThreshold, phraseLevel * PHRASE_LOUDNESS_SHARE);
+}
