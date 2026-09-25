@@ -341,19 +341,26 @@ class ChatterboxEngine:
         the lock is tried, never waited on."""
         while True:
             time.sleep(20)
-            if not self.lock.acquire(blocking=False):
-                continue
-            try:
-                graphed = self.fast_t3
-                if graphed is not None and graphed.release_idle():
-                    import torch
+            self._release_idle_once()
 
-                    torch.cuda.empty_cache()
-                    logger.info("released idle speech-token caches")
-            except Exception:
-                logger.debug("cache release failed", exc_info=True)
-            finally:
-                self.lock.release()
+    def _release_idle_once(self) -> None:
+        # A pass of its own, so nothing of it outlives the pass: a local for
+        # the graphs in the loop slept beside it, and held the old model's
+        # speech-token half and its graph pools on the card through a
+        # Turbo-to-Nano switch, which then ran out of memory (25 September).
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
+            graphed = self.fast_t3
+            if graphed is not None and graphed.release_idle():
+                import torch
+
+                torch.cuda.empty_cache()
+                logger.info("released idle speech-token caches")
+        except Exception:
+            logger.debug("cache release failed", exc_info=True)
+        finally:
+            self.lock.release()
 
     def gpu_memory(self) -> Dict[str, Any]:
         """What this process holds on the card, for /health."""
@@ -397,7 +404,16 @@ class ChatterboxEngine:
 
                 torch.cuda.empty_cache()
             self.kind = kind
-            self.load()
+            try:
+                self.load()
+            except Exception as exc:
+                # Left half-loaded, every later request retried the switch
+                # and failed the same way. A fresh process starts on the
+                # chosen voice's model, with the card to itself.
+                if "out of memory" in str(exc).lower():
+                    logger.critical("switch to %s ran out of memory; exiting", kind)
+                    os._exit(3)
+                raise
         self.switch_seconds = round(time.monotonic() - started, 1)
         logger.info("switched to %s in %.1fs", kind.title(), self.switch_seconds)
 

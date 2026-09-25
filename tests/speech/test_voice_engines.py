@@ -189,3 +189,41 @@ class TestIdleCaches:
         graphed.cache = graphed.buckets[1024].cache
         graphed.release_idle(now=1000.0)
         assert graphed.cache is None and graphed.buckets == {}
+
+
+class TestSwitchLeavesNothingBehind:
+    """25 September: Nano would not load after Turbo -- the cache janitor
+    still held Turbo's decode graphs, and with them its speech-token model."""
+
+    class Graphs:
+        def release_idle(self):
+            return False
+
+    def test_a_janitor_pass_keeps_no_hold_on_the_graphs(self, tmp_path):
+        import gc
+        import weakref
+
+        engine = engine_mod.ChatterboxEngine("cpu", engine_mod.VoiceStore(tmp_path))
+        engine.fast_t3 = self.Graphs()
+        alive = weakref.ref(engine.fast_t3)
+        engine._release_idle_once()
+        engine.fast_t3 = None
+        gc.collect()
+        assert alive() is None
+
+    def test_a_switch_that_runs_out_of_memory_restarts_the_sidecar(
+        self, tmp_path, monkeypatch
+    ):
+        engine = FakeLoading(engine_mod.VoiceStore(tmp_path), model="turbo")
+        engine.model = object()
+
+        def load():
+            raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 MiB")
+
+        monkeypatch.setattr(engine, "load", load)
+        exits = []
+        monkeypatch.setattr(engine_mod.os, "_exit", lambda code: exits.append(code))
+        # The real exit never returns; the stub does, and the error goes on.
+        with pytest.raises(RuntimeError):
+            engine.switch("nano")
+        assert exits == [3]
