@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { interpretFluxMessage, turnSurvivesStatus } from './useFluxSpeech';
+import { heardPastPreRoll, interpretFluxMessage, turnSurvivesStatus } from './useFluxSpeech';
 
 const turnInfo = (event: string, over: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -66,6 +66,7 @@ describe('Flux message interpretation', () => {
         turnIndex: 1,
         transcript: expect.any(String),
         words: [{ word: 'stop', confidence: 0.9 }],
+        windowEnd: Number.NaN,
       });
     });
 
@@ -301,5 +302,29 @@ describe('the socket URL names the provider', () => {
     } finally {
       g.window = saved;
     }
+  });
+});
+
+describe("the wake phrase's own partials", () => {
+  // 25 September: Deepgram's guesses at the pre-rolled "Hey Sage" ("Please",
+  // "I see", "teach") read as the user carrying on and cancelled the
+  // greeting in 6 of 9 wake words, leaving it to the turn's end.
+  it('carries how far into the audio Deepgram has heard', () => {
+    const action = interpretFluxMessage(
+      turnInfo('Update', { transcript: 'Please', audio_window_end: 1.28 }),
+      null,
+    );
+    expect(action).toMatchObject({ kind: 'update', transcript: 'Please', windowEnd: 1.28 });
+  });
+
+  it('does not count words heard only within the pre-roll', () => {
+    expect(heardPastPreRoll(1.28, 1.3)).toBe(false);
+    expect(heardPastPreRoll(1.5, 1.3)).toBe(false);
+    expect(heardPastPreRoll(1.7, 1.3)).toBe(true);
+  });
+
+  it('lets the words decide when no window is known', () => {
+    expect(heardPastPreRoll(Number.NaN, 1.3)).toBe(true);
+    expect(heardPastPreRoll(0.4, 0)).toBe(true);
   });
 });

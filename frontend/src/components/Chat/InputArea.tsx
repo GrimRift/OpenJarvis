@@ -2150,10 +2150,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         continuationRef.current = { submittedAt: null, text: '' };
       }
     },
-    onUpdate: (transcript, turnIndex, words) => {
+    onUpdate: (transcript, turnIndex, words, heard) => {
       // Words beyond the wake phrase: the user carried on, no greeting.
       // (StartOfTurn cannot tell: the pre-rolled phrase opens a turn too.)
-      if (fastFollowRef.current.active && continuesPastWakePhrase(transcript)) {
+      // Only once Deepgram has heard past the pre-roll: before that, extra
+      // words are its guesses at the phrase itself.
+      if (
+        fastFollowRef.current.active &&
+        heard.pastPreRoll &&
+        continuesPastWakePhrase(transcript)
+      ) {
         if (greetingTimerRef.current) {
           voiceTrace('wake.greetCancelled', { heard: transcript.slice(0, 60) });
         }

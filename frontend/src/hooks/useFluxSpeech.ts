@@ -118,7 +118,12 @@ export interface UseFluxSpeechOptions {
    * Partial transcript while a turn is in progress (never displayed), with
    * Deepgram's confidence in each word.
    */
-  onUpdate?: (transcript: string, turnIndex: number, words: FluxWord[]) => void;
+  onUpdate?: (
+    transcript: string,
+    turnIndex: number,
+    words: FluxWord[],
+    heard: { pastPreRoll: boolean },
+  ) => void;
   onTurnResumed?: (turnIndex: number) => void;
   /**
    * Flux cannot be used, or failed mid-session. `audio` carries whatever of
@@ -150,7 +155,14 @@ export type FluxAction =
    * A partial transcript of the turn in progress. Nothing in the UI shows
    * it; it exists so barge-in can count words while Sage is speaking.
    */
-  | { kind: 'update'; turnIndex: number; transcript: string; words: FluxWord[] }
+  | {
+      kind: 'update';
+      turnIndex: number;
+      transcript: string;
+      words: FluxWord[];
+      /** Seconds of the session's audio Deepgram has heard (NaN: unknown). */
+      windowEnd: number;
+    }
   | { kind: 'speculate'; turnIndex: number; transcript: string }
   | { kind: 'cancelSpeculation'; turnIndex: number }
   | {
@@ -203,6 +215,20 @@ export function reconnectDelay(attemptsSoFar: number): number | null {
   return 500 * 2 ** attemptsSoFar;
 }
 
+/**
+ * Whether a partial covers audio after the pre-roll, so its words can be
+ * the user carrying on. Partials of the pre-rolled wake phrase came back as
+ * "Please", "I see", "teach" and cancelled the greeting in 6 of 9 wake words
+ * on 25 September, leaving it to the turn's end, 1.1-1.7 s in. A small
+ * margin: Deepgram's window runs a little past what it has decoded.
+ * Unknown (no window reported): as before, the words decide.
+ */
+export const PAST_PRE_ROLL_MARGIN_S = 0.25;
+export function heardPastPreRoll(windowEnd: number, preRollEnd: number): boolean {
+  if (!Number.isFinite(windowEnd) || preRollEnd <= 0) return true;
+  return windowEnd > preRollEnd + PAST_PRE_ROLL_MARGIN_S;
+}
+
 export function interpretFluxMessage(
   raw: string,
   lastFinalTurn: number | null,
@@ -229,7 +255,13 @@ export function interpretFluxMessage(
     case 'StartOfTurn':
       return { kind: 'turnStarted', turnIndex };
     case 'Update':
-      return { kind: 'update', turnIndex, transcript, words: fluxWords(data.words) };
+      return {
+        kind: 'update',
+        turnIndex,
+        transcript,
+        words: fluxWords(data.words),
+        windowEnd: Number(data.audio_window_end ?? Number.NaN),
+      };
     case 'EagerEndOfTurn':
       return { kind: 'speculate', turnIndex, transcript };
     case 'TurnResumed':
@@ -450,7 +482,9 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           cb.onTurnStarted?.(action.turnIndex);
           break;
         case 'update':
-          cb.onUpdate?.(action.transcript, action.turnIndex, action.words);
+          cb.onUpdate?.(action.transcript, action.turnIndex, action.words, {
+            pastPreRoll: heardPastPreRoll(action.windowEnd, preRollEndRef.current),
+          });
           break;
         case 'speculate':
           cb.onEagerEndOfTurn?.(action.transcript, action.turnIndex);
@@ -536,6 +570,9 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     );
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
+    // Deepgram's audio window counts this socket's audio from its start.
+    sentSamplesRef.current = 0;
+    preRollEndRef.current = 0;
 
     ws.onmessage = (ev) => {
       // A replaced session's late messages are not this session's turns.
@@ -642,6 +679,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         );
         try {
           wsRef.current.send(frame.buffer);
+          sentSamplesRef.current += frame.length;
         } catch {
           break;
         }
@@ -686,12 +724,20 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       for (let at = 0; at + CHUNK_SAMPLES <= lifted.length; at += CHUNK_SAMPLES) {
         try {
           wsRef.current.send(lifted.slice(at, at + CHUNK_SAMPLES).buffer);
+          sentSamplesRef.current += CHUNK_SAMPLES;
         } catch {
           break;
         }
       }
     }
+    preRollEndRef.current = sentSamplesRef.current / TARGET_SAMPLE_RATE;
   }, []);
+
+  // Audio sent on this socket, and where the last pre-roll ended on that
+  // clock: Deepgram's partials of the pre-rolled wake phrase itself ("Please",
+  // "I see") must not read as the user carrying on (see heardPastPreRoll).
+  const sentSamplesRef = useRef(0);
+  const preRollEndRef = useRef(0);
 
   // Frames are dropped while this is set: a greeting clip playing into an
   // open turn would come back as the user's words.
