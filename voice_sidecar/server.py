@@ -502,6 +502,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     from voice_sidecar.engine import default_voices_dir
+    from voice_sidecar.full_speed import run_at_full_speed
+
+    # A copy of openjarvis/core/full_speed.py: the sidecar has its own env.
+    run_at_full_speed()
 
     voices = VoiceStore(
         Path(args.voices_dir) if args.voices_dir else default_voices_dir()

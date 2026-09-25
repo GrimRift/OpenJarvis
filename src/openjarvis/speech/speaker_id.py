@@ -369,16 +369,28 @@ def _maybe_seed(instance: SpeakerId) -> None:
     threading.Thread(target=seed, name="speaker-id-seed", daemon=True).start()
 
 
-def learn_in_background(config: Any, pcm: bytes) -> None:
+def learn_in_background(
+    config: Any, pcm: bytes, *, unless: Optional[Callable[[], bool]] = None
+) -> None:
     """A confirmed "Hey Sage" is the user's voice: learn it without making
-    the wake word wait for the fingerprint."""
+    the wake word wait for the fingerprint. ``unless`` is asked first, on
+    the learning thread: another app playing mixes into the clip."""
     instance = get(config)
     if instance is None:
         return
     key = time.strftime("%Y%m%d_%H%M%S") + f"_live_{int(time.time() * 1000) % 1000:03d}"
+
+    def learn() -> None:
+        if unless is not None:
+            try:
+                if unless():
+                    return
+            except Exception:  # noqa: BLE001 -- a failed lookup is not a veto
+                pass
+        instance.learn_user(pcm, key)
+
     threading.Thread(
-        target=instance.learn_user,
-        args=(pcm, key),
+        target=learn,
         name="speaker-id-learn",
         daemon=True,
     ).start()

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+import concurrent.futures
 import inspect
 import io
 import logging
@@ -242,6 +243,8 @@ class Verdict:
     ms: int = 0
     #: Whether another app was audibly playing, so only the words counted.
     strict: bool = False
+    #: How long the check waited for its thread before the model ran.
+    wait_ms: int = 0
 
 
 class AudioRing:
@@ -275,8 +278,25 @@ _verifier_state = {
     "warm_runs": 0,
     "last_warm_ms": None,
     "last_skip": "",
+    "device": None,
+    "last_wait_ms": None,
+    "last_run_ms": None,
 }
 _verifier_state_lock = threading.Lock()
+
+#: The checks' own thread. Through the shared pool, a check measured 430-540
+#: ms inside the server against 135-224 ms for the same code on its own, on
+#: battery and plugged in alike (25 September): the pool is where the
+#: server's blocking work waits too. One worker: the checks share one model.
+_VERIFY_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="wake-verify"
+)
+
+
+def _model_device(backend: Any) -> Optional[str]:
+    model = getattr(getattr(backend, "_model", None), "model", None)
+    device = getattr(model, "device", None) or getattr(backend, "_device", None)
+    return str(device) if device else None
 
 
 def verifier_status() -> dict:
@@ -290,6 +310,9 @@ def verifier_status() -> dict:
             "warm_runs": _verifier_state["warm_runs"],
             "last_warm_ms": _verifier_state["last_warm_ms"],
             "last_skip": _verifier_state["last_skip"],
+            "device": _verifier_state.get("device"),
+            "last_wait_ms": _verifier_state.get("last_wait_ms"),
+            "last_run_ms": _verifier_state.get("last_run_ms"),
         }
 
 
@@ -320,6 +343,19 @@ class WakeWordVerifier:
     @property
     def backend_id(self) -> str:
         return str(getattr(self._backend, "backend_id", "") or "")
+
+    def _transcribe_timed(
+        self, pcm: bytes, submitted: float
+    ) -> tuple[str, bool, int, int]:
+        started = time.perf_counter()
+        heard, muffled = self._transcribe(pcm)
+        run_ms = int((time.perf_counter() - started) * 1000)
+        wait_ms = int((started - submitted) * 1000)
+        with _verifier_state_lock:
+            _verifier_state["device"] = _model_device(self._backend)
+            _verifier_state["last_wait_ms"] = wait_ms
+            _verifier_state["last_run_ms"] = run_ms
+        return heard, muffled, wait_ms, run_ms
 
     def _transcribe(self, pcm: bytes) -> tuple[str, bool]:
         kwargs: dict = {"format": "wav", "language": self._language or None}
@@ -380,7 +416,9 @@ class WakeWordVerifier:
             _verifier_state["running"] += 1
         started = time.perf_counter()
         try:
-            await asyncio.to_thread(self._transcribe, _SILENCE)
+            await asyncio.get_running_loop().run_in_executor(
+                _VERIFY_POOL, self._transcribe, _SILENCE
+            )
         except Exception as exc:  # noqa: BLE001 -- warm-up is optional
             logger.debug("Wake-word verifier idle warm-up failed: %s", exc)
             return None
@@ -395,7 +433,13 @@ class WakeWordVerifier:
         logger.info("Wake-word verifier kept warm (%d ms on silence)", ms)
         return ms
 
-    async def verify(self, pcm: bytes, *, strict: bool = False) -> Verdict:
+    async def verify(self, pcm: bytes, *, strict: Any = False) -> Verdict:
+        """Judge *pcm*. ``strict`` may instead be a function that finds
+        out (whether another app is playing), awaited only when it would
+        change the verdict: the two readings of the words mostly agree, and
+        the lookup, Windows' audio sessions through COM, held Python's lock
+        for the whole check -- 150 ms of transcription took 500-650 ms
+        beside it (25 September)."""
         if self._backend is None:
             return Verdict(True, "", "no speech backend")
         if not pcm:
@@ -404,8 +448,11 @@ class WakeWordVerifier:
         with _verifier_state_lock:
             _verifier_state["running"] += 1
         try:
-            heard, muffled = await asyncio.wait_for(
-                asyncio.to_thread(self._transcribe, pcm), timeout=self._timeout
+            heard, muffled, wait_ms, _run_ms = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    _VERIFY_POOL, self._transcribe_timed, pcm, time.perf_counter()
+                ),
+                timeout=self._timeout,
             )
         except asyncio.TimeoutError:
             # Not fail-open like the other paths: a firing that cannot be
@@ -418,6 +465,10 @@ class WakeWordVerifier:
             with _verifier_state_lock:
                 _verifier_state["running"] -= 1
                 _verifier_state["last_used"] = time.monotonic()
+        if callable(strict):
+            relaxed = heard_wake_phrase(heard, strict=False, muffled=muffled)
+            named = heard_wake_phrase(heard, strict=True, muffled=muffled)
+            strict = bool(await strict()) if relaxed != named else False
         ms = int((time.perf_counter() - started) * 1000)
         quiet = muffled and loudest_rms(pcm) < QUIET_MUFFLED_RMS
         verdict = Verdict(
@@ -426,6 +477,7 @@ class WakeWordVerifier:
             "muffled, too quiet" if quiet else "muffled" if muffled else "",
             ms,
             strict,
+            wait_ms,
         )
         keep_clip(pcm, verdict)
         return verdict

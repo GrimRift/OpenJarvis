@@ -802,7 +802,18 @@ async def wake_word_stream(websocket: WebSocket):
                     # was let through by the extra audio. So: a few more
                     # frames, judge; not confirmed, a few more, judge again.
                     fired_at = time.monotonic()
-                    strict = await asyncio.to_thread(media_is_playing)
+                    # Asked only when it decides the verdict, once per
+                    # firing (see WakeWordVerifier.verify).
+                    lookup: Optional[asyncio.Future] = None
+
+                    async def strict() -> bool:
+                        nonlocal lookup
+                        if lookup is None:
+                            lookup = asyncio.ensure_future(
+                                asyncio.to_thread(media_is_playing)
+                            )
+                        return await asyncio.shield(lookup)
+
                     # And one check at the firing itself, run while those
                     # frames arrive: when the detector fires late -- in fan
                     # noise it fired ~0.8 s after the phrase (24 September)
@@ -846,6 +857,7 @@ async def wake_word_stream(websocket: WebSocket):
                             "score": score,
                             "heard": verdict.heard,
                             "ms": verdict.ms,
+                            "wait_ms": verdict.wait_ms,
                             "strict": verdict.strict,
                         }
                     )
@@ -863,6 +875,7 @@ async def wake_word_stream(websocket: WebSocket):
                         "heard": verdict.heard if verdict is not None else "",
                         "note": verdict.note if verdict is not None else "",
                         "ms": verdict.ms if verdict is not None else 0,
+                        "wait_ms": verdict.wait_ms if verdict is not None else 0,
                         "strict": bool(verdict is not None and verdict.strict),
                         "since_firing_ms": since_firing_ms,
                     }
@@ -873,8 +886,12 @@ async def wake_word_stream(websocket: WebSocket):
                     if not verdict.strict:
                         from openjarvis.speech import speaker_id
 
+                        # Whether other audio plays is looked up by the
+                        # learning thread, after the reply, not before it.
                         speaker_id.learn_in_background(
-                            getattr(websocket.app.state, "config", None), ring.pcm()
+                            getattr(websocket.app.state, "config", None),
+                            ring.pcm(),
+                            unless=media_is_playing,
                         )
                 ring.clear()
                 # One utterance must produce one detection. The model scores a

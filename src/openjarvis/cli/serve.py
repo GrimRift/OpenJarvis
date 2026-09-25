@@ -1060,6 +1060,11 @@ def serve(
         _timing.setLevel(logging.INFO)
         _timing.propagate = False
 
+    # Run at full speed even with no window (see core/full_speed.py).
+    from openjarvis.core.full_speed import run_at_full_speed
+
+    run_at_full_speed()
+
     # Binding 0.0.0.0 serves IPv4 only, but "localhost" resolves AAAA (::1)
     # before A on Windows, so every client that uses the name pays ~2s failing
     # over before it falls back. Binding "::" is worse: uvicorn makes it

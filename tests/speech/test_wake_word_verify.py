@@ -328,3 +328,47 @@ class TestMuffledSpeech:
             WakeWordVerifier(_Backend("He's in.", no_speech=0.01)).verify(bytes(3200))
         )
         assert verdict.confirmed and verdict.note == ""
+
+
+class TestTheCheckRunsOnItsOwn:
+    """25 September: through the shared thread pool a check took 430-540 ms
+    in the server against 135-224 ms on its own."""
+
+    def test_on_its_own_thread_and_says_how_long_it_waited(self):
+        import threading
+
+        seen = []
+
+        class Backend(_Backend):
+            def transcribe(self, *args, **kwargs):
+                seen.append(threading.current_thread().name)
+                return super().transcribe(*args, **kwargs)
+
+        verifier = WakeWordVerifier(Backend("Hey Sage."))
+        verdict = asyncio.run(verifier.verify(_voice(0.2)))
+        assert verdict.confirmed and seen[0].startswith("wake-verify")
+        assert verdict.wait_ms >= 0
+
+    def test_whether_media_plays_is_asked_only_when_it_decides(self):
+        # The lookup held Python's lock for the whole check (25 September).
+        # "Hey Sage." reads the same strict or not: never asked. "He's in."
+        # is the phrase's sound but not the name: then it decides.
+        async def run(heard, playing):
+            asked = []
+
+            async def lookup():
+                asked.append(True)
+                return playing
+
+            verdict = await WakeWordVerifier(_Backend(heard)).verify(
+                _voice(0.2), strict=lookup
+            )
+            return verdict, asked
+
+        clear, asked = asyncio.run(run("Hey Sage.", True))
+        assert clear.confirmed and not asked
+        relaxed, asked_relaxed = asyncio.run(run("He's in.", False))
+        strict, asked_strict = asyncio.run(run("He's in.", True))
+        assert asked_relaxed and asked_strict
+        assert relaxed.confirmed and not relaxed.strict
+        assert strict.strict and not strict.confirmed

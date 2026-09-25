@@ -268,6 +268,7 @@ export function useWakeWord(
             heard: String(data.heard ?? ''),
             note: String(data.note ?? ''),
             ms: Number(data.ms ?? 0),
+            waitMs: Number(data.wait_ms ?? 0),
             strict: Boolean(data.strict),
             sinceFiringMs: Number(data.since_firing_ms ?? 0),
           });
@@ -280,6 +281,7 @@ export function useWakeWord(
           voiceTrace('wakeword.rejected', {
             heard,
             ms: Number(data.ms ?? 0),
+            waitMs: Number(data.wait_ms ?? 0),
             strict: Boolean(data.strict),
           });
           onRejectedRef.current?.(heard);
