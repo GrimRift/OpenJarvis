@@ -18,6 +18,7 @@ import asyncio
 import inspect
 import io
 import logging
+import math
 import os
 import re
 import threading
@@ -129,6 +130,15 @@ _PHONETIC_MAX_LEAD = 3
 #: September) scored 0.52. The only two recorded takes out of 220 that
 #: passed on the sound alone scored 0.06 (from the door) and 0.01.
 MUFFLED_NO_SPEECH = 0.45
+#: Loudest 100 ms (RMS, 0..1 of full scale) a muffled firing must reach.
+#: A faint sound set it off at 09:38 on 25 September with nobody speaking:
+#: its loudest 100 ms was 0.033, and the verifier, bringing the clip up to
+#: full level and prompting "Hey Sage.", heard exactly that. Nothing tells
+#: such a sound from "Hey Sage" called across the room -- those takes read
+#: 0.023-0.034, just as muffled, transcribed the same -- and the user chose
+#: to drop both. Real firings kept that day were 0.105 and louder; the
+#: quietest recorded muffled take that still passes read 0.085.
+QUIET_MUFFLED_RMS = 0.05
 
 
 def _tokens(text: str) -> list[str]:
@@ -196,6 +206,18 @@ def normalise_level(pcm: bytes) -> bytes:
     gain = _TARGET_PEAK / peak
     scaled = array.array("h", (int(v * gain) for v in samples))
     return scaled.tobytes()
+
+
+def loudest_rms(pcm: bytes, window: int = SAMPLE_RATE // 10) -> float:
+    """RMS of the loudest ``window`` samples of int16 PCM, 0..1."""
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) - len(pcm) % 2])
+    best = 0.0
+    for start in range(0, max(1, len(samples) - window + 1), window):
+        chunk = samples[start : start + window]
+        if chunk:
+            best = max(best, sum(v * v for v in chunk) / len(chunk))
+    return math.sqrt(best) / 32768.0
 
 
 def pcm_to_wav(pcm: bytes) -> bytes:
@@ -397,10 +419,11 @@ class WakeWordVerifier:
                 _verifier_state["running"] -= 1
                 _verifier_state["last_used"] = time.monotonic()
         ms = int((time.perf_counter() - started) * 1000)
+        quiet = muffled and loudest_rms(pcm) < QUIET_MUFFLED_RMS
         verdict = Verdict(
-            heard_wake_phrase(heard, strict=strict, muffled=muffled),
+            not quiet and heard_wake_phrase(heard, strict=strict, muffled=muffled),
             heard,
-            "muffled" if muffled else "",
+            "muffled, too quiet" if quiet else "muffled" if muffled else "",
             ms,
             strict,
         )

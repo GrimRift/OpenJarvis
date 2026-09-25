@@ -74,6 +74,18 @@ class TestRing:
             assert f.getnframes() == 1600
 
 
+def _voice(rms: float, seconds: float = 2.0) -> bytes:
+    """A steady tone at *rms* of full scale, as 16 kHz int16 PCM."""
+    import math as _math
+    import struct as _struct
+
+    amplitude = rms * _math.sqrt(2) * 32767
+    count = int(16000 * seconds)
+    return b"".join(
+        _struct.pack("<h", int(amplitude * _math.sin(i / 5))) for i in range(count)
+    )
+
+
 class _Backend:
     def __init__(self, text="", delay=0.0, error=None, no_speech=None):
         self.text, self.delay, self.error = text, delay, error
@@ -286,15 +298,30 @@ class TestMuffledSpeech:
 
     def test_a_guess_at_muffled_speech_does_not_confirm(self):
         verdict = asyncio.run(
-            WakeWordVerifier(_Backend("Easy.", no_speech=0.52)).verify(bytes(3200))
+            WakeWordVerifier(_Backend("Easy.", no_speech=0.52)).verify(_voice(0.2))
         )
         assert not verdict.confirmed and verdict.note == "muffled"
 
     def test_the_name_spelt_out_still_does(self):
         verdict = asyncio.run(
-            WakeWordVerifier(_Backend("Hey Sage.", no_speech=0.64)).verify(bytes(3200))
+            WakeWordVerifier(_Backend("Hey Sage.", no_speech=0.64)).verify(_voice(0.2))
         )
         assert verdict.confirmed
+
+    def test_a_faint_sound_heard_as_the_name_does_not(self):
+        # 25 September, 09:38: nobody spoke; the loudest 100 ms was 0.033 of
+        # full scale, and the boosted, prompted clip came back "Hey Sage.".
+        # "Hey Sage" called across the room reads the same and is dropped
+        # with it -- the user's choice.
+        faint = WakeWordVerifier(_Backend("Hey Sage.", no_speech=0.86))
+        verdict = asyncio.run(faint.verify(_voice(0.033)))
+        assert not verdict.confirmed and verdict.note == "muffled, too quiet"
+
+    def test_quiet_but_clear_speech_is_not_held_to_it(self):
+        verdict = asyncio.run(
+            WakeWordVerifier(_Backend("Hey Sage.", no_speech=0.04)).verify(_voice(0.03))
+        )
+        assert verdict.confirmed and verdict.note == ""
 
     def test_clear_speech_keeps_the_sound_rule(self):
         verdict = asyncio.run(
