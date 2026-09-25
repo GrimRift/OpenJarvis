@@ -165,6 +165,28 @@ def test_a_firing_with_the_words_is_detected_and_marked_verified():
     assert out[-1]["verified"] is True and out[-1]["heard"].startswith("Hey Sage")
 
 
+class _Doubting(_Backend):
+    """Whisper doubting there was speech (no-speech 0.64), as it did for the
+    user two inches from the mic on 25 September."""
+
+    def transcribe(self, audio, **kwargs):
+        r = super().transcribe(audio, **kwargs)
+
+        class Segment:
+            no_speech = 0.64
+
+        r.segments = [Segment()]
+        return r
+
+
+def test_a_muffled_firing_loud_enough_counts_as_verified():
+    app = _app(None)
+    app.state.speech_backend = _Doubting("Hey Sage.")
+    out = _drive(app)
+    assert out[-1]["type"] == "detected" and out[-1]["note"] == "muffled"
+    assert out[-1]["verified"] is True
+
+
 def test_no_backend_confirms_unverified_rather_than_going_deaf():
     out = _drive(_app(None))
     assert out[-1]["type"] == "detected"

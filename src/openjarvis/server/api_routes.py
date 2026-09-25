@@ -871,7 +871,14 @@ async def wake_word_stream(websocket: WebSocket):
                     {
                         "type": "detected",
                         "score": score,
-                        "verified": bool(verdict is not None and not verdict.note),
+                        # Muffled but confirmed by its words counts: the quiet
+                        # ones are already dropped (QUIET_MUFFLED_RMS), and
+                        # the rest were the user at the mic -- 3 of 12 on 25
+                        # September, each left with no greeting and a mic
+                        # that closed on them.
+                        "verified": bool(
+                            verdict is not None and verdict.note in ("", "muffled")
+                        ),
                         "heard": verdict.heard if verdict is not None else "",
                         "note": verdict.note if verdict is not None else "",
                         "ms": verdict.ms if verdict is not None else 0,
