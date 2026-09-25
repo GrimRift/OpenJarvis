@@ -2157,11 +2157,27 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // words are its guesses at the phrase itself.
       if (
         fastFollowRef.current.active &&
+        !heard.pastPreRoll &&
+        greetingTimerRef.current &&
+        continuesPastWakePhrase(transcript)
+      ) {
+        voiceTrace('wake.phrasePartial', {
+          heard: transcript.slice(0, 40),
+          windowEnd: heard.windowEnd,
+          preRollEnd: heard.preRollEnd,
+        });
+      }
+      if (
+        fastFollowRef.current.active &&
         heard.pastPreRoll &&
         continuesPastWakePhrase(transcript)
       ) {
         if (greetingTimerRef.current) {
-          voiceTrace('wake.greetCancelled', { heard: transcript.slice(0, 60) });
+          voiceTrace('wake.greetCancelled', {
+            heard: transcript.slice(0, 60),
+            windowEnd: heard.windowEnd,
+            preRollEnd: heard.preRollEnd,
+          });
         }
         clearGreetingTimer();
       }

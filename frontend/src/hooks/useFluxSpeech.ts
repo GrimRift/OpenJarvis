@@ -122,7 +122,7 @@ export interface UseFluxSpeechOptions {
     transcript: string,
     turnIndex: number,
     words: FluxWord[],
-    heard: { pastPreRoll: boolean },
+    heard: { pastPreRoll: boolean; windowEnd: number; preRollEnd: number },
   ) => void;
   onTurnResumed?: (turnIndex: number) => void;
   /**
@@ -484,6 +484,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         case 'update':
           cb.onUpdate?.(action.transcript, action.turnIndex, action.words, {
             pastPreRoll: heardPastPreRoll(action.windowEnd, preRollEndRef.current),
+            windowEnd: action.windowEnd,
+            preRollEnd: preRollEndRef.current,
           });
           break;
         case 'speculate':
