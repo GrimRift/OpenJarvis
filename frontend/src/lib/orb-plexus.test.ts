@@ -8,6 +8,8 @@ import {
   breathScale,
   MIN_DRAW_GAP_MS,
   MORPH_FRAMES,
+  SPEAKING_MORPH_FRAMES,
+  easeIntoSpeaking,
   easeMorph,
   speakingScale,
   syllableRise,
@@ -139,5 +141,17 @@ describe('a state change', () => {
   it('takes about a second', () => {
     expect(MORPH_FRAMES / 60).toBeGreaterThan(0.8);
     expect(MORPH_FRAMES / 60).toBeLessThan(1.4);
+  });
+
+  it('into speaking, is there with the first word', () => {
+    // A reminder's words start 170 ms after the orb hears of it; the gentle
+    // morph was only half way there at 480 ms (25 September).
+    const at = (ms: number) => easeIntoSpeaking((ms / (1000 / 60)) / SPEAKING_MORPH_FRAMES);
+    expect(at(330)).toBeGreaterThanOrEqual(0.8);
+    expect(easeMorph(330 / (1000 / 60) / MORPH_FRAMES)).toBeLessThan(0.5);
+    // Still no lurch: no single frame moves it more than 7% of the way.
+    expect(easeIntoSpeaking(1 / SPEAKING_MORPH_FRAMES)).toBeLessThan(0.07);
+    expect(easeIntoSpeaking(0)).toBe(0);
+    expect(easeIntoSpeaking(1)).toBe(1);
   });
 });

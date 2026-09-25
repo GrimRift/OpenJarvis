@@ -61,7 +61,10 @@ META_FILE = "meta.json"
 #: 25% less of the 3-8 Hz pulse the eye reads as talking (measured 24
 #: September) -- and its orb "moved too little". Each voice's pair is fitted
 #: so its orb moves as Nano Jarvis's does; neutral changes nothing.
-ORB_NEUTRAL = {"gain": 1.0, "contrast": 1.0}
+#: release and kick: how fast the speaking orb draws in after a syllable and
+#: how hard an onset lights it -- a smooth voice's orb held one size
+#: (25 September).
+ORB_NEUTRAL = {"gain": 1.0, "contrast": 1.0, "release": 0.035, "kick": 1.0}
 
 
 # Generation controls Chatterbox Turbo/Nano actually honour. (cfg_weight,
@@ -125,7 +128,12 @@ class VoiceInfo:
 def _orb_shaping(raw: Any) -> Dict[str, float]:
     shaping = dict(ORB_NEUTRAL)
     if isinstance(raw, dict):
-        for key, low, high in (("gain", 0.5, 3.0), ("contrast", 0.5, 3.0)):
+        for key, low, high in (
+            ("gain", 0.5, 3.0),
+            ("contrast", 0.5, 3.0),
+            ("release", 0.02, 0.2),
+            ("kick", 0.5, 3.0),
+        ):
             try:
                 shaping[key] = min(high, max(low, float(raw.get(key, shaping[key]))))
             except (TypeError, ValueError):

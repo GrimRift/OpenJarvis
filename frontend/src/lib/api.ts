@@ -369,7 +369,7 @@ export interface LocalVoiceInfo {
   /** The name shown for it ("J.A.R.V.I.S."); the folder name when empty. */
   label?: string;
   /** How the orb reads this voice (lib/audio-level.ts setOrbShaping). */
-  orb?: { gain?: number; contrast?: number };
+  orb?: { gain?: number; contrast?: number; release?: number; kick?: number };
 }
 
 export interface SpeechVoices {

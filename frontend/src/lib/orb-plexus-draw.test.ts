@@ -488,6 +488,9 @@ describe('the thorns in loud, fast speech', () => {
     S.spikes = true;
     let most = 0;
     let thrownFrames = 0;
+    // Settled into speaking first: this is about speech, not the morph into
+    // it, whose length changes which random draws land where.
+    for (let f = -120; f < 0; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, 0);
     for (let f = 0; f < 600; f++) {
       // A sharp, loud syllable every 8 frames: fast, emphatic speech.
       drawPlexus(target, canvas, S, 'speaking', f, 1, (f % 8) < 3 ? 1 : 0.1);
@@ -502,5 +505,34 @@ describe('the thorns in loud, fast speech', () => {
     random.mockRestore();
     expect(thrownFrames).toBeGreaterThan(0); // still lively
     expect(most).toBeLessThanOrEqual(PLEXUS_THORNS.regions + 2);
+  });
+});
+
+describe('how the speaking orb follows a smooth voice', () => {
+  // 25 September: Frieren on Turbo runs her words together, and her orb
+  // held one size; its motion is per voice now (audio-level.ts OrbShaping).
+  const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
+  const run = (motion?: { release: number; kick: number }) => {
+    resetRecord();
+    const target = stubContext(shared);
+    const S = createPlexusState();
+    for (let f = 0; f < 90; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, 0.9, motion);
+    const held = S.voiceEnv;
+    // A short dip between two words, 100 ms.
+    for (let f = 90; f < 96; f++) drawPlexus(target, canvas, S, 'speaking', f, 1, 0.3, motion);
+    const dipped = S.voiceEnv;
+    drawPlexus(target, canvas, S, 'speaking', 96, 1, 0.9, motion);
+    return { drawIn: held - dipped, pulse: S.pulse };
+  };
+
+  it('draws in over a short dip and swells harder on the next word', () => {
+    const neutral = run();
+    const frieren = run({ release: 0.12, kick: 1.6 });
+    expect(frieren.drawIn).toBeGreaterThan(neutral.drawIn * 2.5);
+    expect(frieren.pulse).toBeGreaterThan(neutral.pulse * 1.5);
+  });
+
+  it('leaves Nano Jarvis exactly as it was when nothing is given', () => {
+    expect(run({ release: 0.035, kick: 1 })).toEqual(run());
   });
 });

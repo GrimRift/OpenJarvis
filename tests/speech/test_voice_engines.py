@@ -26,7 +26,7 @@ class TestVoiceMeta:
         assert store.meta("jarvis") == {
             "engine": "nano",
             "label": "",
-            "orb": {"gain": 1.0, "contrast": 1.0},
+            "orb": engine_mod.ORB_NEUTRAL,
         }
 
     def test_meta_is_kept_apart_from_the_sampling(self, tmp_path):
@@ -55,7 +55,7 @@ class TestOrbShaping:
     def test_a_voice_without_one_is_neutral(self, tmp_path):
         store = engine_mod.VoiceStore(tmp_path)
         _voice(tmp_path, "jarvis", {"engine": "nano", "label": "Jarvis"})
-        assert store.meta("jarvis")["orb"] == {"gain": 1.0, "contrast": 1.0}
+        assert store.meta("jarvis")["orb"] == engine_mod.ORB_NEUTRAL
 
     def test_the_fitted_pair_is_read_and_bounded(self, tmp_path):
         store = engine_mod.VoiceStore(tmp_path)
@@ -63,8 +63,19 @@ class TestOrbShaping:
             tmp_path, "t", {"engine": "turbo", "orb": {"gain": 1.2, "contrast": 1.5}}
         )
         _voice(tmp_path, "wild", {"orb": {"gain": 99, "contrast": "loud"}})
-        assert store.info("t").orb == {"gain": 1.2, "contrast": 1.5}
-        assert store.meta("wild")["orb"] == {"gain": 3.0, "contrast": 1.0}
+        fitted = {**engine_mod.ORB_NEUTRAL, "gain": 1.2, "contrast": 1.5}
+        assert store.info("t").orb == fitted
+        assert store.meta("wild")["orb"] == {**engine_mod.ORB_NEUTRAL, "gain": 3.0}
+
+    def test_how_the_orb_follows_the_voice_is_read_and_bounded(self, tmp_path):
+        # Frieren on Turbo: a faster draw-in and harder onsets than neutral.
+        store = engine_mod.VoiceStore(tmp_path)
+        _voice(tmp_path, "f", {"orb": {"release": 0.12, "kick": 1.6}})
+        _voice(tmp_path, "wild", {"orb": {"release": 5, "kick": 0}})
+        assert store.meta("f")["orb"]["release"] == 0.12
+        assert store.meta("f")["orb"]["kick"] == 1.6
+        assert store.meta("wild")["orb"]["release"] == 0.2
+        assert store.meta("wild")["orb"]["kick"] == 0.5
 
     def test_saving_the_name_keeps_the_shaping(self, tmp_path):
         store = engine_mod.VoiceStore(tmp_path)
@@ -72,7 +83,8 @@ class TestOrbShaping:
             tmp_path, "t", {"engine": "turbo", "orb": {"gain": 1.2, "contrast": 1.5}}
         )
         store.save_meta("t", label="J.A.R.V.I.S.")
-        assert store.meta("t")["orb"] == {"gain": 1.2, "contrast": 1.5}
+        fitted = {**engine_mod.ORB_NEUTRAL, "gain": 1.2, "contrast": 1.5}
+        assert store.meta("t")["orb"] == fitted
 
 
 class FakeLoading(engine_mod.ChatterboxEngine):

@@ -5,7 +5,7 @@ import {
   particleCountFor,
   stepRotation,
 } from '../../lib/orb-motion';
-import { getSpeechLevel } from '../../lib/audio-level';
+import { getOrbShaping, getSpeechLevel } from '../../lib/audio-level';
 import { serverVoiceLevel } from '../../lib/server-voice';
 import { wakeCount } from '../../lib/orb-events';
 import {
@@ -178,6 +178,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
             sinceDrawRef.current,
             // The tab's own voice or the server's, whichever is sounding.
             stateRef.current === 'speaking' ? Math.max(getSpeechLevel(), serverVoiceLevel(now)) : 0,
+            getOrbShaping(),
           );
           sinceDrawRef.current = 0;
           lastDrawRef.current = now;

@@ -5,6 +5,7 @@ import {
   getSpeechLevel,
   ORB_NEUTRAL,
   resetSpeechLevel,
+  getOrbShaping,
   setOrbShaping,
   rmsFromTimeDomain,
   setSpeechLevel,
@@ -129,6 +130,17 @@ describe('per-voice orb shaping', () => {
     // A wider swing between syllable peaks and the dips between them.
     expect(loudShaped - quietShaped).toBeGreaterThan(loud - quiet);
     expect(loudShaped).toBeLessThanOrEqual(1);
+  });
+
+  it('follows the voice as Nano Jarvis does unless a voice says otherwise', () => {
+    setOrbShaping({ gain: 1.2, contrast: 1.5 });
+    expect(getOrbShaping().release).toBe(ORB_NEUTRAL.release);
+    expect(getOrbShaping().kick).toBe(1);
+    setOrbShaping({ gain: 1.1, contrast: 1.4, release: 0.12, kick: 1.6 });
+    expect(getOrbShaping()).toEqual({ gain: 1.1, contrast: 1.4, release: 0.12, kick: 1.6 });
+    setOrbShaping({ release: 9, kick: -1 });
+    expect(getOrbShaping().release).toBe(0.2);
+    expect(getOrbShaping().kick).toBe(0.5);
   });
 
   it('bounds a bad value instead of trusting it', () => {

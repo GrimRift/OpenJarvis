@@ -288,8 +288,8 @@ def voice_meta(name: str) -> Dict[str, str]:
         label = str(data.get("label") or "")
         raw = data.get("orb")
         if isinstance(raw, dict):
-            for key in orb:
-                orb[key] = min(3.0, max(0.5, float(raw.get(key, orb[key]))))
+            for key, (low, high) in ORB_RANGES.items():
+                orb[key] = min(high, max(low, float(raw.get(key, orb[key]))))
     except (OSError, ValueError, AttributeError, TypeError):
         pass
     return {
@@ -301,7 +301,15 @@ def voice_meta(name: str) -> Dict[str, str]:
 
 #: The orb reads a voice as min(1, (RMS x scale x gain) ** contrast); see
 #: voice_sidecar/engine.py ORB_NEUTRAL for why voices differ.
-ORB_NEUTRAL = {"gain": 1.0, "contrast": 1.0}
+#: release and kick are how the speaking orb follows the voice (frontend
+#: audio-level.ts OrbShaping); the server's own envelopes use only the pair.
+ORB_NEUTRAL = {"gain": 1.0, "contrast": 1.0, "release": 0.035, "kick": 1.0}
+ORB_RANGES = {
+    "gain": (0.5, 3.0),
+    "contrast": (0.5, 3.0),
+    "release": (0.02, 0.2),
+    "kick": (0.5, 3.0),
+}
 
 
 def orb_shaping(speech_cfg: Any = None) -> Dict[str, float]:

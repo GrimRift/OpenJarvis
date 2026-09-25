@@ -52,14 +52,29 @@ export const SPEECH_LEVEL_SCALE = 3.5;
 export interface OrbShaping {
   gain: number;
   contrast: number;
+  /** How fast the speaking orb draws in after a syllable, per 60Hz frame.
+   * Nano Jarvis pauses crisply between phrases and its orb breathes at
+   * 0.035; Frieren on Turbo runs her words together, never dipped long
+   * enough for that slow release to show, and held one size ("mostly didn't
+   * move", 25 September). A faster release lets the size follow her
+   * syllables instead of only her pauses. */
+  release: number;
+  /** How hard a syllable's onset lights the patches and swells the body:
+   * Turbo's onsets are softer than Nano's (mean rise 0.16 against 0.19). */
+  kick: number;
 }
-export const ORB_NEUTRAL: OrbShaping = { gain: 1, contrast: 1 };
+export const ORB_NEUTRAL: OrbShaping = { gain: 1, contrast: 1, release: 0.035, kick: 1 };
 let shaping: OrbShaping = ORB_NEUTRAL;
 
 export function setOrbShaping(next?: Partial<OrbShaping> | null): void {
-  const clamp = (v: unknown, fallback: number) =>
-    typeof v === 'number' && Number.isFinite(v) ? Math.min(3, Math.max(0.5, v)) : fallback;
-  shaping = { gain: clamp(next?.gain, 1), contrast: clamp(next?.contrast, 1) };
+  const clamp = (v: unknown, fallback: number, low = 0.5, high = 3) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(high, Math.max(low, v)) : fallback;
+  shaping = {
+    gain: clamp(next?.gain, 1),
+    contrast: clamp(next?.contrast, 1),
+    release: clamp(next?.release, ORB_NEUTRAL.release, 0.02, 0.2),
+    kick: clamp(next?.kick, 1),
+  };
 }
 
 export function getOrbShaping(): OrbShaping {

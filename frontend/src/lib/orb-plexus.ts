@@ -489,6 +489,27 @@ export function easeMorph(x: number): number {
   const u = Math.min(1, Math.max(0, x));
   return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
 }
+
+/**
+ * Into speaking, the morph starts at speed and settles instead. With the
+ * gentle start the orb was half way to its speaking look 480 ms into a
+ * reminder and 80% there at 570 ms, while the words began at 170 ms: a
+ * two-second reminder was mostly over before the orb looked like it was
+ * saying it (measured in the page, 25 September). This reaches 80% in
+ * about 320 ms and moves no more than 7% of the way in any one frame.
+ */
+export const SPEAKING_MORPH_FRAMES = 46;
+export function easeIntoSpeaking(x: number): number {
+  const u = Math.min(1, Math.max(0, x));
+  return 1 - Math.pow(1 - u, 3);
+}
+
+/** How the speaking orb follows the voice (audio-level.ts OrbShaping). */
+export interface PlexusMotion {
+  release: number;
+  kick: number;
+}
+export const PLEXUS_MOTION_NEUTRAL: PlexusMotion = { release: 0.035, kick: 1 };
 const lerp = (a: number, b: number, e: number) => a + (b - a) * e;
 
 export interface PlexusState {
@@ -790,6 +811,7 @@ export function drawPlexus(
   t: number,
   dt: number,
   speech: number,
+  motion: PlexusMotion = PLEXUS_MOTION_NEUTRAL,
 ): void {
   const w = canvas.width;
   const h = canvas.height;
@@ -812,8 +834,9 @@ export function drawPlexus(
     // listening, to clear the rim.
     if (state === 'listening') S.listenAt = -PLEXUS_RIPPLE.length * 0.6;
   }
-  S.trans = Math.min(1, S.trans + dt / MORPH_FRAMES);
-  const e = easeMorph(S.trans);
+  const intoSpeaking = state === 'speaking';
+  S.trans = Math.min(1, S.trans + dt / (intoSpeaking ? SPEAKING_MORPH_FRAMES : MORPH_FRAMES));
+  const e = intoSpeaking ? easeIntoSpeaking(S.trans) : easeMorph(S.trans);
   const F = S.from;
   const pace = lerp(F.pace, cfg.pace, e);
   S.lastPace = pace;
@@ -893,7 +916,7 @@ export function drawPlexus(
   S.look.wires = lerp(F.look.wires, want.wires, e);
   S.look.core = lerp(F.look.core, want.core, e);
 
-  const rise = syllableRise(speech, S.lastSpeech);
+  const rise = syllableRise(speech, S.lastSpeech) * motion.kick;
   S.lastSpeech = speech;
   S.pulse = Math.max(S.pulse * Math.pow(0.88, dt), rise * 4.5);
   S.thornPulse = Math.max(
@@ -975,7 +998,7 @@ export function drawPlexus(
     S.spinZ += tumble * 0.0035 * Math.cos(t * 0.07) * dt;
   }
 
-  const attack = speech > S.voiceEnv ? 0.22 : 0.035;
+  const attack = speech > S.voiceEnv ? 0.22 : motion.release;
   S.voiceEnv += (speech - S.voiceEnv) * Math.min(1, attack * dt);
 
   const breath = lerp(S.from.breath, breathScale(state, t, S.voiceEnv), e);
