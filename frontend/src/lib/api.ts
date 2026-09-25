@@ -1,5 +1,4 @@
 import type { ModelInfo, SavingsData, ServerInfo } from '../types';
-import { SUPABASE_ANON_KEY, SUPABASE_URL } from './supabase';
 import { serializeToolCallArguments } from './tool-call';
 
 // ---------------------------------------------------------------------------
@@ -1298,44 +1297,6 @@ export async function fetchAgentTrace(agentId: string, traceId: string): Promise
   const res = await apiFetch(`/v1/managed-agents/${agentId}/traces/${traceId}`);
   if (!res.ok) throw new Error(`Failed: ${res.status}`);
   return res.json();
-}
-
-// ---------------------------------------------------------------------------
-// Leaderboard savings submission (Supabase)
-// ---------------------------------------------------------------------------
-
-export interface SavingsSubmission {
-  anon_id: string;
-  display_name: string;
-  email: string;
-  total_calls: number;
-  total_tokens: number;
-  dollar_savings: number;
-  energy_wh_saved: number;
-  flops_saved: number;
-  token_counting_version?: number;
-}
-
-export async function submitSavings(data: SavingsSubmission): Promise<boolean> {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
-  try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/savings_entries?on_conflict=anon_id`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          Prefer: 'resolution=merge-duplicates',
-        },
-        body: JSON.stringify(data),
-      },
-    );
-    return res.ok || res.status === 201 || res.status === 200;
-  } catch {
-    return false;
-  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,4 @@
 import { EnergyDashboard } from '../components/Dashboard/EnergyDashboard';
-import { CostComparison } from '../components/Dashboard/CostComparison';
-import { LeaderboardCard } from '../components/Dashboard/LeaderboardCard';
 import { TraceDebugger } from '../components/Dashboard/TraceDebugger';
 
 export function DashboardPage() {
@@ -20,14 +18,12 @@ export function DashboardPage() {
             </div>
           </div>
           <p className="text-sm mt-2 max-w-2xl" style={{ color: 'var(--color-text-secondary)' }}>
-            Live telemetry for the on-device inference engine — power draw, token throughput, and cost savings versus cloud APIs.
+            Live telemetry for the on-device inference engine — power draw and token throughput.
           </p>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        <div className="mb-4">
           <EnergyDashboard />
-          <CostComparison />
-          <LeaderboardCard />
         </div>
 
         <TraceDebugger />

@@ -10,7 +10,6 @@ import {
   PanelLeftClose,
   PanelLeft,
   Cpu,
-  Rocket,
   Bot,
   Sun,
   Moon,
@@ -64,7 +63,6 @@ export function Sidebar() {
     { path: '/system-health', icon: Activity, label: 'Health' },
     { path: '/logs', icon: ScrollText, label: 'Logs' },
     { path: '/settings', icon: Settings, label: 'Settings' },
-    { path: '/get-started', icon: Rocket, label: 'Get Started' },
   ];
 
   return (
