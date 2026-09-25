@@ -263,13 +263,46 @@ class AudioRing:
         self._frames.clear()
 
 
-#: The small model gone unused this long is transcribed once on silence.
+#: The small model gone unused this long is transcribed once, on one of
+#: Sage's greetings (_warm_audio).
 #: After two idle hours the first check of the night took 2,937 ms and the
 #: second 983 ms, against 340-620 ms warm (25 September) -- Windows pages
 #: out an idle GPU context, and 3 s is the verifier's limit.
 IDLE_WARM_SECONDS = 240.0
 #: A second of digital silence: nothing to hear, nothing kept.
 _SILENCE = bytes(16000 * 2)
+#: Sage's own greetings, spoken words to warm the model on.
+_GREETINGS = Path(__file__).resolve().parents[3] / "frontend" / "public" / "greetings"
+_warm_pcm: Optional[bytes] = None
+
+
+def _warm_audio() -> bytes:
+    """Words to warm the model on, as 16 kHz int16 PCM: one of Sage's own
+    greetings. Silence reaches only the speech filter, which finds nothing
+    and skips the transcriber -- warmed on it, the first real check still
+    took 428 ms, against 159 ms warmed on words (25 September). Silence
+    when no greeting can be read."""
+    global _warm_pcm
+    if _warm_pcm is not None:
+        return _warm_pcm
+    pcm = _SILENCE
+    try:
+        import numpy as np
+
+        clip = next(iter(sorted(_GREETINGS.glob("*/*.wav"))), None)
+        if clip is not None:
+            with wave.open(str(clip), "rb") as handle:
+                rate, channels = handle.getframerate(), handle.getnchannels()
+                raw = handle.readframes(handle.getnframes())
+            if handle.getsampwidth() == 2:
+                audio = np.frombuffer(raw, np.int16).astype(np.float32)[::channels]
+                at = np.arange(0, len(audio), rate / SAMPLE_RATE)
+                resampled = np.interp(at, np.arange(len(audio)), audio)
+                pcm = resampled[: SAMPLE_RATE * 2].astype(np.int16).tobytes()
+    except Exception as exc:  # noqa: BLE001 -- silence still warms the load
+        logger.debug("No greeting to warm the verifier on: %s", exc)
+    _warm_pcm = pcm
+    return pcm
 # Shared by every socket's verifier (two open tabs share the one model):
 # when the model last ran, and how many real checks are running now.
 _verifier_state = {
@@ -374,7 +407,7 @@ class WakeWordVerifier:
         return str(getattr(result, "text", "") or "").strip(), muffled
 
     async def warm_if_idle(self) -> Optional[int]:
-        """Run the model once on silence if it has sat unused for
+        """Run the model once on a greeting (_warm_audio) if it has sat unused for
         IDLE_WARM_SECONDS, so the next real check is not the slow one.
 
         Only when nothing else wants the card or the room: never during a
@@ -417,7 +450,7 @@ class WakeWordVerifier:
         started = time.perf_counter()
         try:
             await asyncio.get_running_loop().run_in_executor(
-                _VERIFY_POOL, self._transcribe, _SILENCE
+                _VERIFY_POOL, self._transcribe, _warm_audio()
             )
         except Exception as exc:  # noqa: BLE001 -- warm-up is optional
             logger.debug("Wake-word verifier idle warm-up failed: %s", exc)
@@ -430,7 +463,7 @@ class WakeWordVerifier:
         with _verifier_state_lock:
             _verifier_state["warm_runs"] += 1
             _verifier_state["last_warm_ms"] = ms
-        logger.info("Wake-word verifier kept warm (%d ms on silence)", ms)
+        logger.info("Wake-word verifier kept warm (%d ms)", ms)
         return ms
 
     async def verify(self, pcm: bytes, *, strict: Any = False) -> Verdict:
@@ -562,9 +595,16 @@ def local_verifier_backend(config: Any) -> Any:
 
 
 def warm_local_verifier(config: Any) -> None:
-    """Load the small model now, so the first "Hey Sage" is not the slow one."""
+    """Load the small model now and run it once, so the first "Hey Sage"
+    is not the slow one: loaded but never run, the first check after a
+    restart took 1.7-1.8 s against ~250 ms after it (25 September)."""
     try:
-        local_verifier_backend(config).health()
+        backend = local_verifier_backend(config)
+        backend.health()
+        # On the checks' own thread: run from another, the first real
+        # check still took 0.9 s.
+        warm = WakeWordVerifier(backend)._transcribe
+        _VERIFY_POOL.submit(warm, _warm_audio()).result()
     except Exception as exc:  # noqa: BLE001 -- warm-up is optional
         logger.debug("Wake-word verifier warm-up failed: %s", exc)
 

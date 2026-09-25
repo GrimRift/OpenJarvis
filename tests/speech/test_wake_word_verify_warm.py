@@ -1,5 +1,5 @@
-"""The idle warm-up of the wake-word verifier: once on silence after four
-unused minutes, and never in anyone's way."""
+"""The idle warm-up of the wake-word verifier: once, in a quiet room,
+after four unused minutes, and never in anyone's way."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def test_it_runs_once_on_silence_after_the_idle_time(monkeypatch):
     verifier = wwv.WakeWordVerifier(backend)
     ms = asyncio.run(verifier.warm_if_idle())
     assert ms is not None and len(backend.heard) == 1
-    # Silence, and nothing kept of it.
+    # Nothing kept of it.
     assert kept == []
     # Not again until the model has been idle that long once more.
     assert asyncio.run(verifier.warm_if_idle()) is None
