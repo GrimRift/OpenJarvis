@@ -1877,21 +1877,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             stopStreaming();
           }
           await new Promise((resolve) => setTimeout(resolve, 0));
-          let text = spoken;
-          if (kind === 'add' && question) {
-            if (activeId) useAppStore.getState().retractLastExchange(activeId);
-            text = `${question}${AMEND_SEPARATOR}${spoken}`;
-            amendNextRef.current = true;
-          } else {
-            const now = useAppStore.getState();
-            const last = now.messages[now.messages.length - 1];
-            if (now.activeId && last?.role === 'assistant' && !last.content.endsWith(INTERRUPTED_MARK)) {
-              updateLastAssistant(now.activeId, last.content + INTERRUPTED_MARK);
-            }
+          // The half-spoken answer stays, even for an addition: the user has
+          // heard it, and "explain that longer" means it. Withdrawing it and
+          // re-asking the merged question got a different fact altogether
+          // (25 September).
+          const now = useAppStore.getState();
+          const last = now.messages[now.messages.length - 1];
+          if (now.activeId && last?.role === 'assistant' && !last.content.endsWith(INTERRUPTED_MARK)) {
+            updateLastAssistant(now.activeId, last.content + INTERRUPTED_MARK);
           }
           voiceOriginatedRef.current = true;
-          void sendMessageRef.current(text).catch(() => {});
-          openContinuationWindow(text);
+          void sendMessageRef.current(spoken).catch(() => {});
+          openContinuationWindow(spoken);
           return;
         }
         voiceTrace('barge.echoDropped', {
