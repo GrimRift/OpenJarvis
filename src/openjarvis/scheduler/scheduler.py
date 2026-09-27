@@ -74,6 +74,104 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# -- Missed runs ---------------------------------------------------------------
+#
+# A run whose time passed while Sage was off used to happen as soon as Sage
+# started, however late: on 27 September a start at 19:57 ran the 23:10 sleep
+# reminder, the 05:00 morning briefing and the diary -- which then wrote up the
+# wrong day. Each task now says what a late run means for it (the user's
+# choices, 27 September), in its metadata as ``late_policy`` or by its key:
+#
+#   "same_day"  run if it is still the local day it was due (morning briefing
+#               and morning agent)
+#   "catch_up"  always run, for the time it was due (diary, memory clean-up)
+#   minutes     run only up to this late; otherwise wait for the next time
+#
+# One-off reminders are always delivered, marked as missed.
+
+#: Late by less than this is just the poll's own delay: run as normal.
+ON_TIME_MINUTES = 5
+#: A daily task with no policy of its own -- a reminder at a set time -- is
+#: stale after this.
+LATE_GRACE_MINUTES = 60
+_POLICY_BY_KEY = {
+    "digest-daily": "same_day",
+    "proactive-daily": "same_day",
+    "m36-episodes": "catch_up",
+    "m38-memory-hygiene": "catch_up",
+}
+
+
+def late_policy(task: "ScheduledTask") -> Any:
+    meta = task.metadata or {}
+    if meta.get("late_policy") is not None:
+        return meta["late_policy"]
+    for key_field in ("openjarvis_task_key", "managed_by"):
+        if meta.get(key_field) in _POLICY_BY_KEY:
+            return _POLICY_BY_KEY[meta[key_field]]
+    return LATE_GRACE_MINUTES
+
+
+def _local_zone(task: "ScheduledTask") -> Any:
+    name = (task.metadata or {}).get("timezone")
+    if name and name != "UTC":
+        try:
+            from zoneinfo import ZoneInfo
+
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return datetime.now().astimezone().tzinfo
+
+
+def plan_run(task: "ScheduledTask", now: datetime) -> tuple:
+    """Whether a due task runs now, the prompt to run it with, and why not.
+
+    Returns ``(run, prompt, reason)``.
+    """
+    try:
+        due = datetime.fromisoformat(task.next_run or "")
+    except (TypeError, ValueError):
+        return True, task.prompt, ""
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    late = now - due
+    if late <= timedelta(minutes=ON_TIME_MINUTES):
+        return True, task.prompt, ""
+    zone = _local_zone(task)
+    due_local = due.astimezone(zone)
+    when = due_local.strftime("%I:%M %p, %a %d %b").lstrip("0")
+
+    if task.schedule_type == "once":
+        return (
+            True,
+            f"(Missed while Sage was off: this was due at {when}. Deliver it "
+            f"now and say it was missed at that time.) {task.prompt}",
+            "",
+        )
+    if task.schedule_type != "cron":
+        return True, task.prompt, ""
+
+    policy = late_policy(task)
+    if policy == "catch_up":
+        if (task.metadata or {}).get("managed_by") == "m36-episodes":
+            # The day it was due, not the day Sage came back.
+            return True, f"Write Sage's diary entry for {due_local.date()}", ""
+        return True, task.prompt, ""
+    if policy == "same_day":
+        if due_local.date() == now.astimezone(zone).date():
+            return True, task.prompt, ""
+        return False, task.prompt, f"due {when}, no longer the same day"
+    try:
+        grace = float(policy)
+    except (TypeError, ValueError):
+        grace = LATE_GRACE_MINUTES
+    if late <= timedelta(minutes=grace):
+        return True, task.prompt, ""
+    minutes = int(late.total_seconds() // 60)
+    return False, task.prompt, f"due {when}, {minutes} min late"
+
+
 def _to_utc_iso(value: str) -> str:
     """Normalise an ISO timestamp to UTC so it compares as a string.
 
@@ -327,14 +425,41 @@ class TaskScheduler:
                     due = self._store.get_due_tasks(now)
                 for task_dict in due:
                     task = ScheduledTask.from_dict(task_dict)
-                    self._execute_task(task)
+                    run, prompt, reason = plan_run(task, datetime.now(timezone.utc))
+                    if run:
+                        self._execute_task(task, prompt=prompt)
+                    else:
+                        self._skip_task(task, reason)
             except Exception:
                 logger.exception("Scheduler poll error")
             self._stop_event.wait(timeout=self._poll_interval)
 
-    def _execute_task(self, task: ScheduledTask) -> None:
+    def _skip_task(self, task: ScheduledTask, reason: str) -> None:
+        """Pass over a run missed while Sage was off; wait for the next."""
+        now = _now_iso()
+        with self._lock:
+            d = self._store.get_task(task.id)
+            if d is None:
+                return
+            next_run = self._compute_next_run(ScheduledTask.from_dict(d))
+            self._store.log_run(
+                task_id=task.id,
+                started_at=now,
+                finished_at=now,
+                success=True,
+                result=f"Skipped: {reason} (Sage was off); next {next_run}",
+                error="",
+            )
+            d["next_run"] = next_run
+            self._store.update_task(d)
+        logger.info("Skipped missed run of %s: %s", task.id, reason)
+
+    def _execute_task(
+        self, task: ScheduledTask, prompt: Optional[str] = None
+    ) -> None:
         """Execute a single due task and log the result."""
         started_at = _now_iso()
+        prompt = prompt or task.prompt
 
         # Publish start event
         if self._bus is not None:
@@ -382,7 +507,7 @@ class TaskScheduler:
                         ask_kwargs["model"] = cloud
                 result_text = _stringify_result(
                     self._system.ask(
-                        task.prompt,
+                        prompt,
                         **ask_kwargs,
                     )
                 )
