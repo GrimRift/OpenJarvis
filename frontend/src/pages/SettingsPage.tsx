@@ -1535,7 +1535,7 @@ function KeytermEditor({ showSaved }: { showSaved: () => void }) {
         onChange={(event) => setText(event.target.value)}
         rows={6}
         spellCheck={false}
-        placeholder={'Revilloza\nCalamba\nkumusta'}
+        placeholder={'Arkwright\nCalamba\nkumusta'}
         className="w-full rounded-lg px-3 py-2 text-sm font-mono"
         style={{
           background: 'var(--color-input-bg)',

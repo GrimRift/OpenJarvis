@@ -87,4 +87,4 @@ visible in this repository.
 
 ## Contact
 
-Questions about this policy: yansonmark18@gmail.com
+Questions about this policy: open an issue on the repository.

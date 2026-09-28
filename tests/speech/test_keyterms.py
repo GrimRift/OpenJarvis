@@ -59,12 +59,12 @@ class TestReadingTheClassSchedule:
             "Room | Mode | Instructor |\n"
             "|---|---|---|---|---|---|---|---|\n"
             "| CECMPM1D | Construction Methods and Drafting | BSCE231E | "
-            "Tuesday | 05:00PM | Mezz 6 | In-person | Ferly Ann R. Revilloza, MS |\n",
+            "Tuesday | 05:00PM | Mezz 6 | In-person | Dana Q. Arkwright, MS |\n",
             encoding="utf-8",
         )
         found = keyterms.from_class_schedule(schedule)
         # The surname is what gets mangled; the degree suffix is not a word.
-        assert "Revilloza" in found
+        assert "Arkwright" in found
         assert "Construction" in found
         assert not any(term in ("MS", "and") for term in found)
 
@@ -74,9 +74,9 @@ class TestReadingTheClassSchedule:
 
 class TestTheStoredList:
     def test_it_round_trips_and_is_cleaned_on_the_way_in(self, tmp_path):
-        saved = keyterms.save_user_terms(["Revilloza", "po", "Revilloza"], tmp_path)
-        assert saved == ["Revilloza"]
-        assert keyterms.load_user_terms(tmp_path) == ["Revilloza"]
+        saved = keyterms.save_user_terms(["Arkwright", "po", "Arkwright"], tmp_path)
+        assert saved == ["Arkwright"]
+        assert keyterms.load_user_terms(tmp_path) == ["Arkwright"]
 
     def test_a_missing_or_broken_file_reads_as_empty(self, tmp_path):
         assert keyterms.load_user_terms(tmp_path) == []
@@ -114,12 +114,12 @@ class TestLearnedFromMemory:
         self._facts(
             tmp_path,
             {"text": "Mark has a Project due. The project is late."},
-            {"text": "Classes are on Mondays with Revilloza."},
+            {"text": "Classes are on Mondays with Arkwright."},
         )
         learned = keyterms.from_memory(tmp_path)
         assert "Project" not in learned and "Mark" not in learned
         assert "Mondays" not in learned
-        assert "Revilloza" in learned
+        assert "Arkwright" in learned
 
     def test_private_and_removed_facts_are_never_sent(self, tmp_path):
         self._facts(

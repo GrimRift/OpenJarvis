@@ -65,7 +65,7 @@ class TestTelegramPutsItsTokenInThePath:
 
     def test_the_bot_token_is_removed(self, stripper):
         out = stripper.strip(
-            "ConnectError for https://api.telegram.org/bot8509134310:AAH7xQ2vExampleTokenValue/sendMessage"
+            "ConnectError for https://api.telegram.org/bot1234567890:AAH7xQ2vExampleTokenValue/sendMessage"
         )
         assert "AAH7xQ2vExampleTokenValue" not in out
         assert "api.telegram.org" in out

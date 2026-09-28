@@ -12,7 +12,7 @@ Three sources, merged:
   places and apps that come up here, and a few Tagalog words the user
   actually says.
 * the class schedule -- instructors and subject names, read from the local
-  file, so "Revilloza" is not a lottery.
+  file, so "Arkwright" is not a lottery.
 * the user's own list, edited in Settings and kept in ``keyterms.json``.
 * names learned from what Sage remembers -- the people, channels, games and
   programs the user talks about. A friend's words came back wrong often

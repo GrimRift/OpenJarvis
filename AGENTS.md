@@ -1,14 +1,14 @@
 # OpenJarvis-Lab (Sage fork)
 
 Milestones and scoped-but-unbuilt work live in `ROADMAP.md`; shipped work,
-newest first, in `HANDOFF.md`.
+newest first, in the maintainer's private handoff notes (outside the repository, `notes\HANDOFF.md` in the data folder).
 
 Branch: `feature/sage-customization`. Experimental fork, not production Sage
 Architect. Live config: `C:\AI\OpenJarvis-Data\config.toml`.
 
 ## Fast start
 
-- Inspect only files relevant to the request. Read `HANDOFF.md` when resuming
+- Inspect only files relevant to the request. Read the handoff notes when resuming
   roadmap work, checking current state, or explicitly asked; do not load it for
   unrelated routine edits.
 - Preserve the dirty working tree and unrelated changes. Never reset/discard

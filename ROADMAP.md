@@ -5,7 +5,7 @@ tracked in conversation only, which meant a new assistant started blind. Ordered
 newest first; anything marked **not started** has been scoped with the user but
 not built.
 
-For what has actually shipped, read `HANDOFF.md`. For the traps that cost real
+For what has actually shipped, read the maintainer's private handoff notes (outside the repository, `notes\HANDOFF.md` in the data folder). For the traps that cost real
 debugging sessions, read `AGENTS.md`.
 
 ---
@@ -178,6 +178,6 @@ was never the problem.
 
 ## Shipped
 
-M0–M31 and M33 are done; `HANDOFF.md` carries the detail, newest first. The most
+M0–M31 and M33 are done; the handoff notes carry the detail, newest first. The most
 recent are M31's file-upload half (attach a document, and pages the extractor
 mangles get read by looking at them) and the CI lane for this branch.
