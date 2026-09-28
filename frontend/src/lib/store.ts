@@ -56,6 +56,7 @@ import type {
   TokenUsage,
 } from '../types';
 import type { ManagedAgent } from './api';
+import { inDesktopShell } from './api';
 import { isEmbedOnlyModel } from './model-capabilities';
 import { serializeToolCallArguments } from './tool-call';
 
@@ -745,7 +746,9 @@ export const useAppStore = create<AppState>((set, get) => {
     settings: loadSettings(),
 
     commandPaletteOpen: false,
-    sidebarOpen: true,
+    // The Windows app opens with the chat list tucked away (the user's
+    // choice); the browser keeps it open. Either way it is one click to toggle.
+    sidebarOpen: !inDesktopShell(),
     voiceState: 'idle',
     audioPlaying: false,
     presenceState: 'unknown',
