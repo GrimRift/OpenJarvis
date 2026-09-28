@@ -8,9 +8,48 @@ not built.
 For what has actually shipped, read the maintainer's private handoff notes (outside the repository, `notes\HANDOFF.md` in the data folder). For the traps that cost real
 debugging sessions, read `AGENTS.md`.
 
+## Status at a glance (2026-09-29)
+
+| Milestone | Status |
+|---|---|
+| M39 — Sage Desktop App (own Windows app, installer) | scoped 2026-09-25, not started |
+| M38 — Memory: facts, nightly diary, self-clean-up | shipped 2026-09-16 |
+| M37 — Initiative: Sage starts a conversation | shipped 2026-09-16 |
+| M36 — Presence: Sage knows when to speak | shipped 2026-09-15 |
+| M35 — Sage in the car (Siri Shortcut, Waze) | shipped 2026-09-05; a real drive still unverified |
+| M34 — Self-diagnostics (Health page, `system_health`) | shipped 2026-09-08 |
+| M33 — Self-improvement | done (see Shipped) |
+| M32 — Desktop UI automation | parked 2026-09-02; read-only awareness kept |
+| M31 — File and image upload in chat | shipped |
+| M29 — Remote/mobile Sage | partly: the phone reaches Sage over Tailscale for M35 |
+| M0–M30 | shipped |
+
 ---
 
-## M35 — Sage in the car (started 2026-09-05; tool slice implemented)
+## M39 — Sage Desktop App (scoped 2026-09-25, not started)
+
+Sage becomes its own Windows app instead of a browser tab, with every feature,
+visual and capability kept and latency kept or improved. Decisions: a
+one-click installer for the maintainer's PC first, then a from-scratch
+installer for any Windows PC; closing the window hides Sage to the tray and it
+keeps listening; the app shows the live development build so edits appear
+instantly; Settings gets start-with-Windows, start-hidden and a global shortcut.
+
+Built on the upstream Tauri 2 shell in `frontend/src-tauri`, with one rule:
+**one code path** — the app shows the same page as the browser, and the
+upstream Tauri-only branches in `lib/api.ts` / `App.tsx` are removed or made
+inert. Phases: (1) spike that a hidden window keeps the microphone, wake word,
+voice and orb alive; (2) Sage shell (name, icon, tray, upstream updater
+removed); (3) one code path; (4) background listening (throttling off, mic
+permission, autoplay, drag-and-drop); (5) startup/shortcut settings;
+(6) installer for this PC; (7) parity and latency check against the browser;
+(8) from-scratch installer. Conversations live in the browser's storage, so
+the app needs a migration step or it opens empty. The Python lock file trails
+the working environment, which the installer must fix first.
+
+---
+
+## M35 — Sage in the car (shipped 2026-09-05; a real drive still unverified)
 
 The `navigate` tool now handles saved coordinates, unsaved place searches with
 candidate selection, traffic ETA, destination weather and Waze links. Routes,
@@ -129,7 +168,7 @@ speaker-to-microphone round trip.
 
 ---
 
-## M34 — Self-diagnostics (scoped 2026-09-02, not started)
+## M34 — Self-diagnostics (shipped 2026-09-08)
 
 A **Health page** plus a `system_health` tool triggered by ordinary phrasing
 ("check system health"), running diagnostics on demand and answering in chat.
