@@ -11,7 +11,20 @@ declare global {
   }
 }
 
-export const isTauri = () => typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
+/**
+ * Upstream OpenJarvis's desktop mode: its own setup screen, API calls through
+ * Rust, keys in a native store. Sage's desktop app (M39) shows the same page
+ * as the browser -- one code path -- so this is always false. Inside the app
+ * the upstream branches showed "Setting up your local AI..." and waited for a
+ * boot process Sage does not have (29 September). Kept as a function so the
+ * branches it guards can be removed one at a time.
+ */
+export const isTauri = () => false;
+
+/** Running inside Sage's desktop app, for the few things only it can do
+ * (tray, start with Windows, global shortcut). Never used to change how the
+ * page itself talks to the server. */
+export const inDesktopShell = () => typeof window !== 'undefined' && !!window.__TAURI_INTERNALS__;
 
 export type CloudKeyStatus = Record<string, boolean>;
 
