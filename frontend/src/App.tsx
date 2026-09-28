@@ -24,6 +24,7 @@ import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
 import { apiFetch, fetchSpeechVoices } from './lib/api';
 import { ORB_NEUTRAL, setOrbShaping } from './lib/audio-level';
+import { retryUntilAnswered } from './lib/retry';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -112,25 +113,35 @@ export default function App() {
 
   // Whether the cloud model is usable. /v1/models deliberately omits direct
   // cloud models, so the provider key is the only signal available here.
+  // All three are retried until the server answers (lib/retry.ts): a page
+  // loaded while it was still starting kept "Select model" for good.
   useEffect(() => {
-    fetchToolCredentialStatus('cloud_openai')
-      .then((status) => setCloudModelAvailable(Boolean(status.OPENAI_API_KEY)))
+    let gone = false;
+    retryUntilAnswered(() => fetchToolCredentialStatus('cloud_openai'), { cancelled: () => gone })
+      .then((status) => { if (status) setCloudModelAvailable(Boolean(status.OPENAI_API_KEY)); })
       .catch(() => setCloudModelAvailable(false));
+    return () => { gone = true; };
   }, [setCloudModelAvailable]);
 
   // Fetch models on mount
   useEffect(() => {
-    fetchModels()
+    let gone = false;
+    retryUntilAnswered(fetchModels, { cancelled: () => gone })
       .then((m) => {
-        setModels(m);
+        if (m) setModels(m);
       })
       .catch(() => setModels([]))
       .finally(() => setModelsLoading(false));
+    return () => { gone = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch server info
   useEffect(() => {
-    fetchServerInfo().then(setServerInfo).catch(() => {});
+    let gone = false;
+    retryUntilAnswered(fetchServerInfo, { cancelled: () => gone })
+      .then((info) => { if (info) setServerInfo(info); })
+      .catch(() => {});
+    return () => { gone = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll savings for the Dashboard's energy figures. Nothing is shared: the
