@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Sage</title>
+  <defs>
+    <linearGradient id="s" gradientUnits="userSpaceOnUse" x1="760" y1="250" x2="260" y2="770">
+      <stop offset="0" stop-color="#c4f7ff"/>
+      <stop offset="0.35" stop-color="#4fd3f0"/>
+      <stop offset="0.7" stop-color="#2493c4"/>
+      <stop offset="1" stop-color="#1c5fb0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="#0b1418"/>
+  <g transform="translate(512 512) scale(0.7) translate(-512 -507.9)">
+    <path d="M745.5 294.9 A278.5 245.8 0 1 0 512 507.9" fill="none" stroke="url(#s)" stroke-width="80" stroke-linecap="round"/>
+    <path d="M278.5 729.1 A278.5 245.8 0 1 0 512 507.9" fill="none" stroke="url(#s)" stroke-width="80" stroke-linecap="round"/>
+    <circle cx="512" cy="507.9" r="150" fill="#0b1418"/>
+    <circle cx="512" cy="507.9" r="138" fill="#12394a"/>
+    <circle cx="512" cy="507.9" r="112" fill="#1f6f8b"/>
+    <circle cx="512" cy="507.9" r="88" fill="#38c6e8"/>
+    <circle cx="512" cy="507.9" r="62" fill="#9fe9fb"/>
+    <circle cx="512" cy="507.9" r="36" fill="#ffffff"/>
+  </g>
+</svg>
