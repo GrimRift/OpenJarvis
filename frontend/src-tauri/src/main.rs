@@ -1,6 +1,6 @@
-// Prevents additional console window on Windows in release
+// No console window alongside the app in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    openjarvis_desktop::run();
+    sage_desktop::run();
 }

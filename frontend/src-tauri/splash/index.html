@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sage</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0a0a0b; color: #d6e4ea;
+    font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+  .orb { width: 88px; height: 88px; border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, #bff3ff 0%, #38c6e8 28%, #0e4f66 62%, transparent 72%);
+    animation: breathe 2.4s ease-in-out infinite; }
+  @keyframes breathe { 50% { transform: scale(0.9); opacity: 0.75; } }
+  h1 { margin: 0; font-size: 20px; letter-spacing: 0.3em; color: #7fdcf2; font-weight: 600; }
+  p { margin: 0; color: #8aa3ad; font-size: 13px; max-width: 420px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <div class="orb"></div>
+  <h1>SAGE</h1>
+  <p id="status">Starting Sage…</p>
+</main>
+<script>
+  // Open the Sage page only once BOTH the server and the web UI answer: a page
+  // that loads before the server kept an empty model list (29 September).
+  const SERVER = 'http://127.0.0.1:8000/health';
+  const WEB = 'http://localhost:5173/';
+  const status = document.getElementById('status');
+  const started = Date.now();
+  const up = (url) => fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(() => true, () => false);
+  async function poll() {
+    const [server, web] = await Promise.all([up(SERVER), up(WEB)]);
+    if (server && web) { location.replace(WEB); return; }
+    const waited = Math.round((Date.now() - started) / 1000);
+    status.textContent = waited < 90
+      ? `Starting Sage… (${server ? 'server ready' : 'waiting for the server'}${web ? '' : ', waiting for the web UI'})`
+      : 'Sage is taking unusually long to start. It may have failed to launch: check the Sage logs, or use Restart Sage from the tray icon.';
+    setTimeout(poll, 1000);
+  }
+  poll();
+</script>
+</body>
+</html>
