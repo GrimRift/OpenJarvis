@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "sage-page",
+  "description": "The Sage page's Settings reads and changes the app's startup options (start with Windows, stay in the tray, keyboard shortcut). Only these two commands, and only from the Sage web UI.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://localhost:5173/*", "http://127.0.0.1:5173/*"] },
+  "permissions": ["allow-get-startup-settings", "allow-set-startup-settings"]
+}

@@ -11,6 +11,8 @@
 //! pointed at upstream releases). The Sage page never called any of it once
 //! `isTauri()` became false; the upstream code remains in the Git history.
 
+mod startup;
+
 use std::{
     net::{SocketAddr, TcpStream},
     os::windows::process::CommandExt,
@@ -25,6 +27,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_global_shortcut::ShortcutState;
 
 const SERVER_PORT: u16 = 8000;
 /// The bundled start-up page (`splash/`): waits for the server and the web UI.
@@ -108,7 +112,30 @@ pub fn run() {
     tauri::Builder::default()
         // A second launch brings the running app forward instead.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show(app)))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![startup::AUTOSTART_ARG]),
+        ))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        toggle(app);
+                    }
+                })
+                .build(),
+        )
+        .invoke_handler(tauri::generate_handler![
+            startup::get_startup_settings,
+            startup::set_startup_settings
+        ])
         .setup(|app| {
+            let settings = startup::load(app.handle());
+            if let Some(shortcut) = settings.shortcut.as_deref() {
+                let _ = startup::register_shortcut(app.handle(), Some(shortcut), None);
+            }
+            let started_with_windows = std::env::args().any(|a| a == startup::AUTOSTART_ARG);
+
             if !server_up() {
                 let _ = run_script("start-sage.ps1");
             }
@@ -122,6 +149,7 @@ pub fn run() {
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(900.0, 600.0)
                 .additional_browser_args(&args)
+                .visible(!(started_with_windows && settings.start_hidden))
                 .build()?;
 
             let show_item = MenuItem::with_id(app, "show", "Show Sage", true, None::<&str>)?;

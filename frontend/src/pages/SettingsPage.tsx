@@ -33,8 +33,10 @@ const VOLUME_ROWS: Array<[keyof Volumes, string, string]> = [
   ['chime', 'Chime', 'the tone before Sage speaks first'],
 ];
 import { modelForToggle } from '../lib/model-preference';
+import { formatShortcut, getStartupSettings, setStartupSettings, shortcutFromKey, type StartupSettings } from '../lib/desktop-app';
 import {
   checkHealth,
+  inDesktopShell,
   fetchSpeechHealth,
   getMemoryStats,
   getInferenceSource,
@@ -1314,6 +1316,13 @@ export function SettingsPage() {
             )}
           </Section>
 
+          {/* Windows app (M39): only inside the app, where these options exist */}
+          {inDesktopShell() ? (
+            <Section title="Windows app">
+              <DesktopAppSettings showSaved={showSaved} />
+            </Section>
+          ) : null}
+
           {/* Presence (M36) */}
           <Section title="Presence">
             <SettingRow label="Sage knows when you are here" description={`Lets Sage tell whether anyone is at the desk, from keyboard and mouse activity and the window in front. This is the master switch for everything Sage does on its own; off, it behaves exactly as before. What it currently believes is shown on the Health page.${presenceError ? ` (${presenceError})` : ''}`}>
@@ -1564,5 +1573,116 @@ function KeytermEditor({ showSaved }: { showSaved: () => void }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function DesktopAppSettings({ showSaved }: { showSaved: () => void }) {
+  const [current, setCurrent] = useState<StartupSettings | null>(null);
+  const [error, setError] = useState('');
+  const [recording, setRecording] = useState(false);
+
+  useEffect(() => {
+    getStartupSettings()
+      .then(setCurrent)
+      .catch((err: unknown) => setError(String(err)));
+  }, []);
+
+  const apply = useCallback(
+    (change: Partial<StartupSettings>) => {
+      if (!current) return;
+      setError('');
+      setStartupSettings({ ...current, ...change })
+        .then((applied) => {
+          setCurrent(applied);
+          showSaved();
+        })
+        .catch((err: unknown) => {
+          const message = String(err);
+          setError(change.shortcut ? message.split(change.shortcut).join(formatShortcut(change.shortcut)) : message);
+        });
+    },
+    [current, showSaved],
+  );
+
+  // While recording, the next Ctrl/Alt/Win combination becomes the shortcut;
+  // Escape cancels. Captured before the page's own shortcuts see the keys.
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.code === 'Escape') {
+        setRecording(false);
+        return;
+      }
+      const shortcut = shortcutFromKey(event);
+      if (shortcut) {
+        setRecording(false);
+        apply({ shortcut });
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [recording, apply]);
+
+  const buttonStyle = { background: 'var(--color-bg-secondary)', color: 'var(--color-text-secondary)', border: '1px solid var(--color-border)' };
+
+  return (
+    <>
+      <SettingRow label="Start with Windows" description="Sage opens when you sign in to Windows, and starts its server if it is not running yet.">
+        <Switch on={Boolean(current?.startWithWindows)} onClick={() => apply({ startWithWindows: !current?.startWithWindows })} disabled={!current} />
+      </SettingRow>
+      <SettingRow
+        label="When Windows starts"
+        description={current?.startHidden
+          ? 'Sage waits in the tray, still listening for its wake word. Click the tray icon to open it.'
+          : 'The Sage window opens.'}
+      >
+        <select
+          aria-label="When Windows starts"
+          value={current?.startHidden ? 'tray' : 'open'}
+          disabled={!current || !current.startWithWindows}
+          onChange={(event) => apply({ startHidden: event.target.value === 'tray' })}
+          className="px-2 py-1 rounded-lg text-sm disabled:opacity-50"
+          style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+        >
+          <option value="open">Open the window</option>
+          <option value="tray">Stay in the tray</option>
+        </select>
+      </SettingRow>
+      <SettingRow
+        label="Keyboard shortcut"
+        description={recording
+          ? 'Press the keys now, with Ctrl, Alt or Win. Escape cancels.'
+          : current?.shortcut
+            ? `${formatShortcut(current.shortcut)} shows or hides Sage from any app.`
+            : 'A key combination that shows or hides Sage from any app. Off.'}
+      >
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setRecording((r) => !r)}
+            disabled={!current}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-50"
+            style={recording ? { background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: '1px solid var(--color-accent)' } : buttonStyle}
+          >
+            {recording ? 'Press keys…' : current?.shortcut ? formatShortcut(current.shortcut) : 'Set shortcut'}
+          </button>
+          {current?.shortcut && !recording ? (
+            <button
+              type="button"
+              onClick={() => apply({ shortcut: null })}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
+              style={buttonStyle}
+            >
+              Turn off
+            </button>
+          ) : null}
+        </div>
+      </SettingRow>
+      {error ? (
+        <div className="text-xs mt-2" style={{ color: 'var(--color-error)' }}>{error}</div>
+      ) : null}
+    </>
   );
 }
