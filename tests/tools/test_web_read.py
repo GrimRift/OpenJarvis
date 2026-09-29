@@ -86,6 +86,16 @@ class TestBounds:
         assert result.success is False
         assert "limit" in result.content
 
+    def test_a_new_message_gets_a_fresh_read_budget(self):
+        """The first answer spent the reads, and "read the reddit post" a
+        minute later was refused: the reading limit (29 September)."""
+        page_access.allow([PAGE])
+        for _ in range(MAX_READS_PER_TURN):
+            page_access.note_read()
+        page_access.set_turn("read the reddit post more thoroughly")
+        assert page_access.reads_used() == 0
+        assert page_access.is_allowed(PAGE)
+
     def test_an_unreachable_browser_explains_itself(self):
         """A dead CDP port must not read as "the page had nothing"."""
         page_access.allow([PAGE])

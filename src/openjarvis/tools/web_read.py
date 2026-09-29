@@ -49,12 +49,12 @@ logger = logging.getLogger(__name__)
 #:
 #: Each read costs a real page load -- measured 3.6s on a JavaScript-heavy
 #: listings page and 1.3s on a large static one -- and they run one after
-#: another. Two is enough to check a claim against a second source without a
-#: research turn quietly becoming a minute of browsing. Counted over
-#: ``page_access.READ_WINDOW_SECONDS`` rather than strictly per turn, for the
-#: same reason the allowance is: per-turn state does not survive the task and
-#: thread boundaries between the request handler and the tool.
-MAX_READS_PER_TURN = 2
+#: another. Three reads the page asked for and checks it against two others
+#: without a research turn quietly becoming a minute of browsing (the user's
+#: choice, 29 September). The count lives in ``page_access``'s process-level
+#: table, which does survive the task and thread boundaries between the
+#: request handler and the tool, and each new message resets it.
+MAX_READS_PER_TURN = 3
 
 #: Longest a page gets in the browser, loading and rendering together,
 #: before its text is taken anyway. Opening, loading and settling each had
@@ -184,8 +184,8 @@ class WebReadTool(BaseTool):
             )
         if page_access.reads_used() >= MAX_READS_PER_TURN:
             return self._fail(
-                f"I have read {MAX_READS_PER_TURN} pages just now, which is "
-                "the limit. Ask again in a moment for another."
+                f"I have read {MAX_READS_PER_TURN} pages for this message, "
+                "which is the limit. Ask me to read it in your next message."
             )
         wait_for = str(params.get("wait_for") or "").strip()
         started = time.monotonic()

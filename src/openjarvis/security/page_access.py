@@ -50,7 +50,8 @@ _TRAILING = ".,;:!?'\")]}"
 #: short enough that a link from an hour ago is not still open to being read.
 ALLOW_SECONDS = 300.0
 
-#: How long a read counts against the cap in ``web_read``.
+#: Longest a read counts against the cap in ``web_read``. Each new message
+#: resets the count (``set_turn``); this only bounds calls with no turn.
 READ_WINDOW_SECONDS = 300.0
 
 _lock = threading.Lock()
@@ -109,8 +110,16 @@ def allow(urls: Iterable[str]) -> None:
 
 
 def set_turn(user_text: Any) -> None:
-    """Register the URLs the user just wrote. Safe to call repeatedly."""
+    """Register the URLs the user just wrote, and start a fresh read budget.
+
+    Safe to call repeatedly: every call site runs as a request starts, before
+    any tool. The budget used to be shared over ``READ_WINDOW_SECONDS``, so an
+    answer that read two pages left a follow-up a minute later -- "read the
+    reddit post more thoroughly" -- refused at the reading limit (29 September).
+    """
     allow(urls_in(user_text))
+    with _lock:
+        _reads.clear()
 
 
 def is_allowed(url: str) -> bool:
