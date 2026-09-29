@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { transcribeAudio, fetchSpeechHealth } from '../lib/api';
+import { retryUntilAnswered } from '../lib/retry';
 
 export type SpeechState = 'idle' | 'recording' | 'transcribing';
 
@@ -76,11 +77,19 @@ export function useSpeech() {
     vadCtxRef.current = null;
   }, []);
 
-  // Check if speech backend is available on mount
+  // Check if speech backend is available on mount -- until the server
+  // answers. Asked once, a page loaded while the server was still starting
+  // (the web UI is back first after a restart) got no answer, marked speech
+  // unavailable, and that disabled the microphone and with it the wake
+  // word until the page was reloaded; a Sage app hidden in the tray has no
+  // one to reload it (29 September). A server start can wait 90 s for
+  // Ollama alone, hence the long window.
   useEffect(() => {
-    fetchSpeechHealth()
-      .then((health) => setAvailable(health.available))
+    let gone = false;
+    retryUntilAnswered(fetchSpeechHealth, { timeoutMs: 600_000, cancelled: () => gone })
+      .then((health) => { if (health) setAvailable(health.available); })
       .catch(() => setAvailable(false));
+    return () => { gone = true; };
   }, []);
 
   const startRecording = useCallback(async (
