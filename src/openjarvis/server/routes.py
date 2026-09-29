@@ -56,6 +56,23 @@ def _has_attached_image(request_body) -> bool:
     return False
 
 
+def _answered_by_vision(request_body) -> bool:
+    """Whether this turn goes to the one-step vision path instead of the agent.
+
+    An image turn normally does (see `_has_attached_image`). The exception is
+    one that asks to change the picture -- "make the sky a sunset", "remove
+    the background": only the tool loop can call `image_edit`, which reads the
+    pasted image itself (`images.attachments`), so the agent never needs to
+    see it.
+    """
+    if not _has_attached_image(request_body):
+        return False
+    from openjarvis.images.attachments import wants_edit
+    from openjarvis.security.confirmations import last_user_text
+
+    return not wants_edit(last_user_text(getattr(request_body, "messages", None)))
+
+
 def _to_messages(chat_messages) -> list[Message]:
     """Convert Pydantic ChatMessage objects to core Message objects."""
     messages = []
@@ -429,6 +446,12 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     # choose what Sage fetches next.
     page_access.set_turn(confirmations.last_user_text(request_body.messages))
 
+    # The image pasted this turn, for `image_edit(image="attached")`; a turn
+    # without one clears the last turn's. Process-level, so once is enough.
+    from openjarvis.images import attachments as _attachments
+
+    _attachments.set_turn(request_body.messages)
+
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
@@ -687,7 +710,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         if (
             agent is not None
             and getattr(agent, "_tools", None)
-            and not _has_attached_image(request_body)
+            and not _answered_by_vision(request_body)
         ):
             return await _handle_agent_stream(
                 agent,
@@ -732,7 +755,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     if (
         agent is not None
         and not request_body.tools
-        and not _has_attached_image(request_body)
+        and not _answered_by_vision(request_body)
     ):
         response = await asyncio.to_thread(
             _handle_agent,
@@ -1503,6 +1526,9 @@ async def _handle_streaming_orchestrator(
                                                 "explicit_image_search", False
                                             )
                                         ),
+                                        # M40: a generated picture (id + url,
+                                        # never its bytes).
+                                        "image": tool_result.metadata.get("image"),
                                     }
                                     if isinstance(tool_result.metadata, dict)
                                     else {}
@@ -1888,6 +1914,9 @@ async def _handle_agent_stream(
                             "explicit_image_search": getattr(
                                 tool_result, "metadata", {}
                             ).get("explicit_image_search", False),
+                            "image": getattr(tool_result, "metadata", {}).get(
+                                "image"
+                            ),
                         }
                         if isinstance(getattr(tool_result, "metadata", {}), dict)
                         else {}

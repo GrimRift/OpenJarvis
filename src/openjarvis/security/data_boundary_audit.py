@@ -221,12 +221,13 @@ NAVIGATION_TOOLS = {"navigate"}
 # notify_windows is here because deliver() fans a notification out to the
 # configured channel as well as the desktop toast -- the toast is local, the
 # channel leg is not.
-CHANNEL_OUTBOUND_TOOLS = {"channel_send", "notify_windows"}
+CHANNEL_OUTBOUND_TOOLS = {"channel_send", "image_to_phone", "notify_windows"}
 # notify_windows again: its speak() path synthesises reminder text through
 # Cartesia before falling back to the local voice, so reminder content -- the
 # body of a calendar or class alert -- reaches an external provider.
 CLOUD_MEDIA_TOOLS = {
     "audio_transcribe",
+    "image_edit",
     "image_generate",
     "notify_windows",
     "text_to_speech",
@@ -1059,6 +1060,8 @@ def _audit_tool_surfaces(config: Any, builder: _FindingBuilder) -> None:
         path_parts: list[str] = []
         if "image_generate" in cloud_media:
             path_parts.append("image prompt -> external media provider")
+        if "image_edit" in cloud_media:
+            path_parts.append("pasted or generated image -> external media provider")
         if "audio_transcribe" in cloud_media:
             path_parts.append("local audio file -> external media provider")
         if "text_to_speech" in cloud_media:

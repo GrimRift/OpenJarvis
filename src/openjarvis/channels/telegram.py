@@ -152,6 +152,35 @@ class TelegramChannel(BaseChannel):
             logger.debug("Telegram send failed", exc_info=True)
             return False
 
+    def send_photo(self, channel: str, path: str, *, caption: str = "") -> bool:
+        """Send a picture file to a Telegram chat (``sendPhoto``)."""
+        if not self._token:
+            logger.warning("Cannot send photo: no Telegram bot token")
+            return False
+        try:
+            import httpx
+
+            url = f"https://api.telegram.org/bot{self._token}/sendPhoto"
+            with open(path, "rb") as handle:
+                resp = httpx.post(
+                    url,
+                    data={"chat_id": channel, "caption": caption[:1024]},
+                    files={"photo": (os.path.basename(path), handle, "image/png")},
+                    timeout=60.0,
+                )
+            if resp.status_code >= 300:
+                logger.warning(
+                    "Telegram sendPhoto returned status %d: %s",
+                    resp.status_code,
+                    resp.text,
+                )
+                return False
+            self._publish_sent(channel, f"[photo] {caption}", "")
+            return True
+        except Exception:
+            logger.warning("Telegram sendPhoto failed", exc_info=True)
+            return False
+
     def status(self) -> ChannelStatus:
         """Return the current connection status."""
         return self._status

@@ -33,9 +33,10 @@ EXPECTED_BROWSER_TOOLS = {
 }
 
 EXPECTED_GENERIC_NETWORK_TOOLS = {"http_request"}
-EXPECTED_CHANNEL_OUTBOUND_TOOLS = {"channel_send"}
+EXPECTED_CHANNEL_OUTBOUND_TOOLS = {"channel_send", "image_to_phone"}
 EXPECTED_CLOUD_MEDIA_TOOLS = {
     "audio_transcribe",
+    "image_edit",
     "image_generate",
     "text_to_speech",
 }

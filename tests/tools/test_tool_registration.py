@@ -62,6 +62,8 @@ EXPECTED_TOOLS = {
     "pdf_extract",
     # image_tool.py
     "image_generate",
+    "image_edit",
+    "image_to_phone",
     # audio_tool.py
     "audio_transcribe",
     # text_to_speech.py

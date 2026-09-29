@@ -17,6 +17,8 @@ because chat streams through the agent and only an image turn skips the agent.
 
 from __future__ import annotations
 
+import pytest
+
 from openjarvis.core.types import Message, Role
 from openjarvis.engine._base import IMAGE_FORMAT_OPENAI, messages_to_dicts
 from openjarvis.server.cloud_router import _is_reasoning_model, _to_openai_msgs
@@ -106,6 +108,57 @@ class TestRequestBoundary:
             ]
 
         assert _has_attached_image(_Req()) is False
+
+
+class TestImageEditTurnsReachTheTools:
+    """M40: a pasted image with edit wording must reach image_edit, which only
+    the tool loop can call -- the one-step vision path has no tools."""
+
+    @staticmethod
+    def _req(text):
+        class _Req:
+            messages = [ChatMessage(role="user", content=text, images=[B64])]
+
+        return _Req()
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "make the sky a sunset",
+            "remove the background",
+            "turn it into anime style",
+            "Can you make this black and white",
+            "add a cat to this",
+        ],
+    )
+    def test_edit_wording_goes_to_the_tool_loop(self, text):
+        from openjarvis.server.routes import _answered_by_vision
+
+        assert _answered_by_vision(self._req(text)) is False
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "what's in this picture?",
+            "what is in the background?",
+            "describe this",
+            "is the sky a sunset here?",
+            "what style is this?",
+            "make me a list of what's in this picture",
+        ],
+    )
+    def test_questions_stay_on_the_vision_path(self, text):
+        from openjarvis.server.routes import _answered_by_vision
+
+        assert _answered_by_vision(self._req(text)) is True
+
+    def test_a_text_turn_is_never_a_vision_turn(self):
+        from openjarvis.server.routes import _answered_by_vision
+
+        class _Req:
+            messages = [ChatMessage(role="user", content="make it brighter")]
+
+        assert _answered_by_vision(_Req()) is False
 
 
 class TestReasoningModelTokenParameter:

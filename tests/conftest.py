@@ -63,6 +63,26 @@ def _no_real_voice_choice(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_image_state(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M40 keeps an index and settings in the data directory and writes PNGs
+    to the user's Pictures folder. A test that forgets to pass its own paths
+    gets temp ones, never the live index or a real picture."""
+    try:
+        from openjarvis.images import settings as image_settings
+        from openjarvis.images import store as image_store
+    except Exception:
+        return
+    root = tmp_path_factory.mktemp("images")
+    monkeypatch.setattr(image_store, "get_config_dir", lambda: root)
+    monkeypatch.setattr(image_settings, "get_config_dir", lambda: root)
+    monkeypatch.setattr(
+        image_settings, "default_save_dir", lambda: str(root / "Pictures")
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_real_speaker_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     """The voice fingerprint learns from every confirmed wake word and asks
     the real sidecar: left on, the route tests' fake audio was taught to
