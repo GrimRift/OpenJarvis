@@ -23,7 +23,6 @@ import {
 import type { ChatRequest } from '../../lib/sse';
 import {
   fetchSavings,
-  getBase,
   synthesizeSpeech,
   transcribeAudio,
   attachDocument,
@@ -60,7 +59,6 @@ import {
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
-  isDigestPrompt,
   pushSpokenDelta,
   shouldStreamReplySpeech,
   shouldSynthesizeReplyAudio,
@@ -354,7 +352,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const activeId = useAppStore((s) => s.activeId);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const streamState = useAppStore((s) => s.streamState);
-  const messages = useAppStore((s) => s.messages);
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   const diagramsEnabled = useAppStore((s) => s.settings.diagramsEnabled);
   const micBoost = useAppStore((s) => s.settings.micBoost);
@@ -661,12 +658,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // Taken before the state clears so a slow request cannot lose it.
     const outgoingDocs = documents;
     setDocuments([]);
-    const documentPreamble = outgoingDocs
-      .map((d) => `[Attached document: ${d.name}]\n${d.text}`)
-      .join('\n\n');
-    const contentWithDocs = documentPreamble
-      ? `${documentPreamble}\n\n${content}`
-      : content;
 
     const userMsg: ChatMessage = {
       id: generateId(),
@@ -1482,6 +1473,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     voiceRepliesEnabled,
     speakTypedReplies,
     ttsVoice,
+    attachments,
+    documents,
+    diagramsEnabled,
+    diagramsAutomatic,
+    visionUseLocal,
+    visionLocalModel,
+    unlockSpeech,
   ]);
 
   // Hands-free stop: transcribes and sends immediately, unlike a manual
@@ -1594,9 +1592,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       selectedModel,
       streamState.isStreaming,
       updateLastAssistant,
-          speakStreaming,
+      speakStreaming,
       voiceRepliesEnabled,
-    speakTypedReplies,
       ttsVoice,
     ],
   );
@@ -2027,7 +2024,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (!handled) void sendMessage(text).catch(() => {});
       openContinuationWindow(text);
     },
+    // The Flux timers, `flux` and greetAfterPause are declared further down
+    // (listing them would read them before their declaration); `flux` is a
+    // new object each render but only its stable methods are used here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
+      wakeWordGreetingEnabled,
+      updateLastAssistant,
       releaseSpeculativeAnswer,
       sendMessage,
       clearContinuationWindow,
@@ -2064,6 +2067,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         toast.error('Local transcription of that turn failed.', { duration: 6000 });
       }
     },
+    // clearFluxSilenceTimer is declared just below; it only clears a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sendMessage],
   );
 
@@ -2329,8 +2334,19 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // dependencies let this callback keep a stale 'recording' after the
     // turn had ended, and continuous conversation skipped every re-arm
     // from the third turn on. The trace showed the two values disagreeing
-    // in the same millisecond.
-  }, [micDisabled, speechState, effectiveSpeechState, startRecording, finishAutoRecording]);
+    // in the same millisecond. `flux` is a new object each render; only its
+    // stable methods are used.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    micDisabled,
+    speechState,
+    effectiveSpeechState,
+    startRecording,
+    finishAutoRecording,
+    fluxActive,
+    armFluxSilenceTimer,
+    clearContinuationWindow,
+  ]);
 
   // Wake-word variant: acknowledge out loud, then listen. Only the wake word
   // does this — the continuous-conversation re-arm above stays silent, since
@@ -2437,6 +2453,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // ordinary guard above takes over from here.
       wakeWordBusyRef.current = false;
     }
+    // greetAfterPause is declared below; `flux` only for its stable methods.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     micDisabled,
     speechState,
@@ -2445,7 +2463,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     finishAutoRecording,
     wakeWordGreetingEnabled,
     wakeWordFastFollow,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    fluxActive,
+    armFluxSilenceTimer,
+    ttsVoice.id,
   ]);
 
   // The pause greeting: "Yes, Sir?" once, into an open turn, with the
@@ -2645,7 +2665,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       flux: flux.status,
     });
     // Intentionally broad: this is the diagnostic, not the behaviour.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     wakeGate,
     wakeWordEnabled,
@@ -2717,6 +2736,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       });
       if (fire) beginAutoRecording();
     }
+    // fluxTurnActive is only logged; re-running on it would change nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioPlaying, continuousConversationEnabled, micDisabled, speechState, beginAutoRecording]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

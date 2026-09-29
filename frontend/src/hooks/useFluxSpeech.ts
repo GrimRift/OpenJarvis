@@ -696,7 +696,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     source.connect(processor);
     processor.connect(silent);
     silent.connect(ctx.destination);
-  }, [eager, fail, handleMessage]);
+  }, [eager, fail, handleMessage, provider]);
 
   const beginTurn = useCallback((preRoll?: Int16Array) => {
     // A wake turn carries the phrase as pre-roll: its level is what the
