@@ -288,7 +288,13 @@ class OpenAppTool(BaseTool):
                 "asks to open, launch, or show an app and nothing more. For "
                 "playing or controlling music, use spotify_control instead — "
                 "it opens Spotify itself, so opening the app first is both "
-                "unnecessary and leaves the request unfinished."
+                "unnecessary and leaves the request unfinished. Teams, "
+                "Outlook and Gmail are websites in the user's Opera, not "
+                "desktop apps: open them with web_open (Teams "
+                "https://teams.microsoft.com/v2/, Outlook "
+                "https://outlook.cloud.microsoft/mail/) or gmail_open. If the "
+                "app asked for is not in the list, never open a different one "
+                "in its place -- say it is not available."
             ),
             parameters={
                 "type": "object",

@@ -332,7 +332,9 @@ class TeamsReadTool(BaseTool):
                 "feed (mentions, replies, reactions) and Assignments (what is "
                 "due). Use for 'what's on Teams', 'any assignments due', 'did "
                 "anyone mention me'. Read-only — it never posts, replies, "
-                "submits or opens links."
+                "submits or opens links. It reads in a temporary tab and "
+                "closes it, so it is not for 'open Teams' -- use web_open "
+                "with https://teams.microsoft.com/v2/ for that."
             ),
             parameters={
                 "type": "object",
