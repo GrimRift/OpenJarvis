@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional
 
+import pytest
+
 from openjarvis.core.events import EventBus, EventType
 from openjarvis.core.types import Message, Role
 from openjarvis.memory.store import (
@@ -222,18 +224,31 @@ def test_build_context_message_defensively_filters_quarantined_facts():
     assert hostile.text not in message.content
 
 
-def test_inject_context_prioritizes_newest_facts_within_token_budget():
+@pytest.mark.parametrize("tiktoken_available", [True, False])
+def test_inject_context_prioritizes_newest_facts_within_token_budget(
+    monkeypatch, tiktoken_available
+):
+    # CI has no tiktoken, so the chars/4 fallback counts these facts as 6
+    # tokens, not 5: the budget must fit one fact under either counter.
+    from openjarvis.tools.storage import context as _context
+
+    if not tiktoken_available:
+        monkeypatch.setattr(_context, "_encoding", lambda: None)
+    elif _context._encoding() is None:
+        pytest.skip("tiktoken not installed")
+
     messages = [Message(role=Role.USER, content="What do you remember?")]
     facts = [
         Fact(text="old fact uses four tokens"),
         Fact(text="new fact uses four tokens"),
     ]
+    budget = _context._count_tokens(facts[1].text)
 
     augmented = inject_context(
         "remember",
         messages,
         None,
-        config=ContextConfig(max_context_tokens=5),
+        config=ContextConfig(max_context_tokens=budget),
         facts=facts,
     )
 
