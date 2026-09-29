@@ -5,9 +5,24 @@ import { MessageBubble } from './MessageBubble';
 import { ComposerSlot } from './ComposerSlot';
 import { StreamingDots } from './StreamingDots';
 import { OrbVisual, useOrbGenerating, useOrbState } from './OrbVisual';
+import type { OrbState } from '../../lib/orb-state';
+import { useOrbScale } from '../../lib/orb-scale';
 
-/** 20% over the old 394. */
+/** 20% over the old 394. The full size; smaller windows scale it down. */
 const CHAT_ORB_SIZE = 473;
+
+/** The orb drawn at full size and scaled as a picture: a resize never
+ *  restarts its animation, and the layout gets the scaled size. */
+function ScaledOrb({ state, scale }: { state: OrbState; scale: number }) {
+  const size = CHAT_ORB_SIZE * scale;
+  return (
+    <div style={{ width: size, height: size, flexShrink: 0 }}>
+      <div style={{ width: CHAT_ORB_SIZE, height: CHAT_ORB_SIZE, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+        <OrbVisual state={state} size={CHAT_ORB_SIZE} />
+      </div>
+    </div>
+  );
+}
 import { useAppStore } from '../../lib/store';
 import { Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
@@ -24,6 +39,7 @@ export function ChatArea() {
   const messages = useAppStore((s) => s.messages);
   const streamState = useAppStore((s) => s.streamState);
   const orbState = useOrbState();
+  const orbScale = useOrbScale();
   const generating = useOrbGenerating();
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
@@ -133,7 +149,7 @@ export function ChatArea() {
             >
               {orbStateLabel}
             </div>
-            <OrbVisual state={orbState} size={CHAT_ORB_SIZE} />
+            <ScaledOrb state={orbState} scale={orbScale} />
             <h2
               className="font-semibold mt-1"
               style={{ color: 'var(--color-text)', fontFamily: 'var(--font-display)', fontSize: 26 }}
@@ -211,7 +227,7 @@ export function ChatArea() {
       </div>
       {!isEmpty && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, pointerEvents: 'none', zIndex: 5 }}>
-          <OrbVisual state={orbState} size={CHAT_ORB_SIZE} />
+          <ScaledOrb state={orbState} scale={orbScale} />
         </div>
       )}
       <ComposerSlot />

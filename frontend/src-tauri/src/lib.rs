@@ -12,6 +12,7 @@
 //! `isTauri()` became false; the upstream code remains in the Git history.
 
 mod startup;
+mod window_state;
 
 use std::{
     net::{SocketAddr, TcpStream},
@@ -144,13 +145,18 @@ pub fn run() {
             if let Ok(port) = std::env::var("SAGE_APP_DEBUG_PORT") {
                 args.push_str(&format!(" --remote-debugging-port={port}"));
             }
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            // Built hidden, sized and placed, then shown: no flash at a default size.
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Sage")
-                .inner_size(1280.0, 800.0)
+                .inner_size(window_state::FIRST_WIDTH, window_state::FIRST_HEIGHT)
                 .min_inner_size(900.0, 600.0)
                 .additional_browser_args(&args)
-                .visible(!(started_with_windows && settings.start_hidden))
+                .visible(false)
                 .build()?;
+            window_state::restore(&window);
+            if !(started_with_windows && settings.start_hidden) {
+                let _ = window.show();
+            }
 
             let show_item = MenuItem::with_id(app, "show", "Show Sage", true, None::<&str>)?;
             let hide_item = MenuItem::with_id(app, "hide", "Hide Sage", true, None::<&str>)?;
@@ -195,10 +201,17 @@ pub fn run() {
             Ok(())
         })
         // Closing hides to the tray: Sage keeps listening. Quit is in the tray menu.
+        // Moving or resizing is remembered for the next launch.
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            let Some(webview) = window.app_handle().get_webview_window(window.label()) else { return };
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    window_state::save(&webview);
+                    let _ = window.hide();
+                }
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) => window_state::changed(&webview),
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
