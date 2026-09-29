@@ -39,9 +39,8 @@ from openjarvis.security.ssrf import check_ssrf
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.opera_control import (
     _NAV_TIMEOUT,
+    ensure_opera,
     opera_session,
-    port_is_open,
-    setup_hint,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,8 +198,9 @@ class WebReadTool(BaseTool):
             mode = "direct"
             waited = time.monotonic() - started
         else:
-            if not port_is_open():
-                return self._fail(setup_hint())
+            problem = ensure_opera(minimized=True)
+            if problem:
+                return self._fail(problem)
             try:
                 text, waited, title = self._render(url, wait_for)
             except Exception as error:  # noqa: BLE001

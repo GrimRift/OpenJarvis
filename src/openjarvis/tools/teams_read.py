@@ -30,9 +30,8 @@ from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.opera_control import (
     _NAV_TIMEOUT,
     _SELECTOR_TIMEOUT,
+    ensure_opera,
     opera_session,
-    port_is_open,
-    setup_hint,
 )
 
 TEAMS_URL = "https://teams.microsoft.com/v2/"
@@ -355,8 +354,9 @@ class TeamsReadTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        if not port_is_open():
-            return self._fail(setup_hint())
+        problem = ensure_opera(minimized=True)
+        if problem:
+            return self._fail(problem)
         sections = str(params.get("sections") or "both").strip().lower()
         if sections not in {"both", "activity", "assignments"}:
             sections = "both"

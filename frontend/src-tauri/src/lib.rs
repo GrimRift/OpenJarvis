@@ -33,6 +33,8 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const SERVER_PORT: u16 = 8000;
+/// Passed by the Sage server's reading_focus.py after it read something in Opera.
+const RETURN_FOCUS_ARG: &str = "--return-focus";
 /// The bundled start-up page (`splash/`): waits for the server and the web UI.
 const SPLASH: &str = "http://tauri.localhost/";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -126,8 +128,20 @@ fn restart_sage(app: AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
-        // A second launch brings the running app forward instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show(app)))
+        // A second launch brings the running app forward instead. With
+        // `--return-focus` it comes from the Sage server after a read in Opera:
+        // forward too, unless the window is hidden in the tray, where the user
+        // put it on purpose (a minimised window does come back).
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let from_a_read = args.iter().any(|a| a == RETURN_FOCUS_ARG);
+            let in_tray = app
+                .get_webview_window("main")
+                .map(|w| !w.is_visible().unwrap_or(true))
+                .unwrap_or(true);
+            if !(from_a_read && in_tray) {
+                show(app);
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec![startup::AUTOSTART_ARG]),

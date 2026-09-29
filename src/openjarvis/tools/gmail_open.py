@@ -75,9 +75,8 @@ class GmailOpenTool(BaseTool):
         )
         from openjarvis.tools.opera_control import (
             _NAV_TIMEOUT,
+            ensure_opera,
             opera_session,
-            port_is_open,
-            setup_hint,
         )
 
         query = str(params.get("query") or "").strip()
@@ -85,8 +84,9 @@ class GmailOpenTool(BaseTool):
             return self._fail("Which message should I open?")
         if not Path(_TOKEN_PATH).exists():
             return self._fail("Gmail is not connected. Run: jarvis connect gmail")
-        if not port_is_open():
-            return self._fail(setup_hint())
+        problem = ensure_opera(minimized=False)
+        if problem:
+            return self._fail(problem)
 
         try:
             from openjarvis.connectors.google_auth import call_with_refresh

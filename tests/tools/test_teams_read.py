@@ -104,7 +104,7 @@ def _install(monkeypatch, page, frame=None):
 
 class TestTheClosedPortIsExplained:
     def test_it_refuses_with_the_fix(self, monkeypatch):
-        monkeypatch.setattr(teams_read, "port_is_open", lambda timeout=1.5: False)
+        monkeypatch.setattr(opera_control, "port_is_open", lambda timeout=1.5: False)
         result = TeamsReadTool().execute()
         assert result.success is False
         assert "--remote-debugging-port" in result.content

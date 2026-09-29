@@ -110,6 +110,82 @@ def port_is_open(timeout: float = 1.5) -> bool:
         return False
 
 
+#: Opera GX's launcher, where the installer puts it for a per-user install.
+OPERA_EXE = os.environ.get(
+    "OPENJARVIS_OPERA_EXE",
+    os.path.join(
+        os.environ.get("LOCALAPPDATA", ""), "Programs", "Opera GX", "opera.exe"
+    ),
+)
+#: A cold Opera start with its tabs restoring answered in about 5 s here.
+_LAUNCH_WAIT_SECONDS = 30.0
+_SW_SHOWMINNOACTIVE = 7
+
+
+def _opera_running() -> bool:
+    try:
+        import psutil
+
+        return any(
+            (p.info.get("name") or "").lower() == "opera.exe"
+            for p in psutil.process_iter(["name"])
+        )
+    except Exception:
+        return False
+
+
+def ensure_opera(minimized: bool = False) -> Optional[str]:
+    """Make sure Opera GX is up with its control port; ``None`` when it is.
+
+    Closed, Sage starts it (the user's rule, 29 September): normally for a page
+    the user asked to see, minimised for a read, so it does not take over the
+    screen. Already running *without* the port, Sage cannot add it -- that
+    needs the user to restart Opera -- so the reason is returned instead.
+    """
+    if port_is_open():
+        return None
+    if _opera_running():
+        return (
+            "Opera GX is open, but without the setting that lets me control it. "
+            "Close Opera completely (check the tray) and ask again: I will start "
+            "it myself with that setting.\n\n" + setup_hint()
+        )
+    problem = _launch_opera(minimized)
+    if problem:
+        return problem
+    import time
+
+    until = time.monotonic() + _LAUNCH_WAIT_SECONDS
+    while time.monotonic() < until:
+        if port_is_open(timeout=1.0):
+            return None
+        time.sleep(0.5)
+    return "I started Opera GX, but it did not answer on its control port in time."
+
+
+def _launch_opera(minimized: bool) -> Optional[str]:
+    """Start Opera GX with its control port; the reason when it cannot."""
+    if not os.path.isfile(OPERA_EXE):
+        return setup_hint()
+    import subprocess
+
+    startup = None
+    if minimized and hasattr(subprocess, "STARTUPINFO"):
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = _SW_SHOWMINNOACTIVE
+    try:
+        subprocess.Popen(
+            [OPERA_EXE, f"--remote-debugging-port={DEBUG_PORT}"],
+            startupinfo=startup,
+            close_fds=True,
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+        )
+    except OSError as error:
+        return f"I could not start Opera GX ({error})."
+    return None
+
+
 def _window_alive(handle: int) -> bool:
     if not handle:
         return False
@@ -225,6 +301,13 @@ def _opera_session(own_window: bool = False, transient: bool = False):
     if own_window and _window_alive(_MEDIA_HANDLE):
         page = _media_page(browser)
         handle = _MEDIA_HANDLE if page is not None else 0
+    # A read hands the front back to the Sage app when it is done, with Opera
+    # put back the way it was (reading_focus.py). Snapshot before the tab.
+    focus = None
+    if transient:
+        from openjarvis.tools.reading_focus import ReadingFocus
+
+        focus = ReadingFocus()
     if page is None:
         if own_window:
             # An orphan is a media window from before Sage restarted: its
@@ -254,6 +337,8 @@ def _opera_session(own_window: bool = False, transient: bool = False):
         if transient:
             with contextlib.suppress(Exception):
                 browser.close_target(target_id)
+        if focus is not None:
+            focus.finish()
 
 
 def _media_page(browser):
@@ -771,10 +856,10 @@ class _OperaTool(BaseTool):
     def _fail(self, reason: str) -> ToolResult:
         return ToolResult(tool_name=self.tool_id, content=reason, success=False)
 
-    def _guard(self) -> Optional[ToolResult]:
-        if not port_is_open():
-            return self._fail(setup_hint())
-        return None
+    def _guard(self, minimized: bool = False) -> Optional[ToolResult]:
+        """Opera up and controllable, starting it if it is closed."""
+        problem = ensure_opera(minimized=minimized)
+        return self._fail(problem) if problem else None
 
 
 @ToolRegistry.register("skip_ad")
@@ -1385,7 +1470,7 @@ class OutlookReadTool(_OperaTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        blocked = self._guard()
+        blocked = self._guard(minimized=True)
         if blocked:
             return blocked
         try:

@@ -50,7 +50,7 @@ class TestProvenance:
     def test_a_url_the_user_typed_is_allowed_through(self):
         page_access.set_turn(f"read {PAGE} for me")
         with patch(
-            "openjarvis.tools.web_read.port_is_open", return_value=False
+            "openjarvis.tools.opera_control.port_is_open", return_value=False
         ) as port:
             result = _tool().execute(url=PAGE)
         # Refused for a reachable-browser reason, not a provenance one.
@@ -59,14 +59,14 @@ class TestProvenance:
 
     def test_a_url_a_search_returned_is_allowed_through(self):
         page_access.allow([PAGE])
-        with patch("openjarvis.tools.web_read.port_is_open", return_value=False):
+        with patch("openjarvis.tools.opera_control.port_is_open", return_value=False):
             result = _tool().execute(url=PAGE)
         assert "paste it to me" not in result.content
 
     def test_tracking_parameters_do_not_defeat_the_match(self):
         """A search result and the same link typed rarely match byte for byte."""
         page_access.allow([PAGE])
-        with patch("openjarvis.tools.web_read.port_is_open", return_value=False):
+        with patch("openjarvis.tools.opera_control.port_is_open", return_value=False):
             result = _tool().execute(url=f"{PAGE}/?utm_source=news#top")
         assert "paste it to me" not in result.content
 
@@ -89,7 +89,7 @@ class TestBounds:
     def test_an_unreachable_browser_explains_itself(self):
         """A dead CDP port must not read as "the page had nothing"."""
         page_access.allow([PAGE])
-        with patch("openjarvis.tools.web_read.port_is_open", return_value=False):
+        with patch("openjarvis.tools.opera_control.port_is_open", return_value=False):
             result = _tool().execute(url=PAGE)
         assert result.success is False
         assert "Opera" in result.content
