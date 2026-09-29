@@ -9,6 +9,20 @@ import {
 } from './wake-follow';
 
 describe('stripWakePhrase', () => {
+  it('drops sound from before the phrase, such as a video playing', () => {
+    expect(
+      stripWakePhrase("We're on the way and racing almost -- Hey, Sage. Can you close that YouTube tab?"),
+    ).toBe('Can you close that YouTube tab?');
+    expect(stripWakePhrase('good launch off the line hey sage pause the video')).toBe('pause the video');
+  });
+
+  it('keeps a request that only mentions the name later on', () => {
+    expect(stripWakePhrase('Hey Sage, tell my brother to say hey Sage to you')).toBe(
+      'tell my brother to say hey Sage to you',
+    );
+    expect(stripWakePhrase('what does usage mean')).toBe('what does usage mean');
+  });
+
   it('takes the phrase off the front, however Deepgram spelt it', () => {
     expect(stripWakePhrase('Hey Sage, any news on AI?')).toBe('any news on AI?');
     expect(stripWakePhrase('hey stage tell me when it is 1 pm')).toBe('tell me when it is 1 pm');

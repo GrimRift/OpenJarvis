@@ -51,6 +51,10 @@ export function continuesPastWakePhrase(transcript: string): boolean {
   return /[\p{L}\p{N}]/u.test(stripWakePhrase(transcript));
 }
 
+/** How far into a wake-word turn "hey sage" is looked for: PRE_ROLL_MS of
+ *  fast speech before it is about eight words. */
+const LEAD_IN_WORDS = 12;
+
 /** How the wake phrase comes out of Deepgram, as leading tokens. */
 const LEAD = new Set(['hey', 'hi', 'hay', 'he', 'a', 'ok', 'okay', 'yo', 'oh']);
 const NAME = new Set(['sage', 'stage', 'sayge', 'saige', 'sages', 'says', 'siege', 'seige']);
@@ -104,15 +108,33 @@ function isDebris(token: string): boolean {
  * A transcript that does not start with the phrase is returned as it is.
  */
 export function stripWakePhrase(transcript: string): string {
-  const text = transcript.trim();
-  const tokens = text.split(/\s+/);
   const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  let text = transcript.trim();
+  let tokens = text.split(/\s+/);
+  // Sound from before the phrase: the turn carries up to PRE_ROLL_MS of
+  // audio from before the wake word fired, so with a video playing it began
+  // with the commentary -- "We're on the way and racing almost -- Hey, Sage.
+  // Can you close that YouTube tab?" (29 September). An exact "hey sage"
+  // within the first few words marks where the user started; what comes
+  // before it was never said to Sage.
+  const startsWithPhrase =
+    isNameToken(norm(tokens[0])) ||
+    (LEAD.has(norm(tokens[0])) && tokens.length > 1 && isNameToken(norm(tokens[1])));
+  for (let k = 1; !startsWithPhrase && k < Math.min(LEAD_IN_WORDS, tokens.length - 1); k++) {
+    if (LEAD.has(norm(tokens[k])) && NAME.has(norm(tokens[k + 1]))) {
+      tokens = tokens.slice(k);
+      text = tokens.join(' ');
+      break;
+    }
+  }
   let i = 0;
   if (i < tokens.length && LEAD.has(norm(tokens[i]))) i += 1;
   if (i < tokens.length && isNameToken(norm(tokens[i]))) {
     i += 1;
-    // "Peace Sage", "Peace in Sage": the name heard twice over.
-    if (i < tokens.length && isNameToken(norm(tokens[i]))) i += 1;
+    // "Peace Sage", "Peace in Sage": the name heard twice over -- but not a
+    // command that fits the name's shape: "hey sage pause the video" lost
+    // its "pause".
+    if (i < tokens.length && isNameToken(norm(tokens[i])) && !STARTERS.has(norm(tokens[i]))) i += 1;
   } else if (i === 1 && tokens.length === 2 && !STARTERS.has(norm(tokens[1]))) {
     // "Hey, Steve." (heard 22 September): a lead word and one more that
     // begins no request is the name in a spelling no shape predicts. As a
