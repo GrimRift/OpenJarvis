@@ -163,26 +163,59 @@ def ensure_opera(minimized: bool = False) -> Optional[str]:
     """
     if port_is_open():
         return None
-    if _opera_running():
-        return (
-            "Opera GX is open, but without the setting that lets me control it. "
-            "Close Opera completely (check the tray) and ask again: I will start "
-            "it myself with that setting.\n\n" + setup_hint()
-        )
-    problem = _launch_opera(minimized)
-    if problem:
-        return problem
-    import time
-
-    global _LAUNCHED_AT
-    _LAUNCHED_AT = time.monotonic()
-
-    until = time.monotonic() + _LAUNCH_WAIT_SECONDS
-    while time.monotonic() < until:
-        if port_is_open(timeout=1.0):
+    # One launch at a time. The briefing reads Teams and Outlook at once; both
+    # found Opera closed and both started it, and the second start opened a
+    # new window in the Opera already starting -- the reads' tabs landed
+    # there and it was left behind (29 September). A caller that arrives
+    # mid-launch waits here and then finds the port open.
+    with _LAUNCH_LOCK:
+        if port_is_open():
             return None
-        time.sleep(0.5)
-    return "I started Opera GX, but it did not answer on its control port in time."
+        if _opera_running():
+            return (
+                "Opera GX is open, but without the setting that lets me control it. "
+                "Close Opera completely (check the tray) and ask again: I will start "
+                "it myself with that setting.\n\n" + setup_hint()
+            )
+        problem = _launch_opera(minimized)
+        if problem:
+            return problem
+        import time
+
+        global _LAUNCHED_AT
+        _LAUNCHED_AT = time.monotonic()
+
+        until = time.monotonic() + _LAUNCH_WAIT_SECONDS
+        while time.monotonic() < until:
+            if port_is_open(timeout=1.0):
+                break
+            time.sleep(0.5)
+        else:
+            return (
+                "I started Opera GX, but it did not answer on its control port "
+                "in time."
+            )
+        # The port answers before Opera has its first window. A tab opened
+        # then has no window to join, so Opera makes one for it; wait for
+        # Opera's own window (its restored tabs or start page) first.
+        while time.monotonic() < until and not _first_window_ready():
+            time.sleep(0.25)
+        return None
+
+
+_LAUNCH_LOCK = threading.Lock()
+
+
+def _first_window_ready() -> bool:
+    """Whether the Opera Sage just started has a page open yet."""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{DEBUG_PORT}/json/list", timeout=1.0
+        ) as response:
+            targets = json.loads(response.read().decode("utf-8", "replace"))
+    except Exception:
+        return False
+    return any(target.get("type") == "page" for target in targets or [])
 
 
 def _launch_opera(minimized: bool) -> Optional[str]:

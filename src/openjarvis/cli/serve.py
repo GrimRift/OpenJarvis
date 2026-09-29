@@ -178,6 +178,27 @@ def serve(
 
     config = load_config()
 
+    # Local voice providers. Parakeet loads on first use inside this process;
+    # the Chatterbox sidecar is a separate process that starts when it is the
+    # configured voice (otherwise on the first request for it) and stops with
+    # the server, so a restart never leaves one holding the GPU.
+    # Started first, in the background: after a reboot its imports alone took
+    # ~40 s, and launched at the end of this setup it was still loading when
+    # the first reply was ready -- 17 s of silence (29 September).
+    try:
+        import atexit
+
+        from openjarvis.speech import chatterbox_sidecar
+
+        chatterbox_sidecar.start_if_selected(config)
+        atexit.register(chatterbox_sidecar.stop)
+        from openjarvis.speech.voice_choice import chosen_provider
+
+        if chosen_provider(config.speech) == "chatterbox":
+            console.print("  Voice: [cyan]Chatterbox sidecar starting[/cyan]")
+    except Exception as exc:
+        logger.debug("Voice sidecar setup failed: %s", exc)
+
     # Resolve host/port from CLI args or config
     bind_host = host or config.server.host
     bind_port = port or config.server.port
@@ -582,23 +603,6 @@ def serve(
     except Exception as exc:
         logger.debug("Speech backend discovery failed: %s", exc)
 
-    # Local voice providers. Parakeet loads on first use inside this process;
-    # the Chatterbox sidecar is a separate process that starts now when it
-    # is the configured voice (otherwise on the first request for it) and
-    # stops with the server, so a restart never leaves one holding the GPU.
-    try:
-        import atexit
-
-        from openjarvis.speech import chatterbox_sidecar
-
-        chatterbox_sidecar.start_if_selected(config)
-        atexit.register(chatterbox_sidecar.stop)
-        from openjarvis.speech.voice_choice import chosen_provider
-
-        if chosen_provider(config.speech) == "chatterbox":
-            console.print("  Voice: [cyan]Chatterbox sidecar starting[/cyan]")
-    except Exception as exc:
-        logger.debug("Voice sidecar setup failed: %s", exc)
     try:
         # A previous server stopped mid-sentence left the other apps
         # ducked; the levels it meant to restore are on disk.

@@ -364,6 +364,10 @@ class TestProviderSelection:
         with (
             patch.dict("os.environ", {"CARTESIA_API_KEY": ""}, clear=False),
             patch("openjarvis.speech.chatterbox_tts.ChatterboxContext", Context),
+            patch(
+                "openjarvis.speech.chatterbox_sidecar.fetch_health",
+                lambda *_a, **_k: {"ok": True},
+            ),
         ):
             with client.websocket_connect("/v1/speech/tts-stream") as ws:
                 ws.send_json(
@@ -391,6 +395,47 @@ class TestProviderSelection:
                     if _json.loads(message["text"])["type"] == "done":
                         break
                 assert heard >= 1
+
+    def test_a_voice_still_starting_is_announced_before_the_wait(self):
+        """After a reboot the first reply waited 17 s for the sidecar in
+        silence and read as broken (29 September). Say so first."""
+
+        class Context:
+            flushes = 0
+
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return None
+
+            async def send_text(self, _t):
+                pass
+
+            async def finish(self):
+                pass
+
+            async def cancel(self):
+                pass
+
+            async def receive_audio(self):
+                yield bytes(16)
+
+        client = TestClient(_app())
+        with (
+            patch("openjarvis.speech.chatterbox_tts.ChatterboxContext", Context),
+            patch(
+                "openjarvis.speech.chatterbox_sidecar.fetch_health",
+                lambda *_a, **_k: None,
+            ),
+        ):
+            with client.websocket_connect("/v1/speech/tts-stream") as ws:
+                ws.send_json({"type": "begin", "provider": "chatterbox"})
+                assert ws.receive_json()["type"] == "warming"
+                assert ws.receive_json()["type"] == "ready"
 
     def test_a_sidecar_that_cannot_open_is_reported_before_audio(self):
         class Failing:

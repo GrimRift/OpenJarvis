@@ -155,6 +155,17 @@ async def tts_stream(websocket: WebSocket) -> None:
             return
 
         if request.get("type") == "begin":
+            if provider == PROVIDER_CHATTERBOX:
+                # After a reboot the first reply waited 17 s for a sidecar
+                # still loading, in silence, and read as broken (29
+                # September). Tell the browser before the wait begins.
+                from openjarvis.speech.chatterbox_sidecar import fetch_health
+
+                health = await asyncio.to_thread(
+                    fetch_health, getattr(config, "speech", None)
+                )
+                if not (health and health.get("ok")):
+                    await websocket.send_json({"type": "warming"})
             # Initiative (M37) must not start a conversation over a reply
             # being spoken; this is the one place the server sees one.
             activity.tts_begin()

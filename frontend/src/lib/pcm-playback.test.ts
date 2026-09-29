@@ -83,6 +83,10 @@ describe('playback completion', () => {
 });
 
 describe('interpretTtsMessage', () => {
+  it('hears that the voice is still starting (29 September: 17 s of silence after a reboot)', () => {
+    expect(interpretTtsMessage(JSON.stringify({ type: 'warming' }))).toEqual({ kind: 'warming' });
+  });
+
   it('marks the incremental context ready before any audio exists', () => {
     expect(
       interpretTtsMessage(JSON.stringify({ type: 'ready', sample_rate: 24000 })),

@@ -1,3 +1,4 @@
+import { toast } from 'sonner';
 import { IncrementalTtsOutbox } from '../lib/incremental-tts';
 import { limiter, outputContext } from '../lib/audio-out';
 import { gainFor } from '../lib/volume';
@@ -32,6 +33,8 @@ export type IncrementalTtsOutcome =
  * arrives before the reply is given up as unplayable.
  */
 const RESUME_WAIT_MS = 700;
+/** One "Voice is starting…" notice, however many replies wait on it. */
+const VOICE_WARMING_TOAST = 'voice-warming';
 
 export interface IncrementalTtsSession {
   push(delta: string): boolean;
@@ -291,12 +294,25 @@ function createStreamingTtsPlayer() {
 
     // Audio that arrived while a suspended context was being resumed.
     const waiting: ArrayBuffer[] = [];
+    let warmingShown = false;
     let resuming = false;
 
     socket.onmessage = (event) => {
       if (!generationsRef.current.isCurrent(generation)) return;
       if (typeof event.data === 'string') {
         const message = interpretTtsMessage(event.data);
+        // The local voice is still loading: say so, or a reply that waits
+        // ~20 s after a reboot reads as Sage not answering at all.
+        if (message.kind === 'warming') {
+          warmingShown = true;
+          toast.loading('Voice is starting…', { id: VOICE_WARMING_TOAST });
+          voiceTrace('tts.warming', {});
+          return;
+        }
+        if (warmingShown && message.kind !== 'ready') {
+          warmingShown = false;
+          toast.dismiss(VOICE_WARMING_TOAST);
+        }
         if (message.kind === 'ready') {
           outbox.markReady();
         } else if (message.kind === 'start') {

@@ -80,6 +80,7 @@ export class PlaybackGeneration {
 }
 
 export type TtsStreamEvent =
+  | { kind: 'warming' }
   | { kind: 'ready'; sampleRate: number }
   | { kind: 'start'; sampleRate: number }
   | { kind: 'done' }
@@ -106,6 +107,9 @@ export function interpretTtsMessage(raw: string): TtsStreamEvent {
     return { kind: 'ignored' };
   }
   switch (msg.type) {
+    // The local voice is still loading (after a reboot it can take ~20 s).
+    case 'warming':
+      return { kind: 'warming' };
     case 'ready': {
       const rate = Number(msg.sample_rate);
       return { kind: 'ready', sampleRate: rate > 0 ? rate : 24000 };
