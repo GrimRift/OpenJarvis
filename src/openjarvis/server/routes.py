@@ -356,7 +356,8 @@ def _log_tool_timing(call: Any, result: Any, seconds: float) -> None:
     metadata = getattr(result, "metadata", None) or {}
     detail = ""
     if isinstance(metadata, dict):
-        parts = [f"{k}={metadata[k]}" for k in ("mode", "url") if metadata.get(k)]
+        keys = ("mode", "url", "search_depth", "provider_calls")
+        parts = [f"{k}={metadata[k]}" for k in keys if metadata.get(k)]
         detail = (" " + " ".join(parts)) if parts else ""
     logging.getLogger("openjarvis.timing").info(
         "Tool timing: %s %.2fs ok=%s %d chars%s",

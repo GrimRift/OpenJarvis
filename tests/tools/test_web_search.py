@@ -869,6 +869,15 @@ class TestASiteTheUserNamedCountsAsEnough:
         )
         assert search.call_count == 1
 
+    def test_a_site_named_with_a_space_counts(self):
+        """"GasWatch PH fuel prices" came back all from gaswatchph.com and
+        searched again: the name is two words, the host one (29 September)."""
+        search = self._search(
+            "GasWatch PH mechanical keyboards",
+            ["gaswatchph.com"] * 3,
+        )
+        assert search.call_count == 1
+
     def test_an_unnamed_single_domain_still_escalates(self):
         """The rule still catches one site quietly dominating an open search."""
         search = self._search(

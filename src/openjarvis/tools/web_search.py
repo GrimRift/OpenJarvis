@@ -392,8 +392,13 @@ def _query_names_the_only_domain(results: list[dict[str, Any]], query: str) -> b
     if len(hosts) != 1:
         return False
     lowered = query.lower()
+    # "GasWatch PH" names gaswatchph.com: two words in the query, one label in
+    # the host, so it searched a second time (29 September).
+    squashed = re.sub(r"[^a-z0-9]", "", lowered)
     return any(
-        len(label) >= 4 and label not in _GENERIC_HOST_LABELS and label in lowered
+        len(label) >= 4
+        and label not in _GENERIC_HOST_LABELS
+        and (label in lowered or label.replace("-", "") in squashed)
         for label in hosts.pop().split(".")
     )
 
