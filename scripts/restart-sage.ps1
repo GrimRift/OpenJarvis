@@ -26,9 +26,11 @@ foreach ($p in $FrontendPorts) { Stop-PortProcess -Port $p }
 Start-Sleep -Seconds 1
 
 Write-Host "Starting backend (jarvis serve)..."
+# --no-sync: a plain `uv run` syncs .venv to uv.lock first, which would
+# reinstall CPU onnxruntime over onnxruntime-gpu and break GPU Parakeet.
 Start-Process powershell -ArgumentList @(
     "-NoExit", "-Command",
-    "Set-Location '$RepoRoot'; uv run jarvis serve"
+    "Set-Location '$RepoRoot'; uv run --no-sync jarvis serve"
 )
 
 Write-Host "Starting frontend (npm run dev)..."
