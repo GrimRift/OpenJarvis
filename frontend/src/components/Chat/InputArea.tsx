@@ -89,6 +89,9 @@ import type {
   ToolCallInfo,
 } from '../../types';
 
+/** Tools that start a video playing (see mediaTurnRef). */
+const MEDIA_TOOLS = new Set(['youtube_play', 'netflix_play']);
+
 /**
  * Wrap raw PCM in a WAV container for the local transcription endpoint.
  *
@@ -272,6 +275,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // finishes, well after send) can still tell whether that exchange was
   // voice-initiated.
   const lastReplyWasVoiceRef = useRef(false);
+  /** This turn started a video (youtube_play / netflix_play). Its sound would
+   *  reach the microphone as the user's next words -- on 29 September F1
+   *  commentary was taken as a question and answered -- so the reply is not
+   *  listened over, and the mic does not reopen after it: the wake word
+   *  starts the next turn. Cleared when the next turn is sent. */
+  const mediaTurnRef = useRef(false);
   // Barge-in (lib/barge-in.ts). While a voice reply plays the Flux turn is
   // kept open so the user can talk over it; `bargeTriggeredRef` records
   // that this turn cut the reply, which is what separates the user's
@@ -626,6 +635,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     const wasVoice = voiceOriginatedRef.current;
     voiceOriginatedRef.current = false;
     lastReplyWasVoiceRef.current = wasVoice;
+    mediaTurnRef.current = false;
     const wasFollowUp = wasVoice && voiceFollowUpRef.current;
     const wasAmend = wasVoice && amendNextRef.current;
     amendNextRef.current = false;
@@ -1130,6 +1140,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             const tc = toolCalls.find(
               (t) => t.tool === data.tool && t.status === 'running',
             );
+            if (data.success && MEDIA_TOOLS.has(data.tool)) {
+              mediaTurnRef.current = true;
+              voiceTrace('media.started', { tool: data.tool });
+            }
             if (tc) {
               tc.status = data.success ? 'success' : 'error';
               tc.latency = data.latency;
@@ -1506,6 +1520,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       const wasVoice = voiceOriginatedRef.current;
       voiceOriginatedRef.current = false;
       lastReplyWasVoiceRef.current = wasVoice;
+      mediaTurnRef.current = false;
 
       addMessage(convId, {
         id: generateId(),
@@ -2522,7 +2537,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       const bargeIn =
         fluxActive &&
         useAppStore.getState().settings.bargeInEnabled &&
-        lastReplyWasVoiceRef.current;
+        lastReplyWasVoiceRef.current &&
+        !mediaTurnRef.current;
       if (bargeIn) {
         if (!fluxTurnActive) {
           flux.beginTurn();
@@ -2684,10 +2700,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       const fire =
         continuousConversationEnabled &&
         lastReplyWasVoiceRef.current &&
+        !mediaTurnRef.current &&
         !micDisabled &&
         speechState === 'idle';
       voiceTrace('cc.audioEnded', {
         fire,
+        media: mediaTurnRef.current,
         cc: continuousConversationEnabled,
         lastReplyWasVoice: lastReplyWasVoiceRef.current,
         micDisabled,
