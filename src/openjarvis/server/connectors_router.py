@@ -104,6 +104,7 @@ def create_connectors_router():
         raise ImportError("pydantic is required for the connectors router")
 
     from openjarvis.core.registry import ConnectorRegistry
+    from openjarvis.server import oauth_tickets
 
     router = APIRouter(prefix="/v1/connectors", tags=["connectors"])
 
@@ -475,11 +476,51 @@ def create_connectors_router():
             "status": "disconnected",
         }
 
+    def _oauth_page(
+        title: str, message: str, status_code: int, close_after_ms: int = 0
+    ):
+        """A small page for the OAuth popup; *message* is escaped."""
+        import html
+
+        from fastapi.responses import HTMLResponse
+
+        style = "font-family:system-ui;text-align:center;padding:60px"
+        colour = "#22c55e" if status_code < 400 else "#ef4444"
+        close = (
+            f"<script>setTimeout(()=>window.close(),{close_after_ms})</script>"
+            if close_after_ms
+            else ""
+        )
+        return HTMLResponse(
+            content=(
+                f"<html><body style='{style}'>"
+                f"<h2 style='color:{colour}'>{html.escape(title)}</h2>"
+                f"<p>{html.escape(message)}</p>{close}"
+                "</body></html>"
+            ),
+            status_code=status_code,
+        )
+
+    @router.post("/{connector_id}/oauth/ticket")
+    async def oauth_ticket(connector_id: str) -> Dict[str, str]:
+        """Issue the single-use URL the app opens for the consent popup.
+
+        This call carries the API key; the popup that follows cannot, so the
+        ticket in the URL stands in for it (see server/oauth_tickets.py).
+        """
+        _ensure_connectors_registered()
+        if not ConnectorRegistry.contains(connector_id):
+            raise HTTPException(404, f"Connector '{connector_id}' not found")
+        ticket = oauth_tickets.tickets.issue(connector_id)
+        start = f"/v1/connectors/{connector_id}/oauth/start?ticket={ticket}"
+        return {"oauth_start": start}
+
     @router.get("/{connector_id}/oauth/start")
-    async def oauth_start(connector_id: str, request: Request):
+    async def oauth_start(connector_id: str, request: Request, ticket: str = ""):
         """Redirect to the OAuth provider's consent page.
 
-        The callback will come back to /v1/connectors/{id}/oauth/callback.
+        Needs a ticket from POST /oauth/ticket. The callback will come back to
+        /v1/connectors/{id}/oauth/callback carrying the ``state`` issued here.
         """
         from urllib.parse import urlencode
 
@@ -487,6 +528,14 @@ def create_connectors_router():
             get_client_credentials,
             get_provider_for_connector,
         )
+
+        if not oauth_tickets.tickets.consume(ticket, connector_id):
+            return _oauth_page(
+                "Sign-in link expired",
+                "This sign-in link has expired or was already used. "
+                "Close this window and click Connect again.",
+                403,
+            )
 
         _ensure_connectors_registered()
         if not ConnectorRegistry.contains(connector_id):
@@ -515,6 +564,7 @@ def create_connectors_router():
             "response_type": "code",
             "scope": " ".join(provider.scopes),
             **provider.extra_auth_params,
+            "state": oauth_tickets.states.issue(connector_id),
         }
         auth_url = f"{provider.auth_endpoint}?{urlencode(params)}"
 
@@ -528,10 +578,9 @@ def create_connectors_router():
         request: Request,
         code: str = "",
         error: str = "",
+        state: str = "",
     ):
         """Handle OAuth callback from the provider."""
-        from fastapi.responses import HTMLResponse
-
         from openjarvis.connectors.oauth import (
             _CONNECTORS_DIR,
             _exchange_token,
@@ -543,16 +592,15 @@ def create_connectors_router():
         _ensure_connectors_registered()
 
         if error:
-            _style = "font-family:system-ui;text-align:center;padding:60px"
-            return HTMLResponse(
-                content=(
-                    f"<html><body style='{_style}'>"
-                    f"<h2 style='color:#ef4444'>Authorization Failed</h2>"
-                    f"<p>{error}</p>"
-                    "<script>setTimeout(()=>window.close(),3000)</script>"
-                    "</body></html>"
-                ),
-                status_code=400,
+            return _oauth_page("Authorization Failed", error, 400, close_after_ms=3000)
+
+        # Only the answer to a sign-in this server started may save tokens.
+        if not oauth_tickets.states.consume(state, connector_id):
+            return _oauth_page(
+                "Sign-in could not be verified",
+                "This sign-in was not started from Sage, or it took too long. "
+                "Close this window and click Connect again.",
+                403,
             )
 
         if not code:
@@ -575,16 +623,7 @@ def create_connectors_router():
                 provider, code, client_id, client_secret, redirect_uri
             )
         except Exception as exc:
-            _style = "font-family:system-ui;text-align:center;padding:60px"
-            return HTMLResponse(
-                content=(
-                    f"<html><body style='{_style}'>"
-                    f"<h2 style='color:#ef4444'>Token Exchange Failed</h2>"
-                    f"<p>{exc}</p>"
-                    "</body></html>"
-                ),
-                status_code=500,
-            )
+            return _oauth_page("Token Exchange Failed", str(exc), 500)
 
         payload = {
             "access_token": tokens.get("access_token", ""),
@@ -601,15 +640,11 @@ def create_connectors_router():
         # Clear cached instance so it picks up new credentials
         _instances.pop(connector_id, None)
 
-        _style = "font-family:system-ui;text-align:center;padding:60px"
-        return HTMLResponse(
-            content=(
-                f"<html><body style='{_style}'>"
-                "<h2 style='color:#22c55e'>Connected!</h2>"
-                "<p>You can close this tab and return to OpenJarvis.</p>"
-                "<script>setTimeout(()=>window.close(),2000)</script>"
-                "</body></html>"
-            )
+        return _oauth_page(
+            "Connected!",
+            "You can close this tab and return to OpenJarvis.",
+            200,
+            close_after_ms=2000,
         )
 
     @router.post("/{connector_id}/sync")

@@ -8,8 +8,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { SOURCE_CATALOG } from '../../types/connectors';
-import { connectSource, getConnector } from '../../lib/connectors-api';
-import { getBase } from '../../lib/api';
+import { connectSource, startServerOAuth } from '../../lib/connectors-api';
 import type { ConnectRequest, ConnectorMeta } from '../../types/connectors';
 
 // ---------------------------------------------------------------------------
@@ -152,30 +151,15 @@ function OAuthPanel({
   const [waiting, setWaiting] = useState(false);
 
   const startOAuth = () => {
-    // Open the server's OAuth start endpoint which redirects to the provider
-    const oauthUrl = `${getBase()}/v1/connectors/${encodeURIComponent(connectorId)}/oauth/start`;
-    window.open(oauthUrl, '_blank', 'width=600,height=700');
+    // Opens the consent popup (with a single-use ticket) and polls until the
+    // connector reports connected, or gives up after 3 minutes.
     setWaiting(true);
-
-    // Poll for connection status
-    const interval = setInterval(async () => {
-      try {
-        const info = await getConnector(connectorId);
-        if (info.connected) {
-          clearInterval(interval);
-          setWaiting(false);
-          onConnect({});
-        }
-      } catch {
-        // ignore polling errors
-      }
-    }, 2000);
-
-    // Stop polling after 3 minutes
-    setTimeout(() => {
-      clearInterval(interval);
-      setWaiting(false);
-    }, 180000);
+    startServerOAuth(connectorId)
+      .then(() => {
+        setWaiting(false);
+        onConnect({});
+      })
+      .catch(() => setWaiting(false));
   };
 
   return (

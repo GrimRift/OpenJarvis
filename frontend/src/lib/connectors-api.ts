@@ -35,10 +35,29 @@ export async function connectSource(id: string, req: ConnectRequest): Promise<Co
 
 /** Open the server-side OAuth consent flow in a popup and resolve once the
  *  connector reports connected (or reject on timeout). Reused for any OAuth
- *  connector whose /connect returned `oauth_required` (issue #512). */
-export function startServerOAuth(id: string, oauthStartPath?: string): Promise<void> {
-  const path = oauthStartPath || `/v1/connectors/${encodeURIComponent(id)}/oauth/start`;
-  window.open(`${getBase()}${path}`, '_blank', 'width=600,height=700');
+ *  connector whose /connect returned `oauth_required` (issue #512).
+ *
+ *  The popup is a plain navigation and cannot send the API key, so the start
+ *  URL carries a single-use ticket fetched with the key first; a bare
+ *  /oauth/start got a 401 whenever a key was set. */
+export async function startServerOAuth(id: string): Promise<void> {
+  // Open the window before the ticket request, while this still runs inside
+  // the user's click: a popup opened after an await can be blocked.
+  const popup = window.open('about:blank', '_blank', 'width=600,height=700');
+  let path: string;
+  try {
+    const res = await apiFetch(`/v1/connectors/${encodeURIComponent(id)}/oauth/ticket`, {
+      method: 'POST',
+    });
+    if (!res.ok) throw new Error(`Could not start sign-in for ${id}: ${res.status}`);
+    path = (await res.json()).oauth_start;
+  } catch (err) {
+    popup?.close();
+    throw err;
+  }
+  const url = `${getBase()}${path}`;
+  if (popup) popup.location.href = url;
+  else window.open(url, '_blank', 'width=600,height=700');
   return new Promise((resolve, reject) => {
     const interval = setInterval(async () => {
       try {

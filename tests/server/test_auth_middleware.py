@@ -136,3 +136,24 @@ class TestAuthMiddleware:
     def test_non_preflight_options_still_requires_auth(self, client, headers):
         resp = client.options("/v1/models", headers=headers)
         assert resp.status_code == 401
+
+
+def test_oauth_popup_paths_skip_the_header() -> None:
+    """The consent popup and the provider redirect are browser navigations;
+    their routes check a single-use ticket / OAuth state instead."""
+    assert not AuthMiddleware._requires_auth("/v1/connectors/gmail/oauth/start")
+    assert not AuthMiddleware._requires_auth("/v1/connectors/gmail/oauth/callback")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/connectors/gmail/oauth/ticket",
+        "/v1/connectors/gmail/connect",
+        "/v1/connectors/gmail/oauth/start/extra",
+        "/v1/connectors/a/b/oauth/start",
+        "/v1/connectors",
+    ],
+)
+def test_other_connector_paths_still_need_the_key(path: str) -> None:
+    assert AuthMiddleware._requires_auth(path)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import secrets
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _WS_AUTH_PROTOCOL = "openjarvis.auth.v1"
 _WS_KEY_PROTOCOL_PREFIX = "openjarvis.key.b64url."
+_OAUTH_BROWSER_PATH = re.compile(r"^/v1/connectors/[^/]+/oauth/(start|callback)$")
 
 
 def _api_keys_match(presented: str, expected: str) -> bool:
@@ -84,6 +86,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # a 128-bit random, in-memory token that dies with the server, so
         # the token is the credential.
         if path.startswith("/v1/speech/audio/"):
+            return False
+        # The OAuth consent popup and the provider's redirect back are browser
+        # navigations too. Those two routes check their own single-use ticket
+        # and OAuth state instead (see server/oauth_tickets.py).
+        if _OAUTH_BROWSER_PATH.match(path):
             return False
         return (
             path.startswith("/v1/")

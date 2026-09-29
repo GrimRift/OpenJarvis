@@ -652,7 +652,7 @@ function DataSourcesSection() {
       // this the connector would stay "pending" forever — the exact #512 bug.
       if (resp.status === 'oauth_required') {
         setConnectStage('Opening Google sign-in...');
-        await startServerOAuth(id, resp.oauth_start);
+        await startServerOAuth(id);
       }
 
       setConnectStage('Connected! Starting sync...');

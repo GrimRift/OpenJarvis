@@ -18,6 +18,18 @@ describe('landOnChat', () => {
     expect(history.replaceState).toHaveBeenCalledWith({ idx: 3 }, '', '/');
   });
 
+  it('keeps a reload on Voice on Voice', () => {
+    const history = fakeHistory();
+    expect(landOnChat({ pathname: '/voice', search: '', hash: '' }, history)).toBe(false);
+    expect(history.replaceState).not.toHaveBeenCalled();
+  });
+
+  it('keeps Voice but drops its query or hash', () => {
+    const history = fakeHistory();
+    expect(landOnChat({ pathname: '/voice', search: '?x=1', hash: '' }, history)).toBe(true);
+    expect(history.replaceState).toHaveBeenCalledWith({ idx: 3 }, '', '/voice');
+  });
+
   it('leaves a load already on Chat alone', () => {
     const history = fakeHistory();
     expect(landOnChat({ pathname: '/', search: '', hash: '' }, history)).toBe(false);

@@ -121,6 +121,22 @@ def client(hermetic_connectors: Path) -> Iterator[TestClient]:
         yield c
 
 
+def _start_path(client: TestClient, connector_id: str = "gdrive") -> str:
+    """The single-use /oauth/start URL the app would open."""
+    resp = client.post(f"/v1/connectors/{connector_id}/oauth/ticket")
+    assert resp.status_code == 200, resp.text
+    return resp.json()["oauth_start"]
+
+
+def _begin_sign_in(client: TestClient, connector_id: str = "gdrive") -> str:
+    """Run /oauth/start and return the OAuth state it sent to the provider."""
+    from urllib.parse import parse_qs, urlparse
+
+    resp = client.get(_start_path(client, connector_id), follow_redirects=False)
+    assert resp.status_code in (302, 307), resp.text
+    return parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
+
+
 # ---------------------------------------------------------------------------
 # Defect A/B — POST /connect must not silently spawn a background OAuth thread
 # ---------------------------------------------------------------------------
@@ -193,7 +209,7 @@ def test_oauth_start_redirects_to_consent(
     # First save client creds via the connect call.
     client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
 
-    resp = client.get("/v1/connectors/gdrive/oauth/start", follow_redirects=False)
+    resp = client.get(_start_path(client), follow_redirects=False)
     # FastAPI's RedirectResponse defaults to 307; any 3xx is a pass (was 422).
     assert resp.status_code in (302, 307), resp.text
     location = resp.headers["location"]
@@ -201,10 +217,12 @@ def test_oauth_start_redirects_to_consent(
     assert _CLIENT_ID in location
     # redirect_uri must point back at OUR in-process callback.
     assert "oauth%2Fcallback" in location or "oauth/callback" in location
+    # A state ties Google's answer to this sign-in.
+    assert "state=" in location
 
 
 def test_oauth_start_without_creds_returns_400(client: TestClient) -> None:
-    resp = client.get("/v1/connectors/gdrive/oauth/start", follow_redirects=False)
+    resp = client.get(_start_path(client), follow_redirects=False)
     assert resp.status_code == 400
     assert "client credentials" in resp.json()["detail"].lower()
 
@@ -220,6 +238,7 @@ def test_oauth_callback_exchanges_and_connects(
     import openjarvis.connectors.oauth as oauth_mod
 
     client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    state = _begin_sign_in(client)
 
     fake_tokens = {
         "access_token": "ya29.REAL",
@@ -228,7 +247,9 @@ def test_oauth_callback_exchanges_and_connects(
         "expires_in": 3600,
     }
     with patch.object(oauth_mod, "_exchange_token", return_value=fake_tokens) as ex:
-        resp = client.get("/v1/connectors/gdrive/oauth/callback?code=authcode123")
+        resp = client.get(
+            f"/v1/connectors/gdrive/oauth/callback?code=authcode123&state={state}"
+        )
 
     assert resp.status_code == 200, resp.text
     assert "Connected!" in resp.text
@@ -266,8 +287,104 @@ def test_oauth_callback_exchange_failure_renders_error(
     def _boom(*_a: Any, **_k: Any) -> dict[str, Any]:
         raise RuntimeError("token endpoint 400")
 
+    state = _begin_sign_in(client)
     with patch.object(oauth_mod, "_exchange_token", side_effect=_boom):
-        resp = client.get("/v1/connectors/gdrive/oauth/callback?code=bad")
+        resp = client.get(
+            f"/v1/connectors/gdrive/oauth/callback?code=bad&state={state}"
+        )
 
     assert resp.status_code == 500
     assert "Token Exchange Failed" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# The popup and the provider's redirect cannot send the API key, so the auth
+# middleware lets them through; a single-use ticket (start) and OAuth state
+# (callback) are the credential instead. See server/oauth_tickets.py.
+# ---------------------------------------------------------------------------
+
+
+def test_oauth_start_without_ticket_is_refused(client: TestClient) -> None:
+    client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    resp = client.get("/v1/connectors/gdrive/oauth/start", follow_redirects=False)
+    assert resp.status_code == 403
+    assert "expired or was already used" in resp.text
+
+
+def test_oauth_ticket_works_once(client: TestClient) -> None:
+    client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    path = _start_path(client)
+    assert client.get(path, follow_redirects=False).status_code in (302, 307)
+    assert client.get(path, follow_redirects=False).status_code == 403
+
+
+def test_oauth_ticket_is_bound_to_its_connector(client: TestClient) -> None:
+    client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    ticket = _start_path(client, "gcalendar").split("ticket=", 1)[1]
+    resp = client.get(
+        f"/v1/connectors/gdrive/oauth/start?ticket={ticket}", follow_redirects=False
+    )
+    assert resp.status_code == 403
+
+
+def test_oauth_ticket_expires(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import openjarvis.server.oauth_tickets as tickets_mod
+
+    client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    path = _start_path(client)
+    later = tickets_mod.time.monotonic() + tickets_mod.TICKET_TTL_S + 1
+    monkeypatch.setattr(tickets_mod.time, "monotonic", lambda: later)
+    assert client.get(path, follow_redirects=False).status_code == 403
+
+
+def test_oauth_ticket_for_unknown_connector_404s(client: TestClient) -> None:
+    assert client.post("/v1/connectors/nope/oauth/ticket").status_code == 404
+
+
+def test_oauth_callback_without_state_saves_nothing(
+    client: TestClient, hermetic_connectors: Path
+) -> None:
+    import openjarvis.connectors.oauth as oauth_mod
+
+    client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    with patch.object(oauth_mod, "_exchange_token") as ex:
+        resp = client.get("/v1/connectors/gdrive/oauth/callback?code=forged")
+    assert resp.status_code == 403
+    ex.assert_not_called()
+    saved = json.loads((hermetic_connectors / "gdrive.json").read_text())
+    assert not saved.get("access_token")
+
+
+def test_oauth_state_works_once(client: TestClient) -> None:
+    import openjarvis.connectors.oauth as oauth_mod
+
+    client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    state = _begin_sign_in(client)
+    url = f"/v1/connectors/gdrive/oauth/callback?code=c&state={state}"
+    tokens = {"access_token": "ya29.X", "refresh_token": "1//X"}
+    with patch.object(oauth_mod, "_exchange_token", return_value=tokens) as ex:
+        assert client.get(url).status_code == 200
+        assert client.get(url).status_code == 403
+    ex.assert_called_once()
+
+
+def test_oauth_state_is_bound_to_its_connector(client: TestClient) -> None:
+    import openjarvis.connectors.oauth as oauth_mod
+
+    client.post("/v1/connectors/gdrive/connect", json={"code": _CLIENT_PAIR})
+    state = _begin_sign_in(client, "gcalendar")
+    with patch.object(oauth_mod, "_exchange_token") as ex:
+        resp = client.get(f"/v1/connectors/gdrive/oauth/callback?code=c&state={state}")
+    assert resp.status_code == 403
+    ex.assert_not_called()
+
+
+def test_oauth_callback_error_text_is_escaped(client: TestClient) -> None:
+    resp = client.get(
+        "/v1/connectors/gdrive/oauth/callback?error=<script>alert(1)</script>"
+    )
+    assert resp.status_code == 400
+    assert "<script>alert(1)</script>" not in resp.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in resp.text
