@@ -263,6 +263,14 @@ def test_rearmed_it_fires_only_after_the_score_dips():
     assert [r["type"] for r in replies] == ["score", "score", "score", "detected"]
     # Re-arming never reset the detector (the reset is what cost the
     # warm-up); the only reset is the one after the detection itself.
+    # The route sends "detected" first and resets after it (the reply must
+    # not wait), so on a slow runner the reset can land just after the test
+    # reads the reply -- CI failed on exactly that (29 September). Wait for it.
+    import time
+
+    deadline = time.monotonic() + 2.0
+    while detector.resets < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert detector.resets == 1
 
 
