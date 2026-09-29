@@ -27,7 +27,7 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    webview::PageLoadEvent,
+    webview::{NewWindowResponse, PageLoadEvent},
     AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::MacosLauncher;
@@ -132,8 +132,41 @@ extern "system" {
     fn MessageBoxW(hwnd: *mut std::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
 }
 
+#[link(name = "shell32")]
+extern "system" {
+    fn ShellExecuteW(
+        hwnd: *mut std::ffi::c_void,
+        operation: *const u16,
+        file: *const u16,
+        parameters: *const u16,
+        directory: *const u16,
+        show: i32,
+    ) -> isize;
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// A link the page opens in a new window (every source card, every link in
+/// an answer) goes to the default browser. Without this the webview refused
+/// the popup and a click did nothing at all (29 September).
+fn open_in_browser(url: &Url) {
+    if !matches!(url.scheme(), "http" | "https") {
+        return;
+    }
+    const SW_SHOWNORMAL: i32 = 1;
+    let (operation, file) = (wide("open"), wide(url.as_str()));
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
 }
 
 /// A Yes/No question in a standard Windows box, on top of everything.
@@ -241,6 +274,10 @@ pub fn run() {
                     if let PageLoadEvent::Finished = payload.event() {
                         tell_page(&window);
                     }
+                })
+                .on_new_window(|url, _features| {
+                    open_in_browser(&url);
+                    NewWindowResponse::Deny
                 })
                 .build()?;
             window_state::restore(&window);

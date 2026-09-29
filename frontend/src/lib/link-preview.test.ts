@@ -1,11 +1,52 @@
 import { describe, expect, it } from 'vitest';
 import {
+  REPLAYED_RESULT_CHARS,
   externalLinkAttributes,
+  replayedToolResult,
   selectLinkPreview,
   selectSearchImages,
   selectSources,
 } from './link-preview';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, ToolCallInfo } from '../types';
+
+describe('replayedToolResult', () => {
+  it('keeps every source address a long search result would cut off', () => {
+    const summary = 'x'.repeat(600);
+    const call: ToolCallInfo = {
+      id: 't1',
+      tool: 'web_search',
+      arguments: '{}',
+      status: 'success',
+      result: [1, 2, 3]
+        .map((n) => `### Page ${n}\nSource: https://site${n}.example/p\nSummary: ${summary}`)
+        .join('\n\n---\n\n'),
+      metadata: {
+        sources: [1, 2, 3].map((n) => ({
+          title: `Page ${n}`,
+          url: `https://site${n}.example/p`,
+        })),
+      },
+    };
+
+    const replayed = replayedToolResult(call);
+
+    expect(replayed.startsWith(call.result!.slice(0, REPLAYED_RESULT_CHARS))).toBe(true);
+    expect(replayed).toContain('- Page 3: https://site3.example/p');
+    expect(replayed).toContain('- Page 2: https://site2.example/p');
+  });
+
+  it('leaves tools without sources as the plain cut', () => {
+    const call: ToolCallInfo = {
+      id: 't2',
+      tool: 'open_app',
+      arguments: '{}',
+      status: 'success',
+      result: 'y'.repeat(900),
+    };
+
+    expect(replayedToolResult(call)).toBe('y'.repeat(REPLAYED_RESULT_CHARS));
+  });
+});
 
 describe('externalLinkAttributes', () => {
   it('opens external http links in a new tab safely', () => {

@@ -78,6 +78,7 @@ import {
   mergeTurns,
 } from '../../lib/turn-continuation';
 import { setVoiceTraceSink, voiceTrace } from '../../lib/voice-trace';
+import { replayedToolResult } from '../../lib/link-preview';
 import type {
   ChatMessage,
   MessageTelemetry,
@@ -680,7 +681,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // open an app a second time it reproduced the earlier "<app> has been
     // opened for you" verbatim, called no tool, and nothing opened. Results
     // are truncated because they are replayed on every later turn and some
-    // tools return a lot; the shape is what matters here, not the detail.
+    // tools return a lot; the shape is what matters here, not the detail --
+    // except the sources' addresses, kept so "read that one" still works.
     const currentMessages = useAppStore.getState().messages;
     const apiMessages: ChatRequest['messages'] = [];
     for (const m of currentMessages) {
@@ -704,7 +706,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         for (const tc of calls) {
           apiMessages.push({
             role: 'tool',
-            content: (tc.result ?? '').slice(0, 500),
+            content: replayedToolResult(tc),
             tool_call_id: tc.id,
             name: tc.tool,
           });

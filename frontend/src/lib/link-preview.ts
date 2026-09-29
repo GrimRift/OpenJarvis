@@ -69,6 +69,25 @@ function previewsFromToolCall(toolCall: ToolCallInfo): LinkPreview[] {
   });
 }
 
+/** How much of an earlier tool result is replayed to the model each turn. */
+export const REPLAYED_RESULT_CHARS = 500;
+
+/**
+ * An earlier tool result as the next turn's history carries it: cut short,
+ * plus every source's title and address. A search result gives each page a
+ * summary of up to 600 characters, so the cut kept only the first address:
+ * asked to "read the reddit post" from the sources under the last answer,
+ * Sage could not see its link and said no Reddit post had been found
+ * (29 September).
+ */
+export function replayedToolResult(toolCall: ToolCallInfo): string {
+  const text = (toolCall.result ?? '').slice(0, REPLAYED_RESULT_CHARS);
+  const sources = previewsFromToolCall(toolCall);
+  if (sources.length === 0) return text;
+  const lines = sources.map((source) => `- ${source.title}: ${source.url}`);
+  return `${text}\n\nSources:\n${lines.join('\n')}`;
+}
+
 export function selectSearchImages(message: ChatMessage): SearchImage[] {
   for (const toolCall of message.toolCalls ?? []) {
     if (
