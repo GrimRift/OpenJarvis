@@ -492,15 +492,66 @@ class InstrumentedEngine(InferenceEngine):
         max_tokens: int = 1024,
         **kwargs: Any,
     ) -> AsyncIterator["StreamChunk"]:
-        """Delegate to inner engine's stream_full for tool-call support."""
-        async for chunk in self._inner.stream_full(
-            messages,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
-        ):
-            yield chunk
+        """Delegate to inner engine's stream_full for tool-call support.
+
+        Records one telemetry row per call from the usage the provider sends
+        at the end of the stream. Chat and voice both stream through here,
+        and until 29 September none of it was recorded: 990 turns in a week
+        with no token counts at all.
+        """
+        t0 = time.time()
+        first_token = 0.0
+        usage: Dict[str, Any] = {}
+        try:
+            async for chunk in self._inner.stream_full(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            ):
+                if not first_token and (chunk.content or chunk.tool_calls):
+                    first_token = time.time()
+                if chunk.usage:
+                    usage = chunk.usage
+                yield chunk
+        finally:
+            # Also when the caller stops early (the user interrupted): the
+            # tokens were billed all the same.
+            if usage:
+                self._record_stream_usage(model, usage, t0, first_token)
+
+    def _record_stream_usage(
+        self, model: str, usage: Dict[str, Any], t0: float, first_token: float
+    ) -> None:
+        try:
+            from openjarvis.engine.cloud import estimate_cost
+
+            prompt = int(usage.get("prompt_tokens", 0) or 0)
+            completion = int(usage.get("completion_tokens", 0) or 0)
+            cached = int(usage.get("cached_tokens", 0) or 0)
+            record = TelemetryRecord(
+                timestamp=t0,
+                model_id=model,
+                prompt_tokens=prompt,
+                prompt_tokens_evaluated=max(prompt - cached, 0),
+                completion_tokens=completion,
+                total_tokens=prompt + completion,
+                latency_seconds=time.time() - t0,
+                ttft=first_token - t0 if first_token else 0.0,
+                cost_usd=estimate_cost(model, prompt, completion, cached),
+                is_streaming=True,
+                engine=getattr(self._inner, "engine_id", "unknown"),
+                token_counting_version=TOKEN_COUNTING_VERSION,
+                metadata={"cached_tokens": cached, "source": "stream_full"},
+            )
+            self._bus.publish(EventType.TELEMETRY_RECORD, {"record": record})
+        except Exception:  # noqa: BLE001 -- telemetry never breaks a reply
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Stream telemetry failed", exc_info=True
+            )
 
     def list_models(self) -> List[str]:
         return self._inner.list_models()

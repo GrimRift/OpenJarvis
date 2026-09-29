@@ -235,6 +235,7 @@ def record_response_trace(
     agent: str = "server",
     started_at: float,
     ended_at: float,
+    usage: Optional[Dict[str, Any]] = None,
 ) -> Optional[Trace]:
     """Persist a minimal single-step ``Trace`` for a non-agent response.
 
@@ -242,6 +243,10 @@ def record_response_trace(
     engine, bypassing the agent (and therefore ``TraceCollector``). They call
     this so those interactions still land in ``traces.db`` — otherwise streamed
     chats, which are the desktop GUI's main path, would never produce traces.
+
+    *usage* (prompt, cached and completion tokens, model rounds) is the whole
+    turn's, recorded as one ``generate`` step: without it these traces had no
+    token counts at all.
 
     Best-effort: returns the saved ``Trace`` or ``None`` (when *store* is
     ``None`` or persistence raised), and never propagates an exception into the
@@ -251,6 +256,35 @@ def record_response_trace(
         return None
     try:
         duration = max(0.0, ended_at - started_at)
+        steps = []
+        total = 0
+        if usage:
+            prompt = int(usage.get("prompt_tokens", 0) or 0)
+            completion = int(usage.get("completion_tokens", 0) or 0)
+            total = prompt + completion
+            steps.append(
+                TraceStep(
+                    step_type=StepType.GENERATE,
+                    timestamp=started_at,
+                    duration_seconds=duration,
+                    input={"model": model},
+                    output={
+                        "prompt_tokens": prompt,
+                        "completion_tokens": completion,
+                        "cached_tokens": int(usage.get("cached_tokens", 0) or 0),
+                        "rounds": int(usage.get("rounds", 0) or 0),
+                        "tokens": total,
+                    },
+                )
+            )
+        steps.append(
+            TraceStep(
+                step_type=StepType.RESPOND,
+                timestamp=ended_at,
+                duration_seconds=duration,
+                output={"content": result},
+            )
+        )
         trace = Trace(
             query=query,
             agent=agent,
@@ -259,16 +293,10 @@ def record_response_trace(
             result=result,
             started_at=started_at,
             ended_at=ended_at,
-            steps=[
-                TraceStep(
-                    step_type=StepType.RESPOND,
-                    timestamp=ended_at,
-                    duration_seconds=duration,
-                    output={"content": result},
-                )
-            ],
+            steps=steps,
         )
         trace.total_latency_seconds = duration
+        trace.total_tokens = total
         store.save(trace)
         return trace
     except Exception:

@@ -25,6 +25,12 @@ class MultiEngine(InferenceEngine):
 
     def __init__(self, engines: list[tuple[str, InferenceEngine]]) -> None:
         self._engines = engines
+        # serve wraps every engine in here with InstrumentedEngine, which
+        # publishes the inference events itself; without saying so, the agent
+        # published them again and every model call was traced twice.
+        self._publishes_events = bool(engines) and all(
+            getattr(engine, "_publishes_events", False) for _, engine in engines
+        )
         self._model_map: Dict[str, InferenceEngine] = {}
         self._model_key_map: Dict[str, str] = {}
         self._refresh_map()

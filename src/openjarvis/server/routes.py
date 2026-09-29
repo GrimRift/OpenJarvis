@@ -1651,6 +1651,12 @@ async def _handle_streaming_orchestrator(
                 agent=agent.agent_id,
                 started_at=started_at,
                 ended_at=ended_at,
+                usage={
+                    "prompt_tokens": total_prompt_tokens,
+                    "completion_tokens": total_completion_tokens,
+                    "cached_tokens": int(clock.get("cached_tokens", 0)),
+                    "rounds": len(rounds),
+                },
             )
 
         if full_content:

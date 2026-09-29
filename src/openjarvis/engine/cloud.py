@@ -320,8 +320,25 @@ def _is_unsupported_temperature_error(exc: Exception) -> bool:
     )
 
 
-def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """Estimate USD cost based on the hardcoded pricing table."""
+#: Price per million input tokens served from the provider's prompt cache,
+#: where it is known. Other models are charged the full input price.
+CACHED_INPUT_PRICING: Dict[str, float] = {
+    "gpt-5.6-luna": 0.02,
+    "gpt-6-luna": 0.01,
+}
+
+
+def estimate_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int = 0,
+) -> float:
+    """Estimate USD cost based on the hardcoded pricing table.
+
+    *cached_tokens* is the part of *prompt_tokens* the provider served from
+    its cache, charged at the cached price when the model has one.
+    """
     # Try exact match first, then prefix match
     prices = PRICING.get(model)
     if prices is None:
@@ -331,7 +348,13 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
                 break
     if prices is None:
         return 0.0
-    input_cost = (prompt_tokens / 1_000_000) * prices[0]
+    cached_price = CACHED_INPUT_PRICING.get(model)
+    cached = 0
+    input_cost = 0.0
+    if cached_price is not None:
+        cached = min(max(cached_tokens, 0), prompt_tokens)
+        input_cost = (cached / 1_000_000) * cached_price
+    input_cost += ((prompt_tokens - cached) / 1_000_000) * prices[0]
     output_cost = (completion_tokens / 1_000_000) * prices[1]
     return input_cost + output_cost
 
@@ -764,7 +787,9 @@ class CloudEngine(InferenceEngine):
             },
             "model": resp.model,
             "finish_reason": choice.finish_reason or "stop",
-            "cost_usd": estimate_cost(model, prompt_tokens, completion_tokens),
+            "cost_usd": estimate_cost(
+                model, prompt_tokens, completion_tokens, cached_tokens
+            ),
             "ttft": elapsed,
         }
 

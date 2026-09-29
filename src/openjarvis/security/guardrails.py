@@ -50,6 +50,9 @@ class GuardrailsEngine(InferenceEngine):
         bus: Optional[EventBus] = None,
     ) -> None:
         self._engine = engine
+        # Passed through, or the agent re-publishes the inner engine's
+        # inference events and every call is traced twice (multi.py).
+        self._publishes_events = getattr(engine, "_publishes_events", False)
         self._scanners: List[BaseScanner] = (
             scanners
             if scanners is not None

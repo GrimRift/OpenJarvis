@@ -130,7 +130,9 @@ def test_inject_context_filters_low_score():
 
 
 def test_inject_context_respects_max_tokens():
-    # Each result has ~100 tokens, max is 150 → only 1 should be included
+    # The budget fits one result and a half → only 1 should be included
+    from openjarvis.tools.storage.context import _count_tokens
+
     content = " ".join(f"word{i}" for i in range(100))
     results = [
         RetrievalResult(content=content, score=1.0, source="a.md"),
@@ -138,7 +140,7 @@ def test_inject_context_respects_max_tokens():
     ]
     backend = _FakeMemory(results)
     messages = [Message(role=Role.USER, content="test")]
-    cfg = ContextConfig(max_context_tokens=150)
+    cfg = ContextConfig(max_context_tokens=_count_tokens(content) * 3 // 2)
     augmented = inject_context(
         "query",
         messages,
@@ -277,19 +279,22 @@ def test_inject_context_collapses_multiple_system_messages():
 
 
 def test_inject_context_reserves_budget_for_retrieved_documents():
-    backend = _FakeMemory(
-        [RetrievalResult(content="d1 d2 d3 d4 d5", score=1.0, source="doc")]
-    )
+    from openjarvis.tools.storage.context import _count_tokens
+
+    doc = "d1 d2 d3 d4 d5"
+    backend = _FakeMemory([RetrievalResult(content=doc, score=1.0, source="doc")])
     facts = [
         Fact(text="old1 old2 old3 old4 old5"),
         Fact(text="new1 new2 new3 new4 new5"),
     ]
+    # Half the budget holds one fact, the rest the document.
+    unit = max(_count_tokens(doc), *(_count_tokens(f.text) for f in facts))
 
     augmented = inject_context(
         "query",
         [Message(role=Role.USER, content="query")],
         backend,
-        config=ContextConfig(max_context_tokens=10),
+        config=ContextConfig(max_context_tokens=2 * unit),
         facts=facts,
     )
 
@@ -299,16 +304,20 @@ def test_inject_context_reserves_budget_for_retrieved_documents():
 
 
 def test_inject_context_prefers_large_document_that_fits_total_budget():
-    backend = _FakeMemory(
-        [RetrievalResult(content="d1 d2 d3 d4 d5 d6 d7 d8", score=1.0)]
-    )
+    from openjarvis.tools.storage.context import _count_tokens
+
+    doc, fact = "d1 d2 d3 d4 d5 d6 d7 d8", "f1 f2 f3 f4 f5"
+    backend = _FakeMemory([RetrievalResult(content=doc, score=1.0)])
+    # The document fits alone, the fact fits its half, both together do not.
+    budget = max(_count_tokens(doc), 2 * _count_tokens(fact))
+    assert _count_tokens(doc) + _count_tokens(fact) > budget
 
     augmented = inject_context(
         "query",
         [Message(role=Role.USER, content="query")],
         backend,
-        config=ContextConfig(max_context_tokens=10),
-        facts=[Fact(text="f1 f2 f3 f4 f5")],
+        config=ContextConfig(max_context_tokens=budget),
+        facts=[Fact(text=fact)],
     )
 
     assert "d1 d2 d3 d4 d5 d6 d7 d8" in augmented[0].content
@@ -334,6 +343,14 @@ def test_inject_context_publishes_event():
         assert events[0].data["context_injection"] is True
     finally:
         mod.get_event_bus = original
+
+
+def test_budget_counts_model_tokens_not_words():
+    """Word counting sent ~2,930 real tokens under a 2,048 budget."""
+    from openjarvis.tools.storage.context import _count_tokens
+
+    text = "Prefers C:\\AI\\Sage-Staging for code; class HSSH-502 at 08:00."
+    assert _count_tokens(text) > len(text.split())
 
 
 def test_inject_context_does_not_mutate_original():
