@@ -75,6 +75,36 @@ def _no_real_speaker_profile(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_telemetry_db(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A default ``JarvisConfig()`` puts telemetry in the data directory, and
+    on this machine ``OPENJARVIS_HOME`` is the live ``OpenJarvis-Data``: the
+    SDK tests' mock engine wrote hundreds of ``test-model``/``custom-model``
+    rows into the real telemetry.db. Any store opened on that default path
+    gets a temp file instead; tests that pass their own path are untouched."""
+    from openjarvis.core import config as _config
+    from openjarvis.core.paths import get_config_dir
+    from openjarvis.telemetry.store import TelemetryStore
+
+    real_paths = {
+        (get_config_dir() / "telemetry.db").resolve(),
+        (_config.DEFAULT_CONFIG_DIR / "telemetry.db").resolve(),
+    }
+    real_init = TelemetryStore.__init__
+
+    def _init(self, db_path, *args, **kwargs):
+        if (
+            str(db_path) != ":memory:"
+            and Path(db_path).expanduser().resolve() in real_paths
+        ):
+            db_path = tmp_path_factory.mktemp("telemetry") / "telemetry.db"
+        real_init(self, db_path, *args, **kwargs)
+
+    monkeypatch.setattr(TelemetryStore, "__init__", _init)
+
+
+@pytest.fixture(autouse=True)
 def _nobody_speaking() -> None:
     """Any test that plays sound leaves the server "speaking" for the echo
     tail (2 s), and the wake-word socket and Flux relay go deaf for it --
