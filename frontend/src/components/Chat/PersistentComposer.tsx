@@ -5,6 +5,7 @@ import {
   subscribeComposerSlot,
 } from '../../lib/composer-slot';
 import { InputArea } from './InputArea';
+import { appWindowHidden, whenAppWindowShown } from '../../lib/app-window';
 
 interface Box {
   left: number;
@@ -32,7 +33,14 @@ export function PersistentComposer() {
     }
     let frame = 0;
     let last = '';
+    let stopWaiting = () => {};
     const follow = () => {
+      // Out of sight in the app's tray or minimised: nothing moves that
+      // anyone could see; wait for the window to come back.
+      if (appWindowHidden()) {
+        stopWaiting = whenAppWindowShown(follow);
+        return;
+      }
       const rect = slot.el.getBoundingClientRect();
       const key = `${rect.left}|${rect.top}|${rect.width}`;
       if (key !== last) {
@@ -42,7 +50,10 @@ export function PersistentComposer() {
       frame = requestAnimationFrame(follow);
     };
     follow();
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      stopWaiting();
+    };
   }, [slot]);
 
   // Report this box's size, so the slot holds exactly the space it covers.

@@ -622,6 +622,14 @@
     }
   }
 }
+/* The Sage app hidden in the tray or minimised (lib/app-window.ts): nothing
+   animates where nobody can see it. Measured 29 September: the background
+   grid drift alone kept the graphics process redrawing 180 times a second. */
+html[data-app-hidden] *,
+html[data-app-hidden] *::before,
+html[data-app-hidden] *::after {
+  animation-play-state: paused !important;
+}
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);

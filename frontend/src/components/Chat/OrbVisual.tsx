@@ -16,6 +16,7 @@ import {
   type PlexusState,
 } from '../../lib/orb-plexus';
 import { isGenerating, resolveOrbState, type OrbInputs, type OrbState } from '../../lib/orb-state';
+import { appWindowHidden, whenAppWindowShown } from '../../lib/app-window';
 import { useAppStore } from '../../lib/store';
 
 export type { OrbState } from '../../lib/orb-state';
@@ -141,7 +142,17 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
     // a 144Hz monitor spins it 2.4x faster than the rate these constants
     // were tuned against. Clamped so returning to a backgrounded tab eases
     // back in rather than jumping a second of rotation in one frame.
+    let stopWaiting = () => {};
     const draw = (now: number) => {
+      // Out of sight in the app's tray or minimised: the loop stops asking
+      // for frames and restarts when the window is back, with a fresh clock.
+      if (appWindowHidden()) {
+        lastFrameRef.current = 0;
+        stopWaiting = whenAppWindowShown(() => {
+          rafRef.current = requestAnimationFrame(draw);
+        });
+        return;
+      }
       const previous = lastFrameRef.current || now;
       lastFrameRef.current = now;
       const dt = frameDelta(now, previous);
@@ -190,6 +201,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
 
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      stopWaiting();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size]);

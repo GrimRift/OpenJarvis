@@ -26,7 +26,8 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    webview::PageLoadEvent,
+    AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -67,17 +68,31 @@ fn run_script(name: &str) -> std::io::Result<Child> {
         .spawn()
 }
 
+/// Tell the Sage page whether its window is out of sight (hidden in the tray
+/// or minimised). BROWSER_ARGS keep the page "visible" to itself on purpose,
+/// so the wake word and timers never slow down -- which also means it cannot
+/// tell on its own. The orb stops drawing while nobody can see it: measured
+/// on 29 September, a hidden app still spent 75% of a core drawing it.
+fn tell_page(window: &WebviewWindow) {
+    let hidden = !window.is_visible().unwrap_or(true) || window.is_minimized().unwrap_or(false);
+    let _ = window.eval(format!(
+        "window.__sageWindowHidden = {hidden}; window.dispatchEvent(new Event('sage-window-visibility'));"
+    ));
+}
+
 fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        tell_page(&window);
     }
 }
 
 fn hide(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+        tell_page(&window);
     }
 }
 
@@ -152,6 +167,11 @@ pub fn run() {
                 .min_inner_size(900.0, 600.0)
                 .additional_browser_args(&args)
                 .visible(false)
+                .on_page_load(|window, payload| {
+                    if let PageLoadEvent::Finished = payload.event() {
+                        tell_page(&window);
+                    }
+                })
                 .build()?;
             window_state::restore(&window);
             if !(started_with_windows && settings.start_hidden) {
@@ -209,8 +229,14 @@ pub fn run() {
                     api.prevent_close();
                     window_state::save(&webview);
                     let _ = window.hide();
+                    tell_page(&webview);
                 }
-                WindowEvent::Moved(_) | WindowEvent::Resized(_) => window_state::changed(&webview),
+                WindowEvent::Moved(_) => window_state::changed(&webview),
+                // Minimising and restoring arrive as resizes.
+                WindowEvent::Resized(_) => {
+                    window_state::changed(&webview);
+                    tell_page(&webview);
+                }
                 _ => {}
             }
         })
