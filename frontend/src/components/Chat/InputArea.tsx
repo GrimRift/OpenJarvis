@@ -275,7 +275,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // finishes, well after send) can still tell whether that exchange was
   // voice-initiated.
   const lastReplyWasVoiceRef = useRef(false);
-  /** This turn started a video (youtube_play / netflix_play). Its sound would
+  /** This turn plays a video (youtube_play / netflix_play). Its sound would
    *  reach the microphone as the user's next words -- on 29 September F1
    *  commentary was taken as a question and answered -- so the reply is not
    *  listened over, and the mic does not reopen after it: the wake word
@@ -1124,6 +1124,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               status: 'running',
             };
             toolCalls.push(tc);
+            // Set as the tool starts, not when it succeeds: a play that ran
+            // past its time limit was reported failed and played anyway, and
+            // its sound was answered (29 September).
+            if (MEDIA_TOOLS.has(data.tool)) {
+              mediaTurnRef.current = true;
+              voiceTrace('media.started', { tool: data.tool });
+            }
             setStreamState({
               phase: `Calling ${data.tool}...`,
               activeToolCalls: [...toolCalls],
@@ -1140,10 +1147,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             const tc = toolCalls.find(
               (t) => t.tool === data.tool && t.status === 'running',
             );
-            if (data.success && MEDIA_TOOLS.has(data.tool)) {
-              mediaTurnRef.current = true;
-              voiceTrace('media.started', { tool: data.tool });
-            }
             if (tc) {
               tc.status = data.success ? 'success' : 'error';
               tc.latency = data.latency;

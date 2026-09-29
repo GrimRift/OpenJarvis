@@ -1081,6 +1081,10 @@ class YouTubePlayTool(_OperaTool):
                 },
                 "required": ["query"],
             },
+            # Search, open, skip the ad, place, go fullscreen: 27-35 s measured on
+            # 29 September, over the 30 s default -- reported as a failure while
+            # the video went on to play.
+            timeout_seconds=75.0,
         )
 
     def execute(self, **params: Any) -> ToolResult:
@@ -1122,17 +1126,21 @@ class YouTubePlayTool(_OperaTool):
                 )
                 title = known_title or page.title().replace(" - YouTube", "")
                 playing = _ensure_playing(page)
-                # The pre-roll: skip it while still attached, so the user
-                # never sits through one Sage could have clicked away.
-                ad = skip_ad(page)
+                # Shown first, the ad skipped after: waiting out the pre-roll
+                # before placing the window kept it hidden for 15 of the 22 s
+                # a play took (29 September). The user now sees it at once.
                 if wants_to_watch:
                     # Monitor first: going fullscreen and *then* moving the
                     # window drops it back out of fullscreen.
                     where = session.move_to_monitor(monitor)
                     _go_fullscreen(page)
-                    playing = _is_playing(page)
                 else:
                     where = session.show_compact()
+                # The pre-roll: skip it while still attached, so the user
+                # never sits through one Sage could have clicked away.
+                ad = skip_ad(page)
+                if wants_to_watch:
+                    playing = _is_playing(page)
         except Exception as error:
             return self._fail(f"could not play that: {error}")
         state = "Playing" if playing else "Opened (paused — press play)"
@@ -1243,6 +1251,10 @@ class NetflixPlayTool(_OperaTool):
                 },
                 "required": ["query"],
             },
+            # Search, open, skip the ad, place, go fullscreen: 27-35 s measured on
+            # 29 September, over the 30 s default -- reported as a failure while
+            # the video went on to play.
+            timeout_seconds=75.0,
         )
 
     def execute(self, **params: Any) -> ToolResult:
