@@ -2867,8 +2867,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     );
 
     return (
-      <div className="flex flex-col items-center">
-      {attachmentStrip}
+      <div className="relative">
+      {/* Floats above the controls: in the flow it made this row taller and
+          pushed the buttons out of line with their neighbours (29 September). */}
+      {attachmentStrip ? (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max">{attachmentStrip}</div>
+      ) : null}
       <div className="flex items-center justify-center gap-3">
         {iconButton(
           deepResearch,
