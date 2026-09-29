@@ -215,7 +215,7 @@ export function MemoryBrowser({ apiUrl }: { apiUrl: string }) {
     try {
       const result = await invoke<MemoryStats>('fetch_memory_stats', { apiUrl });
       setStats(result);
-    } catch (err) {
+    } catch {
       // Stats are non-critical; silently ignore
     }
   }, [apiUrl]);

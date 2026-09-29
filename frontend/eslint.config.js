@@ -29,6 +29,18 @@ export default defineConfig([
       'react-hooks/immutability': 'off',
       'react-hooks/purity': 'off',
       'react-hooks/preserve-manual-memoization': 'off',
+      // `catch {}` is this codebase's idiom for best-effort calls.
+      'no-empty': ['error', { allowEmptyCatch: true }],
+      // A leading underscore marks a deliberately unused name.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          destructuredArrayIgnorePattern: '^_',
+        },
+      ],
     },
   },
 ]);

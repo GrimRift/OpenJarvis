@@ -203,7 +203,6 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       stopWaiting();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size]);
 
   return (

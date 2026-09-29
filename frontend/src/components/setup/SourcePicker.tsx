@@ -11,7 +11,7 @@ import {
   Users,
   CheckCircle2,
 } from 'lucide-react';
-import { SOURCE_CATALOG, type ConnectorMeta, type SourceCard } from '../../types/connectors';
+import { SOURCE_CATALOG, type ConnectorMeta } from '../../types/connectors';
 
 // ---------------------------------------------------------------------------
 // Icon map
@@ -34,7 +34,6 @@ const ICON_MAP: Record<string, React.ComponentType<{ size?: number; className?: 
 // ---------------------------------------------------------------------------
 
 function CategorySection({
-  category,
   label,
   cards,
   selected,

@@ -16,7 +16,7 @@ function convert(text: string): string {
   let out = text.replace(/\\\[([\s\S]+?)\\\]/g, (_m, body: string) => `$$${body.trim()}$$`);
   out = out.replace(/\\\(([\s\S]+?)\\\)/g, (_m, body: string) => `$${body.trim()}$`);
   // Backslash already eaten: `[ \sum F_x=0 ]` on its own, or `( 0^\circ )`.
-  out = out.replace(/\[\s([^\[\]\n]+?)\s\]/g, (m, body: string) =>
+  out = out.replace(/\[\s([^[\]\n]+?)\s\]/g, (m, body: string) =>
     TEX_COMMAND.test(body) ? `$$${body.trim()}$$` : m,
   );
   out = out.replace(/\(([^()\n]*?(?:\\[a-zA-Z]+|\^\\circ)[^()\n]*?)\)/g, (m, body: string) =>

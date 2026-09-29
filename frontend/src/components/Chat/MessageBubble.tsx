@@ -47,7 +47,7 @@ function getTextContent(node: any): string {
   return '';
 }
 
-function CodeBlockPre({ children, messageId, isLive, ...props }: any) {
+function CodeBlockPre({ children, messageId, isLive: _isLive, ...props }: any) {
   const [copied, setCopied] = useState(false);
   const codeElement = Array.isArray(children) ? children[0] : children;
   const className = codeElement?.props?.className || '';

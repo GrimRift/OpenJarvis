@@ -1,10 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Palette,
-  Globe,
-  Cpu,
-  Database,
-  Info,
   Check,
   Sun,
   Moon,
@@ -12,15 +7,11 @@ import {
   Download,
   Upload,
   Trash2,
-  Mic,
-  Key,
-  Search,
   Brain,
   RotateCcw,
 } from 'lucide-react';
 import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
-import type { BargeMode } from '../lib/barge-in';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
 import { fetchKeyterms, parseTerms, saveKeyterms, type Keyterms } from '../lib/keyterms';
 
@@ -284,7 +275,7 @@ export function SettingsPage() {
   const [speechBackendAvailable, setSpeechBackendAvailable] = useState<boolean | null>(null);
   const [wakeWordAvailable, setWakeWordAvailable] = useState<boolean | null>(null);
   const [fluxAvailable, setFluxAvailable] = useState<boolean | null>(null);
-  const [fluxReason, setFluxReason] = useState<string>('');
+  const [, setFluxReason] = useState<string>('');
   const [speechHealth, setSpeechHealth] = useState<SpeechHealth | null>(null);
   const [speechChecking, setSpeechChecking] = useState(true);
   const [saved, setSaved] = useState(false);

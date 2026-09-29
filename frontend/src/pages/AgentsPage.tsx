@@ -52,13 +52,10 @@ import {
   Settings,
   FileText,
   X,
-  ChevronRight,
   Send,
   RefreshCw,
   Wifi,
   Database,
-  Copy,
-  Check,
   Pencil,
   Loader2,
 } from 'lucide-react';
@@ -184,71 +181,6 @@ function formatSchedule(type?: string, value?: string): string {
 // ---------------------------------------------------------------------------
 // Launch Wizard
 // ---------------------------------------------------------------------------
-
-const CATEGORY_MAP: Record<string, string> = {
-  communication: 'Communication',
-  channel: 'Communication',
-  search: 'Search & Browse',
-  browser: 'Search & Browse',
-  code: 'Code & Dev',
-  system: 'Code & Dev',
-  filesystem: 'Files & Data',
-  memory: 'Memory & Knowledge',
-  knowledge_graph: 'Memory & Knowledge',
-  reasoning: 'Reasoning & AI',
-  math: 'Reasoning & AI',
-  inference: 'Reasoning & AI',
-  agents: 'Reasoning & AI',
-  media: 'Media',
-};
-
-const TOOL_NAME_FALLBACK: Record<string, string> = {
-  file_read: 'Files & Data',
-  file_write: 'Files & Data',
-  pdf_extract: 'Files & Data',
-  db_query: 'Files & Data',
-  http_request: 'Files & Data',
-  apply_patch: 'Code & Dev',
-  git_status: 'Code & Dev',
-  git_diff: 'Code & Dev',
-  git_log: 'Code & Dev',
-  git_commit: 'Code & Dev',
-  channel_send: 'Communication',
-  channel_list: 'Communication',
-  channel_status: 'Communication',
-};
-
-const CATEGORY_ORDER = [
-  'Communication', 'Search & Browse', 'Code & Dev', 'Files & Data',
-  'Memory & Knowledge', 'Reasoning & AI', 'Media',
-];
-
-const POPULAR_TOOLS = new Set([
-  'slack', 'email', 'telegram', 'whatsapp',
-  'web_search', 'browser',
-  'code_interpreter', 'shell_exec', 'git_status', 'git_diff',
-  'file_read', 'file_write', 'pdf_extract',
-  'retrieval', 'memory_store',
-  'think', 'llm', 'calculator',
-  'image_generate',
-]);
-
-const BROWSER_SUB_TOOLS = [
-  'browser_navigate', 'browser_click', 'browser_type',
-  'browser_screenshot', 'browser_extract', 'browser_axtree',
-];
-
-function parseIntervalParts(val: string): { hours: number; minutes: number; seconds: number } {
-  const total = parseInt(val) || 0;
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  return { hours, minutes, seconds };
-}
-
-function serializeInterval(hours: number, minutes: number, seconds: number): string {
-  return String(hours * 3600 + minutes * 60 + seconds);
-}
 
 interface WizardState {
   step: 1 | 2;
@@ -726,7 +658,7 @@ function LaunchWizard({
     try {
       // Map friendly schedule presets to API schedule_type/schedule_value
       let apiScheduleType = wizard.scheduleType;
-      let apiScheduleValue = wizard.scheduleValue;
+      const apiScheduleValue = wizard.scheduleValue;
       if (wizard.scheduleType === 'daily' || wizard.scheduleType === 'weekly') {
         apiScheduleType = 'cron';
         // scheduleValue already holds the cron expression
@@ -765,18 +697,6 @@ function LaunchWizard({
       setLaunching(false);
     }
   }
-
-  const formatScheduleLabel = (type: string, value: string) => {
-    if (type === 'manual') return 'Manual (run on demand)';
-    if (type === 'cron') return `Cron: ${value}`;
-    if (type === 'interval') {
-      const secs = parseInt(value, 10);
-      if (secs >= 3600) return `Every ${secs / 3600}h`;
-      if (secs >= 60) return `Every ${secs / 60}m`;
-      return `Every ${secs}s`;
-    }
-    return type;
-  };
 
   // ── Step 1: Template Selection ──
   if (wizard.step === 1) {
@@ -3421,7 +3341,6 @@ export function AgentsPage() {
   const setManagedAgents = useAppStore((s) => s.setManagedAgents);
   const selectedAgentId = useAppStore((s) => s.selectedAgentId);
   const setSelectedAgentId = useAppStore((s) => s.setSelectedAgentId);
-  const savings = useAppStore((s) => s.savings);
   const [loading, setLoading] = useState(true);
   const [agentManagerAvailable, setAgentManagerAvailable] = useState<boolean | null>(null);
   const [tasks, setTasks] = useState<AgentTask[]>([]);
@@ -3555,11 +3474,6 @@ export function AgentsPage() {
   // ── Detail View ─────────────────────────────────────────────────────────
 
   if (selectedAgent) {
-    const successRate =
-      tasks.length > 0
-        ? Math.round((tasks.filter((t) => t.status === 'completed').length / tasks.length) * 100)
-        : null;
-
     const DETAIL_TABS = [
       { id: 'interact', label: 'Interact', icon: MessageSquare },
       { id: 'overview', label: 'Overview', icon: Activity },

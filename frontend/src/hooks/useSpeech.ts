@@ -219,7 +219,7 @@ export function useSpeech() {
         silentGain.connect(audioCtx.destination);
       }
       setState('recording');
-    } catch (err) {
+    } catch {
       setError('Microphone access denied');
       setState('idle');
       teardownVad();

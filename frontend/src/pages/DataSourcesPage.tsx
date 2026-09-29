@@ -18,10 +18,7 @@ import type { ChannelBinding, ManagedAgent, MemoryStats, MemorySearchResult } fr
 import { apiFetch, isTauri } from '../lib/api';
 import {
   Database, MessageSquare, Loader2, Brain, Search, FolderOpen, FileText,
-  Mail, Hash, MessageCircle, CalendarDays, Contact, StickyNote, BookText,
-  Package, Upload, Link2, PhoneCall,
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 import { SOURCE_CATALOG } from '../types/connectors';
 import type { ConnectRequest } from '../types/connectors';
 import { listConnectors, connectSource, disconnectSource, getSyncStatus, triggerSync, startServerOAuth } from '../lib/connectors-api';
@@ -282,35 +279,6 @@ function UploadForm({ onDone }: { onDone?: () => void }) {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Icon map
-// ---------------------------------------------------------------------------
-
-const iconMap: Record<string, LucideIcon> = {
-  gmail: Mail,
-  gmail_imap: Mail,
-  gmail_api: Mail,
-  outlook: Mail,
-  slack: Hash,
-  imessage: MessageCircle,
-  whatsapp: PhoneCall,
-  gdrive: FolderOpen,
-  dropbox: Package,
-  notion: BookText,
-  obsidian: FileText,
-  apple_notes: StickyNote,
-  granola: FileText,
-  gcalendar: CalendarDays,
-  gcontacts: Contact,
-  apple_contacts: Contact,
-  upload: Upload,
-};
-
-const IconFor = ({ id, size = 18 }: { id: string; size?: number }) => {
-  const Ico = iconMap[id] ?? Link2;
-  return <Ico size={size} />;
-};
 
 // The Gmail card unifies the OAuth (`gmail`) and IMAP (`gmail_imap`) backend
 // connectors — both should resolve to the gmail_imap catalog entry so the
