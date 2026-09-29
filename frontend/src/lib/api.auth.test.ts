@@ -135,3 +135,20 @@ describe('tool credentials', () => {
     );
   });
 });
+
+describe('connectors API', () => {
+  // The Data Sources page sat on "loading" forever: listConnectors used a
+  // bare fetch() with no Authorization, so GET /v1/connectors 401ed.
+  it('sends the Bearer key when listing connectors', async () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiKey: 'sk-local-123' }));
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ connectors: [] }), { status: 200 }),
+    );
+    const { listConnectors } = await import('./connectors-api');
+
+    await expect(listConnectors()).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledWith('/v1/connectors', {
+      headers: { Authorization: 'Bearer sk-local-123' },
+    });
+  });
+});

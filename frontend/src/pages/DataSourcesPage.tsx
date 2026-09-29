@@ -15,7 +15,7 @@ import {
   indexMemoryPath,
 } from '../lib/api';
 import type { ChannelBinding, ManagedAgent, MemoryStats, MemorySearchResult } from '../lib/api';
-import { getBase, isTauri } from '../lib/api';
+import { apiFetch, isTauri } from '../lib/api';
 import {
   Database, MessageSquare, Loader2, Brain, Search, FolderOpen, FileText,
   Mail, Hash, MessageCircle, CalendarDays, Contact, StickyNote, BookText,
@@ -119,7 +119,7 @@ function UploadForm({ onDone }: { onDone?: () => void }) {
     setError('');
     setResult('');
     try {
-      const res = await fetch(`${getBase()}/v1/connectors/upload/ingest`, {
+      const res = await apiFetch(`/v1/connectors/upload/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: title.trim(), content }),
@@ -150,7 +150,7 @@ function UploadForm({ onDone }: { onDone?: () => void }) {
       for (const f of files) formData.append('files', f);
       if (title.trim()) formData.append('title', title.trim());
 
-      const res = await fetch(`${getBase()}/v1/connectors/upload/ingest/files`, {
+      const res = await apiFetch(`/v1/connectors/upload/ingest/files`, {
         method: 'POST',
         body: formData,
       });

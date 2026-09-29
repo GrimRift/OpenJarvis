@@ -1,4 +1,4 @@
-import { getBase } from './api';
+import { apiFetch, getBase } from './api';
 import type { ConnectorInfo, SyncStatus, ConnectRequest, ConnectResponse } from '../types/connectors';
 
 // ---------------------------------------------------------------------------
@@ -6,20 +6,20 @@ import type { ConnectorInfo, SyncStatus, ConnectRequest, ConnectResponse } from 
 // ---------------------------------------------------------------------------
 
 export async function listConnectors(): Promise<ConnectorInfo[]> {
-  const res = await fetch(`${getBase()}/v1/connectors`);
+  const res = await apiFetch(`/v1/connectors`);
   if (!res.ok) throw new Error(`Failed to list connectors: ${res.status}`);
   const data = await res.json();
   return data.connectors || [];
 }
 
 export async function getConnector(id: string): Promise<ConnectorInfo> {
-  const res = await fetch(`${getBase()}/v1/connectors/${encodeURIComponent(id)}`);
+  const res = await apiFetch(`/v1/connectors/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`Failed to get connector ${id}: ${res.status}`);
   return res.json();
 }
 
 export async function connectSource(id: string, req: ConnectRequest): Promise<ConnectResponse> {
-  const res = await fetch(`${getBase()}/v1/connectors/${encodeURIComponent(id)}/connect`, {
+  const res = await apiFetch(`/v1/connectors/${encodeURIComponent(id)}/connect`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -60,20 +60,20 @@ export function startServerOAuth(id: string, oauthStartPath?: string): Promise<v
 }
 
 export async function disconnectSource(id: string): Promise<void> {
-  const res = await fetch(`${getBase()}/v1/connectors/${encodeURIComponent(id)}/disconnect`, {
+  const res = await apiFetch(`/v1/connectors/${encodeURIComponent(id)}/disconnect`, {
     method: 'POST',
   });
   if (!res.ok) throw new Error(`Failed to disconnect ${id}: ${res.status}`);
 }
 
 export async function getSyncStatus(id: string): Promise<SyncStatus> {
-  const res = await fetch(`${getBase()}/v1/connectors/${encodeURIComponent(id)}/sync`);
+  const res = await apiFetch(`/v1/connectors/${encodeURIComponent(id)}/sync`);
   if (!res.ok) throw new Error(`Failed to get sync status for ${id}: ${res.status}`);
   return res.json();
 }
 
 export async function triggerSync(id: string): Promise<{ connector_id: string; chunks_indexed: number; status: string }> {
-  const res = await fetch(`${getBase()}/v1/connectors/${encodeURIComponent(id)}/sync`, {
+  const res = await apiFetch(`/v1/connectors/${encodeURIComponent(id)}/sync`, {
     method: 'POST',
   });
   if (!res.ok) {
