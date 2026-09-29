@@ -253,6 +253,31 @@ describe('isCloseDiagramCommand', () => {
   });
 });
 
+describe('"cost" is Deepgram\'s "close" (29 September)', () => {
+  it('closes when it names the picture', async () => {
+    const { isCloseDiagramCommand, mayBecomeCloseDiagramCommand } = await import('./diagram');
+    // Live: "close the picture" arrived as "Cost the picture." and was sent
+    // to Sage as a message instead of closing the overlay.
+    expect(isCloseDiagramCommand('Cost the picture.')).toBe(true);
+    expect(isCloseDiagramCommand('cost the image')).toBe(true);
+    expect(isCloseDiagramCommand('cost the diagram')).toBe(true);
+    expect(mayBecomeCloseDiagramCommand('Cost the')).toBe(true);
+  });
+
+  it('a question about cost is still a question', async () => {
+    const { isCloseDiagramCommand } = await import('./diagram');
+    for (const said of [
+      'what did it cost',
+      'how much did the picture cost',
+      'how much does this cost',
+      'cost it',
+      'what does that cost',
+    ]) {
+      expect(isCloseDiagramCommand(said), said).toBe(false);
+    }
+  });
+});
+
 describe('rowEndsOn', () => {
   it('alternates, so the wrap arrow hangs under the box the row ended on', async () => {
     const { rowEndsOn } = await import('./diagram');

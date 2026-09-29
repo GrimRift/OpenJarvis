@@ -83,6 +83,35 @@ export function planAttachments(
   return { accepted, rejected: unique.length ? unique.join('; ') : null };
 }
 
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
+/** What the document reader (`/v1/documents`) takes. */
+export const DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.csv'];
+
+/** The Attach button's picker: pictures and documents, one button. It
+ * offered documents only, so a picture could be pasted but not chosen. */
+export const ATTACH_ACCEPT = [...IMAGE_EXTENSIONS, ...DOCUMENT_EXTENSIONS].join(',');
+
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : name.slice(dot).toLowerCase();
+}
+
+/** Sort chosen or dropped files: pictures ride the turn, documents are read. */
+export function splitAttachFiles<T extends { name: string; type: string }>(
+  files: T[],
+): { images: T[]; documents: T[]; unsupported: T[] } {
+  const images: T[] = [];
+  const documents: T[] = [];
+  const unsupported: T[] = [];
+  for (const file of files) {
+    const ext = extensionOf(file.name);
+    if (isAcceptedImage(file.type) || IMAGE_EXTENSIONS.includes(ext)) images.push(file);
+    else if (DOCUMENT_EXTENSIONS.includes(ext)) documents.push(file);
+    else unsupported.push(file);
+  }
+  return { images, documents, unsupported };
+}
+
 /** Extract image files from a paste or drop, ignoring everything else. */
 export function imageFilesFrom(
   items: Array<{ kind?: string; type: string; getAsFile?: () => File | null }>,

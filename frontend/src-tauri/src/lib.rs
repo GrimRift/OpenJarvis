@@ -269,6 +269,10 @@ pub fn run() {
                 .inner_size(window_state::FIRST_WIDTH, window_state::FIRST_HEIGHT)
                 .min_inner_size(900.0, 600.0)
                 .additional_browser_args(&args)
+                // Tauri handles file drops natively by default, and the page
+                // never sees them: dragging a picture in did nothing. The page
+                // has its own drop handling (InputArea), so hand drops to it.
+                .disable_drag_drop_handler()
                 .visible(false)
                 .on_page_load(|window, payload| {
                     if let PageLoadEvent::Finished = payload.event() {

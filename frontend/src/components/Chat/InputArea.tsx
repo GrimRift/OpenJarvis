@@ -3,9 +3,11 @@ import { Send, Square, Paperclip, Search, VolumeX, Volume2, X } from 'lucide-rea
 import { toast } from 'sonner';
 import { useAppStore, generateId, documentsFor } from '../../lib/store';
 import {
+  ATTACH_ACCEPT,
   MAX_IMAGES,
   imageFilesFrom,
   planAttachments,
+  splitAttachFiles,
   type AttachedImage,
 } from '../../lib/image-attach';
 import { apiFetch } from '../../lib/api';
@@ -579,16 +581,6 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     [attachFiles],
   );
 
-  const handleDrop = useCallback(
-    (event: React.DragEvent) => {
-      event.preventDefault();
-      setDragActive(false);
-      const files = Array.from(event.dataTransfer?.files || []);
-      void attachFiles(files);
-    },
-    [attachFiles],
-  );
-
   const handleDocument = useCallback(
     async (file: File) => {
       // Blocking, and it says why. A garbled paper is re-read page by page,
@@ -624,6 +616,51 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     },
     [docIndexed],
   );
+
+  /** Files chosen with Attach or dropped: pictures ride the turn like a
+   * paste, documents are read. */
+  const attachChosen = useCallback(
+    async (files: File[]) => {
+      const { images, documents, unsupported } = splitAttachFiles(files);
+      if (unsupported.length) {
+        toast.error(`${unsupported.map((f) => f.name).join(', ')}: not a picture or a document Sage can read`);
+      }
+      if (images.length) void attachFiles(images);
+      for (const doc of documents) await handleDocument(doc);
+    },
+    [attachFiles, handleDocument],
+  );
+
+  // A picture dropped anywhere on the page (chat or Voice) is attached, not
+  // just one dropped on the message box. The app shell passes drops to the
+  // page only because lib.rs turns off Tauri's native drag-drop handler.
+  useEffect(() => {
+    const carriesFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types || []).includes('Files');
+    const onDragOver = (event: DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      setDragActive(true);
+    };
+    const onDragLeave = (event: DragEvent) => {
+      // Leaving one element for another inside the page is not leaving.
+      if (!event.relatedTarget) setDragActive(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      setDragActive(false);
+      void attachChosen(Array.from(event.dataTransfer?.files || []));
+    };
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [attachChosen]);
 
   const removeDocument = useCallback((id: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
@@ -2771,6 +2808,38 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }
   };
 
+  // Shared by both layouts: a picture dropped on the Voice page must be
+  // visible there too, or it would ride the next spoken turn unseen.
+  const attachmentStrip =
+    attachments.length > 0 ? (
+      <div className="flex flex-wrap gap-2 px-1 pb-2">
+        {attachments.map((image) => (
+          <div key={image.id} className="relative group">
+            <img
+              src={image.dataUrl}
+              alt={image.name}
+              title={image.name}
+              className="h-16 w-16 object-cover rounded-lg"
+              style={{ border: '1px solid var(--color-input-border)' }}
+            />
+            <button
+              onClick={() => removeAttachment(image.id)}
+              title={`Remove ${image.name}`}
+              aria-label={`Remove ${image.name}`}
+              className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full cursor-pointer"
+              style={{
+                background: 'var(--color-bg-tertiary)',
+                color: 'var(--color-text)',
+                border: '1px solid var(--color-input-border)',
+              }}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
+      </div>
+    ) : null;
+
   if (voiceOnly) {
     const iconButton = (
       active: boolean,
@@ -2798,6 +2867,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     );
 
     return (
+      <div className="flex flex-col items-center">
+      {attachmentStrip}
       <div className="flex items-center justify-center gap-3">
         {iconButton(
           deepResearch,
@@ -2829,6 +2900,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           !audioPlaying,
         )}
       </div>
+      </div>
     );
   }
 
@@ -2856,11 +2928,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.txt,.md,.csv"
+            accept={ATTACH_ACCEPT}
+            multiple
             className="hidden"
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleDocument(file);
+              const files = Array.from(e.target.files || []);
+              if (files.length) void attachChosen(files);
               e.target.value = '';
             }}
           />
@@ -2949,45 +3022,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           )}
         </div>
       )}
-      {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-1 pb-2">
-          {attachments.map((image) => (
-            <div key={image.id} className="relative group">
-              <img
-                src={image.dataUrl}
-                alt={image.name}
-                title={image.name}
-                className="h-16 w-16 object-cover rounded-lg"
-                style={{ border: '1px solid var(--color-input-border)' }}
-              />
-              <button
-                onClick={() => removeAttachment(image.id)}
-                title={`Remove ${image.name}`}
-                aria-label={`Remove ${image.name}`}
-                className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full cursor-pointer"
-                style={{
-                  background: 'var(--color-bg-tertiary)',
-                  color: 'var(--color-text)',
-                  border: '1px solid var(--color-input-border)',
-                }}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      {attachmentStrip}
       <div
         className="flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow"
-        onDragOver={(e) => {
-          // Only claim a drag that is actually carrying files, so selecting
-          // text and dragging it does not light up the whole composer.
-          if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
-          e.preventDefault();
-          setDragActive(true);
-        }}
-        onDragLeave={() => setDragActive(false)}
-        onDrop={handleDrop}
         style={{
           background: 'var(--color-input-bg)',
           border: dragActive

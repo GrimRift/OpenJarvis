@@ -254,12 +254,23 @@ export function isCloseDiagramCommand(text: string): boolean {
   if (!said) return false;
   if (said.split(' ').length > CLOSE_COMMAND_MAX_WORDS) return false;
   const verb = CLOSE_VERB.exec(said);
-  if (!verb) return false;
+  if (!verb) return misheardClose(said);
   // Anything may sit between the verb and its target. Deepgram put a phantom
   // "to" in the middle -- "Close to the diagram" -- and an exact-article rule
   // missed it, which let barge-in cut Sage off instead (18 September trace).
   // The six-word cap is what keeps this from matching ordinary speech.
-  return CLOSE_TARGET.test(said.slice(verb.index + verb[0].length));
+  if (CLOSE_TARGET.test(said.slice(verb.index + verb[0].length))) return true;
+  return misheardClose(said);
+}
+
+// Deepgram wrote "close the picture" as "Cost the picture." (29 September).
+// "Cost" is also an ordinary word, so it counts only when it opens the phrase
+// and names the thing on screen -- "what did it cost" and "cost it" do not.
+const MISHEARD_CLOSE = /^cost\b/;
+const MISHEARD_TARGET = /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|image|photo)\b/;
+
+function misheardClose(said: string): boolean {
+  return MISHEARD_CLOSE.test(said) && MISHEARD_TARGET.test(said.slice(4));
 }
 
 /**
@@ -275,7 +286,7 @@ export function mayBecomeCloseDiagramCommand(text: string): boolean {
   const said = heard(text);
   if (!said) return false;
   if (said.split(' ').length > CLOSE_COMMAND_MAX_WORDS) return false;
-  return CLOSE_VERB.test(said);
+  return CLOSE_VERB.test(said) || MISHEARD_CLOSE.test(said);
 }
 
 /** What to tell the server this turn, from the two Settings switches. */
