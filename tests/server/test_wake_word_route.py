@@ -264,3 +264,57 @@ def test_rearmed_it_fires_only_after_the_score_dips():
     # Re-arming never reset the detector (the reset is what cost the
     # warm-up); the only reset is the one after the detection itself.
     assert detector.resets == 1
+
+
+class _Room(_Backend):
+    """Text and Whisper's no-speech doubt set per firing."""
+
+    def __init__(self):
+        super().__init__("")
+        self.no_speech = 0.64
+
+    def transcribe(self, audio, **kwargs):
+        r = super().transcribe(audio, **kwargs)
+        doubt = self.no_speech
+
+        class Segment:
+            no_speech = doubt
+
+        r.segments = [Segment()]
+        return r
+
+
+def _fire(ws):
+    """One firing of the fake detector (third frame) with its staged frames;
+    replies up to and including the verdict."""
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGE_FRAMES, VERIFY_STAGES
+
+    for i in range(3):
+        ws.send_bytes(bytes([i]) * 2560)
+    for j in range(VERIFY_STAGE_FRAMES * VERIFY_STAGES):
+        ws.send_bytes(bytes([100 + j]) * 2560)
+    while True:
+        reply = ws.receive_json()
+        if reply["type"] != "score":
+            return reply
+
+
+def _after_two_rejections(heard, no_speech):
+    app = _app(None)
+    room = app.state.speech_backend = _Room()
+    with TestClient(app).websocket_connect("/v1/speech/wake-word") as ws:
+        for _ in range(2):
+            assert _fire(ws)["type"] == "rejected"
+        room.text, room.no_speech = heard, no_speech
+        return _fire(ws)
+
+
+def test_a_muffled_hey_sage_in_a_noisy_room_is_rejected():
+    # 29 September: a piano fired the detector every few seconds and tiny.en,
+    # prompted with the phrase, wrote "Hey Sage." for some of it (muffled).
+    assert _after_two_rejections("Hey Sage.", 0.64)["type"] == "rejected"
+
+
+def test_a_clear_hey_sage_in_a_noisy_room_still_wakes():
+    reply = _after_two_rejections("Hey Sage.", 0.01)
+    assert reply["type"] == "detected" and reply["verified"] is True

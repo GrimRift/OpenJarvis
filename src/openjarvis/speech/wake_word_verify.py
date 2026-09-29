@@ -26,7 +26,7 @@ import threading
 import time
 import wave
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Deque, Optional
 
@@ -245,6 +245,45 @@ class Verdict:
     strict: bool = False
     #: How long the check waited for its thread before the model ran.
     wait_ms: int = 0
+
+
+#: A muffled "Hey Sage" is not trusted after this many rejected firings in
+#: the last ``NOISY_ROOM_SECONDS``. A piano in the room (29 September) fired
+#: the detector every few seconds, and tiny.en, prompted with the phrase,
+#: wrote exactly "Hey Sage." for some of it -- muffled, and louder than
+#: ``QUIET_MUFFLED_RMS``. Neither dropping the prompt (lost 29 of 31 real
+#: muffled takes) nor pitch steadiness (the held "ay" is as steady as a note)
+#: told them apart. The room did: over 16 days of trace, 11 of 17 false
+#: muffled accepts and 1 of 12 real ones had 2+ rejections in the minute
+#: before. A clear (not muffled) "Hey Sage" is never affected.
+NOISY_ROOM_REJECTIONS = 2
+NOISY_ROOM_SECONDS = 60.0
+NOISY_ROOM_NOTE = "muffled, noisy room"
+
+
+class NoisyRoom:
+    """Recent rejected firings on one socket, and what they rule out."""
+
+    def __init__(self, now: Any = time.monotonic) -> None:
+        self._now = now
+        self._rejected: Deque[float] = deque()
+
+    def rejected(self) -> None:
+        """Record a firing whose final verdict was a rejection."""
+        self._rejected.append(self._now())
+
+    def judge(self, verdict: Verdict) -> Verdict:
+        """*verdict*, or a rejection when it is a muffled accept in a noisy room."""
+        cutoff = self._now() - NOISY_ROOM_SECONDS
+        while self._rejected and self._rejected[0] < cutoff:
+            self._rejected.popleft()
+        if (
+            verdict.confirmed
+            and verdict.note == "muffled"
+            and len(self._rejected) >= NOISY_ROOM_REJECTIONS
+        ):
+            return replace(verdict, confirmed=False, note=NOISY_ROOM_NOTE)
+        return verdict
 
 
 class AudioRing:
@@ -653,6 +692,7 @@ __all__ = [
     "VERIFY_STAGE_FRAMES",
     "VERIFY_STAGES",
     "AudioRing",
+    "NoisyRoom",
     "RING_FRAMES",
     "VERIFY_MODES",
     "Verdict",

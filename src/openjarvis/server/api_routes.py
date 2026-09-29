@@ -705,6 +705,7 @@ async def wake_word_stream(websocket: WebSocket):
         VERIFY_STAGE_FRAMES,
         VERIFY_STAGES,
         AudioRing,
+        NoisyRoom,
         make_verifier,
         media_is_playing,
     )
@@ -714,6 +715,7 @@ async def wake_word_stream(websocket: WebSocket):
         getattr(websocket.app.state, "speech_backend", None),
         websocket.query_params.get("verify"),
     )
+    noisy_room = NoisyRoom()
     ring = AudioRing()
     was_speaking = False
     # The page pauses the wake word during a turn ({"type": "pause"}) and
@@ -845,6 +847,16 @@ async def wake_word_stream(websocket: WebSocket):
                     if early is not None:
                         early.cancel()
                     since_firing_ms = int((time.monotonic() - fired_at) * 1000)
+                if verdict is not None:
+                    verdict = noisy_room.judge(verdict)
+                    if not verdict.confirmed:
+                        noisy_room.rejected()
+                        if verdict.note:
+                            logger.info(
+                                "Wake word rejected (%s): heard %r",
+                                verdict.note,
+                                verdict.heard,
+                            )
                 if verdict is not None and not verdict.confirmed:
                     # Reset before saying so: told first, the page (and a
                     # test) could act on "rejected" while the detector still

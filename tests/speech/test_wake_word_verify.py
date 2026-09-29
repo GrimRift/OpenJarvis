@@ -13,6 +13,7 @@ import pytest
 from openjarvis.speech.wake_word_verify import (
     RING_FRAMES,
     AudioRing,
+    Verdict,
     WakeWordVerifier,
     heard_wake_phrase,
     make_verifier,
@@ -372,3 +373,43 @@ class TestTheCheckRunsOnItsOwn:
         assert asked_relaxed and asked_strict
         assert relaxed.confirmed and not relaxed.strict
         assert strict.strict and not strict.confirmed
+
+
+class TestNoisyRoom:
+    """A muffled accept is overruled after 2+ rejections in the last minute."""
+
+    @staticmethod
+    def _room():
+        from openjarvis.speech.wake_word_verify import NoisyRoom
+
+        clock = {"t": 1000.0}
+        return NoisyRoom(now=lambda: clock["t"]), clock
+
+    MUFFLED = Verdict(True, "Hey Sage.", "muffled")
+
+    def test_quiet_room_keeps_a_muffled_accept(self):
+        room, _ = self._room()
+        room.rejected()
+        assert room.judge(self.MUFFLED).confirmed
+
+    def test_two_recent_rejections_overrule_it(self):
+        room, _ = self._room()
+        room.rejected()
+        room.rejected()
+        verdict = room.judge(self.MUFFLED)
+        assert not verdict.confirmed and verdict.note == "muffled, noisy room"
+        assert verdict.heard == "Hey Sage."
+
+    def test_rejections_older_than_a_minute_are_forgotten(self):
+        room, clock = self._room()
+        room.rejected()
+        room.rejected()
+        clock["t"] += 61
+        assert room.judge(self.MUFFLED).confirmed
+
+    def test_a_clear_accept_is_never_touched(self):
+        room, _ = self._room()
+        for _ in range(5):
+            room.rejected()
+        clear = Verdict(True, "Hey Sage.", "")
+        assert room.judge(clear) is clear
