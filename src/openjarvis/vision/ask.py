@@ -55,7 +55,7 @@ def resolve_vision_model(config: Any) -> str:
         if candidate and is_cloud_model(candidate) and _load_keys():
             return candidate
         if _load_keys().get("OPENAI_API_KEY"):
-            return "gpt-5.6-luna"
+            return "gpt-6-luna"
     except Exception:
         pass
     return str(getattr(vision, "local_model", "") or "qwen3-vl:8b")

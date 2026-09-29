@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _FILE = "model_preference.json"
 
 #: Used until the browser has said otherwise: the default in its settings.
-DEFAULT_CLOUD_MODEL = "gpt-5.6-luna"
+DEFAULT_CLOUD_MODEL = "gpt-6-luna"
 
 
 @dataclass

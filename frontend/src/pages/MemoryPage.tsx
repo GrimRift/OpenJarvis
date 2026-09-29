@@ -277,7 +277,7 @@ function FactsTab({ fail }: { fail: (e: unknown) => void }) {
             className="px-2 py-1 rounded-lg text-sm"
             style={input}
           >
-            <option value="cloud">Cloud ({settings?.cloud_model ?? 'gpt-5.6-luna'})</option>
+            <option value="cloud">Cloud ({settings?.cloud_model ?? 'gpt-6-luna'})</option>
             <option value="local">Local</option>
           </select>
         </div>

@@ -9,7 +9,13 @@
  * very least. Local only wins below roughly 1,500 tokens, which never happens.
  */
 
-export const DEFAULT_CLOUD_MODEL = 'gpt-5.6-luna';
+export const DEFAULT_CLOUD_MODEL = 'gpt-6-luna';
+
+/**
+ * Former defaults. A saved cloudModel equal to one of these was never a
+ * choice, just the default at the time, so it moves to the new default once.
+ */
+export const RETIRED_DEFAULT_CLOUD_MODELS: readonly string[] = ['gpt-5.6-luna'];
 export const DEFAULT_LOCAL_MODEL = 'qwen3.5:4b';
 
 export interface ModelPreference {

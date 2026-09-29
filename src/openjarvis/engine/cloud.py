@@ -37,6 +37,7 @@ PRICING: Dict[str, tuple[float, float]] = {
     "gpt-5.4": (15.00, 60.00),
     "gpt-5-mini": (0.25, 2.00),
     "gpt-5.6-luna": (0.20, 1.20),
+    "gpt-6-luna": (0.10, 0.50),
     "o3-mini": (1.10, 4.40),
     "claude-sonnet-4-20250514": (3.00, 15.00),
     "claude-opus-4-20250514": (15.00, 75.00),
@@ -68,6 +69,7 @@ _OPENAI_MODELS = [
     "gpt-5.4",
     "gpt-5-mini",
     "gpt-5.6-luna",
+    "gpt-6-luna",
     "o3-mini",
 ]
 _ANTHROPIC_MODELS = [
@@ -217,7 +219,7 @@ def is_cloud_model(model: str) -> bool:
 def _is_openai_reasoning_model(model: str) -> bool:
     """Check if model is an OpenAI reasoning model that restricts temperature.
 
-    Also covers GPT-5.6's "sol"/"terra"/"luna" reasoning tiers, which behave
+    Also covers the "sol"/"terra"/"luna" reasoning tiers (GPT-5.6, GPT-6), which behave
     like o1/o3/gpt-5-mini here: reject a custom temperature and support
     `reasoning_effort` instead (kept in sync with
     ``server/cloud_router.py:_is_reasoning_model``, the parallel

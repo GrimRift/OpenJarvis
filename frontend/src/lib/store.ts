@@ -38,6 +38,7 @@ function clampSeconds(value: unknown, fallback: number): number {
 }
 import {
   DEFAULT_CLOUD_MODEL,
+  RETIRED_DEFAULT_CLOUD_MODELS,
   preferredModelId,
 } from './model-preference';
 import type {
@@ -548,10 +549,28 @@ function loadSettings(): Settings {
     if (!TTS_PROVIDERS.includes(parsed.ttsProvider)) {
       merged.ttsProvider = defaults.ttsProvider;
     }
-    return normaliseSpeechProviders(merged);
+    return adoptNewCloudDefault(normaliseSpeechProviders(merged));
   } catch {
     return defaults;
   }
+}
+
+/** The cloud default this browser last moved its saved settings to. */
+const CLOUD_DEFAULT_SEEN_KEY = 'sage-cloud-default-seen';
+
+/**
+ * Move a saved cloudModel that is only a former default to the current one,
+ * once per default change. Recorded, so choosing the old model again later
+ * sticks.
+ */
+function adoptNewCloudDefault(settings: Settings): Settings {
+  if (localStorage.getItem(CLOUD_DEFAULT_SEEN_KEY) === DEFAULT_CLOUD_MODEL) return settings;
+  if (RETIRED_DEFAULT_CLOUD_MODELS.includes(settings.cloudModel)) {
+    settings = { ...settings, cloudModel: DEFAULT_CLOUD_MODEL };
+    saveSettings(settings);
+  }
+  localStorage.setItem(CLOUD_DEFAULT_SEEN_KEY, DEFAULT_CLOUD_MODEL);
+  return settings;
 }
 
 function saveSettings(settings: Settings): void {

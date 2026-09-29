@@ -115,6 +115,14 @@ def _resolve_model(requested: str) -> Tuple[str, str]:
     requested_tokens = _family_tokens(requested)
     matches = [c for c in candidates if _family_tokens(c) == requested_tokens]
 
+    if len(matches) > 1:
+        # "gpt luna" matches every luna generation once there are two; the
+        # one the user means by the bare family name is the current default.
+        from openjarvis.core.model_preference import DEFAULT_CLOUD_MODEL
+
+        if DEFAULT_CLOUD_MODEL in matches:
+            matches = [DEFAULT_CLOUD_MODEL]
+
     if len(matches) == 1:
         return matches[0], f"Resolved {requested!r} to the real model {matches[0]!r}."
 
@@ -404,7 +412,7 @@ class ScheduleTaskTool(BaseTool):
                         "type": "string",
                         "description": (
                             "Model to run this task on. Copy the id exactly "
-                            "as listed, e.g. 'gpt-5.6-luna' — an approximate "
+                            "as listed, e.g. 'gpt-6-luna' — an approximate "
                             "name is rejected rather than guessed at. Leave "
                             "unset to use the server's default; set it when "
                             "the task needs stronger reasoning than the local "

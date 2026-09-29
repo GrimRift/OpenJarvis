@@ -24,7 +24,7 @@ class MemorySettings:
     # 4b local model is where the stale and duplicate facts came from, so
     # cloud is the default; local stays one switch away.
     extraction_mode: str = "cloud"
-    cloud_model: str = "gpt-5.6-luna"
+    cloud_model: str = "gpt-6-luna"
     # The nightly clean-up (dedupe, contradictions, expiry).
     hygiene_enabled: bool = True
     hygiene_hour_local: int = 23

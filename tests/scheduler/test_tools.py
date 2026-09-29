@@ -552,6 +552,16 @@ class TestModelResolution:
                 _resolve_model("gpt-mini")
         assert "more than one" in str(excinfo.value)
 
+    def test_family_name_shared_by_two_generations_means_the_default(self):
+        """'gpt luna' matches gpt-5.6-luna and gpt-6-luna: the default wins."""
+        from openjarvis.core.model_preference import DEFAULT_CLOUD_MODEL
+        from openjarvis.scheduler.tools import _resolve_model
+
+        with self._available("gpt-5.6-luna", "gpt-6-luna"):
+            resolved, note = _resolve_model("gpt luna")
+        assert resolved == DEFAULT_CLOUD_MODEL == "gpt-6-luna"
+        assert note
+
     def test_unknown_name_is_rejected_and_lists_the_options(self):
         from openjarvis.scheduler.tools import ModelNotResolvedError, _resolve_model
 

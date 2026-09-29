@@ -67,7 +67,7 @@ class PresenceSettings:
     # its own, because a plain scheduled run would otherwise land on the local
     # default, which has invented actions it never took.
     episodes_enabled: bool = True
-    episodes_model: str = "gpt-5.6-luna"
+    episodes_model: str = "gpt-6-luna"
     episodes_engine: str = "cloud"
     # Local hour the entry is written. Late enough to cover the evening,
     # early enough that a midnight conversation lands in tomorrow's entry.
@@ -84,7 +84,7 @@ class PresenceSettings:
     # Local hours during which nothing is said, however good the reason.
     quiet_hours_start_local: int = 23
     quiet_hours_end_local: int = 7
-    moments_model: str = "gpt-5.6-luna"
+    moments_model: str = "gpt-6-luna"
     moments_engine: str = "cloud"
     # Initiative (M37): Sage starting a conversation. "off", "gentle",
     # "curious" or "social". Gentle from the first restart, by decision.
