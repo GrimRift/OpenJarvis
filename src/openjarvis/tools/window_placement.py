@@ -30,6 +30,42 @@ _SWP_NOZORDER = 0x0004
 _SWP_SHOWWINDOW = 0x0040
 
 
+def bring_to_front(handle: int) -> bool:
+    """Make *handle* the active window; True when it is.
+
+    A plain ``SetForegroundWindow`` from the Sage server is refused whenever
+    another program owns the front -- Windows' focus-stealing guard. While
+    Sage lived in an Opera tab that never showed, because Opera itself was in
+    front; since the Sage app took the front (29 September) a video window
+    Sage opened stayed behind it: nothing played until the user clicked it,
+    YouTube refused to go fullscreen, and repeated asks replayed it.
+
+    The server briefly shares the front window's input state
+    (``AttachThreadInput``), which lets the call through. No input is
+    synthesised. An elevated window in front (Task Manager) still wins, by
+    design.
+    """
+    user32 = ctypes.windll.user32
+    if user32.SetForegroundWindow(handle) and user32.GetForegroundWindow() == handle:
+        return True
+    kernel32 = ctypes.windll.kernel32
+    front = user32.GetForegroundWindow()
+    front_thread = user32.GetWindowThreadProcessId(front, None) if front else 0
+    own_thread = kernel32.GetCurrentThreadId()
+    attached = bool(
+        front_thread
+        and front_thread != own_thread
+        and user32.AttachThreadInput(own_thread, front_thread, True)
+    )
+    try:
+        user32.BringWindowToTop(handle)
+        user32.SetForegroundWindow(handle)
+    finally:
+        if attached:
+            user32.AttachThreadInput(own_thread, front_thread, False)
+    return user32.GetForegroundWindow() == handle
+
+
 #: A compact player: wide enough to watch, small enough to leave the desktop
 #: behind it usable. Proportions rather than pixels so it lands the same on
 #: either monitor. Measured off the window size the user pointed at — roughly
@@ -68,7 +104,7 @@ def place_compact(handle: int, monitor: Optional[int] = None) -> str:
         height,
         _SWP_NOZORDER | _SWP_SHOWWINDOW,
     )
-    user32.SetForegroundWindow(handle)
+    bring_to_front(handle)
     role = "main" if target.is_primary else "second"
     return f"monitor {target.index} ({role}) at {width}x{height}"
 
@@ -136,7 +172,7 @@ def place_window(handle: int, monitor: int, *, maximize: bool = True) -> str:
     )
     if maximize:
         user32.ShowWindow(handle, _SW_MAXIMIZE)
-    user32.SetForegroundWindow(handle)
+    bring_to_front(handle)
     role = "main" if target.is_primary else "second"
     return f"monitor {target.index} ({role})"
 

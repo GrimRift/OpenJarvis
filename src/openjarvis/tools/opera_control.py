@@ -861,10 +861,15 @@ def _go_fullscreen(page) -> None:
     Focus is set through the DOM rather than by clicking, because clicking is
     what paused the video in the first place.
     """
-    with contextlib.suppress(Exception):
-        page.evaluate("document.querySelector('#movie_player')?.focus()")
-        page.press("f")
-        page.sleep(0.4)
+    # Checked and tried once more: pressed while the window was still coming
+    # forward, the shortcut was ignored and the video stayed windowed.
+    for _ in range(2):
+        with contextlib.suppress(Exception):
+            page.evaluate("document.querySelector('#movie_player')?.focus()")
+            page.press("f")
+            page.sleep(0.6)
+            if page.evaluate("!!document.fullscreenElement"):
+                return
 
 
 class _OperaTool(BaseTool):

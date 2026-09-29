@@ -421,9 +421,17 @@ class TestPlaybackIsReportedHonestly:
         assert page.pressed == ["k"]
 
     def test_fullscreen_never_clicks_the_player(self):
-        page = _FakePage()
+        page = _FakePage(evaluations={"fullscreenElement": True})
         opera_control._go_fullscreen(page)
         assert page.pressed == ["f"]
+        assert page.clicked == []
+
+    def test_fullscreen_is_pressed_once_more_when_it_did_not_take(self):
+        # Pressed while the window was still coming forward, "f" was ignored
+        # and the video stayed windowed (29 September).
+        page = _FakePage(evaluations={"fullscreenElement": False})
+        opera_control._go_fullscreen(page)
+        assert page.pressed == ["f", "f"]
         assert page.clicked == []
 
     def test_the_result_says_paused_when_it_is_paused(self, monkeypatch):
