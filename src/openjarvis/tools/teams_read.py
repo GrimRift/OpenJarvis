@@ -31,6 +31,7 @@ from openjarvis.tools.opera_control import (
     _NAV_TIMEOUT,
     _SELECTOR_TIMEOUT,
     ensure_opera,
+    load_timeout,
     opera_session,
 )
 
@@ -77,7 +78,7 @@ _PAST_DUE_DAYS = 7
 def _click_rail(page, name: str) -> bool:
     selector = _RAIL.format(name=name)
     if not page.wait_for(
-        f"document.querySelector({selector!r})", timeout=_SELECTOR_TIMEOUT
+        f"document.querySelector({selector!r})", timeout=load_timeout(_SELECTOR_TIMEOUT)
     ):
         return False
     try:
@@ -369,10 +370,10 @@ class TeamsReadTool(BaseTool):
         try:
             with opera_session(transient=True) as session:
                 page = session.page
-                page.navigate(TEAMS_URL, timeout=_NAV_TIMEOUT)
+                page.navigate(TEAMS_URL, timeout=load_timeout(_NAV_TIMEOUT))
                 if not page.wait_for(
                     f"document.querySelector({_RAIL.format(name='Activity')!r})",
-                    timeout=_NAV_TIMEOUT,
+                    timeout=load_timeout(_NAV_TIMEOUT),
                 ):
                     return self._fail(
                         "Teams did not load. If it is asking for a login, sign "

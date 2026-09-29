@@ -94,7 +94,7 @@ def _install(monkeypatch, page, frame=None):
         yield session
 
     monkeypatch.setattr(opera_control, "port_is_open", lambda timeout=1.5: True)
-    monkeypatch.setattr(teams_read, "port_is_open", lambda timeout=1.5: True)
+    monkeypatch.setattr(teams_read, "ensure_opera", lambda minimized=False: None)
     monkeypatch.setattr(teams_read, "opera_session", _session)
     monkeypatch.setattr(
         "openjarvis.tools.cdp.Browser", lambda port, timeout=20.0: browser

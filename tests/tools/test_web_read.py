@@ -98,7 +98,7 @@ class TestBounds:
         page_access.allow([PAGE])
         long_text = "x" * 50_000
         with patch.object(WebReadTool, "_render", return_value=(long_text, 1.0, "")):
-            with patch("openjarvis.tools.web_read.port_is_open", return_value=True):
+            with patch("openjarvis.tools.web_read.ensure_opera", return_value=None):
                 result = _tool().execute(url=PAGE)
         assert result.success is True
         assert result.metadata["truncated"] is True
@@ -109,7 +109,7 @@ class TestBounds:
         """Returning "" would read as a page that genuinely said nothing."""
         page_access.allow([PAGE])
         with patch.object(WebReadTool, "_render", return_value=("   ", 1.0, "")):
-            with patch("openjarvis.tools.web_read.port_is_open", return_value=True):
+            with patch("openjarvis.tools.web_read.ensure_opera", return_value=None):
                 result = _tool().execute(url=PAGE)
         assert result.success is False
         assert "no readable text" in result.content
@@ -117,7 +117,7 @@ class TestBounds:
     def test_a_successful_read_counts_against_the_limit(self):
         page_access.allow([PAGE])
         with patch.object(WebReadTool, "_render", return_value=("hello", 1.0, "")):
-            with patch("openjarvis.tools.web_read.port_is_open", return_value=True):
+            with patch("openjarvis.tools.web_read.ensure_opera", return_value=None):
                 _tool().execute(url=PAGE)
         assert page_access.reads_used() == 1
 
@@ -151,7 +151,7 @@ class TestDirectRead:
                 WebReadTool, "_fetch_static", return_value=("The article.", "Sun facts")
             ),
             patch.object(WebReadTool, "_render") as render,
-            patch("openjarvis.tools.web_read.port_is_open") as port,
+            patch("openjarvis.tools.web_read.ensure_opera") as port,
         ):
             result = _tool().execute(url=PAGE)
         assert result.success is True
@@ -166,7 +166,7 @@ class TestDirectRead:
             patch.object(
                 WebReadTool, "_render", return_value=("Showtimes", 1.0, "SM Calamba")
             ),
-            patch("openjarvis.tools.web_read.port_is_open", return_value=True),
+            patch("openjarvis.tools.web_read.ensure_opera", return_value=None),
         ):
             result = _tool().execute(url=PAGE)
         assert result.metadata["mode"] == "browser"
@@ -178,7 +178,7 @@ class TestDirectRead:
         page_access.allow([PAGE])
         with (
             patch.object(WebReadTool, "_render", return_value=("text", 1.0, "")),
-            patch("openjarvis.tools.web_read.port_is_open", return_value=True),
+            patch("openjarvis.tools.web_read.ensure_opera", return_value=None),
         ):
             result = _tool().execute(url=PAGE)
         assert result.metadata["sources"][0]["title"] == "www.clickthecity.com"

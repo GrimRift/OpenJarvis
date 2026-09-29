@@ -122,6 +122,25 @@ _LAUNCH_WAIT_SECONDS = 30.0
 _SW_SHOWMINNOACTIVE = 7
 
 
+#: When Sage last started Opera itself (monotonic seconds; 0 = never).
+_LAUNCHED_AT = 0.0
+#: How long a just-started Opera counts as still warming up.
+_WARM_UP_SECONDS = 120.0
+
+
+def load_timeout(base: float) -> float:
+    """A page-load wait, tripled while an Opera Sage just started warms up.
+
+    Measured 29 September: the first Teams read after Sage started Opera found
+    the activity list still empty (the session was restoring and signing in);
+    the next read, a minute later, worked.
+    """
+    import time
+
+    warming = _LAUNCHED_AT and time.monotonic() - _LAUNCHED_AT < _WARM_UP_SECONDS
+    return base * 3 if warming else base
+
+
 def _opera_running() -> bool:
     try:
         import psutil
@@ -154,6 +173,9 @@ def ensure_opera(minimized: bool = False) -> Optional[str]:
     if problem:
         return problem
     import time
+
+    global _LAUNCHED_AT
+    _LAUNCHED_AT = time.monotonic()
 
     until = time.monotonic() + _LAUNCH_WAIT_SECONDS
     while time.monotonic() < until:
@@ -1481,10 +1503,10 @@ class OutlookReadTool(_OperaTool):
         try:
             with opera_session(transient=True) as session:
                 page = session.page
-                page.navigate(url, timeout=_NAV_TIMEOUT)
+                page.navigate(url, timeout=load_timeout(_NAV_TIMEOUT))
                 if not page.wait_for(
                     "document.querySelector(\"div[role='option']\")",
-                    timeout=_NAV_TIMEOUT,
+                    timeout=load_timeout(_NAV_TIMEOUT),
                 ):
                     return self._fail(
                         "The inbox did not load. If Outlook is asking for a "
