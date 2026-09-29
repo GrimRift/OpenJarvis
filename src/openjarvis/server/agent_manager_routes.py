@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re as _re
 import threading
@@ -1659,6 +1660,27 @@ def create_agent_manager_router(
         server_bus = _get_runtime_event_bus(app_state)
 
         def _run_tick():
+            # The scheduler's executor when the server has one: "Run now" and
+            # a scheduled tick must be the same run. The lightweight system
+            # below builds a fresh engine on the local preferred backend, so an
+            # Operator on a cloud model failed with "Ollama returned 404"
+            # (30 September) -- and its traces would differ from scheduled
+            # ones, which is what M33 reads.
+            scheduler = getattr(app_state, "agent_scheduler", None)
+            shared = getattr(scheduler, "_executor", None)
+            if shared is not None:
+                try:
+                    shared.execute_tick(agent_id, lock_already_held=True)
+                except Exception as exc:
+                    logger.error(
+                        "Run-tick failed for agent %s: %s",
+                        agent_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    with contextlib.suppress(Exception):
+                        manager.end_tick(agent_id)
+                return
             try:
                 from openjarvis.agents.executor import AgentExecutor
 

@@ -715,3 +715,41 @@ class TestLightweightSystemEngineResolution:
         assert results == [backend] * 8
         assert runtime.memory_backend is backend
         assert runtime._owns_memory_backend is True
+
+
+@pytest.mark.skipif(not HAS_FASTAPI, reason="fastapi not installed")
+def test_run_now_uses_the_schedulers_executor(manager):
+    """Run now and a scheduled tick must be the same run (30 September).
+
+    "Run now" built its own system on the local preferred engine, so an
+    Operator on a cloud model failed with "Ollama returned 404: model
+    'gpt-6-luna' not found" while its scheduled ticks would have worked.
+    """
+    import threading
+
+    from fastapi import FastAPI
+
+    from openjarvis.server.agent_manager_routes import create_agent_manager_router
+
+    ran = threading.Event()
+    calls = []
+
+    class _Executor:
+        def execute_tick(self, agent_id, *, lock_already_held=False):
+            calls.append((agent_id, lock_already_held))
+            manager.end_tick(agent_id)
+            ran.set()
+
+    class _Scheduler:
+        _executor = _Executor()
+
+    app = FastAPI()
+    app.state.engine = object()
+    app.state.agent_scheduler = _Scheduler()
+    for r in create_agent_manager_router(manager):
+        app.include_router(r)
+    agent = manager.create_agent("Morning brief", agent_type="orchestrator")
+    resp = TestClient(app).post(f"/v1/managed-agents/{agent['id']}/run")
+    assert resp.status_code == 200
+    assert ran.wait(5)
+    assert calls == [(agent["id"], True)]
