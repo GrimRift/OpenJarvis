@@ -11,6 +11,7 @@
 import { Fragment, useEffect, useMemo } from 'react';
 import type { Diagram, DiagramRow } from '../../lib/diagram';
 import { activeNodeIndex, rowEndsOn } from '../../lib/diagram';
+import { isBackdropClick } from '../../lib/overlay-backdrop';
 import { Arrow, DiagramBox, Legend, RESULT, markColour, tint } from './DiagramParts';
 
 const ACCENT = '#22d3ee';
@@ -99,7 +100,12 @@ export function DiagramOverlay({ diagram, spoken, speaking, wasSpoken, onClose }
           overflowY: 'auto',
           color: '#fafafa',
         }}
-        onClick={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          // This layer covers the whole screen, so a click on the dimmed
+          // background lands here: close on it, but not on the diagram.
+          event.stopPropagation();
+          if (isBackdropClick(event)) onClose();
+        }}
         role="dialog"
         aria-modal="true"
         aria-label={diagram.title}

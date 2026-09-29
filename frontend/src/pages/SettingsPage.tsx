@@ -13,6 +13,7 @@ import {
 import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
+import { fetchImageSettings, saveImageSettings, type ImageSettings } from '../lib/images-api';
 import { fetchKeyterms, parseTerms, saveKeyterms, type Keyterms } from '../lib/keyterms';
 
 const VOLUME_ROWS: Array<[keyof Volumes, string, string]> = [
@@ -254,6 +255,137 @@ function Switch({ on, onClick, disabled }: { on: boolean; onClick: () => void; d
         style={{ transform: on ? 'translateX(20px)' : 'translateX(0)', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }}
       />
     </button>
+  );
+}
+
+const selectStyle = {
+  background: 'var(--color-bg-secondary)',
+  color: 'var(--color-text)',
+  border: '1px solid var(--color-border)',
+};
+
+const QUALITY_LABELS: Record<string, string> = {
+  low: 'Low (fastest, cheapest)',
+  medium: 'Medium (default)',
+  high: 'High (slower, costs more)',
+  auto: 'Let OpenAI decide',
+};
+
+const SIZE_LABELS: Record<string, string> = {
+  '1024x1024': 'Square 1024×1024',
+  '1536x1024': 'Landscape 1536×1024',
+  '1024x1536': 'Portrait 1024×1536',
+  auto: 'Let OpenAI decide',
+};
+
+/**
+ * Settings > Images (M40). Kept on the server, because the tools run there and
+ * a Telegram or voice turn never passes through this page -- except "open
+ * automatically", which only matters where a picture is shown.
+ */
+function ImagesSection({ onSaved }: { onSaved: () => void }) {
+  const settings = useAppStore((s) => s.settings);
+  const updateSettings = useAppStore((s) => s.updateSettings);
+  const [server, setServer] = useState<ImageSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [folder, setFolder] = useState('');
+
+  useEffect(() => {
+    fetchImageSettings().then(
+      (loaded) => {
+        setServer(loaded);
+        setFolder(loaded.save_dir);
+      },
+      (e: Error) => setError(e.message),
+    );
+  }, []);
+
+  const save = (changes: Partial<ImageSettings>) => {
+    saveImageSettings(changes).then(
+      (saved) => {
+        setServer((previous) => (previous ? { ...previous, ...saved } : previous));
+        setFolder(saved.save_dir);
+        setError(null);
+        onSaved();
+      },
+      (e: Error) => setError(e.message),
+    );
+  };
+
+  return (
+    <Section title="Images">
+      {error ? (
+        <div className="text-xs py-2" style={{ color: 'var(--color-error)' }}>
+          {server ? `Not saved: ${error}` : `Could not load image settings: ${error}`}
+        </div>
+      ) : null}
+      <SettingRow
+        label="Let Sage make pictures"
+        description="Create a picture from a description, edit one you paste (“make the sky a sunset”), or refine the last one (“brighter”). Uses OpenAI; a pasted photo leaves this PC to be edited."
+      >
+        <Switch on={server?.enabled ?? false} disabled={!server} onClick={() => server && save({ enabled: !server.enabled })} />
+      </SettingRow>
+      <SettingRow label="Model" description="gpt-image-2.5-flare won the benchmark: about 15 s and $0.013 a picture at medium.">
+        <select
+          value={server?.model ?? ''}
+          disabled={!server}
+          onChange={(e) => save({ model: e.target.value })}
+          className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+          style={selectStyle}
+        >
+          {(server?.models ?? []).map((model) => (
+            <option key={model} value={model}>{model}</option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow label="Quality" description="Higher quality takes longer and costs more; each picture's cost shows under the reply.">
+        <select
+          value={server?.quality ?? ''}
+          disabled={!server}
+          onChange={(e) => save({ quality: e.target.value })}
+          className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+          style={selectStyle}
+        >
+          {(server?.qualities ?? []).map((quality) => (
+            <option key={quality} value={quality}>{QUALITY_LABELS[quality] ?? quality}</option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow label="Size">
+        <select
+          value={server?.size ?? ''}
+          disabled={!server}
+          onChange={(e) => save({ size: e.target.value })}
+          className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+          style={selectStyle}
+        >
+          {(server?.sizes ?? []).map((size) => (
+            <option key={size} value={size}>{SIZE_LABELS[size] ?? size}</option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow
+        label="Open automatically"
+        description="A new picture opens over the app once, in chat and on the Voice page. Esc, Close or a click outside dismisses it; it stays in the message to reopen."
+      >
+        <Switch
+          on={settings.imagesOpenAutomatically}
+          onClick={() => { updateSettings({ imagesOpenAutomatically: !settings.imagesOpenAutomatically }); onSaved(); }}
+        />
+      </SettingRow>
+      <SettingRow label="Save folder" description="Every picture is saved here as YYYY-MM-DD_name.png; nothing is overwritten.">
+        <input
+          value={folder}
+          disabled={!server}
+          onChange={(e) => setFolder(e.target.value)}
+          onBlur={() => server && folder.trim() !== server.save_dir && save({ save_dir: folder.trim() })}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          className="text-sm px-3 py-1.5 rounded-lg outline-none"
+          style={{ ...selectStyle, width: 300 }}
+          spellCheck={false}
+        />
+      </SettingRow>
+    </Section>
   );
 }
 
@@ -608,6 +740,8 @@ export function SettingsPage() {
               />
             </SettingRow>
           </Section>
+
+          <ImagesSection onSaved={showSaved} />
 
           <Section title="Appearance">
             <SettingRow label="Theme" description="Choose how Sage looks">

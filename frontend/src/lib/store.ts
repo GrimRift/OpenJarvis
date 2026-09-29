@@ -401,6 +401,10 @@ interface Settings {
   /** Sage decides when a diagram helps. Off means it draws one only when
    * asked ("show me how", "illustrate that"). */
   diagramsAutomatic: boolean;
+  /** A picture Sage just made opens over the app (M40). The other image
+   * options live on the server (Settings > Images), since Telegram and
+   * voice turns never pass through this page. */
+  imagesOpenAutomatically: boolean;
   continuousConversationEnabled: boolean;
   /** Seconds the microphone stays open for a follow-up after a reply. */
   continuousListenSeconds: number;
@@ -473,6 +477,7 @@ export function defaultSettings(): Settings {
     noiseSuppression: 'conversation',
     diagramsEnabled: true,
     diagramsAutomatic: true,
+    imagesOpenAutomatically: true,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
     ttsVoiceId: DEFAULT_LOCAL_VOICE_PROFILE.id,
     sttProvider: 'whisper',

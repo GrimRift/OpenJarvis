@@ -237,7 +237,7 @@ export function rowEndsOn(rowIndex: number): 'left' | 'right' {
  */
 const CLOSE_VERB = /\b(?:close|hide|dismiss|remove|get rid of)\b/;
 const CLOSE_TARGET =
-  /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|it|that|this)\b/;
+  /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|image|photo|it|that|this)\b/;
 
 export const CLOSE_COMMAND_MAX_WORDS = 6;
 

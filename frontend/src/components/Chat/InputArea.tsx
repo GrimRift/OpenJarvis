@@ -11,6 +11,8 @@ import {
 import { apiFetch } from '../../lib/api';
 import { streamChat, streamResearch } from '../../lib/sse';
 import type { FluxWord } from '../../lib/barge-in';
+import { imageFromToolCall, imageToolPhase } from '../../lib/generated-image';
+import { useImagePresenter } from '../../lib/image-presenter';
 import {
   diagramMode,
   isCloseDiagramCommand,
@@ -90,6 +92,16 @@ import type {
 
 /** Tools that start a video playing (see mediaTurnRef). */
 const MEDIA_TOOLS = new Set(['youtube_play', 'netflix_play']);
+
+/** A diagram or a generated picture is over the app ("close it" applies). */
+function overlayOpen(): boolean {
+  return Boolean(useDiagramPresenter.getState().current || useImagePresenter.getState().current);
+}
+
+function closeOverlays(): void {
+  useDiagramPresenter.getState().close();
+  useImagePresenter.getState().close();
+}
 
 /**
  * Wrap raw PCM in a WAV container for the local transcription endpoint.
@@ -1125,7 +1137,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               voiceTrace('media.started', { tool: data.tool });
             }
             setStreamState({
-              phase: `Calling ${data.tool}...`,
+              // Pictures take 15-50 s: say what is happening, not the tool name.
+              phase: imageToolPhase(data.tool) ?? `Calling ${data.tool}...`,
               activeToolCalls: [...toolCalls],
             });
             updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
@@ -1146,6 +1159,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               tc.result = data.result;
               if (data.metadata && typeof data.metadata === 'object') {
                 tc.metadata = data.metadata;
+              }
+              // M40: a new picture opens over the app from here, not from the
+              // chat bubble -- the Voice page mounts this component but has no
+              // bubble. Shown once per image id; history never reopens it.
+              const made = imageFromToolCall(tc);
+              if (made) {
+                useImagePresenter
+                  .getState()
+                  .showNew(made, useAppStore.getState().settings.imagesOpenAutomatically);
               }
             }
             setStreamState({
@@ -1678,9 +1700,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // words are not a message, and Sage keeps talking.
       if (
         diagramCommandTurnRef.current === turnIndex ||
-        (useDiagramPresenter.getState().current && isCloseDiagramCommand(transcript))
+        (overlayOpen() && isCloseDiagramCommand(transcript))
       ) {
-        useDiagramPresenter.getState().close();
+        closeOverlays();
         diagramCommandTurnRef.current = null;
         // Keep the microphone open. Returning bare left the Flux turn hanging
         // until its silence timer expired, so after dismissing a picture Sage
@@ -2210,9 +2232,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // interruption of the answer: it must be caught before barge-in judges
       // the same words, or asking for the picture to go would also cut Sage
       // off mid-sentence. The voice carries on; only the overlay goes.
-      if (useDiagramPresenter.getState().current) {
+      if (overlayOpen()) {
         if (isCloseDiagramCommand(transcript)) {
-          useDiagramPresenter.getState().close();
+          closeOverlays();
           diagramCommandTurnRef.current = turnIndex;
           voiceTrace('diagram.closedByVoice', { heard: transcript });
           return;

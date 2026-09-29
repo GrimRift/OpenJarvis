@@ -2,17 +2,20 @@ import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { TokenUsage, MessageTelemetry } from '../../types';
 import { inputTokensLabel } from '../../lib/token-label';
+import { formatImageCost, type ImageCost } from '../../lib/generated-image';
 
 interface Props {
   usage?: TokenUsage;
   telemetry?: MessageTelemetry;
   isResearch?: boolean;
+  /** Pictures made this reply (M40) and what they cost. */
+  imageCost?: ImageCost | null;
 }
 
 function formatMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
-export function XRayFooter({ usage, telemetry, isResearch = false }: Props) {
+export function XRayFooter({ usage, telemetry, isResearch = false, imageCost = null }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   // Build collapsed summary parts. For Deep Research responses we hide the
@@ -30,6 +33,9 @@ export function XRayFooter({ usage, telemetry, isResearch = false }: Props) {
   if (usage && (usage.prompt_tokens || usage.completion_tokens)) {
     parts.push(inputTokensLabel(usage));
     parts.push(`${usage.completion_tokens} output tokens`);
+  }
+  if (imageCost) {
+    parts.push(`${imageCost.count > 1 ? `${imageCost.count} images` : 'image'} ${formatImageCost(imageCost)}`);
   }
 
   if (parts.length === 0 && !usage?.total_tokens) return null;
@@ -60,6 +66,9 @@ export function XRayFooter({ usage, telemetry, isResearch = false }: Props) {
       }
     }
     rows.push({ label: 'Tokens', value: tokenParts.join(' \u00B7 ') });
+  }
+  if (imageCost) {
+    rows.push({ label: 'Images', value: `${imageCost.count} · ${formatImageCost(imageCost)}` });
   }
   if (telemetry?.complexity_tier) {
     rows.push({

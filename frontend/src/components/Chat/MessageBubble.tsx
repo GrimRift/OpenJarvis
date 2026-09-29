@@ -1,6 +1,8 @@
 import { memo, useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { DiagramCard } from '../Diagram/DiagramCard';
+import { ImageCard } from '../Image/ImageCard';
+import { imageCost, imagesIn } from '../../lib/generated-image';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -152,6 +154,9 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
     [message, linkPreview],
   );
   const searchImages = useMemo(() => selectSearchImages(message), [message]);
+  // Pictures Sage made this reply (M40), rebuilt from the persisted tool calls.
+  const generatedImages = useMemo(() => imagesIn(message.toolCalls), [message.toolCalls]);
+  const generatedCost = useMemo(() => imageCost(message.toolCalls), [message.toolCalls]);
   // A search image is a third-party URL nobody has fetched yet, so some of
   // them will not load: hotlink blocks, 404s, a URL that was never an image.
   // Without this the tile kept its border and showed the alt text as a wall
@@ -288,6 +293,10 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
         </div>
       )}
 
+      {generatedImages.map((image) => (
+        <ImageCard key={image.id} image={image} />
+      ))}
+
       {linkPreview && <LinkPreviewCard preview={linkPreview} />}
       {otherSources.length > 0 && <SourceList sources={otherSources} />}
 
@@ -332,6 +341,7 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
         usage={message.usage}
         telemetry={message.telemetry}
         isResearch={message.isResearch}
+        imageCost={generatedCost}
       />
     </div>
   );

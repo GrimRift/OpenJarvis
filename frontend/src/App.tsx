@@ -20,6 +20,7 @@ import { usePlaybackReport } from './hooks/usePlaybackReport';
 import { useVoiceOwnership } from './hooks/useVoiceOwner';
 import { fetchModels, fetchServerInfo, fetchSavings, isTauri, fetchToolCredentialStatus } from './lib/api';
 import { DiagramLayer } from './components/Diagram/DiagramLayer';
+import { ImageLayer } from './components/Image/ImageLayer';
 import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
 import { apiFetch, fetchSpeechVoices } from './lib/api';
@@ -222,6 +223,7 @@ export default function App() {
       </Routes>
       <Toaster position="bottom-right" />
       <DiagramLayer />
+      <ImageLayer />
       {commandPaletteOpen && <CommandPalette />}
     </>
   );
