@@ -69,3 +69,15 @@ def test_tabs_wait_for_operas_own_window(monkeypatch):
     began = time.monotonic()
     assert opera_control.ensure_opera(minimized=True) is None
     assert time.monotonic() - began >= 0.6
+
+
+def test_readers_outlast_a_cold_opera_start():
+    """30 September, 02:14: a scheduled brief found Opera closed and Outlook
+    was cut off at the executor's default 30 s -- launching Opera (up to 30 s)
+    and the tripled first page load (75 s) need more than that."""
+    from openjarvis.tools.opera_control import OutlookReadTool
+    from openjarvis.tools.teams_read import TeamsReadTool
+
+    cold = opera_control._LAUNCH_WAIT_SECONDS + 3 * opera_control._NAV_TIMEOUT
+    for tool in (OutlookReadTool(), TeamsReadTool()):
+        assert tool.spec.timeout_seconds > cold, tool.spec.name

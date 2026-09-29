@@ -30,6 +30,7 @@ from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.opera_control import (
     _NAV_TIMEOUT,
     _SELECTOR_TIMEOUT,
+    READER_TIMEOUT_SECONDS,
     ensure_opera,
     load_timeout,
     opera_session,
@@ -353,7 +354,7 @@ class TeamsReadTool(BaseTool):
                 },
             },
             category="productivity",
-            timeout_seconds=90.0,
+            timeout_seconds=READER_TIMEOUT_SECONDS,
         )
 
     def execute(self, **params: Any) -> ToolResult:

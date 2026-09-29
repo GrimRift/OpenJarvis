@@ -60,6 +60,8 @@ DEBUG_PORT = int(os.environ.get("OPENJARVIS_OPERA_CDP_PORT", "9222"))
 #: Long enough for a heavy web app to paint, short enough that a wrong guess
 #: does not hold the whole turn.
 _NAV_TIMEOUT = 25.0
+#: Tool ceiling for a read that may have to start Opera first.
+READER_TIMEOUT_SECONDS = 150.0
 _SELECTOR_TIMEOUT = 12.0
 
 #: YouTube once rendered white inside an otherwise dark setup because Opera
@@ -1545,6 +1547,10 @@ class OutlookReadTool(_OperaTool):
                     },
                 },
             },
+            # A cold start (Opera closed) launches it (up to 30 s) and then
+            # triples the first page load (75 s); the default 30 s cut a
+            # scheduled brief's read off (30 September).
+            timeout_seconds=READER_TIMEOUT_SECONDS,
         )
 
     def execute(self, **params: Any) -> ToolResult:
