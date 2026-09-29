@@ -96,6 +96,48 @@ class TestBounds:
         assert page_access.reads_used() == 0
         assert page_access.is_allowed(PAGE)
 
+    def test_the_same_page_twice_is_not_read_again(self):
+        """One answer read one page three times, a model round each."""
+        page_access.allow([PAGE])
+        with patch.object(WebReadTool, "_render", return_value=("hello", 1.0, "")):
+            with patch("openjarvis.tools.web_read.ensure_opera", return_value=None):
+                _tool().execute(url=PAGE)
+                with patch.object(WebReadTool, "_render") as render_again:
+                    again = _tool().execute(url=PAGE + "/")
+        assert again.success is True
+        assert "Already read" in again.content
+        assert not render_again.called
+        assert page_access.reads_used() == 1
+
+    def test_a_refused_url_lists_the_pages_that_can_be_read(self):
+        page_access.allow([PAGE])
+        result = _tool().execute(url="https://elsewhere.example/linked-from-page")
+        assert result.success is False
+        assert "Pages you can read now" in result.content
+        assert "clickthecity.com/movies/theaters/sm-city-calamba" in result.content
+
+    def test_reads_requested_together_cannot_exceed_the_limit(self):
+        """Reads asked for in one response run at the same time; each must
+        take its slot before any finishes, or all pass the count."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        pages = [f"https://news.example/{n}" for n in range(MAX_READS_PER_TURN + 2)]
+        page_access.allow(pages)
+
+        def slow_render(*_args, **_kwargs):
+            import time
+
+            time.sleep(0.2)
+            return ("text", 0.2, "")
+
+        with patch.object(WebReadTool, "_render", side_effect=slow_render):
+            with patch("openjarvis.tools.web_read.ensure_opera", return_value=None):
+                with ThreadPoolExecutor(len(pages)) as pool:
+                    results = list(
+                        pool.map(lambda url: _tool().execute(url=url), pages)
+                    )
+        assert sum(result.success for result in results) == MAX_READS_PER_TURN
+
     def test_an_unreachable_browser_explains_itself(self):
         """A dead CDP port must not read as "the page had nothing"."""
         page_access.allow([PAGE])

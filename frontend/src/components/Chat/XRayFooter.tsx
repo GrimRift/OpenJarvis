@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { TokenUsage, MessageTelemetry } from '../../types';
+import { inputTokensLabel } from '../../lib/token-label';
 
 interface Props {
   usage?: TokenUsage;
@@ -11,7 +12,6 @@ interface Props {
 function formatMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
-
 export function XRayFooter({ usage, telemetry, isResearch = false }: Props) {
   const [expanded, setExpanded] = useState(false);
 
@@ -28,7 +28,7 @@ export function XRayFooter({ usage, telemetry, isResearch = false }: Props) {
   if (telemetry?.complexity_tier) parts.push(telemetry.complexity_tier);
   if (telemetry?.total_ms) parts.push(formatMs(telemetry.total_ms));
   if (usage && (usage.prompt_tokens || usage.completion_tokens)) {
-    parts.push(`${usage.prompt_tokens} input tokens`);
+    parts.push(inputTokensLabel(usage));
     parts.push(`${usage.completion_tokens} output tokens`);
   }
 
@@ -47,6 +47,7 @@ export function XRayFooter({ usage, telemetry, isResearch = false }: Props) {
   }
   if (usage) {
     const tokenParts = [`${usage.completion_tokens} generated`, `${usage.prompt_tokens} prompt`];
+    if (usage.cached_tokens) tokenParts.push(`${usage.cached_tokens} cached`);
     // Estimate thinking tokens: if total generated >> visible output, the
     // difference is internal reasoning (e.g. Qwen3.5 thinking mode).
     if (telemetry?.tokens_per_sec && telemetry.total_ms && usage.completion_tokens > 50) {

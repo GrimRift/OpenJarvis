@@ -49,6 +49,8 @@ export interface TokenUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  /** Of prompt_tokens, how many the provider served from its cache. */
+  cached_tokens?: number;
 }
 
 export interface MessageTelemetry {

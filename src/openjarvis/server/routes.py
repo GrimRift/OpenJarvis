@@ -350,6 +350,32 @@ def _log_turn_timing(clock: dict[str, float], rounds: list, end: float) -> None:
     )
 
 
+def _log_tool_timing(call: Any, result: Any, seconds: float) -> None:
+    """One line per tool call. A news turn spent 29 s in one tool on 29
+    September and nothing recorded which tool, or which page."""
+    metadata = getattr(result, "metadata", None) or {}
+    detail = ""
+    if isinstance(metadata, dict):
+        parts = [f"{k}={metadata[k]}" for k in ("mode", "url") if metadata.get(k)]
+        detail = (" " + " ".join(parts)) if parts else ""
+    logging.getLogger("openjarvis.timing").info(
+        "Tool timing: %s %.2fs ok=%s %d chars%s",
+        getattr(call, "name", "?"),
+        seconds,
+        bool(getattr(result, "success", False)),
+        len(str(getattr(result, "content", "") or "")),
+        detail,
+    )
+
+
+def _page_reads_spent() -> bool:
+    """Whether this message has used all its page reads."""
+    from openjarvis.security import page_access
+    from openjarvis.tools.web_read import MAX_READS_PER_TURN
+
+    return page_access.reads_used() >= MAX_READS_PER_TURN
+
+
 @router.post("/v1/voice/addition")
 async def voice_addition(request: Request):
     """What words said while Sage prepared an answer are: noise, an addition
@@ -1415,12 +1441,16 @@ async def _handle_streaming_orchestrator(
                                 continue
                         pending.append((index, tool_call))
 
+                    def _run_timed(call: ToolCall) -> ToolResult:
+                        began = time.perf_counter()
+                        outcome = ledger.run(agent._executor.execute, call)
+                        _log_tool_timing(call, outcome, time.perf_counter() - began)
+                        return outcome
+
                     if agent._parallel_tools and len(pending) > 1:
                         executed = await asyncio.gather(
                             *[
-                                asyncio.to_thread(
-                                    ledger.run, agent._executor.execute, tool_call
-                                )
+                                asyncio.to_thread(_run_timed, tool_call)
                                 for _, tool_call in pending
                             ]
                         )
@@ -1431,9 +1461,7 @@ async def _handle_streaming_orchestrator(
                     else:
                         for index, tool_call in pending:
                             results_by_index[index] = await asyncio.to_thread(
-                                ledger.run,
-                                agent._executor.execute,
-                                tool_call,
+                                _run_timed, tool_call
                             )
 
                     for index, tool_call in enumerate(tool_calls):
@@ -1508,6 +1536,14 @@ async def _handle_streaming_orchestrator(
                             for tool in active_tools
                             if (tool.get("function") or {}).get("name")
                             not in _BROWSER_OPEN_TOOL_NAMES
+                        ]
+                    if _page_reads_spent():
+                        # Offered once the budget is spent, the model kept
+                        # calling it, a refusal and a model round each time.
+                        active_tools = [
+                            tool
+                            for tool in active_tools
+                            if (tool.get("function") or {}).get("name") != "web_read"
                         ]
                     continue
 
@@ -1693,6 +1729,9 @@ async def _handle_streaming_orchestrator(
             completion_tokens=total_completion_tokens,
             total_tokens=total_prompt_tokens + total_completion_tokens,
         ).model_dump()
+        # prompt_tokens adds up every model round, each resending the whole
+        # conversation; most of it is cached. The footer shows the split.
+        finish_data["usage"]["cached_tokens"] = int(clock.get("cached_tokens", 0))
         finish_data.setdefault("telemetry", {})
         finish_data["telemetry"]["engine"] = telemetry_engine
         if complexity_info is not None:

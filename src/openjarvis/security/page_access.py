@@ -57,6 +57,8 @@ READ_WINDOW_SECONDS = 300.0
 _lock = threading.Lock()
 _allowed: Dict[str, float] = {}
 _reads: List[float] = []
+#: Pages already read for the current message, normalised.
+_read_urls: Set[str] = set()
 
 
 def normalise(url: str) -> str:
@@ -120,6 +122,7 @@ def set_turn(user_text: Any) -> None:
     allow(urls_in(user_text))
     with _lock:
         _reads.clear()
+        _read_urls.clear()
 
 
 def is_allowed(url: str) -> bool:
@@ -140,6 +143,36 @@ def note_read() -> None:
         _reads.append(now + READ_WINDOW_SECONDS)
 
 
+def reserve_read(url: str, limit: int) -> str:
+    """Take one of this message's *limit* reads for *url*, atomically.
+
+    Returns ``"ok"``, ``"limit"`` or ``"duplicate"``. Reads asked for in one
+    response run at the same time, so checking the count and recording the
+    read separately let every one of them through the check.
+    """
+    now = time.monotonic()
+    normalised = normalise(url)
+    with _lock:
+        _expire(now)
+        if normalised and normalised in _read_urls:
+            return "duplicate"
+        if len(_reads) >= limit:
+            return "limit"
+        _reads.append(now + READ_WINDOW_SECONDS)
+        if normalised:
+            _read_urls.add(normalised)
+        return "ok"
+
+
+def readable_urls(limit: int = 8) -> List[str]:
+    """Pages that may be read right now, newest permission first."""
+    now = time.monotonic()
+    with _lock:
+        _expire(now)
+        ordered = sorted(_allowed.items(), key=lambda item: item[1], reverse=True)
+    return [url for url, _ in ordered[:limit]]
+
+
 def reads_used() -> int:
     now = time.monotonic()
     with _lock:
@@ -158,6 +191,7 @@ def clear() -> None:
     with _lock:
         _allowed.clear()
         _reads.clear()
+        _read_urls.clear()
 
 
 __all__ = [
