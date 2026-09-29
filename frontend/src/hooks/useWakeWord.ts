@@ -307,10 +307,13 @@ export function useWakeWord(
       wsRef.current = null;
       setListening(false);
 
-      // 1008/1011 are the server intentionally refusing pre-accept (bad
-      // auth, no detector configured) — retrying would just repeat the
-      // same refusal, so surface it immediately instead of looping.
-      if (event.code === 1008 || event.code === 1011) {
+      // 1008 is the server refusing the key -- retrying would repeat the same
+      // refusal, so surface it at once. 1011 ("no detector") is NOT final:
+      // a server that has just started refuses with it until its detector
+      // has loaded, and treating it as fatal left the wake word dead after
+      // every restart until the page was reloaded (29 September). It is
+      // retried with the backoff below like any other drop.
+      if (event.code === 1008) {
         fatalRef.current = true;
         setError(`Wake word connection dropped (code ${event.code})`);
         return;

@@ -38,7 +38,7 @@ describe('wake-word liveness', () => {
 
   it('does not retry a permanent failure', () => {
     /**
-     * Mic permission denied, or the server refusing with 1008/1011. Retrying
+     * Mic permission denied, or the server refusing the key (1008). Retrying
      * those on a 3s watchdog is a loop that re-asks the browser for a device
      * it has already been told it cannot have; the error is surfaced instead.
      */
