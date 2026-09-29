@@ -16,6 +16,7 @@ mod window_state;
 
 use std::{
     net::{SocketAddr, TcpStream},
+    sync::atomic::{AtomicBool, Ordering},
     os::windows::process::CommandExt,
     path::PathBuf,
     process::{Child, Command},
@@ -126,6 +127,61 @@ fn restart_sage(app: AppHandle) {
     });
 }
 
+#[link(name = "user32")]
+extern "system" {
+    fn MessageBoxW(hwnd: *mut std::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
+}
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// A Yes/No question in a standard Windows box, on top of everything.
+fn confirm(caption: &str, text: &str) -> bool {
+    const MB_YESNO: u32 = 0x4;
+    const MB_ICONQUESTION: u32 = 0x20;
+    const MB_SETFOREGROUND: u32 = 0x1_0000;
+    const MB_TOPMOST: u32 = 0x4_0000;
+    const IDYES: i32 = 6;
+    let (text, caption) = (wide(text), wide(caption));
+    let answer = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST,
+        )
+    };
+    answer == IDYES
+}
+
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Quit from the tray stops all of Sage, not just this window (the user's
+/// choice, 29 September): after a Yes, Sage's own stop script ends the
+/// server, the web UI and the voice engine (it ends with the server), then
+/// the app exits. Closing the window still only hides it to the tray.
+fn quit_sage(app: AppHandle) {
+    if QUITTING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    thread::spawn(move || {
+        let yes = confirm(
+            "Quit Sage",
+            "Quit Sage?\n\nSage will stop listening for \u{201c}Hey Sage\u{201d}, and reminders and \
+             briefings won't run until you open it again.",
+        );
+        if !yes {
+            QUITTING.store(false, Ordering::SeqCst);
+            return;
+        }
+        if let Ok(mut stop) = run_script("stop-sage.ps1") {
+            let _ = stop.wait();
+        }
+        app.exit(0);
+    });
+}
+
 pub fn run() {
     tauri::Builder::default()
         // A second launch brings the running app forward instead. With
@@ -195,7 +251,7 @@ pub fn run() {
             let show_item = MenuItem::with_id(app, "show", "Show Sage", true, None::<&str>)?;
             let hide_item = MenuItem::with_id(app, "hide", "Hide Sage", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "Restart Sage", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit Sage app", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit Sage\u{2026}", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -215,7 +271,7 @@ pub fn run() {
                     "show" => show(app),
                     "hide" => hide(app),
                     "restart" => restart_sage(app.clone()),
-                    "quit" => app.exit(0),
+                    "quit" => quit_sage(app.clone()),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
