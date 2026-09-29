@@ -98,7 +98,7 @@ export async function runBrowserChecks(): Promise<BrowserCheck[]> {
     ];
   }
 
-  let permission: string | null = null;
+  let permission: string | null;
   try {
     // Firefox has no microphone permission descriptor; a throw here means
     // "unknown", not "denied".

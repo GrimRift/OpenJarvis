@@ -611,7 +611,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
     if (isNode) {
       let seen = 0;
       let layer = NODE_LAYERS[0];
-      let index = 0;
+      let index: number;
       for (index = 0; index < NODE_LAYERS.length; index++) {
         seen += NODE_LAYERS[index].count;
         if (i < seen) { layer = NODE_LAYERS[index]; break; }

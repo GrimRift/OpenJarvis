@@ -675,9 +675,8 @@ function LaunchWizard({
   useEffect(() => {
     fetchRecommendedModel().then((r) => {
       setRecommendedModel(r.model);
-      if (!wizard.model) {
-        setWizard((w) => ({ ...w, model: r.model }));
-      }
+      // Checked on the current wizard: a model picked before this resolved stays.
+      setWizard((w) => (w.model ? w : { ...w, model: r.model }));
     }).catch(() => {});
     fetchAvailableTools().then((tools) => {
       setAvailableTools(tools);

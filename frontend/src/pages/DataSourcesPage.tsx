@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { motion } from 'motion/react';
 import { useAppStore } from '../lib/store';
 import {
@@ -597,7 +597,8 @@ function SyncStatusDisplay({
 function DataSourcesSection() {
   const cachedConnectors = useAppStore((s) => s.cachedConnectors);
   const setCachedConnectors = useAppStore((s) => s.setCachedConnectors);
-  const connectors = cachedConnectors ?? [];
+  // One stable empty list while loading, so the effects below don't re-run every render.
+  const connectors = useMemo(() => cachedConnectors ?? [], [cachedConnectors]);
   const isFirstLoad = cachedConnectors === null;
   const [syncStatuses, setSyncStatuses] = useState<Record<string, SyncStatus>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);

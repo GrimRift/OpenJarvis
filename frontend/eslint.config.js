@@ -20,5 +20,15 @@ export default defineConfig([
       ecmaVersion: 2022,
       globals: globals.browser,
     },
+    // React Compiler-era rules from react-hooks v7: they flag working code
+    // written to the older hooks guidance, which buried the real findings
+    // (user's choice, 2026-09-29).
+    rules: {
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+    },
   },
 ]);
