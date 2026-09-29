@@ -436,6 +436,14 @@ class TestProviderSelection:
                 ws.send_json({"type": "begin", "provider": "chatterbox"})
                 assert ws.receive_json()["type"] == "warming"
                 assert ws.receive_json()["type"] == "ready"
+                # Finish the turn rather than closing mid-turn: closing with
+                # the relay still running was cancelled on CI (30 September).
+                ws.send_json({"type": "text", "delta": "Hello. "})
+                ws.send_json({"type": "finish"})
+                while True:
+                    message = ws.receive()
+                    if message.get("text") and '"done"' in message["text"]:
+                        break
 
     def test_a_sidecar_that_cannot_open_is_reported_before_audio(self):
         class Failing:
@@ -449,7 +457,16 @@ class TestProviderSelection:
                 return None
 
         client = TestClient(_app())
-        with patch("openjarvis.speech.chatterbox_tts.ChatterboxContext", Failing):
+        # The sidecar answers health but the context cannot open. Pinned, not
+        # read from the machine: with no sidecar (CI) the route first says
+        # "warming", and this test read that as its error (30 September).
+        with (
+            patch("openjarvis.speech.chatterbox_tts.ChatterboxContext", Failing),
+            patch(
+                "openjarvis.speech.chatterbox_sidecar.fetch_health",
+                lambda *_a, **_k: {"ok": True},
+            ),
+        ):
             with client.websocket_connect("/v1/speech/tts-stream") as ws:
                 ws.send_json({"type": "begin", "provider": "chatterbox"})
                 msg = ws.receive_json()
