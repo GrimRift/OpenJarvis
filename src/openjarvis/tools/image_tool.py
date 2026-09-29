@@ -200,6 +200,11 @@ class ImageEditTool(_ImageTool):
                 success=False,
             )
         parent_id: Optional[str] = None
+        # A picture pasted with this very message is the one meant, even when
+        # the model says "last": live, it edited Sage's previous picture while
+        # the user's photo sat attached. An explicit id still wins.
+        if which.lower() == "last" and attachments.attached_png() is not None:
+            which = "attached"
         if which.lower() == "attached":
             png = attachments.attached_png()
             if png is None:

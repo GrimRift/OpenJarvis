@@ -152,6 +152,27 @@ class TestImageEditTurnsReachTheTools:
 
         assert _answered_by_vision(self._req(text)) is True
 
+    def test_the_agent_is_told_an_image_is_attached(self):
+        """The agent path passes only text, so without a note the model does
+        not know a picture was pasted and edits its previous one instead."""
+        from openjarvis.server.routes import _note_attached_image
+
+        req = self._req("make the sky a starry night")
+        _note_attached_image(req)
+        text = req.messages[-1].content
+        assert text.startswith("make the sky a starry night")
+        assert "image='attached'" in text
+
+    def test_no_note_without_an_image(self):
+        from openjarvis.server.routes import _note_attached_image
+
+        class _Req:
+            messages = [ChatMessage(role="user", content="make it brighter")]
+
+        req = _Req()
+        _note_attached_image(req)
+        assert req.messages[-1].content == "make it brighter"
+
     def test_a_text_turn_is_never_a_vision_turn(self):
         from openjarvis.server.routes import _answered_by_vision
 

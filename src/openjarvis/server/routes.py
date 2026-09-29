@@ -73,6 +73,30 @@ def _answered_by_vision(request_body) -> bool:
     return not wants_edit(last_user_text(getattr(request_body, "messages", None)))
 
 
+_ATTACHED_NOTE = (
+    "\n\n[The user attached an image to this message. To change it, call "
+    "image_edit with image='attached'.]"
+)
+
+
+def _note_attached_image(request_body) -> None:
+    """Tell the agent a picture came with this message.
+
+    The agent path passes the model text only, so an edit-worded image turn
+    (routed there by `_answered_by_vision`) otherwise reads as a bare "make the
+    sky a starry night" -- and the model edited its own previous picture.
+    """
+    messages = list(getattr(request_body, "messages", None) or [])
+    for message in reversed(messages):
+        if getattr(message, "role", "") != "user":
+            continue
+        if getattr(message, "images", None) and _ATTACHED_NOTE not in (
+            message.content or ""
+        ):
+            message.content = (message.content or "") + _ATTACHED_NOTE
+        return
+
+
 def _to_messages(chat_messages) -> list[Message]:
     """Convert Pydantic ChatMessage objects to core Message objects."""
     messages = []
@@ -451,6 +475,8 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     from openjarvis.images import attachments as _attachments
 
     _attachments.set_turn(request_body.messages)
+    if _has_attached_image(request_body) and not _answered_by_vision(request_body):
+        _note_attached_image(request_body)
 
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)

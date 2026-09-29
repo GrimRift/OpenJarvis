@@ -222,6 +222,30 @@ class TestEdit:
         assert kind == "edit" and call["image_bytes"] == b"PASTED"
         assert result.metadata["image"]["parent_id"] is None
 
+    def test_a_picture_pasted_this_turn_wins_over_last(self, rig):
+        """Live 2026-09-29: pasted a photo, said "make the sky a starry night",
+        and the model passed image='last' -- Sage edited its previous picture
+        instead of the one just pasted."""
+        ImageGenerateTool(rig.service).execute(prompt="an owl")
+        attachments.set_turn(
+            [{"role": "user", "images": [base64.b64encode(b"PASTED").decode()]}]
+        )
+        result = ImageEditTool(rig.service).execute(
+            instruction="starry night sky", image="last"
+        )
+        assert result.success
+        assert rig.images.calls[-1][1]["image_bytes"] == b"PASTED"
+        assert result.metadata["image"]["parent_id"] is None
+
+    def test_an_explicit_id_still_wins_over_a_paste(self, rig):
+        first = ImageGenerateTool(rig.service).execute(prompt="an owl")
+        attachments.set_turn(
+            [{"role": "user", "images": [base64.b64encode(b"PASTED").decode()]}]
+        )
+        image_id = first.metadata["image"]["id"]
+        ImageEditTool(rig.service).execute(instruction="blue", image=image_id)
+        assert rig.images.calls[-1][1]["image_bytes"] == PNG
+
     def test_attached_with_nothing_attached_does_not_edit_something_else(self, rig):
         ImageGenerateTool(rig.service).execute(prompt="an owl")
         result = ImageEditTool(rig.service).execute(
