@@ -22,6 +22,15 @@ describe('retryUntilAnswered', () => {
     expect(calls).toBe(11);
   });
 
+  it('waits out a slow start after a reboot (Ollama first, then the server)', async () => {
+    const clock = fakeClock();
+    const models = await retryUntilAnswered(async () => {
+      if (clock.now() < 180_000) throw new Error('connect ECONNREFUSED');
+      return ['gpt-5.6-luna'];
+    }, clock);
+    expect(models).toEqual(['gpt-5.6-luna']);
+  });
+
   it('answers at once when the server is up', async () => {
     const clock = fakeClock();
     expect(await retryUntilAnswered(async () => 'ok', clock)).toBe('ok');

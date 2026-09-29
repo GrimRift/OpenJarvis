@@ -86,7 +86,7 @@ export function useSpeech() {
   // Ollama alone, hence the long window.
   useEffect(() => {
     let gone = false;
-    retryUntilAnswered(fetchSpeechHealth, { timeoutMs: 600_000, cancelled: () => gone })
+    retryUntilAnswered(fetchSpeechHealth, { cancelled: () => gone })
       .then((health) => { if (health) setAvailable(health.available); })
       .catch(() => setAvailable(false));
     return () => { gone = true; };

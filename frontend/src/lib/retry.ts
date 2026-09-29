@@ -21,7 +21,9 @@ export async function retryUntilAnswered<T>(
   attempt: () => Promise<T>,
   {
     intervalMs = 2000,
-    timeoutMs = 120_000,
+    // After a reboot the server can take minutes (the launcher waits up to
+    // 90 s for Ollama first); 2 minutes gave up before it arrived.
+    timeoutMs = 600_000,
     cancelled = () => false,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = () => Date.now(),
