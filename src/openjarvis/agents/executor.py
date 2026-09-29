@@ -36,6 +36,13 @@ _MAX_RETRIES = 3
 _AGENT_TICK_DEFAULT_MODEL = "gemma4:31b"
 
 
+def _send_to_phone(title: str, text: str) -> bool:
+    """Send *text* to ``[notifications] channel`` (the user's Telegram)."""
+    from openjarvis.tools.notify_windows import _send_to_channel
+
+    return bool(_send_to_channel(title, text))
+
+
 def _tool_calls_for_storage(result: AgentResult) -> list[dict[str, Any]] | None:
     """Convert executor tool results to the managed-message storage contract."""
 
@@ -695,6 +702,34 @@ class AgentExecutor:
             else "",
         }
 
+    def _deliver(self, agent_id: str, result: AgentResult) -> None:
+        """Send a finished report where the Operator's config says.
+
+        The executor does it, not the model: the scheduler's system has no
+        channel backend, so `channel_send` could not reach the phone, and a
+        report that depends on the model remembering a tool call and a chat
+        id is one that sometimes silently never arrives.
+        """
+        agent = self._manager.get_agent(agent_id) or {}
+        target = str((agent.get("config") or {}).get("deliver_to") or "").lower()
+        if target != "telegram":
+            return
+        text = (result.content or "").strip()
+        if not text:
+            result.metadata["delivered_to"] = "skipped: empty report"
+            return
+        try:
+            ok = _send_to_phone(agent.get("name") or "Sage", text)
+        except Exception:  # noqa: BLE001 -- the run still counts
+            logger.warning("Agent %s: delivery failed", agent_id, exc_info=True)
+            ok = False
+        result.metadata["delivered_to"] = "telegram" if ok else "failed: telegram"
+        logger.info(
+            "Agent %s: report delivered_to=%s",
+            agent_id,
+            result.metadata["delivered_to"],
+        )
+
     def _finalize_tick(
         self,
         agent_id: str,
@@ -749,6 +784,7 @@ class AgentExecutor:
                     result.content,
                     tool_calls=_tool_calls_for_storage(result),
                 )
+                self._deliver(agent_id, result)
 
             # Budget enforcement (post-tick check)
             agent_data = self._manager.get_agent(agent_id)
