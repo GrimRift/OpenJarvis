@@ -85,4 +85,18 @@ describe('Sage voice profiles', () => {
     expect(voiceForEngine('nano', 'chatterbox:turbo-jarvis', LOCAL)).toBe('chatterbox:jarvis');
     expect(voiceForEngine('turbo', 'chatterbox:jarvis', LOCAL.slice(0, 3))).toBeUndefined();
   });
+
+  it("opens each model on its default voice, whatever the list's order", () => {
+    // The sidecar lists voices alphabetically: turbo-frieren before turbo-jarvis.
+    const listed = [
+      { name: 'frieren', label: 'Frieren', engine: 'nano' },
+      { name: 'jarvis', label: 'Jarvis', engine: 'nano' },
+      { name: 'jarvis-turbo', label: 'Jarvis', engine: 'turbo' },
+      { name: 'turbo-frieren', label: 'Frieren', engine: 'turbo' },
+      { name: 'turbo-jarvis', label: 'J.A.R.V.I.S.', engine: 'turbo' },
+    ];
+    expect(voiceForEngine('turbo', 'chatterbox:jarvis', listed)).toBe('chatterbox:jarvis-turbo');
+    expect(voiceForEngine('turbo', 'chatterbox:turbo-jarvis', listed)).toBe('chatterbox:turbo-jarvis');
+    expect(voiceForEngine('nano', 'chatterbox:jarvis-turbo', listed)).toBe('chatterbox:jarvis');
+  });
 });

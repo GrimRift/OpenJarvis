@@ -35,6 +35,11 @@
       "greetings/turbo-frieren-local/hello-sir-turbo.wav",
       "greetings/turbo-frieren-local/yes-sir-turbo.wav",
       "greetings/turbo-frieren-local/sir-turbo.wav"
+    ],
+    "chatterbox:jarvis-turbo": [
+      "greetings/jarvis-turbo-local/hello-sir-turbo.wav",
+      "greetings/jarvis-turbo-local/yes-sir-turbo.wav",
+      "greetings/jarvis-turbo-local/sir-turbo.wav"
     ]
   },
   "fillers": {
@@ -79,6 +84,12 @@
       "greetings/turbo-frieren-local/checking-turbo.wav",
       "greetings/turbo-frieren-local/let-me-look-turbo.wav",
       "greetings/turbo-frieren-local/working-on-it-turbo.wav"
+    ],
+    "chatterbox:jarvis-turbo": [
+      "greetings/jarvis-turbo-local/one-moment-turbo.wav",
+      "greetings/jarvis-turbo-local/checking-turbo.wav",
+      "greetings/jarvis-turbo-local/let-me-look-turbo.wav",
+      "greetings/jarvis-turbo-local/working-on-it-turbo.wav"
     ]
   },
   "fillers_again": {
@@ -109,6 +120,10 @@
     "chatterbox:turbo-frieren": [
       "greetings/turbo-frieren-local/still-working-turbo.wav",
       "greetings/turbo-frieren-local/almost-there-turbo.wav"
+    ],
+    "chatterbox:jarvis-turbo": [
+      "greetings/jarvis-turbo-local/still-working-turbo.wav",
+      "greetings/jarvis-turbo-local/almost-there-turbo.wav"
     ]
   }
 }

@@ -123,8 +123,16 @@ export function profilesFor(
   return VOICE_PROFILES.filter((p) => p.provider === 'cartesia');
 }
 
+/** The voice each local model starts on when it is chosen, picked by the
+ * user by ear. Voices list alphabetically, so without this Turbo opened on
+ * turbo-frieren. */
+export const ENGINE_DEFAULT_VOICE: Record<LocalEngine, string> = {
+  nano: 'jarvis',
+  turbo: 'jarvis-turbo',
+};
+
 /** The voice to switch to when *engine* is chosen: the current one if it is
- * that engine's, else that engine's first. */
+ * that engine's, else that engine's default, else its first. */
 export function voiceForEngine(
   engine: LocalEngine,
   currentId: string,
@@ -132,6 +140,7 @@ export function voiceForEngine(
 ): string | undefined {
   const mine = localVoices.filter((v) => localEngineOf(v) === engine);
   const current = mine.find((v) => CHATTERBOX_VOICE_PREFIX + v.name === currentId);
-  const pick = current ?? mine.find((v) => v.name === 'jarvis') ?? mine[0];
+  const pick =
+    current ?? mine.find((v) => v.name === ENGINE_DEFAULT_VOICE[engine]) ?? mine[0];
   return pick ? CHATTERBOX_VOICE_PREFIX + pick.name : undefined;
 }
