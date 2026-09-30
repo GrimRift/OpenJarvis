@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from openjarvis.core.activity import Activity
 from openjarvis.core.moments import (
     DAILY_CAPS,
@@ -43,6 +45,24 @@ from openjarvis.core.presence import (
 )
 
 TZ = "Asia/Singapore"
+
+# The real welcome-back lookups, kept for their own tests before the fixture
+# below swaps them out.
+from openjarvis.core import moments as _moments_module  # noqa: E402
+
+_REAL_STILL_AHEAD = _moments_module._still_ahead_today
+_REAL_OPERATOR_REPORTS = _moments_module._operator_reports_since
+
+
+@pytest.fixture(autouse=True)
+def _no_live_lookups(monkeypatch):
+    """A welcome back reads Gmail, the class schedule and agents.db; a test
+    must never reach the user's real mailbox or data."""
+    monkeypatch.setattr(_moments_module, "_mail_since", lambda since, limit=15: "")
+    monkeypatch.setattr(_moments_module, "_still_ahead_today", lambda now, tz: "")
+    monkeypatch.setattr(
+        _moments_module, "_operator_reports_since", lambda since, config_dir=None: ""
+    )
 
 
 def _at(hour: int, minute: int = 0, day: int = 15) -> float:
@@ -666,6 +686,56 @@ class TestAwayNews:
         assert any("Reminder sent" in line for line in lines)
         assert not any("Nothing upcoming" in line for line in lines)
 
+    def test_a_notifying_tool_that_sent_nothing_is_not_news(self) -> None:
+        """30 September: every welcome back talked about the class schedule.
+        The real class check calls notify_class_schedule -- a notifying tool
+        -- which succeeds with "no notification sent" and marks the run
+        notified: false. Counting the successful call as a notification put
+        every 5-minute "nothing upcoming" into the welcome's context. The shape
+        below is copied from the live scheduler.db."""
+        from openjarvis.core.moments import _finished_jobs
+
+        live_quiet_run = {
+            "content": "Nothing upcoming — no notification sent.",
+            "usage": {},
+            "tool_results": [
+                {
+                    "tool_name": "notify_class_schedule",
+                    "content": "Nothing upcoming — no notification sent.",
+                    "success": True,
+                    "arguments": {},
+                }
+            ],
+            "turns": 1,
+            "metadata": {"notified": False, "upcoming": []},
+        }
+        live_alert_run = dict(
+            live_quiet_run,
+            content="Structural Analysis in 10 minutes.",
+            metadata={"notified": True, "upcoming": ["Structural Analysis"]},
+        )
+        tasks = [
+            self._Task(
+                "cls",
+                "class_notifier",
+                "Check the class schedule and notify about anything imminent.",
+                {"openjarvis_task_key": "class-schedule-notify"},
+            )
+        ]
+        runs = {
+            "cls": [
+                {
+                    "finished_at": f"2026-09-15T13:{m:02d}:00+00:00",
+                    "success": 1,
+                    "result": json.dumps(run),
+                }
+                for m, run in ((0, live_quiet_run), (5, live_alert_run))
+            ]
+        }
+        lines = _finished_jobs(self._scheduler(tasks, runs), since=_at(12))
+        assert not any("Nothing upcoming" in line for line in lines)
+        assert any("Structural Analysis" in line for line in lines)
+
 
 class TestInitiative:
     """Sage starting a conversation (M37 phase 1, Gentle)."""
@@ -1092,3 +1162,146 @@ class TestOneTickAtATime:
             finish.set()
             first.join(5)
         assert rig.spoken == ["[greeting]"]
+
+
+class TestWelcomeBackContent:
+    """What a welcome back carries (user's choice, 30 September): the next
+    class or event still ahead, mail needing action, and what Sage sent while
+    the user was away -- each only when there is something."""
+
+    def test_context_carries_the_three_kinds(self, monkeypatch) -> None:
+        from openjarvis.core.moments import (
+            MOMENT_WELCOME_BACK,
+            Decision,
+            MomentsState,
+            build_context,
+        )
+
+        monkeypatch.setattr(
+            _moments_module,
+            "_still_ahead_today",
+            lambda now, tz: "class Physics at 3:00PM",
+        )
+        monkeypatch.setattr(
+            _moments_module,
+            "_mail_since",
+            lambda since, limit=15: "Shopee | Confirm your order by 30 Sep",
+        )
+        monkeypatch.setattr(
+            _moments_module,
+            "_operator_reports_since",
+            lambda since, config_dir=None: (
+                "Morning brief (sent to telegram): School..."
+            ),
+        )
+        decision = Decision(
+            kinds=[MOMENT_WELCOME_BACK], absence_end=_at(20), absence_seconds=3 * 3600
+        )
+        context = build_context(
+            MOMENT_WELCOME_BACK,
+            decision,
+            now=_at(20),
+            timezone_name=TZ,
+            config_dir=None,
+            scheduler=None,
+            state=MomentsState(),
+        )
+        assert context["still_ahead_today"] == "class Physics at 3:00PM"
+        assert "Shopee" in context["new_mail_while_away"]
+        assert "Morning brief" in context["reports_sent_while_away"]
+
+    def test_nothing_to_tell_leaves_nothing_in_the_context(self) -> None:
+        from openjarvis.core.moments import (
+            MOMENT_WELCOME_BACK,
+            Decision,
+            MomentsState,
+            build_context,
+        )
+
+        context = build_context(
+            MOMENT_WELCOME_BACK,
+            Decision(
+                kinds=[MOMENT_WELCOME_BACK], absence_end=_at(20), absence_seconds=7200
+            ),
+            now=_at(20),
+            timezone_name=TZ,
+            config_dir=None,
+            scheduler=None,
+            state=MomentsState(),
+        )
+        for key in (
+            "still_ahead_today",
+            "new_mail_while_away",
+            "reports_sent_while_away",
+        ):
+            assert key not in context
+
+    def test_only_classes_and_events_still_ahead(self, monkeypatch) -> None:
+        from openjarvis.core.types import ToolResult
+        from openjarvis.tools import check_class_schedule
+
+        classes = [
+            {
+                "subject_description": "Engineering Management",
+                "start_time": "9:40AM",
+                "status": "ended",
+            },
+            {
+                "subject_description": "Physics",
+                "start_time": "3:00PM",
+                "status": "upcoming",
+            },
+            {
+                "subject_description": "Statics",
+                "start_time": "1:00PM",
+                "status": "in_progress",
+            },
+        ]
+        monkeypatch.setattr(
+            check_class_schedule.CheckClassScheduleTool,
+            "execute",
+            lambda self, **kw: ToolResult(
+                tool_name="check_class_schedule",
+                content="",
+                success=True,
+                metadata={"classes": classes},
+            ),
+        )
+        monkeypatch.setattr(
+            _moments_module,
+            "_today_calendar",
+            lambda tz, now: "08:00 Stand-up\n18:30 Dinner with Ana",
+        )
+        ahead = _REAL_STILL_AHEAD(_at(14), TZ)
+        assert "Physics at 3:00PM" in ahead
+        assert "Statics in progress now" in ahead
+        assert "Engineering Management" not in ahead
+        assert "Dinner with Ana" in ahead
+        assert "Stand-up" not in ahead
+
+    def test_operator_reports_since_the_user_left(self, tmp_path) -> None:
+        from openjarvis.agents.manager import AgentManager
+
+        mgr = AgentManager(str(tmp_path / "agents.db"))
+        agent = mgr.create_agent(
+            "Morning brief",
+            agent_type="orchestrator",
+            config={"deliver_to": "telegram"},
+        )
+        mgr.store_agent_response(agent["id"], "Old report before leaving")
+        mgr.close()
+        import sqlite3
+
+        conn = sqlite3.connect(tmp_path / "agents.db")
+        conn.execute("UPDATE agent_messages SET created_at = 1000")
+        conn.commit()
+        conn.close()
+        mgr = AgentManager(str(tmp_path / "agents.db"))
+        mgr.store_agent_response(agent["id"], "School: nothing due.\nInbox: Shopee.")
+        mgr.close()
+        text = _REAL_OPERATOR_REPORTS(2000, tmp_path)
+        assert (
+            "Morning brief (sent to telegram): School: nothing due. Inbox: Shopee."
+            in text
+        )
+        assert "Old report" not in text

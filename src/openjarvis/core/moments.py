@@ -658,6 +658,99 @@ def _today_calendar(timezone_name: str, now: float) -> str:
         return ""
 
 
+def _still_ahead_today(now: float, timezone_name: str) -> str:
+    """Classes and calendar events not yet over today, for a welcome back.
+
+    Only what is still ahead: a return in the evening said "nothing upcoming
+    on your class schedule" every time, which is noise, not news.
+    """
+    lines: List[str] = []
+    try:
+        from datetime import datetime
+
+        from openjarvis.tools.check_class_schedule import CheckClassScheduleTool
+
+        result = CheckClassScheduleTool().execute(
+            full_day=True, now=datetime.fromtimestamp(now)
+        )
+        classes = (result.metadata or {}).get("classes", []) if result.success else []
+        for c in classes:
+            name = c.get("subject_description")
+            if c.get("status") == "upcoming":
+                lines.append(f"class {name} at {c.get('start_time')}")
+            elif c.get("status") == "in_progress":
+                lines.append(f"class {name} in progress now")
+    except Exception:
+        logger.debug("Classes unavailable for welcome back", exc_info=True)
+    local_now = to_local(now, timezone_name).strftime("%H:%M")
+    for event in (_today_calendar(timezone_name, now) or "").splitlines():
+        if event[:5] >= local_now:
+            lines.append(f"event {event}")
+    return "\n".join(lines)
+
+
+def _mail_since(since: float, limit: int = 15) -> str:
+    """Inbox mail that arrived while the user was away (sender, subject, gist)."""
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+
+        from openjarvis.connectors.gmail import _gmail_api_list_messages
+        from openjarvis.connectors.google_auth import call_with_refresh
+        from openjarvis.tools.gmail_read import (
+            _TOKEN_PATH,
+            _ids,
+            _metadata_message,
+            summarise,
+        )
+
+        def fetch(token: str) -> List[str]:
+            listing = _gmail_api_list_messages(
+                token, query=f"in:inbox after:{int(since)}"
+            )
+            ids = _ids(listing, limit)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                messages = list(pool.map(lambda i: _metadata_message(token, i), ids))
+            return [summarise(m)[0] for m in messages]
+
+        return "\n".join(call_with_refresh(fetch, _TOKEN_PATH))
+    except Exception:
+        logger.debug("Mail unavailable for welcome back", exc_info=True)
+        return ""
+
+
+def _operator_reports_since(since: float, config_dir: Optional[Path] = None) -> str:
+    """Reports Sage's Operators delivered while the user was away."""
+    import sqlite3
+
+    path = (config_dir or DEFAULT_CONFIG_DIR) / "agents.db"
+    if not path.exists():
+        return ""
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT a.name, m.content, a.config_json FROM agent_messages m "
+                "JOIN managed_agents a ON a.id = m.agent_id "
+                "WHERE m.direction = 'agent_to_user' AND m.created_at > ? "
+                "ORDER BY m.created_at",
+                (since,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return ""
+    lines = []
+    for name, content, config_json in rows:
+        try:
+            delivered = json.loads(config_json or "{}").get("deliver_to")
+        except ValueError:
+            delivered = None
+        where = f" (sent to {delivered})" if delivered else ""
+        gist = " ".join(str(content or "").split())[:160]
+        lines.append(f"{name}{where}: {gist}")
+    return "\n".join(lines[-3:])
+
+
 # Sage's own recurring jobs. Their runs are news only when they actually
 # told the user something: thirty "nothing upcoming" class checks handed to
 # the model came back as "I checked your class schedule" on a return at
@@ -688,6 +781,13 @@ def _run_summary(run: Dict[str, Any]) -> tuple[str, bool]:
         parsed = None
     if isinstance(parsed, dict):
         text = str(parsed.get("content") or raw)
+        # The run's own word wins. The class check calls notify_class_schedule,
+        # which succeeds with "no notification sent" and says notified: false;
+        # counting the successful call made every 5-minute "nothing upcoming"
+        # news, and every welcome back talked about the schedule (30 Sept).
+        declared = (parsed.get("metadata") or {}).get("notified")
+        if isinstance(declared, bool):
+            return text.replace("\n", " ")[:200], declared
         for tool in parsed.get("tool_results") or []:
             if (
                 isinstance(tool, dict)
@@ -796,6 +896,27 @@ def build_context(
             since = state.last_present_at
         if since is not None:
             context["finished_while_away"] = "\n".join(_finished_jobs(scheduler, since))
+        if kind == MOMENT_WELCOME_BACK:
+            # What the user asked a welcome back to carry (30 September): the
+            # next class or event, mail needing action, and what Sage sent
+            # while they were away -- each only when there is something.
+            # In parallel: the calendar sync alone took 4.8 s and Gmail 1.2 s,
+            # on a welcome the user already found slow.
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                ahead = pool.submit(_still_ahead_today, now, timezone_name)
+                mail = pool.submit(_mail_since, since) if since is not None else None
+                reports = (
+                    pool.submit(_operator_reports_since, since, config_dir)
+                    if since is not None
+                    else None
+                )
+                context["still_ahead_today"] = ahead.result()
+                if mail is not None:
+                    context["new_mail_while_away"] = mail.result()
+                if reports is not None:
+                    context["reports_sent_while_away"] = reports.result()
     if kind == MOMENT_INITIATIVE:
         context.update(initiative_context(now, timezone_name, config_dir, state))
     if kind == MOMENT_TOLD:
@@ -1107,7 +1228,18 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
             "Greeting: the user's first appearance today. Greet them for the "
             "time of day given in the context, not by assumption."
         ),
-        MOMENT_WELCOME_BACK: "Welcome back: the user has returned after being away.",
+        MOMENT_WELCOME_BACK: (
+            "Welcome back: the user has returned after being away. Mention, "
+            "briefly and only if present in the context: the next class or "
+            "event still ahead today; new emails that need the user to do "
+            "something (reply, confirm, pay, submit, a deadline) -- ignore "
+            "newsletters, promotions and automated notices; alerts or reports "
+            "Sage sent while they were away. Never mention what did not "
+            "happen (no alerts, nothing on the schedule, no new mail). This "
+            "is spoken aloud: never say a code, password, amount, reference "
+            "or account number from an email. If none of these apply, just a "
+            "short warm welcome."
+        ),
         MOMENT_TOLD: (
             "Told on request: something the user asked to be told about has happened."
         ),
