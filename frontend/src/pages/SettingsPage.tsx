@@ -913,6 +913,18 @@ export function SettingsPage() {
 
           <WeatherSection onSaved={showSaved} />
 
+          <Section title="System panel">
+            <SettingRow
+              label="Open the system panel automatically"
+              description="“System status”, “how's my memory?” and the like open a live panel over the app: CPU, memory, GPU, disks, network and the programs using the most. Programs other than Sage's and Windows' can be ended there, only after you press Confirm. The Dashboard has the same panel as a tile."
+            >
+              <Switch
+                on={settings.systemOpenAutomatically}
+                onClick={() => { updateSettings({ systemOpenAutomatically: !settings.systemOpenAutomatically }); showSaved(); }}
+              />
+            </SettingRow>
+          </Section>
+
           <Section title="Appearance">
             <SettingRow label="Theme" description="Choose how Sage looks">
               <div className="flex gap-1 p-0.5 rounded-lg" style={{ background: 'var(--color-bg-secondary)' }}>

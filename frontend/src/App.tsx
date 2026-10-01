@@ -22,6 +22,7 @@ import { fetchModels, fetchServerInfo, fetchSavings, isTauri, fetchToolCredentia
 import { DiagramLayer } from './components/Diagram/DiagramLayer';
 import { ImageLayer } from './components/Image/ImageLayer';
 import { WeatherLayer } from './components/Weather/WeatherLayer';
+import { SystemLayer } from './components/System/SystemLayer';
 import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
 import { apiFetch, fetchSpeechVoices } from './lib/api';
@@ -226,6 +227,7 @@ export default function App() {
       <DiagramLayer />
       <ImageLayer />
       <WeatherLayer />
+      <SystemLayer />
       {commandPaletteOpen && <CommandPalette />}
     </>
   );

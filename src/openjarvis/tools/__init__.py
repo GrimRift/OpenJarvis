@@ -256,6 +256,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.system_status  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.apply_health_fix  # noqa: F401
 except ImportError:
     pass

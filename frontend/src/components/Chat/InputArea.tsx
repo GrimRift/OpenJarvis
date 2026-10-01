@@ -17,6 +17,8 @@ import { imageFromToolCall, imageToolPhase } from '../../lib/generated-image';
 import { useImagePresenter } from '../../lib/image-presenter';
 import { useWeatherPresenter } from '../../lib/weather-presenter';
 import { weatherFromToolCall } from '../../lib/weather-report';
+import { useSystemPresenter } from '../../lib/system-presenter';
+import { systemFromToolCall } from '../../lib/system-report';
 import {
   diagramMode,
   isCloseDiagramCommand,
@@ -102,7 +104,8 @@ function overlayOpen(): boolean {
   return Boolean(
     useDiagramPresenter.getState().current ||
       useImagePresenter.getState().current ||
-      useWeatherPresenter.getState().current,
+      useWeatherPresenter.getState().current ||
+      useSystemPresenter.getState().current,
   );
 }
 
@@ -110,6 +113,7 @@ function closeOverlays(): void {
   useDiagramPresenter.getState().close();
   useImagePresenter.getState().close();
   useWeatherPresenter.getState().close();
+  useSystemPresenter.getState().close();
 }
 
 /**
@@ -1219,6 +1223,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 useWeatherPresenter
                   .getState()
                   .showNew(forecast, useAppStore.getState().settings.weatherOpenAutomatically);
+              }
+              const machine = systemFromToolCall(tc);
+              if (machine) {
+                useSystemPresenter
+                  .getState()
+                  .showNew(machine, useAppStore.getState().settings.systemOpenAutomatically);
               }
             }
             setStreamState({

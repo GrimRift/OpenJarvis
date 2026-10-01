@@ -1559,6 +1559,10 @@ async def _handle_streaming_orchestrator(
                                         "weather": tool_result.metadata.get(
                                             "weather"
                                         ),
+                                        # M41: the system panel's snapshot.
+                                        "system": tool_result.metadata.get(
+                                            "system"
+                                        ),
                                     }
                                     if isinstance(tool_result.metadata, dict)
                                     else {}
@@ -1949,6 +1953,9 @@ async def _handle_agent_stream(
                             ),
                             "weather": getattr(tool_result, "metadata", {}).get(
                                 "weather"
+                            ),
+                            "system": getattr(tool_result, "metadata", {}).get(
+                                "system"
                             ),
                         }
                         if isinstance(getattr(tool_result, "metadata", {}), dict)

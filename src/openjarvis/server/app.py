@@ -21,6 +21,7 @@ from openjarvis.server.drive_routes import router as drive_router
 from openjarvis.server.image_routes import create_image_router
 from openjarvis.server.research_router import router as research_router
 from openjarvis.server.routes import router
+from openjarvis.server.system_routes import create_system_router
 from openjarvis.server.upload_router import router as upload_router
 from openjarvis.server.weather_routes import create_weather_router
 
@@ -429,6 +430,7 @@ def create_app(
     app.include_router(create_digest_router())
     app.include_router(create_image_router())
     app.include_router(create_weather_router())
+    app.include_router(create_system_router())
     app.include_router(drive_router)
     app.include_router(upload_router)
     app.include_router(research_router)

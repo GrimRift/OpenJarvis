@@ -40,7 +40,9 @@ class SystemHealthTool(BaseTool):
                 "working', 'are your connectors okay', 'is the voice pipeline "
                 "working', 'why is the briefing empty', 'diagnose yourself'. "
                 "Covers the voice pipeline, models and GPU, scheduled jobs, "
-                "credentials and connectors. Quote the 'summary' it returns."
+                "credentials and connectors. Quote the 'summary' it returns. "
+                "NOT for the computer's CPU, RAM, GPU or disk load -- that is "
+                "system_status."
             ),
             parameters={
                 "type": "object",

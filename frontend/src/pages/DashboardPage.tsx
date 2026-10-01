@@ -1,5 +1,6 @@
 import { EnergyDashboard } from '../components/Dashboard/EnergyDashboard';
 import { SpendTile } from '../components/Dashboard/SpendTile';
+import { SystemTile } from '../components/Dashboard/SystemTile';
 import { TraceDebugger } from '../components/Dashboard/TraceDebugger';
 
 export function DashboardPage() {
@@ -22,6 +23,10 @@ export function DashboardPage() {
             Live telemetry for the on-device inference engine — power draw and token throughput.
           </p>
         </header>
+
+        <div className="mb-4">
+          <SystemTile />
+        </div>
 
         <div className="mb-4">
           <SpendTile />
