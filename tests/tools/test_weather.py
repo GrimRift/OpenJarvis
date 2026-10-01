@@ -1,63 +1,138 @@
-"""Tests for the weather tool and the one-line summary the briefing uses.
+"""Tests for the weather tool and the one-line summary the briefings use.
 
 The line exists to answer one question -- do I need an umbrella -- so the
-tests are about that, not about reciting a forecast table.
+tests are about that, not about reciting a forecast table. The tool's result
+also carries the whole report for the weather panel (M41).
 """
 
 from __future__ import annotations
 
 import json
+import threading
+import time
 from unittest.mock import patch
 
 import httpx
 import pytest
 
 from openjarvis.connectors import weather as connector
-from openjarvis.tools import weather as tool_module
 from openjarvis.tools.weather import WeatherTool
 
-CURRENT = {
-    "main": {"temp": 28.4, "feels_like": 32.1, "humidity": 79},
-    "weather": [{"description": "broken clouds"}],
-    "wind": {"speed": 3.2},
+CALAMBA = {
+    "name": "Calamba",
+    "admin1": "Calabarzon",
+    "admin2": "Province of Laguna",
+    "country": "Philippines",
+    "country_code": "PH",
+    "latitude": 14.21167,
+    "longitude": 121.16528,
+    "timezone": "Asia/Manila",
 }
 
 
-def _forecast(*pops: float):
+def _forecast(*pops: float, now: str = "2026-10-01T12:00", code: int = 3):
+    """An Open-Meteo answer whose hours start at *now*, one per rain chance."""
+    hours = [f"2026-10-01T{12 + i:02d}:00" for i in range(len(pops))]
     return {
-        "list": [
-            {
-                "dt_txt": f"2026-09-04 {12 + i * 3:02d}:00:00",
-                "main": {"temp": 29},
-                "pop": pop,
-            }
-            for i, pop in enumerate(pops)
-        ]
+        "timezone": "Asia/Manila",
+        "current": {
+            "time": now,
+            "temperature_2m": 28.4,
+            "apparent_temperature": 32.1,
+            "relative_humidity_2m": 79,
+            "weather_code": code,
+            "wind_speed_10m": 11.5,
+            "wind_direction_10m": 270,
+            "pressure_msl": 1011.6,
+            "uv_index": 6.2,
+            "is_day": 1,
+        },
+        "hourly": {
+            "time": hours,
+            "temperature_2m": [29] * len(pops),
+            "precipitation_probability": [round(p * 100) for p in pops],
+            "weather_code": [code] * len(pops),
+            "is_day": [1] * len(pops),
+        },
+        "daily": {
+            "time": ["2026-10-01", "2026-10-02"],
+            "weather_code": [3, 95],
+            "temperature_2m_max": [31.9, 32.0],
+            "temperature_2m_min": [24.9, 24.5],
+            "precipitation_probability_max": [40, 98],
+            "uv_index_max": [8.2, 8.1],
+            "sunrise": ["2026-10-01T05:44", "2026-10-02T05:44"],
+            "sunset": ["2026-10-01T17:45", "2026-10-02T17:44"],
+        },
     }
+
+
+def _report(*pops: float, **kw):
+    return connector.build_report(_forecast(*pops, **kw), CALAMBA)
 
 
 class TestTheBriefingLine:
     def test_it_names_the_hour_rain_becomes_likely(self):
-        line = connector.summarize(CURRENT, _forecast(0.1, 0.62))
-        assert "28°C" in line
-        assert "broken clouds" in line
-        assert "3 PM" in line and "62%" in line
+        line = connector.summarize(_report(0.1, 0.62))
+        assert line.startswith("28°C, overcast")
+        assert "1 PM" in line and "62%" in line
+
+    def test_rain_in_the_hour_under_way_is_now(self):
+        """Said at 12:45, "around 12 PM" sounds like it already passed."""
+        line = connector.summarize(_report(0.7, now="2026-10-01T12:45"))
+        assert line.endswith("rain likely now (70%)")
 
     def test_a_dry_day_says_so_rather_than_going_quiet(self):
         """Silence would read as "the forecast failed"."""
-        assert "no rain expected" in connector.summarize(CURRENT, _forecast(0.05, 0.1))
+        assert "no rain expected" in connector.summarize(_report(0.05, 0.1))
 
     def test_a_drizzle_is_not_worth_an_umbrella(self):
         """Reporting 20% every morning teaches the reader to ignore the line."""
-        assert "no rain expected" in connector.summarize(CURRENT, _forecast(0.35))
+        assert "no rain expected" in connector.summarize(_report(0.35))
 
-    def test_losing_the_forecast_costs_the_rain_clause_not_the_line(self):
-        line = connector.summarize(CURRENT, None)
-        assert "28°C, broken clouds" == line
+    def test_tomorrow_s_rain_is_not_today_s(self):
+        """Only the next 12 hours count for a line about today."""
+        pops = [0.0] * connector.RAIN_LOOKAHEAD_HOURS + [0.9]
+        assert "no rain expected" in connector.summarize(_report(*pops))
+
+    def test_the_car_line_has_no_rain_clause(self):
+        assert connector.summarize(_report(0.9), rain=False) == "28°C, overcast"
 
     def test_units_are_the_reader_s_not_the_provider_s(self):
-        assert "°F" in connector.summarize(CURRENT, None, units="imperial")
-        assert "°C" in connector.summarize(CURRENT, None, units="metric")
+        imperial = connector.build_report(_forecast(0.1), CALAMBA, units="imperial")
+        assert "°F" in connector.summarize(imperial)
+        assert "°C" in connector.summarize(_report(0.1))
+
+
+class TestTheReport:
+    def test_hours_start_at_the_current_one(self):
+        """Hours already past are not drawn on the panel's curve."""
+        report = _report(0.1, 0.2, 0.3, now="2026-10-01T13:15")
+        assert [h["time"] for h in report["hourly"]] == [
+            "2026-10-01T13:00",
+            "2026-10-01T14:00",
+        ]
+
+    def test_it_carries_what_the_panel_draws(self):
+        report = _report(0.1)
+        assert report["place"] == "Calamba, Laguna"
+        assert report["source"] == "Open-Meteo"
+        assert report["current"]["icon"] == "cloudy"
+        assert report["current"]["humidity"] == 79
+        assert report["daily"][1]["conditions"] == "thunderstorm"
+        assert report["daily"][1]["rain_chance"] == pytest.approx(0.98)
+        assert report["daily"][0]["sunrise"] == "2026-10-01T05:44"
+
+    def test_an_unknown_code_is_not_a_crash(self):
+        assert connector.describe_code(12345)[0] == "conditions unknown"
+        assert connector.describe_code(None)[0] == "conditions unknown"
+
+    @pytest.mark.parametrize(
+        "units,wind,expected",
+        [("metric", "kmh", "km/h"), ("metric", None, "m/s"), ("imperial", None, "mph")],
+    )
+    def test_wind_units(self, units, wind, expected):
+        assert connector.unit_labels(units, wind)["speed"] == expected
 
 
 class TestTheTool:
@@ -65,109 +140,110 @@ class TestTheTool:
         path = tmp_path / "weather.json"
         # Device location off by default here: these tests are about the tool,
         # and a real Windows fix would make them depend on where the machine is.
-        payload = {"api_key": "k", "use_device_location": False, **config}
+        payload = {"place": CALAMBA, "use_device_location": False, **config}
         path.write_text(json.dumps(payload), encoding="utf-8")
         return WeatherTool(token_path=str(path))
 
-    def test_it_does_not_name_the_place_you_are_standing_in(self, tmp_path):
-        """"Prinza: 25C" tells the user nothing they did not already know.
+    def _run(self, tool, forecast=None, **params):
+        with patch.object(
+            connector, "fetch_forecast", return_value=forecast or _forecast(0.1)
+        ) as f:
+            return tool.execute(**params), f
 
-        The barangay the coordinates land in is more precise than the city
-        and less useful than saying nothing, so a fix from the machine is
-        reported bare.
-        """
-        path = tmp_path / "weather.json"
-        path.write_text(
-            json.dumps({"api_key": "k", "location": "Calamba,PH"}),
-            encoding="utf-8",
-        )
-        tool = WeatherTool(token_path=str(path))
-        located = dict(CURRENT, name="Prinza")
-        with (
-            patch(
-                "openjarvis.core.device_location.current_coordinates",
-                return_value=(14.166, 121.139),
-            ),
-            patch.object(tool_module, "fetch_current", return_value=located),
-            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.1)),
+    def test_a_fix_near_home_is_reported_bare(self, tmp_path):
+        """The user knows they are home; naming it adds words, not news."""
+        tool = self._tool(tmp_path, use_device_location=True)
+        with patch(
+            "openjarvis.core.device_location.current_coordinates",
+            return_value=(14.166, 121.139),
         ):
-            result = tool.execute()
-        assert "Prinza" not in result.content
-        assert result.content.startswith("28")
-        # Still recorded, because the UI and the model may want to know.
-        assert result.metadata["location"] == "Prinza"
+            result, fetch = self._run(tool)
+        assert result.content.startswith("28°C")
+        # The fix itself is what the forecast is for; the panel still names home.
+        assert fetch.call_args.args[:2] == (14.166, 121.139)
+        assert result.metadata["weather"]["place"] == "Calamba, Laguna"
+
+    def test_a_fix_far_from_home_is_not_labelled_home(self, tmp_path):
+        tool = self._tool(tmp_path, use_device_location=True)
+        with patch(
+            "openjarvis.core.device_location.current_coordinates",
+            return_value=(10.3157, 123.8854),  # Cebu
+        ):
+            result, _ = self._run(tool)
+        assert result.metadata["weather"]["place"] == ""
 
     def test_a_named_place_is_echoed_back(self, tmp_path):
         """An answer about Tokyo must not be mistaken for one about here."""
-        tool = self._tool(tmp_path, location="Calamba,PH")
-        with (
-            patch.object(
-                tool_module, "fetch_current", return_value=dict(CURRENT, name="Tokyo")
-            ),
-            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.1)),
-        ):
-            result = tool.execute(location="Tokyo")
-        assert result.content.startswith("Tokyo:")
-
-    def test_the_configured_city_is_named_because_that_signals_no_fix(self, tmp_path):
-        tool = self._tool(tmp_path, location="Calamba,PH")
-        with (
-            patch.object(
-                tool_module,
-                "fetch_current",
-                return_value=dict(CURRENT, name="Calamba"),
-            ),
-            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.1)),
-        ):
-            result = tool.execute()
-        assert result.content.startswith("Calamba:")
-
-    def test_it_reports_the_configured_location(self, tmp_path):
-        tool = self._tool(tmp_path, location="Cebu City,PH")
-        with (
-            patch.object(tool_module, "fetch_current", return_value=CURRENT) as cur,
-            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.7)),
-        ):
-            result = tool.execute()
-        assert result.success is True
-        assert "Cebu City,PH" in result.content
-        assert cur.call_args.args[1] == "Cebu City,PH"
-
-    def test_an_explicit_place_overrides_the_configured_one(self, tmp_path):
-        tool = self._tool(tmp_path, location="Cebu City,PH")
-        with (
-            patch.object(tool_module, "fetch_current", return_value=CURRENT) as cur,
-            patch.object(tool_module, "fetch_forecast", return_value=_forecast(0.1)),
-        ):
-            tool.execute(location="Tokyo")
-        assert cur.call_args.args[1] == "Tokyo"
-
-    def test_a_dead_forecast_still_answers(self, tmp_path):
         tool = self._tool(tmp_path)
-        with (
-            patch.object(tool_module, "fetch_current", return_value=CURRENT),
-            patch.object(tool_module, "fetch_forecast", side_effect=OSError("down")),
-        ):
-            result = tool.execute()
+        tokyo = {
+            "name": "Tokyo",
+            "admin1": "Tokyo",
+            "country": "Japan",
+            "latitude": 35.69,
+            "longitude": 139.69,
+        }
+        with patch.object(connector, "search_places", return_value=[tokyo]):
+            result, fetch = self._run(tool, location="Tokyo")
+        assert result.content.startswith("Tokyo")
+        assert fetch.call_args.args[:2] == (35.69, 139.69)
+
+    def test_the_configured_place_is_named_because_that_signals_no_fix(self, tmp_path):
+        result, fetch = self._run(self._tool(tmp_path))
+        assert result.content.startswith("Calamba, Laguna:")
+        assert fetch.call_args.args[:2] == (14.21167, 121.16528)
+
+    def test_the_pinned_place_needs_no_lookup(self, tmp_path):
+        """Four Calambas in PH: a pinned one is never re-guessed."""
+        with patch.object(connector, "search_places") as search:
+            self._run(self._tool(tmp_path))
+        assert not search.called
+
+    def test_an_old_city_only_file_is_looked_up_by_country(self, tmp_path):
+        path = tmp_path / "weather.json"
+        path.write_text(
+            json.dumps({"location": "Calamba,PH", "use_device_location": False})
+        )
+        connector._geocode_cache.clear()
+        connector._forecast_cache.clear()
+        with patch.object(connector, "_weather_api_get") as api:
+            api.side_effect = [{"results": [CALAMBA]}, _forecast(0.1)]
+            result = WeatherTool(token_path=str(path)).execute()
         assert result.success is True
-        assert "28" in result.content
+        geocode_params = api.call_args_list[0].args[1]
+        assert geocode_params["name"] == "Calamba"
+        assert geocode_params["countryCode"] == "PH"
+
+    def test_no_settings_file_still_answers(self, tmp_path):
+        """Open-Meteo needs no key, so a missing file is not 'not configured'."""
+        connector._geocode_cache.clear()
+        with (
+            patch.object(connector, "search_places", return_value=[CALAMBA]),
+            patch(
+                "openjarvis.core.device_location.current_coordinates", return_value=None
+            ),
+        ):
+            result, _ = self._run(WeatherTool(token_path=str(tmp_path / "absent.json")))
+        assert result.success is True
+
+    def test_the_result_carries_the_panel_and_the_week(self, tmp_path):
+        result, _ = self._run(self._tool(tmp_path))
+        panel = result.metadata["weather"]
+        assert panel["summary"] == result.metadata["summary"]
+        assert len(panel["daily"]) == 2
+        assert "Next days: Thu 25-32°C overcast, rain 40%; Fri" in result.content
 
     def test_a_dead_provider_says_so_rather_than_guessing(self, tmp_path):
         tool = self._tool(tmp_path)
-        with patch.object(tool_module, "fetch_current", side_effect=OSError("down")):
+        with patch.object(connector, "fetch_forecast", side_effect=OSError("down")):
             result = tool.execute()
         assert result.success is False
         assert "weather service" in result.content
 
-    def test_missing_configuration_names_the_file_to_fix(self, tmp_path):
-        result = WeatherTool(token_path=str(tmp_path / "absent.json")).execute()
+    def test_an_unknown_place_fails_plainly(self, tmp_path):
+        with patch.object(connector, "search_places", return_value=[]):
+            result, _ = self._run(self._tool(tmp_path), location="Nowhereville")
         assert result.success is False
-        assert "absent.json" in result.content
-
-
-@pytest.mark.parametrize("units,expected", [("metric", "m/s"), ("imperial", "mph")])
-def test_wind_units_follow_the_temperature_units(units, expected):
-    assert connector.unit_labels(units)["speed"] == expected
+        assert "Nowhereville" in result.content
 
 
 class TestWhichPlaceItReportsFor:
@@ -176,9 +252,7 @@ class TestWhichPlaceItReportsFor:
     CONFIG = {"location": "Manila,PH"}
 
     def test_a_named_place_beats_the_machine_s_own_location(self):
-        with patch(
-            "openjarvis.core.device_location.current_coordinates"
-        ) as fix:
+        with patch("openjarvis.core.device_location.current_coordinates") as fix:
             place, coords = connector.resolve_place(self.CONFIG, "Tokyo")
         assert (place, coords) == ("Tokyo", None)
         # Asking for Tokyo must not cost a location fix, let alone use one.
@@ -208,30 +282,20 @@ class TestWhichPlaceItReportsFor:
         assert (place, coords) == ("Manila,PH", None)
         assert not fix.called
 
-    def test_coordinates_are_sent_instead_of_a_city_name(self):
-        params = connector._place_params("Manila,PH", (14.166, 121.139))
-        assert params == {"lat": "14.166", "lon": "121.139"}
-        assert connector._place_params("Manila,PH", None) == {"q": "Manila,PH"}
+    def test_a_pinned_place_is_named_with_its_province(self):
+        config = {"place": CALAMBA, "use_device_location": False}
+        assert connector.resolve_place(config) == ("Calamba, Laguna", None)
 
 
-class TestTheKeyNeverAppearsInAFailure:
-    """The API key travels in the URL as `appid`, and httpx quotes the URL.
-
-    Raising that unaltered put the key into the tool result, and from there
-    into the model's context, the chat transcript and the logs. Observed for
-    real on the first live call.
-    """
+class TestFailuresDoNotQuoteTheRequest:
+    """httpx quotes the URL in its messages; a failure only needs the kind."""
 
     def _response(self, status):
-        request = httpx.Request(
-            "GET",
-            "https://api.openweathermap.org/data/2.5/weather",
-            params={"lat": "14.1", "lon": "121.1", "appid": "SECRETKEY123"},
-        )
+        request = httpx.Request("GET", "https://api.open-meteo.com/v1/forecast")
         return httpx.Response(status, request=request)
 
-    @pytest.mark.parametrize("status", [401, 404, 429, 500])
-    def test_no_status_quotes_the_credential(self, status):
+    @pytest.mark.parametrize("status", [400, 429, 500])
+    def test_status_failures_name_the_status(self, status):
         response = self._response(status)
         error = httpx.HTTPStatusError(
             "boom", request=response.request, response=response
@@ -239,18 +303,7 @@ class TestTheKeyNeverAppearsInAFailure:
         with patch.object(connector, "_weather_api_get_raw", side_effect=error):
             with pytest.raises(connector.WeatherAPIError) as raised:
                 connector._weather_api_get("https://example.invalid", {})
-        assert "SECRETKEY123" not in str(raised.value)
         assert str(status) in str(raised.value)
-
-    def test_a_rejected_key_explains_the_activation_delay(self):
-        response = self._response(401)
-        error = httpx.HTTPStatusError(
-            "boom", request=response.request, response=response
-        )
-        with patch.object(connector, "_weather_api_get_raw", side_effect=error):
-            with pytest.raises(connector.WeatherAPIError) as raised:
-                connector._weather_api_get("https://example.invalid", {})
-        assert "activate" in str(raised.value)
 
     def test_a_transport_failure_names_the_kind_not_the_url(self):
         with patch.object(
@@ -262,3 +315,77 @@ class TestTheKeyNeverAppearsInAFailure:
                 connector._weather_api_get("https://example.invalid", {})
         assert "ConnectTimeout" in str(raised.value)
         assert "example.invalid" not in str(raised.value)
+
+
+class TestASlowNetwork:
+    """2026-10-01: about 1 in 3 connections to the forecast server stalled."""
+
+    def test_a_stalled_request_is_tried_once_more(self):
+        ok = httpx.Response(200, json={"ok": True}, request=httpx.Request("GET", "x"))
+        with (
+            patch.object(connector, "_STARTS", (0.0, 0.01)),
+            patch.object(
+                connector.httpx, "get", side_effect=[httpx.ReadTimeout("stall"), ok]
+            ) as get,
+        ):
+            assert connector._weather_api_get_raw("https://x.invalid", {}) == {
+                "ok": True
+            }
+        assert get.call_count == 2
+
+    def test_every_attempt_stalling_gives_up_with_the_kind_of_failure(self):
+        with (
+            patch.object(connector, "_STARTS", (0.0, 0.01, 0.02)),
+            patch.object(
+                connector.httpx, "get", side_effect=httpx.ConnectTimeout("stall")
+            ) as get,
+        ):
+            with pytest.raises(connector.WeatherAPIError, match="ConnectTimeout"):
+                connector._weather_api_get("https://x.invalid", {})
+        assert get.call_count == 3
+
+    def test_the_same_forecast_is_not_fetched_twice_in_ten_minutes(self):
+        connector._forecast_cache.clear()
+        with patch.object(
+            connector, "_weather_api_get", return_value=_forecast(0.1)
+        ) as api:
+            connector.fetch_forecast(14.1661, 121.1392, "metric", "kmh")
+            # A fix a few metres away is the same place.
+            connector.fetch_forecast(14.1659, 121.1394, "metric", "kmh")
+            connector.fetch_forecast(14.1661, 121.1392, "imperial", "kmh")
+        assert api.call_count == 2
+        connector._forecast_cache.clear()
+
+    def test_a_stalled_attempt_does_not_hold_up_the_answer(self):
+        """The second attempt starts beside the stalled first and wins."""
+        release = threading.Event()
+        calls = []
+
+        def get(url, params=None, timeout=None):
+            calls.append(url)
+            if len(calls) == 1:
+                release.wait(5)
+                return httpx.Response(
+                    200, json={"who": "first"}, request=httpx.Request("GET", url)
+                )
+            return httpx.Response(
+                200, json={"who": "second"}, request=httpx.Request("GET", url)
+            )
+
+        with (
+            patch.object(connector, "_STARTS", (0.0, 0.1, 0.2)),
+            patch.object(connector.httpx, "get", side_effect=get),
+        ):
+            started = time.monotonic()
+            result = connector._weather_api_get_raw("https://x.invalid", {})
+            elapsed = time.monotonic() - started
+        release.set()
+        assert result == {"who": "second"}
+        assert elapsed < 2
+
+    def test_an_answered_error_is_not_asked_again(self):
+        bad = httpx.Response(400, request=httpx.Request("GET", "https://x.invalid"))
+        with patch.object(connector.httpx, "get", return_value=bad) as get:
+            with pytest.raises(connector.WeatherAPIError, match="400"):
+                connector._weather_api_get("https://x.invalid", {})
+        assert get.call_count == 1

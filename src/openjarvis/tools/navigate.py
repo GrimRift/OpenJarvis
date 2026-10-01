@@ -195,19 +195,19 @@ def compute_route(origin: dict, destination: dict, key: str) -> dict:
 
 def destination_weather(root: Path, point: dict) -> str:
     try:
-        config = json.loads((root / "connectors" / "weather.json").read_text("utf-8"))
-        key = config.get("api_key") if isinstance(config, dict) else None
-        if not key:
-            return "Weather unavailable: weather is not configured."
+        config = weather.load_config(root / "connectors" / "weather.json")
         units = config.get("units") or weather.DEFAULT_UNITS
-        coords = (point["latitude"], point["longitude"])
-        # Current conditions only. The forecast clause ("rain likely around
+        wind_unit = config.get("wind_unit") or weather.DEFAULT_WIND_UNIT
+        lat, lon = point["latitude"], point["longitude"]
+        data = weather.fetch_forecast(lat, lon, units, wind_unit)
+        report = weather.build_report(
+            data, {"name": "", "latitude": lat, "longitude": lon}, units, wind_unit
+        )
+        # Current conditions only. The rain clause ("rain likely around
         # 12 PM") earns its place in a morning briefing and not on a
         # sixteen-minute drive, and it is spoken while Waze is counting down
-        # to start talking. Skipping it also drops an API call, so the
-        # briefing arrives sooner as well as ending sooner.
-        current = weather.fetch_current(key, "", units, coords)
-        return weather.summarize(current, None, units)
+        # to start talking.
+        return weather.summarize(report, rain=False)
     except Exception:
         return "Weather unavailable for this drive."
 

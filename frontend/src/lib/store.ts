@@ -405,6 +405,9 @@ interface Settings {
    * options live on the server (Settings > Images), since Telegram and
    * voice turns never pass through this page. */
   imagesOpenAutomatically: boolean;
+  /** A weather answer opens the weather panel (M41). Place and units live
+   * on the server (Settings > Weather), since briefings read them too. */
+  weatherOpenAutomatically: boolean;
   continuousConversationEnabled: boolean;
   /** Seconds the microphone stays open for a follow-up after a reply. */
   continuousListenSeconds: number;
@@ -478,6 +481,7 @@ export function defaultSettings(): Settings {
     diagramsEnabled: true,
     diagramsAutomatic: true,
     imagesOpenAutomatically: true,
+    weatherOpenAutomatically: true,
     continuousListenSeconds: DEFAULT_LISTEN_SECONDS,
     ttsVoiceId: DEFAULT_LOCAL_VOICE_PROFILE.id,
     sttProvider: 'whisper',

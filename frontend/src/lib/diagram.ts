@@ -237,7 +237,7 @@ export function rowEndsOn(rowIndex: number): 'left' | 'right' {
  */
 const CLOSE_VERB = /\b(?:close|hide|dismiss|remove|get rid of)\b/;
 const CLOSE_TARGET =
-  /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|image|photo|it|that|this)\b/;
+  /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|image|photo|weather|forecast|panel|it|that|this)\b/;
 
 export const CLOSE_COMMAND_MAX_WORDS = 6;
 
@@ -267,7 +267,8 @@ export function isCloseDiagramCommand(text: string): boolean {
 // "Cost" is also an ordinary word, so it counts only when it opens the phrase
 // and names the thing on screen -- "what did it cost" and "cost it" do not.
 const MISHEARD_CLOSE = /^cost\b/;
-const MISHEARD_TARGET = /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|image|photo)\b/;
+const MISHEARD_TARGET =
+  /\b(?:diagram|illustration|drawing|chart|graphic|overlay|picture|image|photo|weather|forecast|panel)\b/;
 
 function misheardClose(said: string): boolean {
   return MISHEARD_CLOSE.test(said) && MISHEARD_TARGET.test(said.slice(4));

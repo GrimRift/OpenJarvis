@@ -667,6 +667,8 @@ class TestChatCompletions:
                             }
                         ],
                         "explicit_image_search": True,
+                        # M41: the panel's report must reach the app too.
+                        "weather": {"place": "Calamba, Laguna"},
                         "images": [
                             {
                                 "url": "https://images.example/story.jpg",
@@ -744,6 +746,7 @@ class TestChatCompletions:
         assert tool_end["metadata"]["sources"][0]["image_url"].endswith("story.jpg")
         assert tool_end["metadata"]["explicit_image_search"] is True
         assert tool_end["metadata"]["images"][0]["description"] == "Story image"
+        assert tool_end["metadata"]["weather"] == {"place": "Calamba, Laguna"}
 
     def test_orchestrator_streams_final_answer_as_model_deltas(self):
         """The default Sage agent must not collapse a streamed reply to one chunk."""

@@ -21,6 +21,7 @@ import { useVoiceOwnership } from './hooks/useVoiceOwner';
 import { fetchModels, fetchServerInfo, fetchSavings, isTauri, fetchToolCredentialStatus } from './lib/api';
 import { DiagramLayer } from './components/Diagram/DiagramLayer';
 import { ImageLayer } from './components/Image/ImageLayer';
+import { WeatherLayer } from './components/Weather/WeatherLayer';
 import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
 import { apiFetch, fetchSpeechVoices } from './lib/api';
@@ -224,6 +225,7 @@ export default function App() {
       <Toaster position="bottom-right" />
       <DiagramLayer />
       <ImageLayer />
+      <WeatherLayer />
       {commandPaletteOpen && <CommandPalette />}
     </>
   );

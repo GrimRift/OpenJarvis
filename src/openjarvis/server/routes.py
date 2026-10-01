@@ -1555,6 +1555,10 @@ async def _handle_streaming_orchestrator(
                                         # M40: a generated picture (id + url,
                                         # never its bytes).
                                         "image": tool_result.metadata.get("image"),
+                                        # M41: the weather panel's report.
+                                        "weather": tool_result.metadata.get(
+                                            "weather"
+                                        ),
                                     }
                                     if isinstance(tool_result.metadata, dict)
                                     else {}
@@ -1942,6 +1946,9 @@ async def _handle_agent_stream(
                             ).get("explicit_image_search", False),
                             "image": getattr(tool_result, "metadata", {}).get(
                                 "image"
+                            ),
+                            "weather": getattr(tool_result, "metadata", {}).get(
+                                "weather"
                             ),
                         }
                         if isinstance(getattr(tool_result, "metadata", {}), dict)

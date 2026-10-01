@@ -22,6 +22,7 @@ from openjarvis.server.image_routes import create_image_router
 from openjarvis.server.research_router import router as research_router
 from openjarvis.server.routes import router
 from openjarvis.server.upload_router import router as upload_router
+from openjarvis.server.weather_routes import create_weather_router
 
 logger = logging.getLogger(__name__)
 _MANAGED_SHUTDOWN_GRACE_SECONDS = 0.25
@@ -427,6 +428,7 @@ def create_app(
     app.include_router(create_connectors_router())
     app.include_router(create_digest_router())
     app.include_router(create_image_router())
+    app.include_router(create_weather_router())
     app.include_router(drive_router)
     app.include_router(upload_router)
     app.include_router(research_router)

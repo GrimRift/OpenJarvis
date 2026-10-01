@@ -14,6 +14,13 @@ import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, 
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
 import { fetchImageSettings, saveImageSettings, type ImageSettings } from '../lib/images-api';
+import {
+  fetchWeatherSettings,
+  saveWeatherSettings,
+  searchWeatherPlaces,
+  type WeatherPlace,
+  type WeatherSettings,
+} from '../lib/weather-api';
 import { fetchKeyterms, parseTerms, saveKeyterms, type Keyterms } from '../lib/keyterms';
 
 const VOLUME_ROWS: Array<[keyof Volumes, string, string]> = [
@@ -389,6 +396,167 @@ function ImagesSection({ onSaved }: { onSaved: () => void }) {
   );
 }
 
+const UNITS_LABELS: Record<string, string> = { metric: '°C (Celsius)', imperial: '°F (Fahrenheit)' };
+const WIND_LABELS: Record<string, string> = { kmh: 'km/h', ms: 'm/s', mph: 'mph' };
+
+/**
+ * Settings > Weather (M41). Place and units are kept on the server, because
+ * the chat tool and both briefings read them there; "open automatically" only
+ * matters where the panel is shown, so the app keeps it.
+ */
+function WeatherSection({ onSaved }: { onSaved: () => void }) {
+  const settings = useAppStore((s) => s.settings);
+  const updateSettings = useAppStore((s) => s.updateSettings);
+  const [server, setServer] = useState<WeatherSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<WeatherPlace[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    fetchWeatherSettings().then(setServer, (e: Error) => setError(e.message));
+  }, []);
+
+  const save = (changes: Parameters<typeof saveWeatherSettings>[0]) => {
+    saveWeatherSettings(changes).then(
+      (saved) => {
+        setServer(saved);
+        setError(null);
+        onSaved();
+      },
+      (e: Error) => setError(e.message),
+    );
+  };
+
+  const search = () => {
+    const q = query.trim();
+    if (!q) return;
+    setSearching(true);
+    searchWeatherPlaces(q).then(
+      (found) => {
+        setResults(found);
+        setSearching(false);
+        setError(null);
+      },
+      (e: Error) => {
+        setResults(null);
+        setSearching(false);
+        setError(e.message);
+      },
+    );
+  };
+
+  const home = server?.place_label || (server?.legacy_location ? `${server.legacy_location} (not pinned yet)` : 'Not set');
+
+  return (
+    <Section title="Weather">
+      {error ? (
+        <div className="text-xs py-2" style={{ color: 'var(--color-error)' }}>
+          {server ? `Not saved: ${error}` : `Could not load weather settings: ${error}`}
+        </div>
+      ) : null}
+      <SettingRow
+        label="Open the weather panel automatically"
+        description="Any weather question opens the panel over the app (now, next 24 hours, 7 days), in chat and on the Voice page. It stays until you close it: Esc, Close, a click outside, or “close it”. Off: the answer keeps a card to open it."
+      >
+        <Switch
+          on={settings.weatherOpenAutomatically}
+          onClick={() => { updateSettings({ weatherOpenAutomatically: !settings.weatherOpenAutomatically }); onSaved(); }}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Use this PC's location"
+        description="Ask Windows where the PC is, so the weather follows the laptop. Within 30 km of your home place it is shown under that name. Off: always your home place."
+      >
+        <Switch
+          on={server?.use_device_location ?? true}
+          disabled={!server}
+          onClick={() => server && save({ use_device_location: !server.use_device_location })}
+        />
+      </SettingRow>
+      <div className="py-3" style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
+        <div className="text-sm" style={{ color: 'var(--color-text)' }}>Home place</div>
+        <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
+          Used when the PC's location is off or unknown (chat, morning briefing and car briefing alike). Now: <b>{home}</b>
+        </div>
+        <div className="flex gap-2 mt-2">
+          <input
+            value={query}
+            disabled={!server}
+            placeholder="Search a city, e.g. Calamba"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') search(); }}
+            className="text-sm px-3 py-1.5 rounded-lg outline-none"
+            style={{ ...selectStyle, width: 300 }}
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            onClick={search}
+            disabled={!server || searching || !query.trim()}
+            className="text-sm px-3 py-1.5 rounded-lg cursor-pointer disabled:opacity-50"
+            style={{ background: 'var(--color-accent)', color: 'white' }}
+          >
+            {searching ? 'Searching...' : 'Search'}
+          </button>
+        </div>
+        {results ? (
+          <div className="mt-2 flex flex-col gap-1">
+            {results.length === 0 ? (
+              <div className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>No place by that name.</div>
+            ) : (
+              results.map((place) => (
+                <button
+                  key={`${place.latitude},${place.longitude}`}
+                  type="button"
+                  onClick={() => {
+                    save({ place });
+                    setResults(null);
+                    setQuery('');
+                  }}
+                  className="text-left text-sm px-3 py-1.5 rounded-lg cursor-pointer"
+                  style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)' }}
+                >
+                  {place.label || place.name}
+                  <span className="text-xs ml-2" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {[place.admin1, place.country].filter(Boolean).join(', ')} · {place.latitude.toFixed(3)}, {place.longitude.toFixed(3)}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        ) : null}
+      </div>
+      <SettingRow label="Temperature">
+        <select
+          value={server?.units ?? ''}
+          disabled={!server}
+          onChange={(e) => save({ units: e.target.value })}
+          className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+          style={selectStyle}
+        >
+          {(server?.units_options ?? []).map((u) => (
+            <option key={u} value={u}>{UNITS_LABELS[u] ?? u}</option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow label="Wind speed" description={`Forecasts from ${server?.source ?? 'Open-Meteo'} (free, no key).`}>
+        <select
+          value={server?.wind_unit ?? ''}
+          disabled={!server}
+          onChange={(e) => save({ wind_unit: e.target.value })}
+          className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+          style={selectStyle}
+        >
+          {(server?.wind_unit_options ?? []).map((u) => (
+            <option key={u} value={u}>{WIND_LABELS[u] ?? u}</option>
+          ))}
+        </select>
+      </SettingRow>
+    </Section>
+  );
+}
+
 const themeOptions: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: 'light', label: 'Light', icon: Sun },
   { value: 'dark', label: 'Dark', icon: Moon },
@@ -742,6 +910,8 @@ export function SettingsPage() {
           </Section>
 
           <ImagesSection onSaved={showSaved} />
+
+          <WeatherSection onSaved={showSaved} />
 
           <Section title="Appearance">
             <SettingRow label="Theme" description="Choose how Sage looks">

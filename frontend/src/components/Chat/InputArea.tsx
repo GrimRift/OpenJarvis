@@ -15,6 +15,8 @@ import { streamChat, streamResearch } from '../../lib/sse';
 import type { FluxWord } from '../../lib/barge-in';
 import { imageFromToolCall, imageToolPhase } from '../../lib/generated-image';
 import { useImagePresenter } from '../../lib/image-presenter';
+import { useWeatherPresenter } from '../../lib/weather-presenter';
+import { weatherFromToolCall } from '../../lib/weather-report';
 import {
   diagramMode,
   isCloseDiagramCommand,
@@ -95,14 +97,19 @@ import type {
 /** Tools that start a video playing (see mediaTurnRef). */
 const MEDIA_TOOLS = new Set(['youtube_play', 'netflix_play']);
 
-/** A diagram or a generated picture is over the app ("close it" applies). */
+/** A diagram, a generated picture or the weather panel is over the app ("close it" applies). */
 function overlayOpen(): boolean {
-  return Boolean(useDiagramPresenter.getState().current || useImagePresenter.getState().current);
+  return Boolean(
+    useDiagramPresenter.getState().current ||
+      useImagePresenter.getState().current ||
+      useWeatherPresenter.getState().current,
+  );
 }
 
 function closeOverlays(): void {
   useDiagramPresenter.getState().close();
   useImagePresenter.getState().close();
+  useWeatherPresenter.getState().close();
 }
 
 /**
@@ -1205,6 +1212,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 useImagePresenter
                   .getState()
                   .showNew(made, useAppStore.getState().settings.imagesOpenAutomatically);
+              }
+              // M41: same route for the weather panel, so it opens on Voice too.
+              const forecast = weatherFromToolCall(tc);
+              if (forecast) {
+                useWeatherPresenter
+                  .getState()
+                  .showNew(forecast, useAppStore.getState().settings.weatherOpenAutomatically);
               }
             }
             setStreamState({

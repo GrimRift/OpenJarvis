@@ -338,20 +338,20 @@ def test_weather_uses_destination_and_existing_summarizer(nav, monkeypatch, tmp_
     module, tool = nav
     tool._config.weather_enabled = True
     (tmp_path / "connectors").mkdir()
-    (tmp_path / "connectors" / "weather.json").write_text(
-        '{"api_key":"test-only-value"}'
-    )
+    (tmp_path / "connectors" / "weather.json").write_text('{"units":"metric"}')
 
-    def current(key, location, units, coords):
-        assert coords == (DEST["latitude"], DEST["longitude"])
+    def forecast(latitude, longitude, units, wind_unit=None, days=7):
+        assert (latitude, longitude) == (DEST["latitude"], DEST["longitude"])
         assert units == "metric"
-        return {"main": {"temp": 25}, "weather": [{"description": "rain"}]}
+        return {
+            "current": {"temperature_2m": 25, "weather_code": 63},
+            # A wet hour must not reach the drive line: no rain clause there.
+            "hourly": {"time": ["2026-10-01T10:00"], "precipitation_probability": [90]},
+        }
 
-    monkeypatch.setattr(module.weather, "fetch_current", current)
-    monkeypatch.setattr(module.weather, "fetch_forecast", lambda *a, **k: None)
+    monkeypatch.setattr(module.weather, "fetch_forecast", forecast)
     result = tool.execute(destination="there", destination_coordinates=DEST)
     assert result.metadata["weather"] == "25°C, rain"
-    assert "test-only-value" not in result.content
 
 
 def test_config_loads_navigation_section(tmp_path, monkeypatch):

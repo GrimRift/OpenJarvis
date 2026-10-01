@@ -1016,7 +1016,7 @@ def _audit_tool_surfaces(config: Any, builder: _FindingBuilder) -> None:
             title="Driving navigation tool is configured",
             potential_data_path=(
                 "origin/destination -> Google Routes; place query -> Google Places; "
-                "destination -> OpenWeatherMap; opened link -> Waze"
+                "destination -> Open-Meteo; opened link -> Waze"
             ),
             evidence=f"configured tool(s) = {_format_tools(tools & NAVIGATION_TOOLS)}",
             recommendation=(

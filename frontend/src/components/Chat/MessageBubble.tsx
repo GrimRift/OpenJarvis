@@ -2,6 +2,8 @@ import { memo, useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { DiagramCard } from '../Diagram/DiagramCard';
 import { ImageCard } from '../Image/ImageCard';
+import { WeatherCard } from '../Weather/WeatherCard';
+import { weatherIn } from '../../lib/weather-report';
 import { imageCost, imagesIn } from '../../lib/generated-image';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
@@ -157,6 +159,8 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   // Pictures Sage made this reply (M40), rebuilt from the persisted tool calls.
   const generatedImages = useMemo(() => imagesIn(message.toolCalls), [message.toolCalls]);
   const generatedCost = useMemo(() => imageCost(message.toolCalls), [message.toolCalls]);
+  // The forecast this reply fetched (M41): a line that reopens the panel.
+  const weatherReport = useMemo(() => weatherIn(message.toolCalls), [message.toolCalls]);
   // A search image is a third-party URL nobody has fetched yet, so some of
   // them will not load: hotlink blocks, 404s, a URL that was never an image.
   // Without this the tile kept its border and showed the alt text as a wall
@@ -296,6 +300,8 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
       {generatedImages.map((image) => (
         <ImageCard key={image.id} image={image} />
       ))}
+
+      {weatherReport && <WeatherCard report={weatherReport} />}
 
       {linkPreview && <LinkPreviewCard preview={linkPreview} />}
       {otherSources.length > 0 && <SourceList sources={otherSources} />}
