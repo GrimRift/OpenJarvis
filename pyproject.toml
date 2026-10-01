@@ -83,6 +83,8 @@ server = [
     "uvicorn>=0.30",
     "pydantic>=2.0",
     "python-multipart>=0.0.9",
+    # The system panel (core/machine.py, imported by the app) and media tools.
+    "psutil>=5.9",
 ]
 desktop = [
     "fastapi>=0.110",
@@ -90,6 +92,7 @@ desktop = [
     "pydantic>=2.0",
     "python-multipart>=0.0.9",
     "faster-whisper>=1.0",
+    "psutil>=5.9",
 ]
 openhands = ["openhands-sdk>=1.0; python_version >= '3.12'"]
 gpu-metrics = ["pynvml>=12.0"]

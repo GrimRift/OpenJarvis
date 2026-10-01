@@ -4447,6 +4447,7 @@ dashboard = [
 desktop = [
     { name = "fastapi" },
     { name = "faster-whisper" },
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "uvicorn" },
@@ -4573,6 +4574,7 @@ security-signing = [
 ]
 server = [
     { name = "fastapi" },
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "uvicorn" },
@@ -4687,6 +4689,8 @@ requires-dist = [
     { name = "posthog", specifier = ">=3.0" },
     { name = "praw", marker = "extra == 'channel-reddit'", specifier = ">=7.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0" },
+    { name = "psutil", marker = "extra == 'desktop'", specifier = ">=5.9" },
+    { name = "psutil", marker = "extra == 'server'", specifier = ">=5.9" },
     { name = "pycaw", marker = "sys_platform == 'win32' and extra == 'audio-ducking'", specifier = ">=20240210" },
     { name = "pydantic", marker = "extra == 'desktop'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'server'", specifier = ">=2.0" },
