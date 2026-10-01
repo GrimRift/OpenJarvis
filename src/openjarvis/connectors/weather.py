@@ -409,37 +409,41 @@ def build_report(
     times = list(hourly_in.get("time") or [])
     # Hours from the current one on; the API's "now" is a quarter-hour stamp.
     start = next((i for i, t in enumerate(times) if t[:13] >= now[:13]), 0)
-    hourly = []
-    for i in range(start, min(start + 24, len(times))):
+
+    def hour(i: int) -> Dict[str, Any]:
         rain = _num(_at(hourly_in, "precipitation_probability", i))
-        hourly.append(
-            {
-                "time": times[i],
-                "temp": _num(_at(hourly_in, "temperature_2m", i)),
-                "rain_chance": None if rain is None else rain / 100.0,
-                "icon": describe_code(_at(hourly_in, "weather_code", i))[1],
-                "is_day": bool(_at(hourly_in, "is_day", i)),
-            }
-        )
+        return {
+            "time": times[i],
+            "temp": _num(_at(hourly_in, "temperature_2m", i)),
+            "rain_chance": None if rain is None else rain / 100.0,
+            "icon": describe_code(_at(hourly_in, "weather_code", i))[1],
+            "is_day": bool(_at(hourly_in, "is_day", i)),
+        }
+
+    all_hours = [hour(i) for i in range(len(times))]
+    hourly = all_hours[start : start + 24]
 
     daily_in = data.get("daily") or {}
     daily = []
     for i, day in enumerate(daily_in.get("time") or []):
         d_words, d_icon = describe_code(_at(daily_in, "weather_code", i))
         rain = _num(_at(daily_in, "precipitation_probability_max", i))
-        daily.append(
-            {
-                "date": day,
-                "conditions": d_words,
-                "icon": d_icon,
-                "high": _num(_at(daily_in, "temperature_2m_max", i)),
-                "low": _num(_at(daily_in, "temperature_2m_min", i)),
-                "rain_chance": None if rain is None else rain / 100.0,
-                "uv_max": _num(_at(daily_in, "uv_index_max", i)),
-                "sunrise": _at(daily_in, "sunrise", i),
-                "sunset": _at(daily_in, "sunset", i),
-            }
-        )
+        entry = {
+            "date": day,
+            "conditions": d_words,
+            "icon": d_icon,
+            "high": _num(_at(daily_in, "temperature_2m_max", i)),
+            "low": _num(_at(daily_in, "temperature_2m_min", i)),
+            "rain_chance": None if rain is None else rain / 100.0,
+            "uv_max": _num(_at(daily_in, "uv_index_max", i)),
+            "sunrise": _at(daily_in, "sunrise", i),
+            "sunset": _at(daily_in, "sunset", i),
+            # That day's own 24 hours: the panel draws them when the day is
+            # picked ("Friday, hour by hour"), not the next 24 from now.
+            "hours": [h for h in all_hours if str(h["time"]).startswith(str(day))],
+        }
+        entry["advice"] = day_advice(entry, labels["temp"])
+        daily.append(entry)
 
     name = place_label(place) if place.get("name") else ""
     return {
@@ -467,6 +471,42 @@ def build_report(
         "hourly": hourly,
         "daily": daily,
     }
+
+
+def day_advice(day: Dict[str, Any], temp_unit: str = "°C") -> str:
+    """One line for a whole day, shown under "Sage" in the panel.
+
+    'Thunderstorms likely, heaviest around 5 PM (98%). 24–31°C; take an
+    umbrella.' The peak hour comes from the day's own hours, so it says when,
+    not only whether.
+    """
+    low, high = day.get("low"), day.get("high")
+    temps = (
+        f"{round(low)}–{round(high)}{temp_unit}"
+        if isinstance(low, (int, float)) and isinstance(high, (int, float))
+        else ""
+    )
+    wet = [
+        h
+        for h in day.get("hours") or []
+        if isinstance(h.get("rain_chance"), (int, float))
+    ]
+    peak = max(wet, key=lambda h: h["rain_chance"]) if wet else None
+    chance = day.get("rain_chance")
+    if isinstance(chance, (int, float)) and chance >= RAIN_LIKELY:
+        what = "Thunderstorms" if day.get("icon") == "thunder" else "Rain"
+        when = (
+            f", heaviest around {_hour_label(str(peak['time']))} "
+            f"({round(peak['rain_chance'] * 100)}%)"
+            if peak and peak["rain_chance"] >= RAIN_LIKELY
+            else f" ({round(chance * 100)}%)"
+        )
+        return f"{what} likely{when}. {temps}; take an umbrella.".strip()
+    line = f"{str(day.get('conditions') or 'Dry').capitalize()}, no rain expected."
+    uv = day.get("uv_max")
+    if isinstance(uv, (int, float)) and uv >= 8:
+        line += " UV is very high around midday."
+    return f"{line} {temps}".strip()
 
 
 def _hour_label(stamp: str) -> str:

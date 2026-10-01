@@ -39,6 +39,10 @@ export interface WeatherDay {
   uv_max: number | null;
   sunrise: string | null;
   sunset: string | null;
+  /** That day's own hours (M41 design pass); absent on reports saved before it. */
+  hours?: WeatherHour[];
+  /** One line for the day, shown under "Sage". */
+  advice?: string;
 }
 
 export interface WeatherReport {
@@ -51,6 +55,8 @@ export interface WeatherReport {
   speed_unit: string;
   source: string;
   summary: string;
+  /** Index into `daily` of the day the user asked about ("Friday"), if any. */
+  focus_day?: number | null;
   current: {
     temp: number | null;
     feels_like: number | null;

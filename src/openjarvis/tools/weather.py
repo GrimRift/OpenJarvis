@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openjarvis.connectors.weather import load_config, report_for, summarize
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
@@ -47,6 +47,45 @@ def _days_line(report: Dict[str, Any]) -> str:
         )
         parts.append(f"{label} {temps} {day.get('conditions', '')}{rain_text}")
     return "; ".join(parts)
+
+
+_WEEKDAYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+
+
+def match_day(report: Dict[str, Any], asked: str) -> Optional[int]:
+    """Index into ``report['daily']`` for 'Friday', 'tomorrow' or '2026-10-02'.
+
+    The panel opens on this day, so "the weather for Friday" shows Friday
+    rather than today with Friday one click away (user report, 2026-10-02).
+    Days come from the report, so "Friday" means the place's next Friday.
+    """
+    text = asked.strip().lower()
+    days = [str(d.get("date") or "") for d in report.get("daily") or []]
+    if not text or not days:
+        return None
+    if text in ("today", "tonight", "now"):
+        return 0
+    if text == "tomorrow":
+        return 1 if len(days) > 1 else None
+    if text in days:
+        return days.index(text)
+    for name in _WEEKDAYS:
+        if name.startswith(text[:3]) and len(text) >= 3:
+            for i, day in enumerate(days):
+                try:
+                    if date.fromisoformat(day).weekday() == _WEEKDAYS.index(name):
+                        return i
+                except ValueError:
+                    continue
+    return None
 
 
 @ToolRegistry.register("weather")
@@ -86,6 +125,15 @@ class WeatherTool(BaseTool):
                             "'Tokyo'. Omit for the user's own location."
                         ),
                     },
+                    "day": {
+                        "type": "string",
+                        "description": (
+                            "The day the user asked about, if any: 'today', "
+                            "'tomorrow', a weekday such as 'Friday', or "
+                            "YYYY-MM-DD. The panel opens on that day. Omit "
+                            "for a general weather question."
+                        ),
+                    },
                 },
                 "required": [],
             },
@@ -117,6 +165,15 @@ class WeatherTool(BaseTool):
         spoken = summary if located_here or not place else f"{place}: {summary}"
         days = _days_line(report)
         content = spoken + (f"\nNext days: {days}" if days else "")
+        asked_day = str(params.get("day") or "").strip()
+        focus = match_day(report, asked_day) if asked_day else None
+        if focus is not None and focus > 0:
+            # Named for the model, so "Friday" is answered from Friday's line.
+            day = report["daily"][focus]
+            content += (
+                f"\nAsked about: {day['date']} ({day.get('conditions', '')}): "
+                f"{day.get('advice', '')}"
+            )
 
         current = report["current"]
         return ToolResult(
@@ -134,7 +191,7 @@ class WeatherTool(BaseTool):
                 "speed_unit": report["speed_unit"],
                 # The panel's data (M41). Persisted with the tool call, so the
                 # chat card can reopen it after a reload.
-                "weather": {**report, "summary": summary},
+                "weather": {**report, "summary": summary, "focus_day": focus},
             },
         )
 

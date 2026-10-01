@@ -1,15 +1,17 @@
 /**
- * The weather panel (M41): today's conditions, a 24-hour curve and seven days,
- * over the whole app.
+ * The weather panel (M41), in the design the user picked on 2 Oct ("2C" +
+ * "S3"): the week as a list on the left, the chosen day on the right with
+ * Sage's line about it and that day's own hours, over particles that act out
+ * the weather. The hourly curve is drawn as linked, glowing points and the
+ * chosen day breathes.
  *
- * Styled like the image overlay (the app behind is dimmed). It stays until the
- * user closes it -- Esc, Close, a click outside, or "close it" by voice -- and
- * does not leave with the voice: Sage says one line, the week is to be read.
- * Clicking a day shows that day's figures in the stats block.
+ * It opens on the day the user asked about ("Friday's weather"), otherwise on
+ * Now. It stays until the user closes it -- Esc, Close, a click outside, or
+ * "close it" by voice -- and does not leave with the voice.
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Droplets, Gauge, Navigation, Sun, Sunrise, Sunset, Thermometer, Wind } from 'lucide-react';
+import { Umbrella } from 'lucide-react';
 import { isBackdropClick } from '../../lib/overlay-backdrop';
 import {
   clockLabel,
@@ -19,98 +21,138 @@ import {
   observedLabel,
   percent,
   round,
+  type WeatherDay,
+  type WeatherHour,
   type WeatherReport,
 } from '../../lib/weather-report';
 import { WeatherIcon } from './WeatherIcon';
+import { WeatherParticles } from './WeatherParticles';
 
-const ACCENT = '#38bdf8';
-const MUTED = '#94a3b8';
-const PANEL_BG = 'linear-gradient(160deg, rgba(15, 23, 42, 0.96), rgba(8, 47, 73, 0.94))';
+const ACCENT = '#22d3ee';
+const MUTED = '#a1a1aa';
+const DIM = '#71717a';
+const CARD = 'rgba(22, 22, 26, 0.82)';
+
+const STYLE = `
+@keyframes wx-breathe {
+  0%, 100% { box-shadow: inset 2px 0 0 ${ACCENT}, 0 0 10px rgba(34,211,238,0.10); }
+  50% { box-shadow: inset 2px 0 0 ${ACCENT}, 0 0 26px rgba(34,211,238,0.32); }
+}
+.wx-day { transition: background 0.2s; }
+.wx-day:hover { background: rgba(255,255,255,0.04); }
+.wx-day[aria-pressed='true'] { background: rgba(34,211,238,0.09); animation: wx-breathe 2.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .wx-day[aria-pressed='true'] { animation: none; box-shadow: inset 2px 0 0 ${ACCENT}; } }
+`;
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function longDate(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  if (!y || !m || !d) return date;
+  return `${WEEKDAYS[new Date(y, m - 1, d).getDay()]} ${d} ${MONTHS[m - 1]}`;
+}
+
+/** The day the question was about, if it was a later day (today = Now). */
+function focusDay(report: WeatherReport): number | null {
+  const i = report.focus_day;
+  return typeof i === 'number' && i > 0 && i < report.daily.length ? i : null;
+}
+
+/** A day's own hours; reports saved before they existed fall back to the next 24. */
+function hoursOf(report: WeatherReport, day: WeatherDay | null): WeatherHour[] {
+  if (!day) return report.hourly;
+  if (day.hours?.length) return day.hours;
+  return report.hourly.filter((h) => h.time.startsWith(day.date));
+}
+
+/** Temperature through the hours as linked, glowing points; rain chance as bars. */
+function ConstellationCurve({ hours, label }: { hours: WeatherHour[]; label: string }) {
+  const points = hours.filter((h) => typeof h.temp === 'number');
+  if (points.length < 2) return null;
+  const width = 560;
+  const height = 150;
+  const temps = points.map((h) => h.temp as number);
+  const min = Math.min(...temps);
+  const span = Math.max(1, Math.max(...temps) - min);
+  const step = width / points.length;
+  const x = (i: number) => step * i + step / 2;
+  const y = (t: number) => height - 36 - ((t - min) / span) * (height - 68);
+  const line = points.map((h, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(h.temp as number).toFixed(1)}`).join(' ');
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, letterSpacing: '0.14em', fontWeight: 600, color: MUTED, textTransform: 'uppercase', margin: '14px 0 4px' }}>
+        {label}
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label={`${label}: temperature and rain chance`}>
+        <defs>
+          <filter id="wx-glow" x="-20%" y="-50%" width="140%" height="200%">
+            <feGaussianBlur stdDeviation="3" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        {points.slice(0, -2).map((h, i) => (
+          <line
+            key={`x${h.time}`}
+            x1={x(i)}
+            y1={y(h.temp as number)}
+            x2={x(i + 2)}
+            y2={y(points[i + 2].temp as number)}
+            stroke={ACCENT}
+            strokeOpacity={0.12}
+          />
+        ))}
+        <path d={line} fill="none" stroke={ACCENT} strokeOpacity={0.7} strokeWidth={1.4} filter="url(#wx-glow)" />
+        {points.map((h, i) => {
+          const rain = typeof h.rain_chance === 'number' ? h.rain_chance : 0;
+          const labelled = i % 3 === 0;
+          return (
+            <g key={h.time}>
+              <rect x={x(i) - 4} y={height - 20 - rain * 16} width={8} height={Math.max(1.5, rain * 16)} rx={2} fill="#38bdf8" opacity={0.2 + rain * 0.65}>
+                <title>{`${hourLabel(h.time)}: ${round(h.temp)}°, rain ${percent(h.rain_chance)}`}</title>
+              </rect>
+              <circle cx={x(i)} cy={y(h.temp as number)} r={labelled ? 3.2 : 1.8} fill="#cffafe" filter="url(#wx-glow)" />
+              {labelled ? (
+                <>
+                  <text x={x(i)} y={y(h.temp as number) - 10} textAnchor="middle" fontSize={12} fill="#e4e4e7">
+                    {round(h.temp)}°
+                  </text>
+                  <text x={x(i)} y={height - 3} textAnchor={i ? 'middle' : 'start'} fontSize={10.5} fill={DIM}>
+                    {hourLabel(h.time)}
+                  </text>
+                </>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ background: CARD, borderRadius: 10, padding: '8px 10px', border: '1px solid rgba(255,255,255,0.05)', minWidth: 0 }}>
+      <div style={{ fontSize: 11.5, color: DIM }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: '#fafafa', whiteSpace: 'nowrap' }}>{value}</div>
+    </div>
+  );
+}
 
 interface Props {
   report: WeatherReport;
   onClose: () => void;
 }
 
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-      <span style={{ color: MUTED, display: 'flex' }}>{icon}</span>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 10.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: MUTED }}>{label}</div>
-        <div style={{ fontSize: 15, fontWeight: 600, color: '#f1f5f9', whiteSpace: 'nowrap' }}>{value}</div>
-      </div>
-    </div>
-  );
-}
-
-/** Temperature over the next 24 hours, with each hour's rain chance as a bar. */
-function HourlyCurve({ report }: { report: WeatherReport }) {
-  const hours = report.hourly.filter((h) => typeof h.temp === 'number');
-  if (hours.length < 2) return null;
-  const width = 960;
-  const height = 150;
-  const top = 34;
-  const curveBottom = 92;
-  const temps = hours.map((h) => h.temp as number);
-  const min = Math.min(...temps);
-  const max = Math.max(...temps);
-  const span = Math.max(1, max - min);
-  const step = width / hours.length;
-  const x = (i: number) => step * i + step / 2;
-  const y = (t: number) => curveBottom - ((t - min) / span) * (curveBottom - top);
-  const line = hours.map((h, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(h.temp as number).toFixed(1)}`).join(' ');
-  const area = `${line} L${x(hours.length - 1).toFixed(1)},${curveBottom + 6} L${x(0).toFixed(1)},${curveBottom + 6} Z`;
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label="Temperature and rain chance for the next 24 hours">
-      <defs>
-        <linearGradient id="wx-area" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor={ACCENT} stopOpacity="0.35" />
-          <stop offset="100%" stopColor={ACCENT} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill="url(#wx-area)" />
-      <path d={line} fill="none" stroke={ACCENT} strokeWidth={2.5} strokeLinejoin="round" />
-      {hours.map((h, i) => {
-        const rain = typeof h.rain_chance === 'number' ? h.rain_chance : 0;
-        const labelled = i % 3 === 0;
-        return (
-          <g key={h.time}>
-            <rect
-              x={x(i) - step * 0.3}
-              y={height - 20 - rain * 26}
-              width={step * 0.6}
-              height={Math.max(1, rain * 26)}
-              rx={2}
-              fill="#60a5fa"
-              opacity={0.25 + rain * 0.6}
-            >
-              <title>{`${hourLabel(h.time)}: rain ${percent(h.rain_chance)}`}</title>
-            </rect>
-            {labelled ? (
-              <>
-                <circle cx={x(i)} cy={y(h.temp as number)} r={3.5} fill="#0f172a" stroke={ACCENT} strokeWidth={2} />
-                <text x={x(i)} y={y(h.temp as number) - 10} textAnchor="middle" fontSize={13} fontWeight={600} fill="#e2e8f0">
-                  {round(h.temp)}°
-                </text>
-                <text x={x(i)} y={height - 4} textAnchor="middle" fontSize={11} fill={MUTED}>
-                  {i === 0 ? 'Now' : hourLabel(h.time)}
-                </text>
-              </>
-            ) : null}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
 export function WeatherOverlay({ report, onClose }: Props) {
-  // null = today's live conditions; a number = the day picked in the row.
-  const [picked, setPicked] = useState<number | null>(null);
+  // null = Now (today's live conditions); a number = the day picked in the list.
+  const [picked, setPicked] = useState<number | null>(() => focusDay(report));
 
-  useEffect(() => setPicked(null), [report.key]);
+  useEffect(() => setPicked(focusDay(report)), [report]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -123,35 +165,47 @@ export function WeatherOverlay({ report, onClose }: Props) {
   const unit = report.temp_unit;
   const now = report.current;
   const today = report.daily[0];
-  const day = picked === null ? null : report.daily[picked];
+  const day = picked === null ? null : report.daily[picked] ?? null;
   const title = report.place || 'Your location';
+  const hours = hoursOf(report, day);
 
-  const stats = useMemo(() => {
-    if (day) {
-      return [
-        { icon: <Thermometer size={18} />, label: 'High / Low', value: `${round(day.high)}° / ${round(day.low)}°` },
-        { icon: <Droplets size={18} />, label: 'Rain chance', value: percent(day.rain_chance) },
-        { icon: <Sun size={18} />, label: 'UV max', value: round(day.uv_max) },
-        { icon: <Sunrise size={18} />, label: 'Sunrise', value: clockLabel(day.sunrise) },
-        { icon: <Sunset size={18} />, label: 'Sunset', value: clockLabel(day.sunset) },
-      ];
-    }
-    return [
-      { icon: <Droplets size={18} />, label: 'Humidity', value: `${round(now.humidity)}%` },
-      {
-        icon: <Wind size={18} />,
-        label: 'Wind',
-        value: `${round(now.wind_speed)} ${report.speed_unit} ${compass(now.wind_direction)}`.trim(),
-      },
-      { icon: <Gauge size={18} />, label: 'Pressure', value: `${round(now.pressure)} hPa` },
-      { icon: <Sun size={18} />, label: 'UV index', value: round(now.uv_index) },
-      { icon: <Sunrise size={18} />, label: 'Sunrise', value: clockLabel(today?.sunrise) },
-      { icon: <Sunset size={18} />, label: 'Sunset', value: clockLabel(today?.sunset) },
-    ];
-  }, [day, now, today, report.speed_unit]);
+  const advice = day ? day.advice || `${day.conditions}, rain ${percent(day.rain_chance)}.` : report.summary;
+  const stats = useMemo(
+    () =>
+      day
+        ? [
+            { label: 'Rain', value: percent(day.rain_chance) },
+            { label: 'UV max', value: round(day.uv_max) },
+            { label: 'Sunrise', value: clockLabel(day.sunrise) },
+            { label: 'Sunset', value: clockLabel(day.sunset) },
+          ]
+        : [
+            { label: 'Humidity', value: `${round(now.humidity)}%` },
+            { label: 'Wind', value: `${round(now.wind_speed)} ${report.speed_unit} ${compass(now.wind_direction)}`.trim() },
+            { label: 'Pressure', value: `${round(now.pressure)} hPa` },
+            // After today's sunset the next thing worth knowing is sunrise.
+            report.observed_at && today?.sunset && report.observed_at > today.sunset
+              ? { label: 'Sunrise', value: clockLabel(report.daily[1]?.sunrise) }
+              : { label: 'Sunset', value: clockLabel(today?.sunset) },
+          ],
+    [day, now, today, report.speed_unit, report.observed_at, report.daily],
+  );
+  const heavy = (day ? day.rain_chance : hours[0]?.rain_chance ?? 0) ?? 0;
+
+  const tabStyle = (on: boolean): React.CSSProperties => ({
+    fontSize: 12.5,
+    padding: '5px 12px',
+    borderRadius: 8,
+    border: 'none',
+    cursor: 'pointer',
+    color: on ? '#fafafa' : MUTED,
+    background: on ? 'rgba(34,211,238,0.14)' : 'transparent',
+    boxShadow: on ? 'inset 0 0 12px rgba(34,211,238,0.25)' : 'none',
+  });
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 80 }} role="presentation">
+      <style>{STYLE}</style>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(10, 10, 11, 0.62)', backdropFilter: 'blur(2px)' }} />
       <div
         style={{
@@ -173,116 +227,160 @@ export function WeatherOverlay({ report, onClose }: Props) {
       >
         <div
           style={{
-            width: 'min(980px, 100%)',
+            position: 'relative',
+            width: 'min(920px, 100%)',
             borderRadius: 18,
-            border: '1px solid rgba(56, 189, 248, 0.35)',
-            background: PANEL_BG,
-            boxShadow: '0 24px 70px rgba(0,0,0,0.55), inset 0 0 40px rgba(56, 189, 248, 0.06)',
-            color: '#f1f5f9',
-            padding: '22px 26px 20px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 18,
+            background: '#0f1013',
+            border: '1px solid rgba(34,211,238,0.22)',
+            boxShadow: '0 24px 70px rgba(0,0,0,0.6), 0 0 40px rgba(34,211,238,0.08)',
+            overflow: 'hidden',
+            color: '#fafafa',
           }}
         >
-          {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.14em', color: ACCENT }}>WEATHER</div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>{title}</div>
-            <div style={{ fontSize: 12, color: MUTED }}>
-              {report.observed_at ? observedLabel(report.observed_at) : ''}
-              {report.timezone ? ` · ${report.timezone}` : ''} · {report.source}
-            </div>
-          </div>
+          <WeatherParticles icon={day ? day.icon : now.icon} isDay={day ? true : now.is_day} heavy={heavy >= 0.8} />
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: 18,
+              pointerEvents: 'none',
+              boxShadow: 'inset 0 0 0 1px rgba(34,211,238,0.22), inset 0 0 50px rgba(34,211,238,0.08), inset 0 -40px 80px rgba(183,148,255,0.05)',
+            }}
+          />
 
-          {/* Now (or the picked day) + stats */}
-          <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 18, minWidth: 260 }}>
-              <WeatherIcon kind={day ? day.icon : now.icon} day={day ? true : now.is_day} size={76} />
-              <div>
-                <div style={{ fontSize: 56, fontWeight: 700, lineHeight: 1 }}>
-                  {day ? `${round(day.high)}°` : `${round(now.temp)}°`}
-                  <span style={{ fontSize: 22, color: MUTED, fontWeight: 500, marginLeft: 4 }}>{unit.replace('°', '')}</span>
-                </div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: ACCENT, textTransform: 'capitalize', marginTop: 6 }}>
-                  {day ? day.conditions : now.conditions}
-                </div>
-                <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
-                  {day
-                    ? `${dayLabel(day.date, picked ?? 0)} · low ${round(day.low)}°`
-                    : `Feels like ${round(now.feels_like)}°`}
-                </div>
+          <div style={{ position: 'relative', padding: '20px 24px 16px' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 17, fontWeight: 600 }}>{title}</span>
+              <span style={{ fontSize: 12, color: DIM }}>
+                {report.observed_at ? observedLabel(report.observed_at) : ''} · {report.source}
+              </span>
+              <div
+                style={{
+                  marginLeft: 'auto',
+                  display: 'flex',
+                  gap: 2,
+                  background: 'rgba(22,22,26,0.9)',
+                  padding: 3,
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.06)',
+                }}
+              >
+                <button type="button" style={tabStyle(picked === null)} onClick={() => setPicked(null)}>
+                  Now {round(now.temp)}°
+                </button>
+                {day ? (
+                  <button type="button" style={tabStyle(true)}>
+                    {longDate(day.date).split(' ')[0]}
+                  </button>
+                ) : null}
               </div>
             </div>
-            <div
-              style={{
-                flex: 1,
-                minWidth: 280,
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-                gap: '14px 18px',
-                padding: '14px 16px',
-                borderRadius: 12,
-                background: 'rgba(15, 23, 42, 0.55)',
-                border: '1px solid rgba(148, 163, 184, 0.15)',
-              }}
-            >
-              {stats.map((s) => (
-                <Stat key={s.label} icon={s.icon} label={s.label} value={s.value} />
-              ))}
-            </div>
-          </div>
 
-          {report.summary && !day ? (
-            <div style={{ fontSize: 13.5, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Navigation size={14} color={ACCENT} style={{ transform: 'rotate(90deg)' }} aria-hidden />
-              {report.summary}
-            </div>
-          ) : null}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 240px) 1fr', gap: 18, marginTop: 16 }}>
+              {/* The week */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {report.daily.map((d, i) => {
+                  const selected = i === 0 ? picked === null : picked === i;
+                  return (
+                    <button
+                      key={d.date}
+                      type="button"
+                      className="wx-day"
+                      aria-pressed={selected}
+                      onClick={() => setPicked(i === 0 ? null : i)}
+                      title={d.advice || d.conditions}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '44px 22px 1fr auto',
+                        gap: 8,
+                        alignItems: 'center',
+                        padding: '9px 10px',
+                        borderRadius: 10,
+                        border: 'none',
+                        background: 'transparent',
+                        color: '#fafafa',
+                        fontSize: 13,
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span>{dayLabel(d.date, i)}</span>
+                      <WeatherIcon kind={d.icon} size={20} />
+                      <span style={{ color: '#38bdf8', fontSize: 11.5 }}>{percent(d.rain_chance)}</span>
+                      <span style={{ whiteSpace: 'nowrap' }}>
+                        {round(d.high)}° <span style={{ color: DIM }}>{round(d.low)}°</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
 
-          {/* Next 24 hours */}
-          <div>
-            <div style={{ fontSize: 10.5, letterSpacing: '0.1em', color: MUTED, marginBottom: 4 }}>NEXT 24 HOURS</div>
-            <HourlyCurve report={report} />
-          </div>
-
-          {/* Seven days */}
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, report.daily.length)}, minmax(0, 1fr))`, gap: 8 }}>
-            {report.daily.map((d, i) => {
-              const active = picked === i;
-              return (
-                <button
-                  key={d.date}
-                  type="button"
-                  onClick={() => setPicked(active ? null : i)}
-                  aria-pressed={active}
-                  title={`${d.conditions}, rain ${percent(d.rain_chance)}`}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '10px 4px',
-                    borderRadius: 12,
-                    cursor: 'pointer',
-                    color: '#f1f5f9',
-                    background: active ? 'rgba(56, 189, 248, 0.18)' : 'rgba(15, 23, 42, 0.5)',
-                    border: `1px solid ${active ? ACCENT : 'rgba(148, 163, 184, 0.15)'}`,
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 600, color: active ? ACCENT : '#cbd5e1' }}>{dayLabel(d.date, i)}</div>
-                  <WeatherIcon kind={d.icon} size={26} />
-                  <div style={{ fontSize: 11, color: '#7dd3fc' }}>{percent(d.rain_chance)}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>
-                    {round(d.high)}° <span style={{ color: MUTED, fontWeight: 400 }}>{round(d.low)}°</span>
+              {/* The chosen day (or Now) */}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+                  <span style={{ filter: 'drop-shadow(0 0 10px rgba(34,211,238,0.55))', display: 'flex' }}>
+                    <WeatherIcon kind={day ? day.icon : now.icon} day={day ? true : now.is_day} size={58} />
+                  </span>
+                  <span style={{ fontSize: 58, fontWeight: 600, lineHeight: 1, textShadow: '0 0 18px rgba(34,211,238,0.35)' }}>
+                    {day ? round(day.high) : round(now.temp)}°
+                    <span style={{ fontSize: 18, color: MUTED, fontWeight: 500, marginLeft: 2 }}>{unit.replace('°', '')}</span>
+                  </span>
+                  <div style={{ paddingBottom: 6 }}>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{day ? longDate(day.date) : 'Now'}</div>
+                    <div style={{ color: MUTED }}>
+                      <span style={{ textTransform: 'capitalize' }}>{day ? day.conditions : now.conditions}</span>
+                      {day ? ` · low ${round(day.low)}°` : ` · feels like ${round(now.feels_like)}°`}
+                    </div>
                   </div>
-                </button>
-              );
-            })}
-          </div>
+                </div>
 
-          <div style={{ fontSize: 11, color: '#64748b', textAlign: 'center' }}>
-            Esc, Close, click outside or say “close it” to dismiss · click a day for its details
+                {advice ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 10,
+                      fontSize: 13.5,
+                      background: CARD,
+                      borderRadius: 12,
+                      padding: '10px 14px',
+                      marginTop: 14,
+                      border: '1px solid rgba(34,211,238,0.18)',
+                    }}
+                  >
+                    <Umbrella size={18} color={ACCENT} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden />
+                    <div>
+                      <div style={{ fontSize: 10, letterSpacing: '0.32em', color: ACCENT, textShadow: '0 0 8px rgba(34,211,238,0.3)', marginBottom: 2 }}>
+                        SAGE
+                      </div>
+                      {advice}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8, marginTop: 12 }}>
+                  {stats.map((s) => (
+                    <Stat key={s.label} label={s.label} value={s.value} />
+                  ))}
+                </div>
+
+                <ConstellationCurve hours={hours} label={day ? `${longDate(day.date).split(' ')[0]}, hour by hour` : 'Next 24 hours'} />
+
+                {day ? (
+                  <div style={{ fontSize: 12, color: DIM }}>
+                    Now: {round(now.temp)}°, {now.conditions} · humidity {round(now.humidity)}% · wind {round(now.wind_speed)} {report.speed_unit}{' '}
+                    {compass(now.wind_direction)}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div style={{ fontSize: 11.5, color: DIM, marginTop: 10, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <span>{report.timezone}</span>
+              <span>Esc, Close or “close it” · click a day to see it</span>
+            </div>
           </div>
         </div>
       </div>

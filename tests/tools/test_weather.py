@@ -389,3 +389,84 @@ class TestASlowNetwork:
             with pytest.raises(connector.WeatherAPIError, match="400"):
                 connector._weather_api_get("https://x.invalid", {})
         assert get.call_count == 1
+
+
+class TestTheDayAskedAbout:
+    """'Friday's weather' opens the panel on Friday (user report, 2026-10-02)."""
+
+    WEEK = {"daily": [{"date": f"2026-10-0{d}"} for d in range(1, 8)]}  # Thu..Wed
+
+    @pytest.mark.parametrize(
+        "asked,index",
+        [
+            ("Friday", 1),
+            ("fri", 1),
+            ("Saturday", 2),
+            ("Thursday", 0),
+            ("tomorrow", 1),
+            ("today", 0),
+            ("2026-10-05", 4),
+            ("someday", None),
+            ("2026-12-25", None),
+        ],
+    )
+    def test_matching(self, asked, index):
+        from openjarvis.tools.weather import match_day
+
+        assert match_day(self.WEEK, asked) == index
+
+    def test_the_tool_marks_the_day_and_names_it(self, tmp_path):
+        path = tmp_path / "weather.json"
+        path.write_text(json.dumps({"place": CALAMBA, "use_device_location": False}))
+        with patch.object(connector, "fetch_forecast", return_value=_forecast(0.1)):
+            result = WeatherTool(token_path=str(path)).execute(day="Friday")
+        assert result.metadata["weather"]["focus_day"] == 1
+        assert "Asked about: 2026-10-02 (thunderstorm)" in result.content
+
+    def test_a_general_question_has_no_day(self, tmp_path):
+        path = tmp_path / "weather.json"
+        path.write_text(json.dumps({"place": CALAMBA, "use_device_location": False}))
+        with patch.object(connector, "fetch_forecast", return_value=_forecast(0.1)):
+            result = WeatherTool(token_path=str(path)).execute()
+        assert result.metadata["weather"]["focus_day"] is None
+        assert "Asked about" not in result.content
+
+
+class TestADaysOwnHoursAndAdvice:
+    def _report(self):
+        data = _forecast(0.1, 0.2, now="2026-10-01T12:00")
+        # Friday's hours: dry morning, storm peaking at 5 PM.
+        fri = [f"2026-10-02T{h:02d}:00" for h in range(24)]
+        pops = [10] * 15 + [60, 80, 98, 70] + [30] * 5
+        data["hourly"]["time"] += fri
+        data["hourly"]["temperature_2m"] += [25 + (h > 9) * 5 for h in range(24)]
+        data["hourly"]["precipitation_probability"] += pops
+        data["hourly"]["weather_code"] += [95] * 24
+        data["hourly"]["is_day"] += [1] * 24
+        return connector.build_report(data, CALAMBA)
+
+    def test_each_day_carries_its_own_24_hours(self):
+        report = self._report()
+        fri = report["daily"][1]["hours"]
+        assert len(fri) == 24
+        assert fri[0]["time"] == "2026-10-02T00:00"
+        # The next-24-hours strip is unchanged: it starts at the current hour.
+        assert report["hourly"][0]["time"] == "2026-10-01T12:00"
+
+    def test_a_stormy_day_says_when(self):
+        advice = self._report()["daily"][1]["advice"]
+        assert advice.startswith("Thunderstorms likely, heaviest around 5 PM (98%)")
+        assert "take an umbrella" in advice
+
+    def test_a_dry_day_says_so(self):
+        day = {
+            "conditions": "clear sky",
+            "low": 24,
+            "high": 33,
+            "rain_chance": 0.1,
+            "uv_max": 9,
+            "hours": [],
+        }
+        assert connector.day_advice(day) == (
+            "Clear sky, no rain expected. UV is very high around midday. 24–33°C"
+        )

@@ -5,11 +5,13 @@
  */
 
 import { useWeatherPresenter } from '../../lib/weather-presenter';
-import { round, type WeatherReport } from '../../lib/weather-report';
+import { dayLabel, round, type WeatherReport } from '../../lib/weather-report';
 import { WeatherIcon } from './WeatherIcon';
 
 export function WeatherCard({ report }: { report: WeatherReport }) {
   const open = useWeatherPresenter((s) => s.open);
+  const focus = typeof report.focus_day === 'number' ? report.focus_day : 0;
+  const asked = focus > 0 ? report.daily[focus] ?? null : null;
   return (
     <button
       type="button"
@@ -24,11 +26,12 @@ export function WeatherCard({ report }: { report: WeatherReport }) {
       }}
       aria-label={`Open the weather panel${report.place ? ` for ${report.place}` : ''}`}
     >
-      <WeatherIcon kind={report.current.icon} day={report.current.is_day} size={28} />
+      <WeatherIcon kind={asked ? asked.icon : report.current.icon} day={asked ? true : report.current.is_day} size={28} />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
-          {round(report.current.temp)}
-          {report.temp_unit} · <span className="capitalize">{report.current.conditions}</span>
+          {/* The card names what was asked: "Fri · 31° · thunderstorm", not today's now. */}
+          {asked ? `${dayLabel(asked.date, focus)} · ${round(asked.high)}` : round(report.current.temp)}
+          {report.temp_unit} · <span className="capitalize">{asked ? asked.conditions : report.current.conditions}</span>
         </div>
         <div className="text-[11.5px] truncate" style={{ color: 'var(--color-text-tertiary)' }}>
           {report.place || 'Your location'} · 7-day forecast
