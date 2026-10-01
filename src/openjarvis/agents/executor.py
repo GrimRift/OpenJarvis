@@ -118,7 +118,13 @@ class AgentExecutor:
         )
         return agent.run(input_text)
 
-    def execute_tick(self, agent_id: str, *, lock_already_held: bool = False) -> None:
+    def execute_tick(
+        self,
+        agent_id: str,
+        *,
+        lock_already_held: bool = False,
+        late_for: float | None = None,
+    ) -> None:
         """Run one tick for the given agent.
 
         1. Acquire concurrency guard (start_tick)
@@ -132,6 +138,10 @@ class AgentExecutor:
         Without this flag, the executor would re-acquire and trip its own
         guard — bailing out with no end_tick(), leaving the agent stuck in
         ``status='running'`` forever.
+
+        ``late_for`` is the scheduled slot this run catches up on (Sage was
+        off or the PC slept through it): the model is told, and a delivered
+        report says so in its first line.
         """
         if lock_already_held:
             self._set_activity(agent_id, "Preparing tick...")
@@ -147,6 +157,8 @@ class AgentExecutor:
         if agent is None:
             logger.error("Agent %s not found", agent_id)
             return
+        if late_for is not None:
+            agent = {**agent, "late_for": late_for}
 
         self._bus.publish(
             EventType.AGENT_TICK_START,
@@ -565,6 +577,15 @@ class AgentExecutor:
         else:
             base = tick_note or "Continue your assigned task."
             input_text = f"Current date: {today}\n\n{base}"
+        late_for = agent.get("late_for")
+        if late_for:
+            due = datetime.datetime.fromtimestamp(late_for).strftime("%H:%M")
+            now_hm = datetime.datetime.now().strftime("%H:%M")
+            input_text += (
+                f"\n\nThis run is late: it was due at {due}, but the PC was "
+                f"asleep. It is now {now_hm}; report as of now (skip what is "
+                "already over). Do not mention the delay yourself."
+            )
         pending = self._manager.get_pending_messages(agent["id"])
         if pending:
             user_msgs = "\n".join(f"User: {m['content']}" for m in pending)
@@ -661,6 +682,8 @@ class AgentExecutor:
                 result = agent_instance.run(input_text, context=agent_ctx)
         finally:
             resolved_toolkit.close()
+        if late_for:
+            result.metadata["late_for"] = late_for
 
         _elapsed = time.time() - _t0
         logger.info(
@@ -718,6 +741,12 @@ class AgentExecutor:
         if not text:
             result.metadata["delivered_to"] = "skipped: empty report"
             return
+        late_for = result.metadata.get("late_for")
+        if late_for:
+            import datetime
+
+            due = datetime.datetime.fromtimestamp(late_for).strftime("%H:%M")
+            text = f"Late brief: missed {due}, the PC was asleep.\n\n{text}"
         try:
             ok = _send_to_phone(agent.get("name") or "Sage", text)
         except Exception:  # noqa: BLE001 -- the run still counts

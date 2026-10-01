@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from openjarvis.core.events import EventType
 
@@ -38,6 +38,53 @@ def _next_cron_fire(cron_expr: str, now: float | None = None) -> float:
     return next_dt.timestamp()
 
 
+# A scheduled run missed because Sage was off or the PC slept runs once when
+# Sage is back -- the same day and less than this late. Older misses are
+# skipped, never stacked: a 06:30 brief at 21:00 is noise.
+CATCH_UP_WINDOW_SECONDS = 10 * 3600
+# How far behind its slot a fire can be before it counts as missed rather
+# than merely delayed by the tick before it (a brief takes 1-3 minutes and
+# the loop runs ticks one at a time).
+_LATE_AFTER_SECONDS = 15 * 60
+
+
+def _prev_cron_fire(cron_expr: str, now: float) -> float | None:
+    """The cron's most recent fire time at or before *now*, if computable."""
+    try:
+        from croniter import croniter
+    except ImportError:
+        return None
+    import datetime
+
+    dt = datetime.datetime.fromtimestamp(now)
+    return croniter(cron_expr, dt).get_prev(datetime.datetime).timestamp()
+
+
+def _hhmm(ts: float) -> str:
+    import datetime
+
+    return datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
+
+
+def _catch_up_allowed(slot: float, now: float, agent: dict) -> bool:
+    """Whether the missed *slot* should still run now.
+
+    Not if a run (scheduled or Run now) already happened after it, not if the
+    agent did not exist yet, and only the same day within the window.
+    """
+    import datetime
+
+    if now - slot >= CATCH_UP_WINDOW_SECONDS or slot > now:
+        return False
+    if (
+        datetime.date.fromtimestamp(slot) != datetime.date.fromtimestamp(now)
+    ):
+        return False
+    last_run = agent.get("last_run_at") or 0.0
+    created = agent.get("created_at") or 0.0
+    return last_run < slot and created < slot
+
+
 class AgentScheduler:
     """Schedules managed agent ticks based on cron/interval configs.
 
@@ -51,11 +98,17 @@ class AgentScheduler:
         executor: AgentExecutor | Any,
         tick_interval: float = 1.0,
         event_bus: Any = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._manager = manager
         self._executor = executor
         self._tick_interval = tick_interval
         self._bus = event_bus
+        # Looked up per call, so tests that patch this module's `time` work.
+        self._clock = clock or (lambda: time.time())
+        # (agent_id, slot) already caught up in this process, so a failed
+        # catch-up is not retried every second.
+        self._caught_up: set[tuple[str, float]] = set()
         # agent_id -> {schedule_type, schedule_value, next_fire}
         self._agents: dict[str, dict] = {}
         self._tick_counts: dict[str, int] = {}
@@ -82,9 +135,19 @@ class AgentScheduler:
         schedule_type = config.get("schedule_type", "manual")
         schedule_value = config.get("schedule_value", 0)
 
-        now = time.time()
+        now = self._clock()
+        late_for: float | None = None
         if schedule_type == "cron":
             next_fire = _next_cron_fire(str(schedule_value), now)
+            # Sage was off at the last slot: run it now, once, marked late.
+            slot = _prev_cron_fire(str(schedule_value), now)
+            if slot is not None and _catch_up_allowed(slot, now, agent):
+                late_for, next_fire = slot, now
+                logger.info(
+                    "Agent %s missed its %s run; catching up now",
+                    agent_id,
+                    _hhmm(slot),
+                )
         elif schedule_type == "interval":
             next_fire = now + float(schedule_value)
         else:
@@ -95,6 +158,7 @@ class AgentScheduler:
                 "schedule_type": schedule_type,
                 "schedule_value": schedule_value,
                 "next_fire": next_fire,
+                "late_for": late_for,
             }
 
         logger.info(
@@ -170,11 +234,11 @@ class AgentScheduler:
 
     def _check_due_agents(self) -> None:
         """Check all registered agents and fire those that are due."""
-        now = time.time()
+        now = self._clock()
 
         with self._lock:
             due = [
-                (aid, info)
+                (aid, dict(info))
                 for aid, info in self._agents.items()
                 if info["next_fire"] <= now
             ]
@@ -192,25 +256,58 @@ class AgentScheduler:
             ):
                 continue
 
-            logger.info("Firing tick for agent %s", agent_id)
+            late_for = info.get("late_for")
+            if (
+                late_for is None
+                and info["schedule_type"] == "cron"
+                and now - info["next_fire"] > _LATE_AFTER_SECONDS
+            ):
+                # The server stayed up but the PC slept through the slot.
+                late_for = info["next_fire"]
+                if not _catch_up_allowed(late_for, now, agent):
+                    logger.info(
+                        "Agent %s missed its %s run; too late to catch up",
+                        agent_id,
+                        _hhmm(late_for),
+                    )
+                    self._reschedule(agent_id, info, now)
+                    continue
+            if late_for is not None:
+                if (agent_id, late_for) in self._caught_up:
+                    self._reschedule(agent_id, info, now)
+                    continue
+                self._caught_up.add((agent_id, late_for))
+
+            logger.info(
+                "Firing tick for agent %s%s",
+                agent_id,
+                f" (late: due {_hhmm(late_for)})" if late_for else "",
+            )
             try:
-                self._executor.execute_tick(agent_id)
+                if late_for is None:
+                    self._executor.execute_tick(agent_id)
+                else:
+                    self._executor.execute_tick(agent_id, late_for=late_for)
             except Exception:
                 logger.exception("Error executing tick for agent %s", agent_id)
 
-            # Update next fire time
-            with self._lock:
-                if agent_id in self._agents:
-                    if info["schedule_type"] == "cron":
-                        self._agents[agent_id]["next_fire"] = _next_cron_fire(
-                            str(info["schedule_value"]),
-                            now,
-                        )
-                    elif info["schedule_type"] == "interval":
-                        self._agents[agent_id]["next_fire"] = now + float(
-                            info["schedule_value"]
-                        )
-                    # Manual: stays at inf
+            self._reschedule(agent_id, info, now)
+
+    def _reschedule(self, agent_id: str, info: dict, now: float) -> None:
+        """Set the next fire time after a slot was fired or skipped."""
+        with self._lock:
+            if agent_id in self._agents:
+                self._agents[agent_id]["late_for"] = None
+                if info["schedule_type"] == "cron":
+                    self._agents[agent_id]["next_fire"] = _next_cron_fire(
+                        str(info["schedule_value"]),
+                        now,
+                    )
+                elif info["schedule_type"] == "interval":
+                    self._agents[agent_id]["next_fire"] = now + float(
+                        info["schedule_value"]
+                    )
+                # Manual: stays at inf
 
     def _reconcile(self) -> None:
         """Check running agents for stalls and handle retries."""
