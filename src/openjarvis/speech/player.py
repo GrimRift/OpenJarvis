@@ -11,16 +11,24 @@ from __future__ import annotations
 
 import array
 import itertools
+import logging
 import math
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
 import wave
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 _PLAYERS = ["ffplay -nodisp -autoexit -loglevel quiet", "aplay", "afplay", "paplay"]
+
+#: How long to wait for ffplay to report that sound has started before
+#: marking the voice anyway. A cold start measured 0.5-1.2 s on 2 October.
+SOUND_START_WAIT_SECONDS = 3.0
 
 #: One voice at a time, server-wide. The moments engine (greeting, welcome
 #: back, initiative) and the desktop reminder each had a player of their
@@ -219,26 +227,44 @@ def _decode_mono(audio_path: str) -> Optional[tuple]:
 
 
 class voice:
-    """Mark the server as saying something, for as long as it plays."""
+    """Mark the server as saying something, for as long as it plays.
 
-    def __init__(self, channel: str, envelope: Optional[List[float]] = None) -> None:
+    ``deferred`` waits for :meth:`begin` -- called when the sound is actually
+    heard -- before the page learns of it. Marking it at once had the orb
+    about a second ahead of the words on a reminder (2 October): ffplay's
+    cold start, process and audio device, took 0.5-1.2 s before any sound.
+    """
+
+    def __init__(
+        self,
+        channel: str,
+        envelope: Optional[List[float]] = None,
+        *,
+        deferred: bool = False,
+    ) -> None:
         self._channel = channel
         self._envelope = envelope
+        self._deferred = deferred
         self._id: Optional[int] = None
 
     def __enter__(self) -> "voice":
+        if not self._deferred:
+            self.begin()
+        return self
+
+    def begin(self, started: Optional[float] = None) -> None:
+        """The sound is playing (since *started*, monotonic); once only."""
         global _voice
-        if self._channel in _SILENT_CHANNELS:
-            return self
+        if self._channel in _SILENT_CHANNELS or self._id is not None:
+            return
         with _voice_lock:
             self._id = next(_voice_ids)
             _voice = {
                 "id": self._id,
                 "channel": self._channel,
-                "started": time.monotonic(),
+                "started": time.monotonic() if started is None else started,
                 "envelope": self._envelope,
             }
-        return self
 
     def __exit__(self, *exc: object) -> None:
         global _voice
@@ -289,11 +315,72 @@ def play_file(audio_path: str, *, duck: bool = True, channel: str = "moments") -
     # in here, which is why its orb was in time and the reminders' was not.
     with speaking():
         if not duck:
-            with voice(channel, envelope):
-                return _play(audio_path, volume)
+            with voice(channel, envelope, deferred=True) as said:
+                return _play(audio_path, volume, on_start=said.begin)
         with ducked():
-            with voice(channel, envelope):
-                return _play(audio_path, volume)
+            with voice(channel, envelope, deferred=True) as said:
+                return _play(audio_path, volume, on_start=said.begin)
+
+
+_CLOCK = re.compile(rb"^\s*(-?\d+(?:\.\d+)?)\s+[AMV]")
+
+
+def _run_ffplay(cmd: List[str], on_start: Callable[..., None]) -> bool:
+    """Run ffplay, calling *on_start* when its audio clock starts.
+
+    ``-stats`` prints a status line about 30 times a second whose first
+    field is the audio clock: "nan" until sound comes out, then the seconds
+    played. The first number marks the moment, less what it already shows.
+    If no clock appears in ``SOUND_START_WAIT_SECONDS`` the voice is marked
+    anyway: an orb a little early beats a silent one.
+    """
+    launched = time.monotonic()
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    started = threading.Event()
+    once = threading.Lock()
+
+    def mark(at: Optional[float] = None) -> None:
+        # The clock and the fallback may race; only the first counts.
+        with once:
+            if started.is_set():
+                return
+            started.set()
+        on_start(at)
+
+    fallback = threading.Timer(SOUND_START_WAIT_SECONDS, mark)
+    fallback.daemon = True
+    fallback.start()
+    try:
+        line = b""
+        stream = process.stderr
+        while stream is not None:
+            # Read everything: an undrained pipe would stall the player.
+            chunk = stream.read(1)
+            if not chunk:
+                break
+            if chunk not in (b"\r", b"\n"):
+                line += chunk
+                continue
+            match = _CLOCK.match(line)
+            line = b""
+            if match and not started.is_set():
+                fallback.cancel()
+                played = max(0.0, float(match.group(1)))
+                mark(time.monotonic() - played)
+                logger.info(
+                    "Voice heard %.2f s after the player started",
+                    time.monotonic() - launched - played,
+                )
+        return process.wait() == 0
+    finally:
+        fallback.cancel()
+        if process.poll() is None:
+            process.kill()
 
 
 def _volume_filter(volume: float) -> str:
@@ -303,13 +390,28 @@ def _volume_filter(volume: float) -> str:
     return f"volume={max(0.0, volume):.3f},alimiter=limit=0.97:level=false"
 
 
-def _play(audio_path: str, volume: float = 1.0) -> bool:
+def _play(
+    audio_path: str,
+    volume: float = 1.0,
+    on_start: Optional[Callable[..., None]] = None,
+) -> bool:
+    """Play to completion; call *on_start* (with the monotonic time the
+    sound began) once it is actually heard."""
+    start = on_start or (lambda started=None: None)
     for player in _PLAYERS:
         cmd_parts = player.split()
         if cmd_parts[0] == "ffplay":
-            cmd_parts += ["-af", _volume_filter(volume)]
+            cmd_parts += ["-af", _volume_filter(volume), "-stats"]
+            cmd_parts.append(audio_path)
+            try:
+                if _run_ffplay(cmd_parts, start):
+                    return True
+            except FileNotFoundError:
+                pass
+            continue
         cmd_parts.append(audio_path)
         try:
+            start()
             subprocess.run(
                 cmd_parts,
                 stdout=subprocess.DEVNULL,

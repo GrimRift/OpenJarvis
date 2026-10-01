@@ -128,7 +128,7 @@ class TestOneVoiceAtATime:
 
         playing = []
 
-        def _fake_play(path, volume=1.0):
+        def _fake_play(path, volume=1.0, on_start=None):
             playing.append(path)
             time.sleep(0.15)
             playing.remove(path)
@@ -138,7 +138,7 @@ class TestOneVoiceAtATime:
         overlaps = []
 
         def _worker(name):
-            def _observe(path, volume=1.0):
+            def _observe(path, volume=1.0, on_start=None):
                 if playing:
                     overlaps.append((name, list(playing)))
                 return _fake_play(path)

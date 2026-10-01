@@ -6,6 +6,7 @@ import html as _html
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -418,6 +419,35 @@ MIN_SUFFICIENT_DOMAINS = 2
 #: more per call, and the two-call bound is deliberately kept.
 ESCALATED_MAX_RESULTS = 8
 
+#: The whole search, first call and retry together, ends within this. From
+#: 163 searches in traces.db (20 Aug - 2 Oct): median 4.0 s, 9 in 10 under
+#: 6.2 s, 5 over 8 s (max 13.6 s). The user chose 8 s on 2 October.
+SEARCH_BUDGET_SECONDS = 8.0
+#: Not worth starting a retry with less time than this left.
+_MIN_RETRY_SECONDS = 1.0
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    # tavily raises its own TimeoutError (not the builtin) on a slow call.
+    return isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError"
+
+
+def _timed_out(provider_calls: int) -> ToolResult:
+    return ToolResult(
+        tool_name="web_search",
+        content=(
+            f"Search timed out after {SEARCH_BUDGET_SECONDS:.0f} s with no "
+            "results. Say so; you may try once more with a shorter query."
+        ),
+        success=False,
+        metadata={
+            "engine": "tavily",
+            "provider_calls": provider_calls,
+            "bounded_search_complete": True,
+            "timed_out": True,
+        },
+    )
+
 
 def _read_hint(sources: list[dict[str, Any]], quality_passed: bool) -> str:
     """Point at the page to open when a summary cannot hold the answer.
@@ -768,6 +798,11 @@ class WebSearchTool(BaseTool):
         retry_max_results = min(max(max_results, ESCALATED_MAX_RESULTS), 10)
 
         client = TavilyClient(api_key=self._api_key)
+        deadline = time.monotonic() + SEARCH_BUDGET_SECONDS
+
+        def left() -> float:
+            return deadline - time.monotonic()
+
         provider_calls = 0
         credits: int | float = 0
         initial_depth = plan.depth
@@ -778,9 +813,12 @@ class WebSearchTool(BaseTool):
             provider_calls += 1
             response = client.search(
                 query,
+                timeout=SEARCH_BUDGET_SECONDS,
                 **self._search_kwargs(plan, plan.depth, provider_max_results),
             )
         except Exception as exc:
+            if _is_timeout(exc) or left() < _MIN_RETRY_SECONDS:
+                return _timed_out(provider_calls)
             if plan.depth == "advanced":
                 logger.debug("Tavily search error: %s", exc)
                 return self._error(
@@ -792,10 +830,13 @@ class WebSearchTool(BaseTool):
                 provider_calls += 1
                 response = client.search(
                     _retry_query(query),
+                    timeout=left(),
                     **self._search_kwargs(plan, "advanced", retry_max_results),
                 )
             except Exception as retry_exc:
                 logger.debug("Tavily search error after escalation: %s", retry_exc)
+                if _is_timeout(retry_exc):
+                    return _timed_out(provider_calls)
                 return self._error(
                     f"Tavily search error: {retry_exc}",
                     provider_calls=provider_calls,
@@ -807,28 +848,39 @@ class WebSearchTool(BaseTool):
         images = _gallery_images(response) if plan.explicit_images else []
         quality_passed = _results_are_sufficient(results, query, plan, images=images)
 
-        if initial_depth == "basic" and not escalated and not quality_passed:
-            escalated = True
-            final_depth = "advanced"
+        # The better-results retry only runs with time left, and a slow or
+        # failed one keeps the first results rather than losing them.
+        if (
+            initial_depth == "basic"
+            and not escalated
+            and not quality_passed
+            and left() >= _MIN_RETRY_SECONDS
+        ):
+            retry = None
             try:
                 provider_calls += 1
-                response = client.search(
+                retry = client.search(
                     _retry_query(query),
+                    timeout=left(),
                     **self._search_kwargs(plan, "advanced", retry_max_results),
                 )
             except Exception as exc:
-                logger.debug("Tavily search error after escalation: %s", exc)
-                return self._error(
-                    f"Tavily search error: {exc}", provider_calls=provider_calls
+                logger.info(
+                    "Tavily retry %s; keeping the first results",
+                    "timed out" if _is_timeout(exc) else f"failed ({exc})",
                 )
-            credits += _credits(response)
-            results = _filter_relevant_results(
-                list(response.get("results") or []), query, news=plan.news
-            )
-            images = _gallery_images(response) if plan.explicit_images else []
-            quality_passed = _results_are_sufficient(
-                results, query, plan, images=images
-            )
+            if retry is not None:
+                escalated = True
+                final_depth = "advanced"
+                response = retry
+                credits += _credits(response)
+                results = _filter_relevant_results(
+                    list(response.get("results") or []), query, news=plan.news
+                )
+                images = _gallery_images(response) if plan.explicit_images else []
+                quality_passed = _results_are_sufficient(
+                    results, query, plan, images=images
+                )
 
         formatted_parts: list[str] = []
         sources: list[dict[str, Any]] = []

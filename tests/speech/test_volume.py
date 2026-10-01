@@ -64,14 +64,25 @@ def test_api_round_trip_and_validation(tmp_path, monkeypatch):
 
 
 def test_ffplay_gets_the_level(monkeypatch, tmp_path):
+    import io
+
     from openjarvis.speech import player
 
     calls = []
 
-    def _run(cmd, **kwargs):
-        calls.append(cmd)
+    class _Popen:
+        # ffplay runs under Popen so its clock can mark when sound starts.
+        def __init__(self, cmd, **kwargs):
+            calls.append(cmd)
+            self.stderr = io.BytesIO(b"")
 
-    monkeypatch.setattr(player.subprocess, "run", _run)
+        def wait(self):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(player.subprocess, "Popen", _Popen)
     monkeypatch.setattr("openjarvis.speech.volume.DEFAULT_CONFIG_DIR", tmp_path)
     save_volumes(Volumes(master=0.5, chime=0.5), tmp_path)
     player.play_file("x.wav", duck=False, channel="chime")

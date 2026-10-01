@@ -97,7 +97,8 @@ class TestCurrentVoice:
         clip = _wav(tmp_path / "v.wav", [(0.1, 0.5)])
         seen = {}
 
-        def fake_play(path, volume=1.0):
+        def fake_play(path, volume=1.0, on_start=None):
+            on_start()
             seen["during"] = player.current_voice()
             return True
 
@@ -125,7 +126,8 @@ class TestCurrentVoice:
             order.append(("ducked", player.current_voice()))
             yield []
 
-        def fake_play(path, volume=1.0):
+        def fake_play(path, volume=1.0, on_start=None):
+            on_start()
             order.append(("play", player.current_voice()))
             return True
 
@@ -139,7 +141,8 @@ class TestCurrentVoice:
         clip = _wav(tmp_path / "c.wav", [(0.1, 0.5)])
         seen = {}
 
-        def fake_play(path, volume=1.0):
+        def fake_play(path, volume=1.0, on_start=None):
+            on_start()
             seen["during"] = player.current_voice()
             return True
 
@@ -150,7 +153,7 @@ class TestCurrentVoice:
     def test_cleared_even_when_the_player_fails(self, tmp_path, monkeypatch) -> None:
         clip = _wav(tmp_path / "v.wav", [(0.1, 0.5)])
 
-        def broken(path, volume=1.0):
+        def broken(path, volume=1.0, on_start=None):
             raise RuntimeError("player crashed")
 
         monkeypatch.setattr(player, "_play", broken)
@@ -218,3 +221,84 @@ class TestOneHoldForChimeAndWords:
         with player.speaking():
             pass
         assert waits == [1, 1]
+
+
+class TestMarkedWhenHeard:
+    """2 October: the orb ran about a second ahead of a reminder. The voice
+    was marked before ffplay had started -- measured 0.5-1.2 s from launch
+    to sound on a cold start -- so the page began the envelope too early."""
+
+    def test_not_reported_until_the_sound_starts(self, tmp_path, monkeypatch) -> None:
+        clip = _wav(tmp_path / "v.wav", [(0.1, 0.5)])
+        seen = {}
+
+        def fake_play(path, volume=1.0, on_start=None):
+            seen["before"] = player.current_voice()
+            on_start()
+            seen["after"] = player.current_voice()
+            return True
+
+        monkeypatch.setattr(player, "_play", fake_play)
+        player.play_file(str(clip), duck=False, channel="reminders")
+        assert seen["before"] is None
+        assert seen["after"] is not None and seen["after"]["elapsed_ms"] < 50
+
+    def test_begin_lines_the_clock_up_with_what_already_played(self) -> None:
+        import time
+
+        said = player.voice("reminders", deferred=True)
+        with said:
+            assert player.current_voice() is None
+            said.begin(time.monotonic() - 0.3)
+            said.begin()  # once only
+            assert player.current_voice()["elapsed_ms"] >= 300
+        assert player.current_voice() is None
+
+    @staticmethod
+    def _fake_ffplay(monkeypatch, stderr_bytes, *, delay=0.0):
+        import io
+        import time
+
+        class Stream(io.BytesIO):
+            def read(self, n=-1):
+                if delay:
+                    time.sleep(delay)
+                return super().read(n)
+
+        class Proc:
+            def __init__(self, *a, **k):
+                self.stderr = Stream(stderr_bytes)
+
+            def wait(self):
+                return 0
+
+            def poll(self):
+                return 0
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(player.subprocess, "Popen", Proc)
+
+    def test_ffplay_clock_marks_the_start(self, monkeypatch) -> None:
+        import time
+
+        self._fake_ffplay(
+            monkeypatch,
+            b"nan M-A: nan fd=0\r   nan M-A: nan\r  0.12 M-A:  0.000 fd=0\r"
+            b"  0.15 M-A:  0.000\r",
+        )
+        calls = []
+        before = time.monotonic()
+        assert player._run_ffplay(["ffplay", "x.wav"], lambda t=None: calls.append(t))
+        assert len(calls) == 1
+        assert calls[0] <= time.monotonic() - 0.12 + 0.05
+        assert calls[0] >= before - 0.12 - 0.05
+
+    def test_marked_anyway_when_no_clock_appears(self, monkeypatch) -> None:
+        monkeypatch.setattr(player, "SOUND_START_WAIT_SECONDS", 0.05)
+        # 40 bytes, 10 ms apart: the player outlives the wait.
+        self._fake_ffplay(monkeypatch, b"x" * 40, delay=0.01)
+        calls = []
+        player._run_ffplay(["ffplay", "x.wav"], lambda t=None: calls.append(t))
+        assert len(calls) == 1

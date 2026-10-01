@@ -870,7 +870,7 @@ class TestASiteTheUserNamedCountsAsEnough:
         assert search.call_count == 1
 
     def test_a_site_named_with_a_space_counts(self):
-        """"GasWatch PH fuel prices" came back all from gaswatchph.com and
+        """ "GasWatch PH fuel prices" came back all from gaswatchph.com and
         searched again: the name is two words, the host one (29 September)."""
         search = self._search(
             "GasWatch PH mechanical keyboards",
@@ -1000,3 +1000,73 @@ def test_a_results_table_reads_as_words_on_a_card():
         _card_text("| | --- --- | Pos | Driver | 1 | Lewis Hamilton | Ferrari |")
         == "Pos Driver 1 Lewis Hamilton Ferrari"
     )
+
+
+class TestSearchBudget:
+    """2 October: every search ends within 8 s (the user's choice, from 163
+    timed searches: 5 took longer, up to 13.6 s)."""
+
+    class _TavilyTimeout(Exception):
+        pass
+
+    _TavilyTimeout.__name__ = "TimeoutError"
+
+    def test_each_call_gets_at_most_the_budget(self):
+        from openjarvis.tools.web_search import SEARCH_BUDGET_SECONDS
+
+        thin = {"results": [_result("One", "https://a.example/x", "short")]}
+        fake_module, mock_client_cls = _fake_tavily_module(search_return=thin)
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            WebSearchTool(api_key="key").execute(query="OpenJarvis")
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 2  # first + better-results retry
+        timeouts = [c.kwargs["timeout"] for c in search.call_args_list]
+        assert timeouts[0] == SEARCH_BUDGET_SECONDS
+        assert 0 < timeouts[1] <= SEARCH_BUDGET_SECONDS
+
+    def test_a_first_call_timeout_says_so_without_retrying(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_side_effect=self._TavilyTimeout(8.0)
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(query="OpenJarvis")
+        assert mock_client_cls.return_value.search.call_count == 1
+        assert result.success is False
+        assert "timed out after 8 s" in result.content
+        assert result.metadata["timed_out"] is True
+
+    def test_a_slow_retry_keeps_the_first_results(self):
+        thin = {
+            "results": [
+                _result(
+                    "OpenJarvis notes", "https://a.example/x", "OpenJarvis kept result"
+                )
+            ]
+        }
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_side_effect=[thin, self._TavilyTimeout(3.0)]
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(query="OpenJarvis")
+        assert mock_client_cls.return_value.search.call_count == 2
+        assert result.success is True
+        assert "kept result" in result.content
+        assert result.metadata["provider_calls"] == 2
+
+    def test_no_retry_when_the_budget_is_spent(self, monkeypatch):
+        import openjarvis.tools.web_search as web_search
+
+        clock = iter([100.0, 107.5, 107.5, 107.5, 107.5])
+        monkeypatch.setattr(web_search.time, "monotonic", lambda: next(clock, 107.5))
+        thin = {
+            "results": [
+                _result(
+                    "OpenJarvis notes", "https://a.example/x", "OpenJarvis kept result"
+                )
+            ]
+        }
+        fake_module, mock_client_cls = _fake_tavily_module(search_return=thin)
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(query="OpenJarvis")
+        assert mock_client_cls.return_value.search.call_count == 1
+        assert "kept result" in result.content
