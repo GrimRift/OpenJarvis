@@ -342,15 +342,20 @@ describe('depth', () => {
     // turns while the shell's stays put.
     const S = createPlexusState();
     const shell = S.particles.find((p) => p.rigid)!;
-    const inner = S.particles.find((p) => p.node && !p.rigid)!;
-    const before = [shell.hx, shell.hz, inner.hx, inner.hz];
+    // The whole inner web, not one node: positions are random, and a single
+    // node near the turn's axis barely moves -- CI failed on one at 0.0072
+    // (1 Oct) with nothing broken.
+    const inner = S.particles.filter((p) => p.node && !p.rigid);
+    const before = [shell.hx, shell.hz];
+    const homes = inner.map((p) => [p.hx, p.hz]);
     resetRecord();
     const target = stubContext(shared);
     const canvas = { width: 394, height: 394 } as HTMLCanvasElement;
     for (let f = 0; f < 120; f++) drawPlexus(target, canvas, S, 'idle', f, 1, 0);
     expect(shell.hx).toBe(before[0]);
     expect(shell.hz).toBe(before[1]);
-    expect(Math.hypot(inner.hx - before[2], inner.hz - before[3])).toBeGreaterThan(0.01);
+    const turned = Math.max(...inner.map((p, i) => Math.hypot(p.hx - homes[i][0], p.hz - homes[i][1])));
+    expect(turned).toBeGreaterThan(0.01);
   });
 });
 
