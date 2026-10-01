@@ -1571,6 +1571,7 @@ export interface MemoryPageSettings {
   hygiene_enabled: boolean;
   hygiene_hour_local: number;
   restore_window_days: number;
+  relevant_only: boolean;
 }
 
 export interface HygieneRun {

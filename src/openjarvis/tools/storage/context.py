@@ -100,12 +100,26 @@ def format_context(results: List[RetrievalResult]) -> str:
     return "\n\n".join(lines)
 
 
+def _relevant_only() -> bool:
+    """The Memory page switch; on unless the user turned it off."""
+    try:
+        from openjarvis.memory.settings import load_memory_settings
+
+        return load_memory_settings().relevant_only
+    except Exception:  # noqa: BLE001 -- fall back to the default
+        return True
+
+
 def build_context_message(
     results: List[RetrievalResult],
     facts: Sequence[Fact] = (),
     recent_days: str = "",
+    also_on_file: str = "",
 ) -> Message:
     """Create a system message with formatted context.
+
+    ``also_on_file`` names the topics of remembered facts not sent this
+    turn, so the model knows memory holds more than it sees.
 
     ``recent_days`` is the episode text from :mod:`openjarvis.memory.episodes`:
     what happened on the last few days, as opposed to facts, which are what
@@ -124,6 +138,13 @@ def build_context_message(
             "The following durable facts were remembered from prior "
             "conversations. Use them when relevant to the user's request:\n\n"
             + fact_text
+        )
+    if also_on_file.strip():
+        sections.append(
+            "Also on file but not shown here, by topic: "
+            + also_on_file.strip()
+            + ". If the answer may be in memory but is not shown above, call "
+            "recall before saying you don't know."
         )
     if results:
         sections.append(
@@ -275,10 +296,12 @@ def inject_context(
     fact_budget = cfg.max_context_tokens
     if results:
         fact_budget //= 2
-    from openjarvis.memory.recall import select_facts
+    from openjarvis.memory.recall import select_facts, topics_not_sent
 
+    trusted = _trusted_facts(facts)
+    relevant_only = _relevant_only()
     selected_facts: List[Fact] = select_facts(
-        _trusted_facts(facts), query, fact_budget, _count_tokens
+        trusted, query, fact_budget, _count_tokens, relevant_only=relevant_only
     )
     total_tokens = sum(_count_tokens(f.text) for f in selected_facts)
 
@@ -300,7 +323,13 @@ def inject_context(
         truncated.append(r)
         total_tokens += tokens
 
-    if not selected_facts and not truncated and not recent_days.strip():
+    also_on_file = topics_not_sent(trusted, selected_facts) if relevant_only else ""
+    if (
+        not selected_facts
+        and not truncated
+        and not recent_days.strip()
+        and not also_on_file
+    ):
         return messages
 
     # Publish event
@@ -317,7 +346,9 @@ def inject_context(
     )
 
     # Build context message and prepend
-    ctx_msg = build_context_message(truncated, selected_facts, recent_days)
+    ctx_msg = build_context_message(
+        truncated, selected_facts, recent_days, also_on_file
+    )
     if placement == "turn":
         return add_turn_context(messages, ctx_msg.text)
     return _merge_context_message(messages, ctx_msg)

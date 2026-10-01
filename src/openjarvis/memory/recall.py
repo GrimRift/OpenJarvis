@@ -11,6 +11,12 @@ rather than the document backend: facts are one line each, there are a few
 hundred, and scoring them is microseconds; the point is that the ranking
 is the same one the Memory page's search shows, so what the user sees is
 what the model can recall.
+
+"Relevant only" (1 Oct, the user's middle ground, on by default): the budget
+is no longer filled with unrelated newest facts. A turn gets the pinned
+core, the facts that share a word with the message and the five newest --
+about 1,000 fewer prompt tokens a turn -- and a line naming the topics of
+what was left out, so the model knows to call ``recall``.
 """
 
 from __future__ import annotations
@@ -67,11 +73,16 @@ def score_facts(facts: Sequence[Fact], query: str) -> List[float]:
     return scores
 
 
+NEWEST_ALWAYS = 5
+
+
 def select_facts(
     facts: Sequence[Fact],
     query: str,
     budget_tokens: int,
     count_tokens: Callable[[str], int],
+    *,
+    relevant_only: bool = False,
 ) -> List[Fact]:
     """The facts for this turn, within *budget_tokens*.
 
@@ -80,6 +91,9 @@ def select_facts(
     common with the message are still eligible, so a bare "hi" gets the
     newest few rather than nothing. Returned in stored order, so the model
     sees them in the order they were learned.
+
+    With *relevant_only*, facts sharing no term with the message are left
+    out except the :data:`NEWEST_ALWAYS` newest, even when budget remains.
     """
     # Positions, not ids: facts built in tests may share an empty id.
     live = [(i, f) for i, f in enumerate(facts) if f.trusted_for_recall]
@@ -91,9 +105,15 @@ def select_facts(
         key=lambda item: (item[1], item[0][1].created_at, item[0][0]),
         reverse=True,
     )
+    if relevant_only:
+        matched = [entry for entry, score in ranked if score > 0]
+        unmatched = [entry for entry, score in ranked if score <= 0]
+        candidates = pinned + matched + unmatched[:NEWEST_ALWAYS]
+    else:
+        candidates = pinned + [entry for entry, _ in ranked]
     chosen: List[tuple[int, Fact]] = []
     used = 0
-    for i, fact in pinned + [entry for entry, _ in ranked]:
+    for i, fact in candidates:
         cost = count_tokens(fact.text)
         if used + cost > budget_tokens:
             continue
@@ -103,4 +123,22 @@ def select_facts(
     return [f for _, f in chosen]
 
 
-__all__ = ["score_facts", "select_facts", "tokens"]
+def topics_not_sent(facts: Sequence[Fact], sent: Sequence[Fact]) -> str:
+    """'school (41), research (38), ...' for the recallable facts not in
+    *sent*, most first; "" when nothing tagged was left out."""
+    sent_ids = {id(f) for f in sent}
+    counts: Counter[str] = Counter(
+        f.topic
+        for f in facts
+        if id(f) not in sent_ids and f.trusted_for_recall and f.topic
+    )
+    return ", ".join(f"{topic} ({n})" for topic, n in counts.most_common())
+
+
+__all__ = [
+    "NEWEST_ALWAYS",
+    "score_facts",
+    "select_facts",
+    "tokens",
+    "topics_not_sent",
+]

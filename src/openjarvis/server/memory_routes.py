@@ -280,6 +280,12 @@ async def put_memory_settings(request: Request):
                 status_code=400, detail="hygiene_enabled must be a boolean"
             )
         settings.hygiene_enabled = body["hygiene_enabled"]
+    if "relevant_only" in body:
+        if not isinstance(body["relevant_only"], bool):
+            raise HTTPException(
+                status_code=400, detail="relevant_only must be a boolean"
+            )
+        settings.relevant_only = body["relevant_only"]
     save_memory_settings(settings)
     return settings.to_dict()
 

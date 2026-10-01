@@ -283,6 +283,15 @@ function FactsTab({ fail }: { fail: (e: unknown) => void }) {
         </div>
         <div className="flex items-center justify-between gap-3">
           <div>
+            <div className="text-sm" style={{ color: 'var(--color-text)' }}>Send only relevant memories</div>
+            <div className="text-xs" style={muted}>Each message gets the pinned facts, the ones that bear on it and the five newest, plus a list of what else is on file for Sage to look up. Off sends as many as fit, which costs about 1,000 more tokens a message.</div>
+          </div>
+          <Button onClick={() => putMemoryPageSettings({ relevant_only: !settings?.relevant_only }).then(setSettings).catch(fail)} disabled={!settings}>
+            {settings?.relevant_only ? 'On' : 'Off'}
+          </Button>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <div>
             <div className="text-sm" style={{ color: 'var(--color-text)' }}>Nightly clean-up</div>
             <div className="text-xs" style={muted}>
               Merges duplicates, resolves contradictions (newest wins), expires facts that were only true on the day they were written. Applied overnight; every removal is restorable above.

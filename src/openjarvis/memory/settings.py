@@ -30,6 +30,9 @@ class MemorySettings:
     hygiene_hour_local: int = 23
     # How long a removed fact stays restorable.
     restore_window_days: int = 7
+    # Each turn gets the pinned facts, the ones that bear on the message and
+    # the newest few, not as many as fit (1 Oct). Off = the old behaviour.
+    relevant_only: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -53,6 +56,8 @@ def load_memory_settings(config_dir: Optional[Path] = None) -> MemorySettings:
         settings.cloud_model = raw["cloud_model"].strip()
     if isinstance(raw.get("hygiene_enabled"), bool):
         settings.hygiene_enabled = raw["hygiene_enabled"]
+    if isinstance(raw.get("relevant_only"), bool):
+        settings.relevant_only = raw["relevant_only"]
     hour = raw.get("hygiene_hour_local")
     if isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23:
         settings.hygiene_hour_local = hour

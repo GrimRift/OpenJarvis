@@ -125,6 +125,15 @@ class FactExtractor:
 
         return self._parse(content)
 
+    @property
+    def engine(self) -> Any:
+        return self._engine
+
+    def tagging_model(self) -> str:
+        """The model that tags fact topics: the one the settings pick for
+        extraction, as if no turn had answered."""
+        return self._resolve_model("")
+
     def _resolve_model(self, answered_by: str) -> str:
         """Pick the extraction model for a turn answered by *answered_by*.
 

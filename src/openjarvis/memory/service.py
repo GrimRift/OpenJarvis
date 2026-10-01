@@ -59,6 +59,7 @@ class MemoryService:
         self._queue: "queue.Queue[Any]" = queue.Queue(maxsize=max(1, max_queue))
         self._thread: Optional[threading.Thread] = None
         self._running = threading.Event()
+        self._tag_tried: set[str] = set()
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -153,6 +154,8 @@ class MemoryService:
     # -- worker -------------------------------------------------------------
 
     def _loop(self) -> None:
+        # Every untagged fact gets a topic first; this is also the backfill.
+        self._tag_topics()
         while True:
             try:
                 job = self._queue.get(timeout=0.5)
@@ -165,12 +168,31 @@ class MemoryService:
                 break
             try:
                 self._process(job)
+                # Facts saved by this job, or by `remember` since the last
+                # one, get their topic here, off the request path.
+                self._tag_topics()
             except Exception:  # noqa: BLE001 — a bad job must not kill the worker
                 logger.debug("Memory extraction job failed", exc_info=True)
             finally:
                 self._queue.task_done()
             if not self._running.is_set() and self._queue.empty():
                 break
+
+    def _tag_topics(self) -> None:
+        engine = getattr(self._extractor, "engine", None)
+        if engine is None:
+            return
+        try:
+            from openjarvis.memory.topics import tag_untagged
+
+            tag_untagged(
+                self._store,
+                engine,
+                self._extractor.tagging_model(),
+                self._tag_tried,
+            )
+        except Exception:  # noqa: BLE001 -- topics must never stop extraction
+            logger.debug("Fact topic tagging failed", exc_info=True)
 
     def _scan(self, text: str) -> Optional[Any]:
         """Run the injection scanner, or return ``None`` when it is absent or

@@ -76,9 +76,7 @@ def _catch_up_allowed(slot: float, now: float, agent: dict) -> bool:
 
     if now - slot >= CATCH_UP_WINDOW_SECONDS or slot > now:
         return False
-    if (
-        datetime.date.fromtimestamp(slot) != datetime.date.fromtimestamp(now)
-    ):
+    if datetime.date.fromtimestamp(slot) != datetime.date.fromtimestamp(now):
         return False
     last_run = agent.get("last_run_at") or 0.0
     created = agent.get("created_at") or 0.0

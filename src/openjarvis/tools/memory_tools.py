@@ -256,8 +256,10 @@ class RecallTool(BaseTool):
                 "daily diary (episodes) and indexed documents. Use it when the "
                 "user asks what you know or remember about something, when "
                 "they ask why you think something, or when a question needs "
-                "more than what is already in context. Each hit says where it "
-                "came from and when."
+                "more than what is already in context. Only the facts that "
+                "bear on the message are in context; if the answer may be "
+                "remembered but is not shown, search here before saying you "
+                "don't know. Each hit says where it came from and when."
             ),
             parameters={
                 "type": "object",

@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.registry import FactStoreRegistry
@@ -224,6 +224,9 @@ class Fact:
     day: str = ""
     removed_at: Optional[float] = None
     removed_reason: str = ""
+    # One of memory.topics.TOPICS, set by the model after the fact is
+    # saved; "" until then. Names what is on file but not sent each turn.
+    topic: str = ""
 
     @property
     def live(self) -> bool:
@@ -371,6 +374,7 @@ class LocalFactStore(FactStore):
                     if isinstance(removed_at, (int, float))
                     else None,
                     removed_reason=str(obj.get("removed_reason", "") or ""),
+                    topic=str(obj.get("topic", "") or ""),
                 )
             )
         return facts
@@ -497,6 +501,22 @@ class LocalFactStore(FactStore):
                 fact.source = source
             self._flush()
             return fact
+
+    def set_topics(self, topics: Dict[str, str]) -> int:
+        """Set the topic of each fact id in *topics*; returns how many changed."""
+        if not topics:
+            return 0
+        with self._lock, _cross_process_lock(self._lock_path()):
+            self._sync_from_disk_locked()
+            changed = 0
+            for fact in self._facts:
+                topic = topics.get(fact.id)
+                if topic and fact.topic != topic:
+                    fact.topic = topic
+                    changed += 1
+            if changed:
+                self._flush()
+            return changed
 
     def remove(self, fact_id: str, reason: str = "") -> bool:
         """Soft-delete: the fact leaves recall at once and can be restored

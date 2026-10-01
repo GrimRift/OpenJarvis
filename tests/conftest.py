@@ -63,6 +63,21 @@ def _no_real_voice_choice(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_memory_settings(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every turn's context reads the Memory page settings; tests get the
+    defaults from a temp folder, not whatever the live data folder holds."""
+    try:
+        from openjarvis.memory import settings as memory_settings
+    except Exception:
+        return
+    monkeypatch.setattr(
+        memory_settings, "DEFAULT_CONFIG_DIR", tmp_path_factory.mktemp("memset")
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_real_image_state(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
