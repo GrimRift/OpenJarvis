@@ -293,8 +293,19 @@ def test_inject_context_collapses_multiple_system_messages():
     assert "User likes jazz" in system_messages[0].content
 
 
+def _relevant_only(on: bool) -> None:
+    from openjarvis.memory import settings as memory_settings
+
+    memory_settings.save_memory_settings(
+        memory_settings.MemorySettings(relevant_only=on)
+    )
+
+
 def test_inject_context_reserves_budget_for_retrieved_documents():
+    """With "relevant only" off: facts are capped at half the budget."""
     from openjarvis.tools.storage.context import _count_tokens
+
+    _relevant_only(False)
 
     doc = "d1 d2 d3 d4 d5"
     backend = _FakeMemory([RetrievalResult(content=doc, score=1.0, source="doc")])
@@ -319,7 +330,10 @@ def test_inject_context_reserves_budget_for_retrieved_documents():
 
 
 def test_inject_context_prefers_large_document_that_fits_total_budget():
+    """With "relevant only" off: a large document displaces the facts."""
     from openjarvis.tools.storage.context import _count_tokens
+
+    _relevant_only(False)
 
     doc, fact = "d1 d2 d3 d4 d5 d6 d7 d8", "f1 f2 f3 f4 f5"
     backend = _FakeMemory([RetrievalResult(content=doc, score=1.0)])
@@ -337,6 +351,55 @@ def test_inject_context_prefers_large_document_that_fits_total_budget():
 
     assert "d1 d2 d3 d4 d5 d6 d7 d8" in augmented[0].content
     assert "f1 f2 f3 f4 f5" not in augmented[0].content
+
+
+def test_relevant_facts_are_not_halved_by_a_matching_document():
+    """1 Oct: a stray test note matched any message with "use" and cut the
+    facts to half the budget. With "relevant only" the facts keep their
+    full selection and the document gets what is left."""
+    from openjarvis.tools.storage.context import _count_tokens
+
+    _relevant_only(True)
+    doc = "d1 d2 d3 d4 d5"
+    backend = _FakeMemory([RetrievalResult(content=doc, score=1.0, source="doc")])
+    facts = [
+        Fact(text="query old1 old2 old3 old4", trust="auto"),
+        Fact(text="query new1 new2 new3 new4", trust="auto"),
+    ]
+    unit = max(_count_tokens(doc), *(_count_tokens(f.text) for f in facts))
+
+    augmented = inject_context(
+        "query",
+        [Message(role=Role.USER, content="query")],
+        backend,
+        config=ContextConfig(max_context_tokens=3 * unit),
+        facts=facts,
+    )
+
+    text = augmented[0].content
+    assert "query old1" in text and "query new1" in text
+    assert "d1 d2 d3 d4 d5" in text
+
+
+def test_relevant_facts_stay_when_a_large_document_does_not_fit():
+    from openjarvis.tools.storage.context import _count_tokens
+
+    _relevant_only(True)
+    doc, fact = "d1 d2 d3 d4 d5 d6 d7 d8", "query f2 f3 f4 f5"
+    backend = _FakeMemory([RetrievalResult(content=doc, score=1.0)])
+    budget = max(_count_tokens(doc), 2 * _count_tokens(fact))
+    assert _count_tokens(doc) + _count_tokens(fact) > budget
+
+    augmented = inject_context(
+        "query",
+        [Message(role=Role.USER, content="query")],
+        backend,
+        config=ContextConfig(max_context_tokens=budget),
+        facts=[Fact(text=fact, trust="auto", pinned=True)],
+    )
+
+    assert "query f2 f3 f4 f5" in augmented[0].content
+    assert "d1 d2 d3 d4 d5 d6 d7 d8" not in augmented[0].content
 
 
 def test_inject_context_publishes_event():

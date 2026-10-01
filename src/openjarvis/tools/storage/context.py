@@ -293,13 +293,17 @@ def inject_context(
     # still available to documents. Within the fact budget, selection is by
     # relevance to the message with a pinned core that always goes (M38);
     # it used to be newest-first, which crowded out everything older.
-    fact_budget = cfg.max_context_tokens
-    if results:
-        fact_budget //= 2
+    # With "relevant only" the facts are already limited to what bears on
+    # the message (~650-1,300 tokens), so they are not halved: halving let
+    # any matching document -- a stray test note, on 1 Oct -- cut the facts
+    # to 1,024 tokens on every turn that shared a word with it.
     from openjarvis.memory.recall import select_facts, topics_not_sent
 
     trusted = _trusted_facts(facts)
     relevant_only = _relevant_only()
+    fact_budget = cfg.max_context_tokens
+    if results and not relevant_only:
+        fact_budget //= 2
     selected_facts: List[Fact] = select_facts(
         trusted, query, fact_budget, _count_tokens, relevant_only=relevant_only
     )
@@ -312,8 +316,15 @@ def inject_context(
         if total_tokens + tokens > cfg.max_context_tokens:
             # A large top result should not disappear solely because facts
             # consumed their reserved share. Prefer that result when it fits
-            # the total budget on its own.
-            if not truncated and selected_facts and tokens <= cfg.max_context_tokens:
+            # the total budget on its own. Not with "relevant only": those
+            # facts (the pinned core among them) stay, and recall can still
+            # search the documents.
+            if (
+                not relevant_only
+                and not truncated
+                and selected_facts
+                and tokens <= cfg.max_context_tokens
+            ):
                 selected_facts = []
                 total_tokens = 0
             else:
