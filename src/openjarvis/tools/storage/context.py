@@ -143,8 +143,13 @@ def build_context_message(
         sections.append(
             "Also on file but not shown here, by topic: "
             + also_on_file.strip()
-            + ". If the answer may be in memory but is not shown above, call "
-            "recall before saying you don't know."
+            # Only for the user's own details: worded more broadly, a
+            # question comparing a model "to gpt luna" sent Sage through
+            # memory twelve times (2 October), since dozens of facts name it.
+            + ". If the user asks about themselves or their own things "
+            "(their schedule, devices, plans, people, preferences) and the "
+            "answer is not shown above, call recall once before saying you "
+            "don't know. For general topics, do not search memory."
         )
     if results:
         sections.append(

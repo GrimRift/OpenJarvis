@@ -70,7 +70,11 @@ class GmailOpenTool(BaseTool):
 
         from openjarvis.tools.gmail_read import (
             _TOKEN_PATH,
+            _header,
+            _metadata_message,
             message_url,
+            query_words,
+            score_match,
             search_messages,
         )
         from openjarvis.tools.opera_control import (
@@ -95,8 +99,40 @@ class GmailOpenTool(BaseTool):
                 lambda token: search_messages(token, query, 1),
                 _TOKEN_PATH,
             )
+            meta = (
+                call_with_refresh(
+                    lambda token: _metadata_message(token, ids[0]), _TOKEN_PATH
+                )
+                if ids
+                else {}
+            )
         except Exception as error:
             return self._fail(f"could not search Gmail: {error}")
+
+        headers = (meta.get("payload") or {}).get("headers") or []
+        subject = _header(headers, "Subject") or "(no subject)"
+        sender = _header(headers, "From") or "unknown sender"
+        when = _header(headers, "Date")
+        named = f'"{subject}" from {sender}' + (f" ({when})" if when else "")
+        # Gmail's fallback search ORs the words, so a lone "reminder" matched
+        # an Academia.edu promo for "PMFC examination reminder" -- which lives
+        # in Outlook -- and it was opened three times as if it were the one
+        # (2 October). Open only what matches at least half of the words.
+        words = query_words(query)
+        if ids and words:
+            haystack = " ".join([sender, subject, meta.get("snippet") or ""])
+            if score_match(haystack, words) * 2 < len(words):
+                return ToolResult(
+                    tool_name=self.tool_id,
+                    content=(
+                        f"No Gmail message matches {query!r} well, so nothing "
+                        f"was opened. The closest was {named}, which is not it. "
+                        "Tell the user it is not in Gmail; if it came from "
+                        "Outlook, use outlook_open."
+                    ),
+                    success=True,
+                    metadata={"found": False, "closest": ids[0]},
+                )
 
         if not ids:
             # A miss is a miss, never evidence that the message was imagined.
@@ -104,7 +140,8 @@ class GmailOpenTool(BaseTool):
                 tool_name=self.tool_id,
                 content=(
                     f"No Gmail message matches {query!r}, so there is nothing "
-                    "to open. It may be worded differently."
+                    "to open. It may be worded differently, or be in Outlook "
+                    "(use outlook_open)."
                 ),
                 success=True,
                 metadata={"found": False},
@@ -121,7 +158,10 @@ class GmailOpenTool(BaseTool):
 
         return ToolResult(
             tool_name=self.tool_id,
-            content=f"Opened that message in Gmail.{where}",
+            content=(
+                f"Opened in Gmail: {named}.{where} Name it when you tell the "
+                "user, so they can see it is the right one."
+            ),
             success=True,
             metadata={"found": True, "id": ids[0], "url": url},
         )

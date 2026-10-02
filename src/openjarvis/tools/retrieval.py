@@ -184,6 +184,14 @@ class RetrievalTool(BaseTool):
                 content="No query provided.",
                 success=False,
             )
+        from openjarvis.tools import memory_budget
+
+        if not memory_budget.take():
+            return ToolResult(
+                tool_name="retrieval",
+                content=memory_budget.SPENT_MESSAGE,
+                success=False,
+            )
         top_k = params.get("top_k", self._top_k)
         source = params.get("source")
         since = params.get("since")

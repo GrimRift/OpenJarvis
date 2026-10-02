@@ -69,6 +69,15 @@ _ASSIGNMENT_GROUP = '[class*="group-container"]'
 #: work in it — the empty answer was the slowest to give.
 _EMPTY_STATE = r"no (upcoming|past due|completed) assignments"
 
+
+def _empty_state_for(tab: str) -> str:
+    """The empty message of *tab* only. Right after a tab click the old tab's
+    "No upcoming assignments" is still on the page for ~100 ms; matching any
+    tab's message read that as Past due being empty (2 October: an
+    assignment due the day before was reported as "nothing")."""
+    return rf"no {re.escape(tab.lower())} assignments"
+
+
 #: Overdue work stays on the Past due tab forever; this user had items seven
 #: months old sitting beside yesterday's. Only the last week is worth
 #: reporting, and Teams already renders the age as "Due yesterday" or
@@ -105,9 +114,7 @@ def _tidy(rows, limit: int) -> List[str]:
     return out
 
 
-def wait_until_settled(
-    page, selector: str, timeout: Optional[float] = None
-) -> int:
+def wait_until_settled(page, selector: str, timeout: Optional[float] = None) -> int:
     """Poll until the number of *selector* matches stops growing.
 
     Rows stream in, so reading the instant the first one appears truncates the
@@ -121,9 +128,7 @@ def wait_until_settled(
     """
     import time
 
-    deadline = time.monotonic() + (
-        _STABLE_CEILING if timeout is None else timeout
-    )
+    deadline = time.monotonic() + (_STABLE_CEILING if timeout is None else timeout)
     previous = -1
     while time.monotonic() < deadline:
         try:
@@ -139,7 +144,7 @@ def wait_until_settled(
     return max(previous, 0)
 
 
-def read_activity(page, count: int) -> List[str]:
+def read_activity(page, count: int) -> Optional[List[str]]:
     """Recent Activity items, newest first as Teams orders them.
 
     The row text is taken from the title element's enclosing row, not the
@@ -147,11 +152,11 @@ def read_activity(page, count: int) -> List[str]:
     what happened.
     """
     if not _click_rail(page, "Activity"):
-        return []
+        return None
     if not page.wait_for(
         f"document.querySelector({_ACTIVITY_ROWS!r})", timeout=_PANEL_TIMEOUT
     ):
-        return []
+        return None
     wait_until_settled(page, _ACTIVITY_ROWS)
     try:
         rows = page.evaluate(
@@ -165,7 +170,7 @@ def read_activity(page, count: int) -> List[str]:
                 }})"""
         )
     except Exception:
-        return []
+        return None
     return _tidy(rows, count)
 
 
@@ -206,7 +211,9 @@ def _click_tab(frame, label: str) -> bool:
         return False
 
 
-def _await_rows_or_empty(frame, timeout: float = _PANEL_TIMEOUT) -> str:
+def _await_rows_or_empty(
+    frame, timeout: float = _PANEL_TIMEOUT, tab: str = "upcoming"
+) -> str:
     """Return "rows", "empty" or "timeout" for the visible assignments tab.
 
     Waiting only for rows makes an empty tab cost the full timeout, and an
@@ -225,7 +232,7 @@ def _await_rows_or_empty(frame, timeout: float = _PANEL_TIMEOUT) -> str:
             ):
                 return "rows"
             if frame.evaluate(
-                f"new RegExp({_EMPTY_STATE!r}, 'i')"
+                f"new RegExp({_empty_state_for(tab)!r}, 'i')"
                 ".test(document.body ? document.body.innerText : '')"
             ):
                 return "empty"
@@ -255,7 +262,7 @@ def _scrape_rows(frame, count: int):
     )
 
 
-def read_assignments(browser, page, count: int) -> List[str]:
+def read_assignments(browser, page, count: int) -> Optional[List[str]]:
     """Assignments with their due dates, from the iframe's own CDP target.
 
     The due date is not in the card. Teams groups cards under a date heading —
@@ -264,34 +271,41 @@ def read_assignments(browser, page, count: int) -> List[str]:
     it an assignment reads "Due at 11:59 PM" with no day attached, which is the
     one thing the user needs from it.
 
-    When Upcoming is empty the Past due tab is read instead, filtered to the
-    last week. Nothing due is the common case here, and it used to be both the
-    slowest answer and the least useful one: ten seconds of waiting to say
-    nothing, while yesterday's overdue work sat one tab away.
+    Upcoming, then always the Past due tab, filtered to the last week (the
+    user's choice, 2 October): work due yesterday matters whether or not
+    something else is coming up. Returns None when the panel did not load, so
+    "could not check" is never reported as "nothing due".
     """
     if not _click_rail(page, "Assignments"):
-        return []
+        return None
     frame = _await_assignments_frame(browser, page)
     if frame is None:
-        return []
+        return None
     try:
-        state = _await_rows_or_empty(frame)
+        state = _await_rows_or_empty(frame, tab="upcoming")
+        if state == "timeout":
+            return None
+        upcoming: List[str] = []
         if state == "rows":
             wait_until_settled(frame, _ASSIGNMENT_ROWS)
-            return _tidy(_scrape_rows(frame, count), count)
-        if state != "empty" or not _click_tab(frame, "Past due"):
-            return []
-        if _await_rows_or_empty(frame) != "rows":
-            return []
-        wait_until_settled(frame, _ASSIGNMENT_ROWS)
-        rows = [
-            row
-            for row in (_scrape_rows(frame, count) or [])
-            if _recent_past_due(str(row or ""))
-        ]
-        return [f"Past due: {row}" for row in _tidy(rows, count)]
+            upcoming = _tidy(_scrape_rows(frame, count), count)
+        if not _click_tab(frame, "Past due"):
+            return upcoming
+        past_due: List[str] = []
+        if _await_rows_or_empty(frame, tab="past due") == "rows":
+            wait_until_settled(frame, _ASSIGNMENT_ROWS)
+            rows = [
+                row
+                for row in (_scrape_rows(frame, count) or [])
+                if _recent_past_due(str(row or ""))
+            ]
+            past_due = [f"Past due: {row}" for row in _tidy(rows, count)]
+        # Leave the panel where the user expects it.
+        with contextlib.suppress(Exception):
+            _click_tab(frame, "Upcoming")
+        return past_due + upcoming
     except Exception:
-        return []
+        return None
     finally:
         with contextlib.suppress(Exception):
             frame.close()
@@ -312,6 +326,14 @@ def _await_assignments_frame(browser, page):
             return frame
         page.sleep(_IFRAME_POLL)
     return None
+
+
+#: Before the second read of a panel that did not load.
+_RETRY_WAIT_SECONDS = 3.0
+
+
+class _TeamsDidNotLoad(Exception):
+    """Teams itself never rendered (signed out, offline): no point retrying."""
 
 
 @ToolRegistry.register("teams_read")
@@ -342,9 +364,7 @@ class TeamsReadTool(BaseTool):
                 "properties": {
                     "sections": {
                         "type": "string",
-                        "description": (
-                            "Which panel to read. Default 'both'."
-                        ),
+                        "description": ("Which panel to read. Default 'both'."),
                         "enum": ["both", "activity", "assignments"],
                     },
                     "count": {
@@ -369,47 +389,66 @@ class TeamsReadTool(BaseTool):
         except (TypeError, ValueError):
             count = 10
 
-        groups: List[Tuple[str, List[str]]] = []
-        try:
-            with opera_session(transient=True) as session:
-                page = session.page
-                page.navigate(TEAMS_URL, timeout=load_timeout(_NAV_TIMEOUT))
-                if not page.wait_for(
-                    f"document.querySelector({_RAIL.format(name='Activity')!r})",
-                    timeout=load_timeout(_NAV_TIMEOUT),
-                ):
-                    return self._fail(
-                        "Teams did not load. If it is asking for a login, sign "
-                        "in inside Opera GX once and try again."
-                    )
-                from openjarvis.tools.cdp import Browser
-                from openjarvis.tools.opera_control import DEBUG_PORT
+        wanted = []
+        if sections in {"both", "activity"}:
+            wanted.append("Activity")
+        if sections in {"both", "assignments"}:
+            wanted.append("Assignments")
+        # A panel that did not load is read once more: on a cold morning the
+        # first read after Opera starts is the one most likely to miss.
+        got: dict[str, List[str]] = {}
+        for attempt in range(2):
+            missing = [label for label in wanted if label not in got]
+            if not missing:
+                break
+            if attempt:
+                import time
 
-                browser = Browser(DEBUG_PORT)
-                if sections in {"both", "activity"}:
-                    groups.append(("Activity", read_activity(page, count)))
-                if sections in {"both", "assignments"}:
-                    groups.append(
-                        ("Assignments", read_assignments(browser, page, count))
-                    )
-        except Exception as error:
-            return self._fail(f"could not read Teams: {error}")
+                time.sleep(_RETRY_WAIT_SECONDS)
+            try:
+                read = self._read_once(missing, count)
+            except _TeamsDidNotLoad as error:
+                return self._fail(str(error))
+            except Exception as error:
+                if attempt:
+                    return self._fail(f"could not read Teams: {error}")
+                continue
+            got.update({k: v for k, v in read.items() if v is not None})
 
+        unread = [label for label in wanted if label not in got]
+        groups: List[Tuple[str, List[str]]] = [
+            (label, got[label]) for label in wanted if label in got
+        ]
         total = sum(len(items) for _, items in groups)
-        if not total:
+        if not total and not unread:
             return ToolResult(
                 tool_name=self.tool_id,
                 content=(
-                    "Nothing to report from Teams — no recent activity and "
-                    "nothing due, or the panels did not render."
+                    "Nothing to report from Teams: no recent activity, nothing "
+                    "upcoming and nothing past due in the last week."
                 ),
                 success=True,
                 metadata={"count": 0},
             )
+        if not groups:
+            return self._fail(
+                "Teams could not be checked: "
+                + " and ".join(unread)
+                + " did not load, twice. Say so; do not report it as nothing due."
+            )
         parts = []
+        for label in unread:
+            parts.append(
+                f"{label}: could not be checked (did not load, twice). Say so; "
+                "do not report it as nothing."
+            )
         for label, items in groups:
             if not items:
-                parts.append(f"{label}: nothing.")
+                parts.append(
+                    f"{label}: nothing."
+                    if label == "Activity"
+                    else f"{label}: nothing upcoming, nothing past due this week."
+                )
                 continue
             body = "\n".join(f"  {i}. {text}" for i, text in enumerate(items, 1))
             parts.append(f"{label} ({len(items)}):\n{body}")
@@ -432,6 +471,30 @@ class TeamsReadTool(BaseTool):
                 "items": {label: list(items) for label, items in groups},
             },
         )
+
+    def _read_once(self, labels: List[str], count: int) -> dict:
+        """One pass over *labels*; a label maps to None if it did not load."""
+        out: dict = {}
+        with opera_session(transient=True) as session:
+            page = session.page
+            page.navigate(TEAMS_URL, timeout=load_timeout(_NAV_TIMEOUT))
+            if not page.wait_for(
+                f"document.querySelector({_RAIL.format(name='Activity')!r})",
+                timeout=load_timeout(_NAV_TIMEOUT),
+            ):
+                raise _TeamsDidNotLoad(
+                    "Teams did not load. If it is asking for a login, sign "
+                    "in inside Opera GX once and try again."
+                )
+            from openjarvis.tools.cdp import Browser
+            from openjarvis.tools.opera_control import DEBUG_PORT
+
+            browser = Browser(DEBUG_PORT)
+            if "Activity" in labels:
+                out["Activity"] = read_activity(page, count)
+            if "Assignments" in labels:
+                out["Assignments"] = read_assignments(browser, page, count)
+        return out
 
     def _fail(self, reason: str) -> ToolResult:
         return ToolResult(tool_name=self.tool_id, content=reason, success=False)

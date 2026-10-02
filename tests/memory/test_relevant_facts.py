@@ -102,7 +102,8 @@ def test_context_carries_the_topics_line_and_the_recall_hint():
     assert (
         "Also on file but not shown here, by topic: games (15), personal (1)." in text
     )
-    assert "call recall before saying you don't know" in text
+    assert "call recall once before saying you don't know" in text
+    assert "For general topics, do not search memory." in text
 
 
 def test_context_with_the_switch_off_has_no_topics_line(tmp_path, monkeypatch):

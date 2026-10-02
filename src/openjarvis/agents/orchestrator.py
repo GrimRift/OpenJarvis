@@ -15,6 +15,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextvars
 import json
+import logging
 import re
 from typing import Any, List, Optional
 
@@ -24,6 +25,17 @@ from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import Message, Role, ToolCall, ToolResult
 from openjarvis.engine._stubs import InferenceEngine
 from openjarvis.tools._stubs import BaseTool
+
+logger = logging.getLogger(__name__)
+
+
+#: Sent, with no tools offered, when a turn has used every round without
+#: answering (2 October: fifteen rounds of memory searches, no answer).
+LAST_ROUND_PROMPT = (
+    "(You have used all your steps for this message. Answer now from what "
+    "you have already gathered, and say briefly what you could not check. "
+    "Do not ask to search again.)"
+)
 
 
 @AgentRegistry.register("orchestrator")
@@ -523,8 +535,21 @@ class OrchestratorAgent(ToolUsingAgent):
                         )
                     )
 
-        # Max turns exceeded
-        final_content = self._strip_think_tags(content) if content else ""
+        # Max turns exceeded: one more call without tools, so it answers
+        # from what it gathered instead of returning nothing.
+        final_content = ""
+        if all_tool_results:
+            messages.append(Message(role=Role.USER, content=LAST_ROUND_PROMPT))
+            try:
+                last = self._generate(messages)
+                usage = last.get("usage", {})
+                total_prompt_tokens += usage.get("prompt_tokens", 0)
+                total_completion_tokens += usage.get("completion_tokens", 0)
+                final_content = self._strip_think_tags(last.get("content", "") or "")
+            except Exception:  # noqa: BLE001 -- fall back to the old message
+                logger.warning("Last-round answer failed", exc_info=True)
+        if not final_content:
+            final_content = self._strip_think_tags(content) if content else ""
         self._emit_turn_end(turns=turns, max_turns_exceeded=True)
         return AgentResult(
             content=final_content or "Maximum turns reached without a final answer.",

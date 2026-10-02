@@ -63,6 +63,35 @@ def _no_real_voice_choice(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_brief_memory(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Briefs read earlier briefs from digest.db/traces.db and ask GitHub for
+    CI status; tests get an empty temp folder and no network call."""
+    try:
+        from openjarvis.agents import brief_memory
+    except Exception:
+        return
+    root = tmp_path_factory.mktemp("briefs")
+    monkeypatch.setattr(brief_memory, "get_config_dir", lambda: root)
+    monkeypatch.setattr(brief_memory, "ci_status", lambda timeout=10.0: "")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_memory_search_budget():
+    """Each test is its own message: the per-message limit on memory
+    searches would otherwise carry over from one test to the next."""
+    try:
+        from openjarvis.tools import memory_budget
+    except Exception:
+        yield
+        return
+    memory_budget.start_message()
+    yield
+    memory_budget.start_message()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_memory_settings(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:

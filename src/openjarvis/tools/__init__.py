@@ -271,6 +271,7 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.brief_done  # noqa: F401
     import openjarvis.tools.close_media  # noqa: F401
     import openjarvis.tools.gmail_open  # noqa: F401
     import openjarvis.tools.memory_tools  # noqa: F401

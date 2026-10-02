@@ -257,9 +257,11 @@ class RecallTool(BaseTool):
                 "user asks what you know or remember about something, when "
                 "they ask why you think something, or when a question needs "
                 "more than what is already in context. Only the facts that "
-                "bear on the message are in context; if the answer may be "
-                "remembered but is not shown, search here before saying you "
-                "don't know. Each hit says where it came from and when."
+                "bear on the message are in context; if the user asks about "
+                "themselves or their own things and the answer is not shown, "
+                "search here once before saying you don't know. Not for "
+                "general topics; at most three memory searches per message. "
+                "Each hit says where it came from and when."
             ),
             parameters={
                 "type": "object",
@@ -279,6 +281,14 @@ class RecallTool(BaseTool):
         if not query:
             return ToolResult(
                 tool_name=self.tool_id, content="Recall what?", success=False
+            )
+        from openjarvis.tools import memory_budget
+
+        if not memory_budget.take():
+            return ToolResult(
+                tool_name=self.tool_id,
+                content=memory_budget.SPENT_MESSAGE,
+                success=False,
             )
         limit = max(1, min(int(params.get("limit") or 8), 30))
         from openjarvis.memory.recall import score_facts, tokens

@@ -13,6 +13,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from openjarvis.agents.orchestrator import LAST_ROUND_PROMPT as _LAST_ROUND
 from openjarvis.core import activity
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.types import Message, Role, ToolCall
@@ -34,6 +35,7 @@ from openjarvis.server.models import (
     UsageInfo,
 )
 from openjarvis.server.undo import TurnLedger
+from openjarvis.tools import memory_budget as _memory_budget
 
 router = APIRouter()
 
@@ -469,6 +471,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     # of an email, or of a page just read -- is refused, so a page cannot
     # choose what Sage fetches next.
     page_access.set_turn(confirmations.last_user_text(request_body.messages))
+    _memory_budget.start_message()
 
     # The image pasted this turn, for `image_edit(image="attached")`; a turn
     # without one clears the last turn's. Process-level, so once is enough.
@@ -1269,6 +1272,7 @@ async def _handle_streaming_orchestrator(
     # while the route logged the URL as permitted. This generator is the task
     # the tools actually execute in.
     page_access.set_turn(confirmations.last_user_text(req.messages))
+    _memory_budget.start_message()
 
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     input_text = req.messages[-1].content if req.messages else ""
@@ -1598,6 +1602,14 @@ async def _handle_streaming_orchestrator(
                             if (tool.get("function") or {}).get("name")
                             not in _BROWSER_OPEN_TOOL_NAMES
                         ]
+                    if _memory_budget.spent():
+                        # Same as page reads: once spent, stop offering them.
+                        active_tools = [
+                            tool
+                            for tool in active_tools
+                            if (tool.get("function") or {}).get("name")
+                            not in _memory_budget.MEMORY_SEARCH_TOOLS
+                        ]
                     if _page_reads_spent():
                         # Offered once the budget is spent, the model kept
                         # calling it, a refusal and a model round each time.
@@ -1693,6 +1705,48 @@ async def _handle_streaming_orchestrator(
                     full_content += continuation
                 break
             else:
+                if not full_content:
+                    # Out of rounds with tool results in hand: one more call,
+                    # without tools, so it has to answer. On 2 October a turn
+                    # spent all fifteen rounds searching memory and the user
+                    # got "Maximum turns reached" though two articles had
+                    # already been read.
+                    messages.append(Message(role=Role.USER, content=_LAST_ROUND))
+                    final = ""
+                    try:
+                        async for stream_chunk in agent._engine.stream_full(
+                            messages,
+                            model=model or agent._model,
+                            temperature=agent._temperature,
+                            max_tokens=budget,
+                        ):
+                            if stream_chunk.content:
+                                final += stream_chunk.content
+                                last_chunk = ChatCompletionChunk(
+                                    id=chunk_id,
+                                    model=model,
+                                    choices=[
+                                        StreamChoice(
+                                            delta=DeltaMessage(
+                                                content=stream_chunk.content
+                                            )
+                                        )
+                                    ],
+                                )
+                                yield f"data: {last_chunk.model_dump_json()}\n\n"
+                            if stream_chunk.usage:
+                                total_prompt_tokens += int(
+                                    stream_chunk.usage.get("prompt_tokens", 0) or 0
+                                )
+                                total_completion_tokens += int(
+                                    stream_chunk.usage.get("completion_tokens", 0)
+                                    or 0
+                                )
+                    except Exception:
+                        logging.getLogger("openjarvis.server").warning(
+                            "Last-round answer failed", exc_info=True
+                        )
+                    full_content = final
                 if not full_content:
                     full_content = "Maximum turns reached without a final answer."
                     content_chunk = ChatCompletionChunk(
@@ -1859,6 +1913,7 @@ async def _handle_agent_stream(
         from openjarvis.security import page_access as _page_access
 
         _page_access.set_turn(_confirmations.last_user_text(req.messages))
+        _memory_budget.start_message()
 
         first_chunk = ChatCompletionChunk(
             id=chunk_id,

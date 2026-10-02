@@ -577,6 +577,19 @@ class AgentExecutor:
         else:
             base = tick_note or "Continue your assigned task."
             input_text = f"Current date: {today}\n\n{base}"
+        if config.get("deliver_to"):
+            # A report sent to the phone is a brief: it gets its own earlier
+            # reports, the done list and CI status (2 October: a finished
+            # exam and fixed CI runs were repeated daily).
+            try:
+                from openjarvis.agents.brief_memory import (
+                    memory_block,
+                    operator_briefs,
+                )
+
+                input_text += "\n\n" + memory_block(operator_briefs(agent["id"]))
+            except Exception:  # noqa: BLE001 -- a brief without memory beats none
+                logger.warning("Brief memory unavailable", exc_info=True)
         late_for = agent.get("late_for")
         if late_for:
             due = datetime.datetime.fromtimestamp(late_for).strftime("%H:%M")

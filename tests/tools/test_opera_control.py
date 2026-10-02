@@ -937,3 +937,30 @@ class TestOneBrowserTaskAtATime:
         first.join(2)
         second.join(2)
         assert order == ["in", "out", "in", "out"]
+
+
+class TestOutlookRowsKeepTheirDate:
+    """2 October: the date was dropped from each row, so a "submit by
+    tonight" reminder from 30 September read as tonight every morning."""
+
+    def test_each_row_starts_with_the_day_it_arrived(self, monkeypatch):
+        from datetime import date as _date
+
+        from openjarvis.tools import opera_control
+
+        class _Today(_date):
+            @classmethod
+            def today(cls):
+                return _date(2026, 10, 2)
+
+        monkeypatch.setattr(opera_control, "date", _Today)
+        rows = [
+            "Ask Lex PH Academy\n[EXT]PMFC83 Examination Reminder\nWed 12:11 AM\n"
+            "Dear PMFC83 Participant, submit by tonight",
+            "NU Information Security\nDaily Digest\n9:15 AM\nNew posts",
+        ]
+        messages, newest = opera_control._tidy(rows)
+        assert messages[0].startswith("[received Wed Sep 30, 2 days ago] Ask Lex")
+        assert "Wed 12:11 AM" not in messages[0]
+        assert messages[1].startswith("[received Fri Oct 2, today] NU Information")
+        assert newest == _date(2026, 10, 2)

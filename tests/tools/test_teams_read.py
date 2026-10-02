@@ -29,6 +29,7 @@ def _quick_settle(monkeypatch):
     monkeypatch.setattr(teams_read, "_IFRAME_TIMEOUT", 0.2)
     monkeypatch.setattr(teams_read, "_IFRAME_POLL", 0.02)
     monkeypatch.setattr(teams_read, "_PANEL_TIMEOUT", 0.2)
+    monkeypatch.setattr(teams_read, "_RETRY_WAIT_SECONDS", 0.0, raising=False)
 
 
 
@@ -127,8 +128,9 @@ class TestActivity:
         page = _FakePage(rows={"activity": ["one", "two", "three"]})
         assert read_activity(page, 2) == ["one", "two"]
 
-    def test_a_panel_that_never_renders_is_empty_not_an_error(self):
-        assert read_activity(_FakePage(ready=False), 5) == []
+    def test_a_panel_that_never_renders_is_not_read_as_empty(self):
+        """2 October: "did not load" and "nothing there" were one answer."""
+        assert read_activity(_FakePage(ready=False), 5) is None
 
 
 class TestAssignments:
@@ -149,11 +151,12 @@ class TestAssignments:
         TeamsReadTool().execute(sections="assignments")
         assert browser.looked_for == teams_read._ASSIGNMENT_HOST
 
-    def test_a_missing_iframe_is_reported_not_crashed(self, monkeypatch):
+    def test_a_missing_iframe_says_teams_could_not_be_checked(self, monkeypatch):
         _install(monkeypatch, _FakePage(), None)
         result = TeamsReadTool().execute(sections="assignments")
-        assert result.success is True
-        assert result.metadata["count"] == 0
+        assert result.success is False
+        assert "could not be checked" in result.content
+        assert "do not report it as nothing" in result.content
 
 
 class TestBothSections:
@@ -190,10 +193,33 @@ class TestBothSections:
         assert session.transient is True
 
     def test_an_empty_teams_says_so_without_failing(self, monkeypatch):
-        _install(monkeypatch, _FakePage(), _FakePage())
+        _install(monkeypatch, _FakePage(), _FakeAssignmentsFrame([], []))
         result = TeamsReadTool().execute()
         assert result.success is True
         assert "Nothing to report" in result.content
+
+    def test_a_panel_that_fails_once_is_read_again(self, monkeypatch):
+        frames = iter([None, _FakeAssignmentsFrame(["Tomorrow - Quiz 2"], [])])
+
+        class _Flaky(_FakeBrowser):
+            def attach_by_url(self, needle):
+                return next(frames)
+
+        _install(monkeypatch, _FakePage(), None)
+        monkeypatch.setattr(
+            "openjarvis.tools.cdp.Browser", lambda port, timeout=20.0: _Flaky(None)
+        )
+        result = TeamsReadTool().execute(sections="assignments")
+        assert result.success is True
+        assert "Quiz 2" in result.content
+
+    def test_one_panel_failing_twice_is_named_beside_the_other(self, monkeypatch):
+        page = _FakePage(rows={"activity": ["Rick mentioned you"]})
+        _install(monkeypatch, page, None)
+        result = TeamsReadTool().execute()
+        assert result.success is True
+        assert "Rick mentioned you" in result.content
+        assert "Assignments: could not be checked" in result.content
 
 
 class TestTheDueDate:
@@ -259,25 +285,36 @@ class _FakeAssignmentsFrame(_FakePage):
         self._tabs = {"Upcoming": list(upcoming), "Past due": list(past_due)}
         self.current = "Upcoming"
         self.tabs_clicked = []
+        # Right after a tab click the old tab's empty message is still on
+        # the page for a moment (measured: ~100 ms), as here for one poll.
+        self._stale = None
 
     def evaluate(self, expression):
         if "const wanted" in expression:
             for label in self._tabs:
                 if repr(label) in expression:
                     self.tabs_clicked.append(label)
+                    if not self._tabs[self.current]:
+                        self._stale = self.current
                     self.current = label
                     return True
             return False
         if "new RegExp" in expression:
-            return not self._tabs[self.current]
+            stale, self._stale = self._stale, None
+            shown = {self.current.lower()} | ({stale.lower()} if stale else set())
+            return any(
+                f"no {tab} assignments" in expression
+                for tab in shown
+                if not self._tabs[tab.capitalize() if tab != "past due" else "Past due"]
+            )
         if 'role="listitem"' in expression:
-            rows = self._tabs[self.current]
+            rows = [] if self._stale else self._tabs[self.current]
             return len(rows) if expression.rstrip().endswith(".length") else rows
         return None
 
 
-class TestPastDueFallback:
-    """Nothing due was the slowest answer and the least useful one."""
+class TestPastDue:
+    """Past due is always read, last week only (the user, 2 October)."""
 
     YESTERDAY = "Sep 3rd - Due yesterday - Case Study (By group)"
     ANCIENT = "Mar 27th - Due 5 months ago - SPECIFICATIONS"
@@ -288,9 +325,11 @@ class TestPastDueFallback:
         _, browser = _install(monkeypatch, page, frame)
         return read_assignments(browser, page, 10), frame
 
-    def test_an_empty_upcoming_tab_falls_back_to_past_due(self, monkeypatch):
+    def test_an_empty_upcoming_tab_still_reads_past_due(self, monkeypatch):
+        """The stale "No upcoming assignments" seen just after the click
+        used to end the read with nothing (2 October)."""
         rows, frame = self._read(monkeypatch, [], [self.YESTERDAY])
-        assert frame.tabs_clicked == ["Past due"]
+        assert frame.tabs_clicked[0] == "Past due"
         assert rows == [f"Past due: {self.YESTERDAY}"]
 
     def test_work_months_overdue_is_not_reported(self, monkeypatch):
@@ -299,14 +338,12 @@ class TestPastDueFallback:
         )
         assert rows == [f"Past due: {self.YESTERDAY}"]
 
-    def test_upcoming_work_is_answered_without_touching_past_due(
-        self, monkeypatch
-    ):
+    def test_past_due_is_read_even_with_upcoming_work(self, monkeypatch):
         rows, frame = self._read(
             monkeypatch, ["Tomorrow - Quiz 2"], [self.YESTERDAY]
         )
-        assert frame.tabs_clicked == []
-        assert rows == ["Tomorrow - Quiz 2"]
+        assert rows == [f"Past due: {self.YESTERDAY}", "Tomorrow - Quiz 2"]
+        assert frame.tabs_clicked == ["Past due", "Upcoming"]
 
     def test_nothing_anywhere_is_empty_not_an_error(self, monkeypatch):
         rows, _ = self._read(monkeypatch, [], [])

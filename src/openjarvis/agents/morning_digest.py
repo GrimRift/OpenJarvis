@@ -311,6 +311,9 @@ class MorningDigestAgent(ToolUsingAgent):
                         if deadlines
                         else ""
                     )
+                    # Earlier briefs, done items and CI status (2 October:
+                    # a finished exam and fixed CI runs were repeated daily).
+                    + _brief_memory()
                     + "Use configured sections only. Omit missing "
                     "data and sources. Do not add personal context or activities. "
                     "Use the honorific no more than three times and keep the "
@@ -683,3 +686,14 @@ def _deadline_lines(browser_results: List[tuple]) -> str:
                 continue
             lines.extend(f"- {' '.join(str(entry).split())}" for entry in entries)
     return "\n".join(lines)
+
+
+def _brief_memory() -> str:
+    """The brief-memory block for the digest, or "" if it cannot be built."""
+    try:
+        from openjarvis.agents.brief_memory import digest_briefs, memory_block
+
+        return memory_block(digest_briefs()) + "\n\n"
+    except Exception:  # noqa: BLE001 -- a brief without memory beats none
+        logger.warning("Brief memory unavailable", exc_info=True)
+        return ""
