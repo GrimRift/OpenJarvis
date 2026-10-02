@@ -127,8 +127,9 @@ class GmailOpenTool(BaseTool):
                     content=(
                         f"No Gmail message matches {query!r} well, so nothing "
                         f"was opened. The closest was {named}, which is not it. "
-                        "Tell the user it is not in Gmail; if it came from "
-                        "Outlook, use outlook_open."
+                        "It is not in Gmail: call outlook_open with the same "
+                        "words now, before answering (the user has two "
+                        "mailboxes; school mail is in Outlook)."
                     ),
                     success=True,
                     metadata={"found": False, "closest": ids[0]},
@@ -141,7 +142,7 @@ class GmailOpenTool(BaseTool):
                 content=(
                     f"No Gmail message matches {query!r}, so there is nothing "
                     "to open. It may be worded differently, or be in Outlook "
-                    "(use outlook_open)."
+                    "(call outlook_open with the same words before answering)."
                 ),
                 success=True,
                 metadata={"found": False},
