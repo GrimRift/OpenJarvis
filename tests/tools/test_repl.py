@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import threading
 import time
+
+import pytest
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.tools.repl import ReplTool
@@ -230,17 +236,41 @@ class TestReplSecurity:
 
 
 class TestReplTimeout:
-    def test_sleep_timeout(self):
-        tool = ReplTool(timeout=1)
-        result = tool.execute(code="import time\ntime.sleep(10)")
-        assert not result.success
-        assert "timed out" in result.content
+    @pytest.fixture(autouse=True)
+    def parent_process_is_unchanged(self):
+        threads = set(threading.enumerate())
+        stdout, stderr = sys.stdout, sys.stderr
+        yield
+        assert sys.stdout is stdout
+        assert sys.stderr is stderr
+        assert set(threading.enumerate()) <= threads
 
-    def test_infinite_loop_timeout(self):
-        tool = ReplTool(timeout=1)
-        result = tool.execute(code="while True: pass")
-        assert not result.success
-        assert "timed out" in result.content
+    @staticmethod
+    def _check_timeout(code, tmp_path):
+        # A timeout returns without cancelling the daemon worker. Run these
+        # cases in a child so its busy loop and redirected streams cannot
+        # contaminate the rest of pytest; process exit stops the worker.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from openjarvis.tools.repl import ReplTool\n"
+                f"result = ReplTool(timeout=1).execute(code={code!r})\n"
+                "assert not result.success\n"
+                "assert 'timed out' in result.content\n",
+            ],
+            env={**os.environ, "OPENJARVIS_HOME": str(tmp_path / "home")},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_sleep_timeout(self, tmp_path):
+        self._check_timeout("import time\ntime.sleep(10)", tmp_path)
+
+    def test_infinite_loop_timeout(self, tmp_path):
+        self._check_timeout("while True: pass", tmp_path)
 
 
 class TestReplOutput:

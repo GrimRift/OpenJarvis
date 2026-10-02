@@ -498,22 +498,13 @@ class TestResolveToolSpecs:
 
     @pytest.fixture
     def _registered_tools(self):
-        """Re-register tools after the autouse conftest fixture clears them."""
-        import importlib
-        import sys
-
+        """Register the tested tools without replacing other modules' classes."""
         from openjarvis.core.registry import ToolRegistry
+        from openjarvis.tools.file_read import FileReadTool
+        from openjarvis.tools.think import ThinkTool
 
-        for mod_name in list(sys.modules):
-            if (
-                mod_name.startswith("openjarvis.tools.")
-                and not mod_name.endswith("_stubs")
-                and not mod_name.endswith("agent_tools")
-            ):
-                try:
-                    importlib.reload(sys.modules[mod_name])
-                except Exception:
-                    pass
+        ToolRegistry.register_value("file_read", FileReadTool)
+        ToolRegistry.register_value("think", ThinkTool)
         yield ToolRegistry
 
     def test_string_names_resolve_to_openai_specs(self, _registered_tools):

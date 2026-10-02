@@ -44,6 +44,25 @@ def _no_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_analytics_senders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test-created SDK clients must not send events or leave exit hooks waiting.
+
+    Each real PostHog client otherwise starts a consumer whose 30-second
+    queue wait is joined serially at exit, adding minutes after the summary.
+    """
+    from posthog import Posthog
+
+    real_init = Posthog.__init__
+
+    def _init(self, *args, **kwargs):
+        kwargs["send"] = False
+        kwargs["disabled"] = True
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(Posthog, "__init__", _init)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_voice_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Settings voice choice lives in the data directory; a test that
     resolves a TTS provider must see a fresh default, not this machine's

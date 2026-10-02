@@ -8,10 +8,12 @@ times, and Sage said "It's open in Gmail" each time.
 from __future__ import annotations
 
 import contextlib
+import os
+import subprocess
+import sys
 
 import pytest
 
-from openjarvis.tools import gmail_open as gmail_open_module
 from openjarvis.tools.gmail_open import GmailOpenTool
 
 
@@ -89,5 +91,20 @@ def test_a_good_match_is_opened_and_named(opened):
     assert result.metadata["found"] is True
 
 
-def test_module_imports_cleanly():
-    assert gmail_open_module.GmailOpenTool is GmailOpenTool
+def test_module_imports_cleanly(tmp_path):
+    # Registry bootstrap can reload tools during other tests. Verify a clean
+    # import without comparing a class retained across those supported reloads.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from openjarvis.tools import gmail_open as module\n"
+            "from openjarvis.tools.gmail_open import GmailOpenTool\n"
+            "assert module.GmailOpenTool is GmailOpenTool\n",
+        ],
+        env={**os.environ, "OPENJARVIS_HOME": str(tmp_path / "home")},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

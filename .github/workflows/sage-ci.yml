@@ -93,16 +93,11 @@ jobs:
       # gives Linux the same zone database the Windows target already has.
       - run: uv pip install pillow tzdata
 
-      # This step takes ~18 minutes while pytest's own timer reports ~4.
-      # --no-sync was an attempt to explain the gap as `uv run` re-syncing
-      # the environment before each invocation. It is not: run 4 came in at
-      # 19m26s against 18m58s, 18m27s and 20m29s before it, so the flag
-      # changed nothing measurable. It is kept only because an implicit sync
-      # in a test step is undesirable regardless.
-      #
-      # Where the time actually goes is still unknown. The timestamps below
-      # bracket pytest so the next run says whether the gap is inside the
-      # command or around it -- do not replace them with another guess.
+      # --no-sync preserves the environment installed above. The REPL timeout
+      # tests must stay process-isolated: their uncancelled daemon workers
+      # otherwise slow every later test. The shared test fixtures also disable
+      # analytics senders whose exit hooks otherwise wait 30 seconds per client.
+      # Per-test durations and wall-clock timestamps expose either delay.
       #
       # -p no:randomly is load-bearing, not tidiness. pytest-randomly shuffles
       # order and several tests here leak state, so a shuffled run fails a
@@ -129,7 +124,7 @@ jobs:
         run: |
           set -o pipefail
           echo "pytest starting at $(date -u +%H:%M:%S)"
-          uv run --no-sync pytest -p no:randomly -q --tb=short \
+          uv run --no-sync pytest -p no:randomly -q --tb=short --durations=30 \
             -m "not live and not cloud and not hub" \
             tests/analytics tests/architecture tests/core tests/daemon \
             tests/engine tests/memory tests/operators tests/scheduler \
