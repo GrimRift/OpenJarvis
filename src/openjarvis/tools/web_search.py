@@ -756,6 +756,9 @@ class WebSearchTool(BaseTool):
 
         url = self._extract_url(query) if not self._is_url(query) else query
         if url:
+            from openjarvis.tools import memory_budget
+
+            memory_budget.note_web_search()
             try:
                 content = self._fetch_url(url)
                 return ToolResult(
@@ -808,6 +811,12 @@ class WebSearchTool(BaseTool):
         initial_depth = plan.depth
         final_depth = plan.depth
         escalated = False
+
+        # Bind before the provider call, including timeouts and failures.
+        # Parallel tools must see that web research has already started.
+        from openjarvis.tools import memory_budget
+
+        memory_budget.note_web_search()
 
         try:
             provider_calls += 1
@@ -882,6 +891,14 @@ class WebSearchTool(BaseTool):
                     results, query, plan, images=images
                 )
 
+        # Social and meme posts after the articles, unless the message is
+        # about social media (the user's choice, 2 October). Stable sort, so
+        # the order within each group is Tavily's.
+        if not page_access.social_wanted():
+            results = sorted(
+                results,
+                key=lambda result: page_access.is_social(str(result.get("url") or "")),
+            )
         formatted_parts: list[str] = []
         sources: list[dict[str, Any]] = []
         seen_urls: set[str] = set()

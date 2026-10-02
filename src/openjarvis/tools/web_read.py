@@ -192,6 +192,13 @@ class WebReadTool(BaseTool):
                 "returned. This URL came from somewhere else -- paste it to "
                 "me directly and I will read it." + listed
             )
+        if page_access.is_social(url) and not page_access.social_wanted():
+            # Before the read budget: a skipped page should not use one up.
+            return self._fail(
+                "Skipped: that is a social media or meme page, which is not "
+                "opened unless the user asks about social media. Use the "
+                "article sources instead."
+            )
         reserved = page_access.reserve_read(url, MAX_READS_PER_TURN)
         if reserved == "duplicate":
             # The same page again cost a whole model round and resent its

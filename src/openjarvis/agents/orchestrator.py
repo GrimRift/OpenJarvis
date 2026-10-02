@@ -128,11 +128,20 @@ class OrchestratorAgent(ToolUsingAgent):
         # means the third "open obsidian" of the server's lifetime is refused
         # and every one after it, in any chat, replying "I cannot repeat the
         # same tool call" while nothing opens.
-        if self._loop_guard:
-            self._loop_guard.reset()
-        if self._mode == "structured":
-            return self._run_structured(input, context, **kwargs)
-        return self._run_function_calling(input, context, **kwargs)
+        from openjarvis.security import page_access
+        from openjarvis.tools import memory_budget
+
+        # Server transcripts may end with assistant/tool text. Only the
+        # actual user's message may grant page access or social-page intent.
+        user_text = (context.metadata if context is not None else {}).get(
+            "page_access_user_text", input
+        )
+        with page_access.scope(user_text), memory_budget.scope():
+            if self._loop_guard:
+                self._loop_guard.reset()
+            if self._mode == "structured":
+                return self._run_structured(input, context, **kwargs)
+            return self._run_function_calling(input, context, **kwargs)
 
     # ------------------------------------------------------------------
     # Structured mode (THOUGHT/TOOL/INPUT/FINAL_ANSWER)
@@ -344,6 +353,8 @@ class OrchestratorAgent(ToolUsingAgent):
         context: Optional[AgentContext] = None,
         **kwargs: Any,
     ) -> AgentResult:
+        from openjarvis.tools import memory_budget
+
         self._emit_turn_start(input)
 
         # Build initial messages
@@ -534,6 +545,8 @@ class OrchestratorAgent(ToolUsingAgent):
                             name=tc.name,
                         )
                     )
+
+            openai_tools = memory_budget.available_tools(openai_tools)
 
         # Max turns exceeded: one more call without tools, so it answers
         # from what it gathered instead of returning nothing.

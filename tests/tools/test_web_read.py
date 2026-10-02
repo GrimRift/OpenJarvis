@@ -120,6 +120,7 @@ class TestBounds:
         """Reads asked for in one response run at the same time; each must
         take its slot before any finishes, or all pass the count."""
         from concurrent.futures import ThreadPoolExecutor
+        from contextvars import copy_context
 
         pages = [f"https://news.example/{n}" for n in range(MAX_READS_PER_TURN + 2)]
         page_access.allow(pages)
@@ -133,9 +134,13 @@ class TestBounds:
         with patch.object(WebReadTool, "_render", side_effect=slow_render):
             with patch("openjarvis.tools.web_read.ensure_opera", return_value=None):
                 with ThreadPoolExecutor(len(pages)) as pool:
-                    results = list(
-                        pool.map(lambda url: _tool().execute(url=url), pages)
-                    )
+                    # Match the synchronous agent's worker boundary: each
+                    # worker receives a copy pointing to the same turn state.
+                    futures = [
+                        pool.submit(copy_context().run, _tool().execute, url=url)
+                        for url in pages
+                    ]
+                    results = [future.result() for future in futures]
         assert sum(result.success for result in results) == MAX_READS_PER_TURN
 
     def test_an_unreachable_browser_explains_itself(self):

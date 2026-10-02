@@ -129,12 +129,35 @@ def _to_messages(chat_messages) -> list[Message]:
     return messages
 
 
+def _model_line(model: str) -> str:
+    """Which model this answer comes from, stated each turn (2 October).
+
+    Asked to compare a model with "gpt luna", Sage said it ran on GPT-5.6
+    Luna: old design notes in the searchable vault said so, and nothing told
+    it otherwise. One line, current by construction.
+    """
+    model = (model or "").strip()
+    if not model:
+        return ""
+    try:
+        from openjarvis.engine.cloud import is_cloud_model
+
+        where = " (cloud)" if is_cloud_model(model) else " (local)"
+    except Exception:
+        where = ""
+    return (
+        f"You are answering with {model}{where}. Notes or memories naming a "
+        "different model for Sage describe an older setup."
+    )
+
+
 def _ensure_identity_prompt(
     messages: list[Message],
     app_config,
     diagrams: str = "off",
     *,
     turn_context: bool = False,
+    model: str = "",
 ) -> list[Message]:
     """Prepend OpenJarvis's identity system prompt when the client omits one.
 
@@ -196,6 +219,11 @@ def _ensure_identity_prompt(
         drawing = instruction(diagrams)
         if drawing:
             prompt = prompt + "\n\n" + drawing
+        own = _model_line(model)
+        if own and turn_context:
+            volatile = (volatile + "\n" + own).strip()
+        elif own:
+            prompt = prompt + "\n\n" + own
     except Exception:
         logging.getLogger("openjarvis.server").debug(
             "Identity system prompt resolution failed; "
@@ -393,15 +421,66 @@ def _log_turn_timing(clock: dict[str, float], rounds: list, end: float) -> None:
     )
 
 
+def _safe_tool_arguments(arguments: str) -> str:
+    """Keep diagnostic option values; never persist arbitrary model text."""
+    import json
+
+    try:
+        values = json.loads(arguments or "{}")
+    except (TypeError, ValueError):
+        return "[unparseable]"
+    if not isinstance(values, dict):
+        return "[unparseable]"
+    safe = {}
+    numeric = {"max_results", "limit", "top_k", "timeout_seconds"}
+    days = {
+        "today", "tomorrow", "tonight", "now", "monday", "tuesday",
+        "wednesday", "thursday", "friday", "saturday", "sunday",
+    }
+    for key, value in list(values.items())[:20]:
+        label = key if re.fullmatch(r"[a-z_]{1,40}", key) else "[field]"
+        if key in numeric and type(value) in (int, float) and 0 <= value <= 1000:
+            safe[label] = value
+        elif key == "day" and isinstance(value, str) and (
+            value.lower() in days or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
+        ):
+            safe[label] = value
+        elif key == "search_depth" and value in ("basic", "advanced"):
+            safe[label] = value
+        else:
+            safe[label] = "[redacted]"
+    return json.dumps(safe, sort_keys=True) if safe else ""
+
+
 def _log_tool_timing(call: Any, result: Any, seconds: float) -> None:
     """One line per tool call. A news turn spent 29 s in one tool on 29
     September and nothing recorded which tool, or which page."""
     metadata = getattr(result, "metadata", None) or {}
     detail = ""
     if isinstance(metadata, dict):
-        keys = ("mode", "url", "search_depth", "provider_calls")
-        parts = [f"{k}={metadata[k]}" for k in keys if metadata.get(k)]
+        from urllib.parse import urlsplit
+
+        parts = []
+        for key, allowed in (
+            ("mode", ("fetch", "search")),
+            ("search_depth", ("basic", "advanced")),
+        ):
+            if metadata.get(key) in allowed:
+                parts.append(f"{key}={metadata[key]}")
+        if type(metadata.get("provider_calls")) is int:
+            parts.append(f"provider_calls={metadata['provider_calls']}")
+        try:
+            host = urlsplit(str(metadata.get("url") or "")).hostname
+        except ValueError:
+            host = None
+        if host:
+            parts.append(f"host={host}")
         detail = (" " + " ".join(parts)) if parts else ""
+    # What it was asked: on 2 October an unrelated weather call landed in a
+    # research answer and nothing showed what the model had passed it.
+    arguments = _safe_tool_arguments(getattr(call, "arguments", ""))
+    if arguments:
+        detail += f" args={arguments}"
     logging.getLogger("openjarvis.timing").info(
         "Tool timing: %s %.2fs ok=%s %d chars%s",
         getattr(call, "name", "?"),
@@ -509,7 +588,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
             if query_text:
                 messages = _to_messages(request_body.messages)
                 messages = _ensure_identity_prompt(
-                    messages, config, request_body.diagrams, turn_context=True
+                    messages,
+                    config,
+                    request_body.diagrams,
+                    turn_context=True,
+                    model=model,
                 )
                 ctx_cfg = ContextConfig(
                     top_k=config.memory.context_top_k,
@@ -932,7 +1015,9 @@ def _handle_direct(
 ) -> ChatCompletionResponse:
     """Direct engine call without agent."""
     messages = _to_messages(req.messages)
-    messages = _ensure_identity_prompt(messages, app_config, req.diagrams)
+    messages = _ensure_identity_prompt(
+        messages, app_config, req.diagrams, model=getattr(req, "model", "") or ""
+    )
     kwargs: dict[str, Any] = {}
     if req.tools:
         kwargs["tools"] = req.tools
@@ -1120,9 +1205,12 @@ def _handle_agent(
     (``check_readiness``, min 20 traces) could never open.
     """
     from openjarvis.agents._stubs import AgentContext
+    from openjarvis.security import confirmations
 
     # Build context from prior messages
-    ctx = AgentContext()
+    ctx = AgentContext(
+        metadata={"page_access_user_text": confirmations.last_user_text(req.messages)}
+    )
     if len(req.messages) > 1:
         prior = _to_messages(req.messages[:-1])
         for m in prior:
@@ -1221,6 +1309,33 @@ def _merge_agent_tool_call_fragments(
 # Tools that a bounded/terminal search result retires for the rest of the turn.
 _SEARCH_TOOL_NAMES = frozenset({"web_search"})
 
+#: Words that make a message a weather question (English and Tagalog). The
+#: card and panel show only then: on 2 October a research answer about an AI
+#: model came with a Calamba forecast card the user never asked for.
+_WEATHER_WORDS = re.compile(
+    r"\b(weather|rain(?:ing|y|fall)?|umbrella|humid(?:ity)?|"
+    r"storms?|typhoons?|thunder(?:storms?)?|sunny|cloudy|windy|sunrise|sunset|"
+    r"ulan|uulan|umuulan|bagyo)\b",
+    re.IGNORECASE,
+)
+_WEATHER_CONTEXT = re.compile(
+    r"\b(?:how (?:hot|cold) (?:is|will) it|"
+    r"(?:is|will) it (?:be |going to be )?(?:hot|cold)|"
+    r"(?:hot|cold|temperature) outside|"
+    r"(?:forecast|temperature|uv(?: index)?) (?:for )?"
+    r"(?:today|tomorrow|tonight|this week)|"
+    r"(?:mainit|malamig|init|lamig) (?:ba |sa )?(?:ngayon|bukas|mamaya|labas)|"
+    r"(?:kumusta|ano|anong) (?:ang )?panahon)\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_about_weather(text: str) -> bool:
+    return bool(
+        _WEATHER_WORDS.search(text or "") or _WEATHER_CONTEXT.search(text or "")
+    )
+
+
 #: Tools retired for the rest of the turn once a search has answered.
 #:
 #: ``web_open`` navigates and returns only "Opened <title>." -- it never reads
@@ -1264,19 +1379,9 @@ async def _handle_streaming_orchestrator(
     from openjarvis.core.types import ToolResult
     from openjarvis.security import confirmations, page_access
 
-    # Bound again here, and not only in `chat_completions`, because
-    # `AuthMiddleware` is a `BaseHTTPMiddleware`: it runs the endpoint in an
-    # inner task and streams the response body from its own. A ContextVar set
-    # in the endpoint is therefore invisible by the time this generator runs
-    # the tools -- `web_read` saw no allowance at all and refused every page,
-    # while the route logged the URL as permitted. This generator is the task
-    # the tools actually execute in.
-    page_access.set_turn(confirmations.last_user_text(req.messages))
-    _memory_budget.start_message()
-
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     input_text = req.messages[-1].content if req.messages else ""
-    query_text = input_text or ""
+    query_text = confirmations.last_user_text(req.messages)
 
     context = AgentContext()
     if len(req.messages) > 1:
@@ -1560,8 +1665,10 @@ async def _handle_streaming_orchestrator(
                                         # never its bytes).
                                         "image": tool_result.metadata.get("image"),
                                         # M41: the weather panel's report.
-                                        "weather": tool_result.metadata.get(
-                                            "weather"
+                                        "weather": (
+                                            tool_result.metadata.get("weather")
+                                            if _asks_about_weather(query_text)
+                                            else None
                                         ),
                                         # M41: the system panel's snapshot.
                                         "system": tool_result.metadata.get(
@@ -1602,14 +1709,7 @@ async def _handle_streaming_orchestrator(
                             if (tool.get("function") or {}).get("name")
                             not in _BROWSER_OPEN_TOOL_NAMES
                         ]
-                    if _memory_budget.spent():
-                        # Same as page reads: once spent, stop offering them.
-                        active_tools = [
-                            tool
-                            for tool in active_tools
-                            if (tool.get("function") or {}).get("name")
-                            not in _memory_budget.MEMORY_SEARCH_TOOLS
-                        ]
+                    active_tools = _memory_budget.available_tools(active_tools)
                     if _page_reads_spent():
                         # Offered once the budget is spent, the model kept
                         # calling it, a refusal and a model round each time.
@@ -1854,8 +1954,18 @@ async def _handle_streaming_orchestrator(
         yield f"data: {_json.dumps(finish_data)}\n\n"
         yield "data: [DONE]\n\n"
 
+    async def scoped_generate():
+        from contextlib import aclosing
+
+        # This body runs in Starlette's streaming task. Binding only in the
+        # endpoint/response factory loses context across BaseHTTPMiddleware.
+        with page_access.scope(query_text), _memory_budget.scope():
+            async with aclosing(generate()) as stream:
+                async for event in stream:
+                    yield event
+
     return StreamingResponse(
-        generate(),
+        scoped_generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
@@ -2086,7 +2196,9 @@ async def _handle_stream_tools(
     regresses non-tool-capable engines.
     """
     messages = _to_messages(req.messages)
-    messages = _ensure_identity_prompt(messages, app_config, req.diagrams)
+    messages = _ensure_identity_prompt(
+        messages, app_config, req.diagrams, model=getattr(req, "model", "") or ""
+    )
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     use_cloud = _uses_direct_cloud_router(engine, model)
     telemetry_engine = (
@@ -2216,7 +2328,9 @@ async def _handle_stream(
     from openjarvis.server.cloud_router import stream_cloud, stream_local
 
     messages = _to_messages(req.messages)
-    messages = _ensure_identity_prompt(messages, app_config, req.diagrams)
+    messages = _ensure_identity_prompt(
+        messages, app_config, req.diagrams, model=getattr(req, "model", "") or ""
+    )
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
     # Last user message — recorded as the trace query.

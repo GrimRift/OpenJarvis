@@ -186,6 +186,12 @@ class RetrievalTool(BaseTool):
             )
         from openjarvis.tools import memory_budget
 
+        if memory_budget.web_searched():
+            return ToolResult(
+                tool_name="retrieval",
+                content=memory_budget.AFTER_WEB_MESSAGE,
+                success=False,
+            )
         if not memory_budget.take():
             return ToolResult(
                 tool_name="retrieval",

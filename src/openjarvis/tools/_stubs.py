@@ -8,6 +8,7 @@ Each tool is registered via ``@ToolRegistry.register("name")`` and implements
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import json
 import time
 from abc import ABC, abstractmethod
@@ -332,10 +333,21 @@ class ToolExecutor:
 
         # Execute with timeout
         timeout = tool.spec.timeout_seconds or self._default_timeout
-        t0 = time.time()
+        t0 = time.perf_counter()
+        from openjarvis.security import page_access
+        from openjarvis.tools import memory_budget
+
+        # Standalone executors have no request scope: create their mutable
+        # states in the caller before copying them into timeout workers.
+        page_access.turn_text()
+        memory_budget.web_searched()
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(tool.execute, **params)
+                # The timeout worker is another thread boundary, even when
+                # its caller already copied context for parallel tools.
+                future = pool.submit(
+                    contextvars.copy_context().run, tool.execute, **params
+                )
                 result = future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
             if self._bus:
@@ -361,7 +373,7 @@ class ToolExecutor:
                 content=_STRIPPER.strip(f"Tool execution error: {exc}"),
                 success=False,
             )
-        latency = time.time() - t0
+        latency = time.perf_counter() - t0
         result.latency_seconds = latency
         result.metadata["arguments"] = params
 

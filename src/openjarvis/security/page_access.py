@@ -13,20 +13,12 @@ returned it; anything else is refused by construction. Prompt-level rules have
 not held in this codebase before, which is why this is a check and not a
 sentence in a tool spec.
 
-Kept in a short-lived process-level table rather than a ``ContextVar``, and
-that was measured rather than assumed. A ContextVar set in the request handler
-is gone by the time a tool runs: ``AuthMiddleware`` is a
-``BaseHTTPMiddleware``, so the endpoint runs in one task while the response
-body streams from another, and the agent loop then crosses into worker
-threads. Traced live, ``set_turn`` ran on ``MainThread`` and the check ran on
-``ThreadPoolExecutor-3_0`` with nothing bound -- after binding it in three
-separate places, it still never reached the tool.
-
-What the table gives up is turn isolation: a URL stays readable for a few
-minutes rather than for exactly one turn. What it keeps is the property that
-actually matters -- a URL is only ever added when the user wrote it or a
-search returned it, so a link found inside an email, or inside a page just
-read, is never in the table and can never be followed.
+URL allowances remain in a short-lived process-level table so a follow-up
+can read a recent source. Read counts and user intent belong to one turn.
+Their context is bound inside the response-body generator, not just the
+endpoint: BaseHTTPMiddleware streams in a different task. asyncio.to_thread
+and both the agent and ToolExecutor's copy_context submissions then share
+that turn's mutable state, while overlapping turns have separate states.
 """
 
 from __future__ import annotations
@@ -34,7 +26,10 @@ from __future__ import annotations
 import re
 import threading
 import time
-from typing import Any, Dict, Iterable, List, Set
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, Iterator, List, Set
 from urllib.parse import urlsplit, urlunsplit
 
 #: Bare URLs in a user's message. Deliberately permissive about what follows
@@ -56,9 +51,24 @@ READ_WINDOW_SECONDS = 300.0
 
 _lock = threading.Lock()
 _allowed: Dict[str, float] = {}
-_reads: List[float] = []
-#: Pages already read for the current message, normalised.
-_read_urls: Set[str] = set()
+
+
+@dataclass
+class _ReadState:
+    text: str = ""
+    reads: List[float] = field(default_factory=list)
+    urls: Set[str] = field(default_factory=set)
+
+
+_current: ContextVar[_ReadState | None] = ContextVar("page_read_turn", default=None)
+
+
+def _state() -> _ReadState:
+    state = _current.get()
+    if state is None:
+        state = _ReadState()
+        _current.set(state)
+    return state
 
 
 def normalise(url: str) -> str:
@@ -111,7 +121,7 @@ def allow(urls: Iterable[str]) -> None:
                 _allowed[normalised] = now + ALLOW_SECONDS
 
 
-def set_turn(user_text: Any) -> None:
+def set_turn(user_text: Any) -> Token:
     """Register the URLs the user just wrote, and start a fresh read budget.
 
     Safe to call repeatedly: every call site runs as a request starts, before
@@ -120,9 +130,61 @@ def set_turn(user_text: Any) -> None:
     reddit post more thoroughly" -- refused at the reading limit (29 September).
     """
     allow(urls_in(user_text))
+    return _current.set(_ReadState(text=str(user_text or "")))
+
+
+@contextmanager
+def scope(user_text: Any) -> Iterator[None]:
+    """Bind in the task/thread that actually runs this turn's tools."""
+    token = set_turn(user_text)
+    try:
+        yield
+    finally:
+        _current.reset(token)
+
+
+def turn_text() -> str:
+    """The user's latest message, as given to :func:`set_turn`."""
     with _lock:
-        _reads.clear()
-        _read_urls.clear()
+        return _state().text
+
+
+#: Social and meme sites (2 October: 7 s spent reading an x.com photo page
+#: about a memecoin for a question about an AI model). Not opened, and listed
+#: after articles, unless the user's message is about social media itself.
+_SOCIAL_HOSTS = (
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "fb.com",
+    "fb.watch",
+    "tiktok.com",
+    "instagram.com",
+    "threads.net",
+    "9gag.com",
+    "imgur.com",
+    "knowyourmeme.com",
+)
+_ASKS_SOCIAL = re.compile(
+    r"\b(x\.com|on x|twitter|tweets?|facebook|fb|tiktok|instagram|ig|threads|"
+    r"social(?:s| media)?|memes?|viral|9gag|imgur|reels?)\b",
+    re.IGNORECASE,
+)
+
+
+def is_social(url: str) -> bool:
+    try:
+        host = (
+            urlsplit(url if "://" in str(url) else "https://" + str(url)).hostname or ""
+        ).lower()
+    except ValueError:
+        return False
+    return any(host == h or host.endswith("." + h) for h in _SOCIAL_HOSTS)
+
+
+def social_wanted() -> bool:
+    """Whether this message asks about social media, so social pages count."""
+    return bool(_ASKS_SOCIAL.search(turn_text()))
 
 
 def is_allowed(url: str) -> bool:
@@ -140,7 +202,7 @@ def note_read() -> None:
     now = time.monotonic()
     with _lock:
         _expire(now)
-        _reads.append(now + READ_WINDOW_SECONDS)
+        _state().reads.append(now + READ_WINDOW_SECONDS)
 
 
 def reserve_read(url: str, limit: int) -> str:
@@ -154,13 +216,14 @@ def reserve_read(url: str, limit: int) -> str:
     normalised = normalise(url)
     with _lock:
         _expire(now)
-        if normalised and normalised in _read_urls:
+        state = _state()
+        if normalised and normalised in state.urls:
             return "duplicate"
-        if len(_reads) >= limit:
+        if len(state.reads) >= limit:
             return "limit"
-        _reads.append(now + READ_WINDOW_SECONDS)
+        state.reads.append(now + READ_WINDOW_SECONDS)
         if normalised:
-            _read_urls.add(normalised)
+            state.urls.add(normalised)
         return "ok"
 
 
@@ -177,21 +240,21 @@ def reads_used() -> int:
     now = time.monotonic()
     with _lock:
         _expire(now)
-        return len(_reads)
+        return len(_state().reads)
 
 
 def _expire(now: float) -> None:
     for url in [url for url, until in _allowed.items() if until <= now]:
         del _allowed[url]
-    _reads[:] = [until for until in _reads if until > now]
+    state = _state()
+    state.reads[:] = [until for until in state.reads if until > now]
 
 
 def clear() -> None:
     """Drop everything remembered. For tests."""
     with _lock:
         _allowed.clear()
-        _reads.clear()
-        _read_urls.clear()
+        _current.set(None)
 
 
 __all__ = [
@@ -204,5 +267,6 @@ __all__ = [
     "note_read",
     "reads_used",
     "set_turn",
+    "scope",
     "urls_in",
 ]

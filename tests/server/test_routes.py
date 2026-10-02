@@ -634,7 +634,16 @@ class TestChatCompletions:
         assert stream_turn == 2
         assert not engine.generate.called
 
-    def test_terminal_search_removes_tools_before_final_synthesis(self):
+    @pytest.mark.parametrize(
+        "query, expected_weather",
+        [
+            ("Philippines news", None),
+            ("Philippines news and weather", {"place": "Calamba, Laguna"}),
+        ],
+    )
+    def test_terminal_search_removes_tools_before_final_synthesis(
+        self, query, expected_weather,
+    ):
         """A bounded search result must not allow redundant model searches."""
         from openjarvis.agents.orchestrator import OrchestratorAgent
         from openjarvis.core.types import ToolResult
@@ -724,7 +733,7 @@ class TestChatCompletions:
             "/v1/chat/completions",
             json={
                 "model": "test-model",
-                "messages": [{"role": "user", "content": "Philippines news"}],
+                "messages": [{"role": "user", "content": query}],
                 "stream": True,
             },
         )
@@ -746,7 +755,7 @@ class TestChatCompletions:
         assert tool_end["metadata"]["sources"][0]["image_url"].endswith("story.jpg")
         assert tool_end["metadata"]["explicit_image_search"] is True
         assert tool_end["metadata"]["images"][0]["description"] == "Story image"
-        assert tool_end["metadata"]["weather"] == {"place": "Calamba, Laguna"}
+        assert tool_end["metadata"]["weather"] == expected_weather
 
     def test_orchestrator_streams_final_answer_as_model_deltas(self):
         """The default Sage agent must not collapse a streamed reply to one chunk."""
