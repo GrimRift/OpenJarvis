@@ -55,6 +55,15 @@ def test_no_model_no_line():
         ("How cold is it outside?", True),
         ("mainit ba bukas?", True),
         ("ang lamig ngayon", True),
+        # Widened 6 October: plain weather questions that showed no card.
+        ("What's the forecast?", True),
+        ("Give me the forecast", True),
+        ("What's the temperature now?", True),
+        ("Ilang degrees ngayon?", True),
+        ("What temperature should I bake bread at?", False),
+        ("convert 90 degrees to radians", False),
+        ("what degree program is best for AI?", False),
+        ("demand forecast for next month", False),
     ],
 )
 def test_the_weather_card_is_for_weather_questions(text, asked):

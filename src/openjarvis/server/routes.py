@@ -1330,10 +1330,29 @@ _WEATHER_CONTEXT = re.compile(
 )
 
 
+#: Weather on their own, unless the message is plainly about something else
+#: (6 October: "What's the forecast?" and "Ilang degrees ngayon?" showed no
+#: card, while "GPU temperature" and "sales forecast" must still not).
+_WEATHER_LOOSE = re.compile(
+    r"\b(forecasts?|temperatures?|degrees?|celsius|uv index|init|lamig|panahon)\b",
+    re.IGNORECASE,
+)
+_NOT_WEATHER = re.compile(
+    r"\b(gpu|cpu|vram|laptop|pc|computer|processor|chip|battery|ssd|disk|"
+    r"fan|thermal|sales?|revenue|budget|profit|market|stocks?|prices?|"
+    r"demand|traffic|emails?|outreach|calls?|leads?|angles?|radians?|"
+    r"rotat\w*|turn|triangle|geometry|circle|"
+    r"oven|bake|baking|cook|cooking|water|coffee|body|fever|"
+    r"degree program|bachelor'?s|master'?s|college degree)\b",
+    re.IGNORECASE,
+)
+
+
 def _asks_about_weather(text: str) -> bool:
-    return bool(
-        _WEATHER_WORDS.search(text or "") or _WEATHER_CONTEXT.search(text or "")
-    )
+    text = text or ""
+    if _WEATHER_WORDS.search(text) or _WEATHER_CONTEXT.search(text):
+        return True
+    return bool(_WEATHER_LOOSE.search(text)) and not _NOT_WEATHER.search(text)
 
 
 #: Tools retired for the rest of the turn once a search has answered.
