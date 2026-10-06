@@ -350,3 +350,31 @@ describe('garbled words while Sage works (24 September: "blah blah blah")', () =
     expect(isIdleSpeech('on the second monitor')).toBe(false);
   });
 });
+
+describe('a video playing while Sage works (6 October: PewDiePie added to the question)', () => {
+  const check = (verdict: 'user' | 'sage' | 'unsure', user: number, sage: number) => ({
+    verdict,
+    user,
+    sage,
+    seconds: 2,
+  });
+
+  it('treats the video dialogue as media', async () => {
+    const { isMediaSpeech } = await import('./barge-in');
+    expect(isMediaSpeech(check('unsure', 0.606, 0.605), true)).toBe(true);
+    expect(isMediaSpeech(check('user', 0.694, 0.633), true)).toBe(true);
+    expect(isMediaSpeech(check('sage', 0.4, 0.8), true)).toBe(true);
+  });
+
+  it("still hears the user's own voice over the video", async () => {
+    const { isMediaSpeech } = await import('./barge-in');
+    expect(isMediaSpeech(check('user', 0.841, 0.571), true)).toBe(false);
+    expect(isMediaSpeech(check('user', 0.811, 0.654), true)).toBe(false);
+  });
+
+  it('changes nothing without media or without a voice check', async () => {
+    const { isMediaSpeech } = await import('./barge-in');
+    expect(isMediaSpeech(check('unsure', 0.6, 0.6), false)).toBe(false);
+    expect(isMediaSpeech(undefined, true)).toBe(false);
+  });
+});

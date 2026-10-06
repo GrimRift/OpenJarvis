@@ -376,6 +376,29 @@ export interface SpeakerCheck {
 }
 
 /**
+ * How far the user's voice score must beat Sage's before speech heard while
+ * a video plays counts as the user's. Measured 6 October: the user's own
+ * turns cleared Sage's score by 0.16-0.27; a PewDiePie video playing in the
+ * room scored "unsure" (0.61 vs 0.61) and then "user" (0.69 vs 0.63).
+ */
+export const MEDIA_VOICE_MARGIN = 0.12;
+
+/**
+ * Whether speech heard while Sage prepares an answer, with a video or song
+ * Sage started playing, is the media rather than the user. The video's
+ * dialogue was added to the user's question twice and cut the answer off
+ * (6 October). Without a voice check there is nothing to go on: kept.
+ */
+export function isMediaSpeech(
+  speaker: SpeakerCheck | undefined,
+  mediaPlaying: boolean,
+): boolean {
+  if (!mediaPlaying || !speaker) return false;
+  if (speaker.verdict !== 'user') return true;
+  return speaker.user - (speaker.sage ?? 0) < MEDIA_VOICE_MARGIN;
+}
+
+/**
  * A turn heard over Sage with Sage's own words cut out of it. `text` is
  * empty when every word was Sage's -- unless the voice check says the user
  * spoke, in which case they repeated Sage on purpose and keep their words.

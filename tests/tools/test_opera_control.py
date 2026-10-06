@@ -964,3 +964,57 @@ class TestOutlookRowsKeepTheirDate:
         assert "Wed 12:11 AM" not in messages[0]
         assert messages[1].startswith("[received Fri Oct 2, today] NU Information")
         assert newest == _date(2026, 10, 2)
+
+
+class TestYouTubePlayIsForPlaying:
+    """6 October: "tell me more about it, like the summarization of that
+    YouTube video and your own view" played a different video."""
+
+    @pytest.fixture(autouse=True)
+    def _open_port(self, monkeypatch):
+        from openjarvis.security import page_access
+
+        monkeypatch.setattr(opera_control.YouTubePlayTool, "_guard", lambda self: None)
+        page_access.clear()
+        yield
+        page_access.clear()
+
+    def _run(self, message):
+        from openjarvis.security import page_access
+
+        token = page_access.set_turn(message)
+        try:
+            return opera_control.YouTubePlayTool().execute(query="Ajax PewDiePie")
+        finally:
+            page_access._current.reset(token)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "And just tell me more about it, like the summarization of that "
+            "YouTube video and your own view of it.",
+            "What was that video about?",
+            "Explain that video to me",
+        ],
+    )
+    def test_a_question_about_a_video_does_not_play_one(self, monkeypatch, message):
+        opened = []
+        monkeypatch.setattr(
+            opera_control, "opera_session", lambda **kw: opened.append(kw)
+        )
+        result = self._run(message)
+        assert result.success is False
+        assert "web_read" in result.content
+        assert not opened
+
+    def test_asking_to_play_still_plays(self, monkeypatch):
+        reached = []
+
+        def _session(**kw):
+            reached.append(kw)
+            raise RuntimeError("stop here")
+
+        monkeypatch.setattr(opera_control, "opera_session", _session)
+        result = self._run("Play a video that explains the Ajax model")
+        assert reached
+        assert "could not play" in result.content

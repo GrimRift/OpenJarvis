@@ -52,6 +52,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
+from openjarvis.security import page_access
 from openjarvis.tools import youtube_pick
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
@@ -1045,6 +1046,19 @@ class WebOpenTool(_OperaTool):
         )
 
 
+#: A message about a video rather than one asking for a video to play.
+_ASKS_ABOUT_VIDEO = re.compile(
+    r"\b(?:summar\w*|recap|explain\w*|what\s+(?:was|is)\s+(?:it|this|that|the)"
+    r"(?:\s+(?:video|one|clip))?\s+about|tell\s+me\s+(?:more\s+)?about|your\s+(?:own\s+)?(?:view|opinion|"
+    r"take|thoughts))\b",
+    re.IGNORECASE,
+)
+_ASKS_TO_PLAY = re.compile(
+    r"\b(?:play|watch|open|show\s+me|put\s+(?:it\s+)?on|start|queue|another)\b",
+    re.IGNORECASE,
+)
+
+
 @ToolRegistry.register("youtube_play")
 class YouTubePlayTool(_OperaTool):
     """Search YouTube and start the first result actually playing."""
@@ -1132,6 +1146,17 @@ class YouTubePlayTool(_OperaTool):
         query = str(params.get("query") or "").strip()
         if not query:
             return self._fail("What should I search for?")
+        asked = page_access.turn_text()
+        if _ASKS_ABOUT_VIDEO.search(asked) and not _ASKS_TO_PLAY.search(asked):
+            # "Tell me more about it, like the summarization of that YouTube
+            # video" opened a different video, whose sound was then taken
+            # for the user talking (6 October).
+            return self._fail(
+                "The user asked about a video, not to play one. Answer from "
+                "what you know of it: use web_read on its youtube.com link from "
+                "the earlier youtube_play result (title, channel, description), "
+                "and web_search if that is not enough."
+            )
         monitor = params.get("monitor")
         latest = bool(params.get("latest", False))
         request = str(params.get("request") or "").strip() or query
@@ -1183,7 +1208,13 @@ class YouTubePlayTool(_OperaTool):
             return self._fail(f"could not play that: {error}")
         state = "Playing" if playing else "Opened (paused — press play)"
         note = {"skipped": " Skipped the ad.", "unskippable": " (An ad is playing.)"}
-        content = f"{state} {title!r} on YouTube.{where}{note.get(ad, '')}"
+        watch_url = urllib.parse.urljoin("https://www.youtube.com", href)
+        # Without its address a later "summarise that video" had nothing to
+        # read, so the model played another one instead (6 October).
+        page_access.allow([watch_url])
+        content = (
+            f"{state} {title!r} on YouTube ({watch_url}).{where}{note.get(ad, '')}"
+        )
         if others:
             content += "\nOther matches (pass video_id to play one): " + "; ".join(
                 f"{other.video_id}: {other.describe()}" for other in others

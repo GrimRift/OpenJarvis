@@ -59,6 +59,7 @@ import {
   isIdleSpeech,
   isEchoTurn,
   isLoopedBack,
+  isMediaSpeech,
   isStopCommand,
   judge,
   STOP_ECHO_WINDOW_CHARS,
@@ -1861,6 +1862,19 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           interruptedRef.current = true;
           stopStreaming();
           setFluxTurnActive(false);
+          return;
+        }
+        // A video or song this turn started is heard by the mic; its
+        // dialogue is not the user adding to the question.
+        const heardSpeaker = useAppStore.getState().settings.recogniseMyVoice
+          ? detail?.speaker
+          : undefined;
+        if (isMediaSpeech(heardSpeaker, mediaTurnRef.current)) {
+          voiceTrace('gen.media', {
+            chars: spoken.length,
+            verdict: heardSpeaker?.verdict ?? '',
+          });
+          flux.beginTurn();
           return;
         }
         // Checked while the answer carries on: noise is let pass, and only an
