@@ -232,6 +232,28 @@ class TestTheTool:
         assert len(panel["daily"]) == 2
         assert "Next days: Thu 25-32°C overcast, rain 40%; Fri" in result.content
 
+    def test_an_hour_s_chance_and_the_rain_around_it_are_in_the_result(self, tmp_path):
+        """Reported 7 October: 'rain at 7 AM?' got 'likely' from the summary's
+        'rain likely now', while the panel showed 4% at 7 AM."""
+        forecast = _forecast(0.72, 0.5, 0.1, 0.04, 0.6, 0.6, now="2026-10-01T12:15")
+        result, _ = self._run(self._tool(tmp_path), forecast=forecast)
+        assert "Rain chance by hour: 12 PM 72%, 1 PM 50%, 2 PM 10%, 3 PM 4%," in (
+            result.content
+        )
+        assert (
+            "Rain likely: now until about 2 PM (peak 72%); from 4 PM on (peak 60%)"
+            in result.content
+        )
+
+    def test_a_later_spell_names_its_start_and_end(self, tmp_path):
+        forecast = _forecast(0.1, 0.45, 0.8, 0.2)
+        result, _ = self._run(self._tool(tmp_path), forecast=forecast)
+        assert "Rain likely: 1 PM to 3 PM (peak 80%)" in result.content
+
+    def test_a_dry_day_says_no_rain_in_the_hours_shown(self, tmp_path):
+        result, _ = self._run(self._tool(tmp_path), forecast=_forecast(0.1, 0.2))
+        assert "Rain likely: not in the next 2 hours" in result.content
+
     def test_a_dead_provider_says_so_rather_than_guessing(self, tmp_path):
         tool = self._tool(tmp_path)
         with patch.object(connector, "fetch_forecast", side_effect=OSError("down")):

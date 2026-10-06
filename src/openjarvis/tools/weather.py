@@ -17,7 +17,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from openjarvis.connectors.weather import load_config, report_for, summarize
+from openjarvis.connectors.weather import (
+    RAIN_LIKELY,
+    _hour_label,
+    load_config,
+    report_for,
+    summarize,
+)
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
@@ -47,6 +53,58 @@ def _days_line(report: Dict[str, Any]) -> str:
         )
         parts.append(f"{label} {temps} {day.get('conditions', '')}{rain_text}")
     return "; ".join(parts)
+
+
+def _hours_line(report: Dict[str, Any]) -> str:
+    """'1 AM 72%, 2 AM 55%, ...' for the next 24 hours.
+
+    The panel draws these hours; without them "will it rain at 7 AM?" was
+    answered from the summary's "rain likely now" and came out wrong while
+    the panel showed 4% at 7 AM (user report, 2026-10-07).
+    """
+    parts = []
+    for entry in report.get("hourly") or []:
+        chance = entry.get("rain_chance")
+        if isinstance(chance, (int, float)):
+            label = _hour_label(str(entry.get("time") or ""))
+            parts.append(f"{label} {round(chance * 100)}%")
+    return ", ".join(parts)
+
+
+def _rain_spells(report: Dict[str, Any]) -> str:
+    """'now until about 4 AM (peak 72%); 3 PM to 6 PM (peak 61%)'.
+
+    When rain starts and when it eases, so a question about one hour can be
+    answered with the rain around it. A spell ends at its first dry hour.
+    """
+    hours = report.get("hourly") or []
+    if not hours:
+        return ""
+    now = str(report.get("observed_at") or "")[:13]
+    spells: List[str] = []
+    start: Optional[int] = None
+    peak = 0.0
+    for i, entry in enumerate([*hours, {}]):
+        chance = entry.get("rain_chance")
+        if isinstance(chance, (int, float)) and chance >= RAIN_LIKELY:
+            if start is None:
+                start, peak = i, 0.0
+            peak = max(peak, float(chance))
+            continue
+        if start is None:
+            continue
+        first = str(hours[start]["time"])
+        begins = "now" if first[:13] == now else _hour_label(first)
+        if i < len(hours):
+            ends = _hour_label(str(hours[i]["time"]))
+            span = (
+                f"now until about {ends}" if begins == "now" else f"{begins} to {ends}"
+            )
+        else:
+            span = "from now on" if begins == "now" else f"from {begins} on"
+        spells.append(f"{span} (peak {round(peak * 100)}%)")
+        start = None
+    return "; ".join(spells) or f"not in the next {len(hours)} hours"
 
 
 _WEEKDAYS = (
@@ -110,7 +168,10 @@ class WeatherTool(BaseTool):
                 "or whether to take an umbrella, rather than searching the web. "
                 "The app shows the full forecast in a weather panel, so answer "
                 "in one or two spoken sentences: start from the first line of "
-                "the result and add a later day only if the user asked about it."
+                "the result and add a later day only if the user asked about it. "
+                "For a particular hour, give that hour's chance from 'Rain "
+                "chance by hour', then when the nearest rain starts or eases "
+                "from 'Rain likely'."
             ),
             # A Windows location fix (up to 6 s) plus a lookup and the
             # forecast, each retried once when the network stalls.
@@ -164,7 +225,13 @@ class WeatherTool(BaseTool):
         place = report.get("place") or ""
         spoken = summary if located_here or not place else f"{place}: {summary}"
         days = _days_line(report)
-        content = spoken + (f"\nNext days: {days}" if days else "")
+        content = spoken
+        hours = _hours_line(report)
+        if hours:
+            content += (
+                f"\nRain likely: {_rain_spells(report)}\nRain chance by hour: {hours}"
+            )
+        content += f"\nNext days: {days}" if days else ""
         asked_day = str(params.get("day") or "").strip()
         focus = match_day(report, asked_day) if asked_day else None
         if focus is not None and focus > 0:
