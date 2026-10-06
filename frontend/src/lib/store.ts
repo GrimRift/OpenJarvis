@@ -394,6 +394,11 @@ interface Settings {
    * For a laptop mic across the room when the automatic ceiling is not
    * enough on its own. */
   micBoost: number;
+  /** The microphone Sage listens with ('' = the Windows default input).
+   * The label is kept beside the id so the choice survives the browser
+   * re-issuing ids; see lib/mic-device.ts. */
+  micDeviceId: string;
+  micDeviceLabel: string;
   /** Where the browser strips steady background noise:
    * 'conversation' (default), 'all' (also the wake word) or 'off'. */
   noiseSuppression: 'conversation' | 'all' | 'off';
@@ -479,6 +484,8 @@ export function defaultSettings(): Settings {
     wakeWordListenSeconds: DEFAULT_LISTEN_SECONDS,
     wakeWordFastFollow: true,
     micBoost: 1,
+    micDeviceId: '',
+    micDeviceLabel: '',
     noiseSuppression: 'conversation',
     diagramsEnabled: true,
     diagramsAutomatic: true,

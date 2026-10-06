@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Send, Square, Paperclip, Search, VolumeX, Volume2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore, generateId, documentsFor } from '../../lib/store';
@@ -382,6 +382,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const diagramsEnabled = useAppStore((s) => s.settings.diagramsEnabled);
   const micBoost = useAppStore((s) => s.settings.micBoost);
   const noiseSuppression = useAppStore((s) => s.settings.noiseSuppression);
+  const micDeviceId = useAppStore((s) => s.settings.micDeviceId);
+  const micDeviceLabel = useAppStore((s) => s.settings.micDeviceLabel);
+  // One object per choice, so the listeners reopen only when it changes.
+  const micDevice = useMemo(
+    () => ({ id: micDeviceId ?? '', label: micDeviceLabel ?? '' }),
+    [micDeviceId, micDeviceLabel],
+  );
   const diagramsAutomatic = useAppStore((s) => s.settings.diagramsAutomatic);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const wakeWordFastFollow = useAppStore((s) => s.settings.wakeWordFastFollow);
@@ -437,7 +444,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     available: speechAvailable,
     startRecording,
     stopRecording,
-  } = useSpeech();
+  } = useSpeech(micDevice);
 
   // Abort in-flight stream when the user switches models mid-generation.
   // This prevents errors from trying to continue a stream with a stale model.
@@ -2221,6 +2228,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     eager: fluxEagerEnabled,
     provider: sttProvider === 'parakeet' ? 'parakeet' : 'flux',
     suppressNoise: noiseSuppression !== 'off',
+    micDevice,
     model: selectedModel,
     onEndOfTurn: handleFluxEndOfTurn,
     onSessionReady: () => {
@@ -2788,6 +2796,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     noiseSuppression === 'all',
     effectiveSpeechState === 'idle' && !audioPlaying && wakeWordSettled,
     micBoost,
+    micDevice,
   );
   takeRecentAudioRef.current = takeRecentAudio;
   ambientRmsRef.current = ambientRms;

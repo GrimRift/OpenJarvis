@@ -2,6 +2,7 @@ import { keepOutputAwake } from '../lib/audio-out';
 import { markWake } from '../lib/orb-events';
 import { voiceTrace } from '../lib/voice-trace';
 import { applyGain, nextGain, wakeGainCeiling } from '../lib/mic-gain';
+import { openMicrophone, type MicChoice } from '../lib/mic-device';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import { buildWsProtocols } from '../lib/useAgentEvents';
@@ -12,6 +13,7 @@ const TARGET_SAMPLE_RATE = 16000;
 export const WAKE_WORD_STALE_MS = 12_000;
 // Frames of recent audio kept for the one-breath wake word: 4 s.
 const RECENT_FRAMES = 50;
+const NO_MIC_CHOICE: MicChoice = { id: '', label: '' };
 
 /**
  * Whether the listener is dead and should be rebuilt.
@@ -133,6 +135,8 @@ export function useWakeWord(
    * the slider needs no reconnect.
    */
   micBoost: number = 1,
+  /** The Settings microphone; a change reopens the stream. */
+  micDevice: MicChoice = NO_MIC_CHOICE,
 ) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +178,8 @@ export function useWakeWord(
   micBoostRef.current = micBoost;
   const suppressNoiseRef = useRef(suppressNoise);
   suppressNoiseRef.current = suppressNoise;
+  const micDeviceRef = useRef(micDevice);
+  micDeviceRef.current = micDevice;
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The server answers every submitted 80 ms frame. If those replies stop,
@@ -369,14 +375,15 @@ export function useWakeWord(
       // classifier depends on to tell them apart. The classifier was
       // trained on relatively raw/unprocessed audio, so raw mic input
       // here keeps train/inference conditions closer to matching.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
+      const stream = await openMicrophone(
+        {
           echoCancellation: true,
           noiseSuppression: suppressNoiseRef.current,
           autoGainControl: false,
           channelCount: 1,
         },
-      });
+        micDeviceRef.current,
+      );
 
       if (sessionIdRef.current !== mySession) {
         // stop() (or a newer start()) ran while getUserMedia was pending —
@@ -504,7 +511,7 @@ export function useWakeWord(
     // The verifier choice is part of the socket URL, so a change rebuilds
     // the listener the same way enabling does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, verify, suppressNoise]);
+  }, [enabled, verify, suppressNoise, micDevice.id]);
 
   useEffect(() => {
     if (!enabled) return;

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import type { FluxWord, SpeakerCheck } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
+import { openMicrophone, type MicChoice } from '../lib/mic-device';
 import {
   SPEAKING_MAX_GAIN,
   adaptFloor,
@@ -82,6 +83,8 @@ export interface UseFluxSpeechOptions {
   provider?: StreamingSttProvider;
   /** Let the browser strip steady background noise. Default true. */
   suppressNoise?: boolean;
+  /** The Settings microphone; a change reopens the stream. */
+  micDevice?: MicChoice;
   /**
    * A new Deepgram session is connected. Turn indices restart at 0, so any
    * per-turn bookkeeping the caller keeps must restart too.
@@ -333,6 +336,7 @@ function downsample(input: Float32Array, fromRate: number): Int16Array {
  */
 export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const { enabled, eager, model, suppressNoise } = options;
+  const micDeviceId = options.micDevice?.id ?? '';
   const provider: StreamingSttProvider = options.provider ?? 'flux';
   // Read at connect time, never a dependency of the connect effect. Making it
   // one tore the socket down whenever the selected model changed -- and
@@ -540,8 +544,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
+      stream = await openMicrophone(
+        {
           channelCount: 1,
           echoCancellation: true,
           // The laptop's fan sits beside its built-in microphone and holds
@@ -551,7 +555,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           noiseSuppression: optsRef.current.suppressNoise !== false,
           autoGainControl: false,
         },
-      });
+        optsRef.current.micDevice ?? { id: '', label: '' },
+      );
     } catch (err) {
       setStatus('unavailable');
       const why = `microphone unavailable: ${String(err)}`;
@@ -839,7 +844,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // connect/teardown are stable; re-running on `eager` is intended, since
     // the flag is part of the socket URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, eager, suppressNoise, provider]);
+  }, [enabled, eager, suppressNoise, provider, micDeviceId]);
 
   // A socket opened before the model was known is reopened with it, but
   // only between turns: mid-turn the EndOfTurn would never arrive and the

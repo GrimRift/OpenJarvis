@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
+import { MicrophonePicker } from '../components/Settings/MicrophonePicker';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
 import { fetchImageSettings, saveImageSettings, type ImageSettings } from '../lib/images-api';
 import {
@@ -1324,6 +1325,16 @@ export function SettingsPage() {
 
           {/* Speech */}
           <Section title="Microphone">
+            <SettingRow
+              label="Microphone"
+              description={
+                settings.micDeviceId
+                  ? 'Sage listens with this one for the wake word, what you say and dictation. If it is unplugged or closed, Sage falls back to the Windows default.'
+                  : 'Sage listens with whatever Windows has as its default input. Pick one here to use a different mic, such as NVIDIA Broadcast, without changing Windows.'
+              }
+            >
+              <MicrophonePicker onSaved={showSaved} />
+            </SettingRow>
             <SettingRow
               label="Remove background noise"
               description={

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { transcribeAudio, fetchSpeechHealth } from '../lib/api';
 import { retryUntilAnswered } from '../lib/retry';
+import { openMicrophone, type MicChoice } from '../lib/mic-device';
 
 export type SpeechState = 'idle' | 'recording' | 'transcribing';
 
@@ -53,7 +54,10 @@ export function computeSpeechThreshold(noiseFloor: number): number {
   );
 }
 
-export function useSpeech() {
+/** *micDevice*: the Settings microphone, read when a recording starts. */
+export function useSpeech(micDevice: MicChoice = { id: '', label: '' }) {
+  const micDeviceRef = useRef(micDevice);
+  micDeviceRef.current = micDevice;
   const [state, setState] = useState<SpeechState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [available, setAvailable] = useState(false);
@@ -120,14 +124,15 @@ export function useSpeech() {
       // you", none of it actual speech. A manual click has no such
       // stall to cause (the user stops it themselves), so it keeps the
       // original behaviour.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
+      const stream = await openMicrophone(
+        {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: !onSilence,
           channelCount: 1,
         },
-      });
+        micDeviceRef.current,
+      );
       streamRef.current = stream;
 
       const recorder = new MediaRecorder(stream);
