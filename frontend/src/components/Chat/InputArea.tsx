@@ -878,7 +878,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     const heldDeltas: string[] = [];
     const speakNow = (delta: string) => {
       if (!incrementalSpeech) return;
-      spokenChars = pushSpokenDelta(spokenChars, delta, !wasVoice, incrementalSpeech);
+      // Uncapped: a typed deep-research reply stopped mid-answer at 3,000
+      // characters, which the user heard as a fault (6 October). Replies are
+      // medium-length by default now, and speech can always be stopped.
+      spokenChars = pushSpokenDelta(spokenChars, delta, false, incrementalSpeech);
       spokenTextRef.current += delta;
     };
     const speakDelta = (delta: string) => {
@@ -1499,9 +1502,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // while the stream starts speaking at about 0.41s. Streamed replies
         // are deliberately ephemeral — no file, so no replay control.
         // Spoken text is prepared, displayed text is not: code blocks and
-        // link targets are unlistenable, and a very long answer traps the
-        // listener with no way to skim.
-        const spokenContent = speakableText(accumulatedContent);
+        // link targets are unlistenable. Read whole, like the streamed path.
+        const spokenContent = speakableText(accumulatedContent, Infinity);
         spokenTextRef.current = spokenContent;
         useDiagramPresenter.getState().noteSpoken(spokenContent);
         speakStreaming(spokenContent, ttsVoice)

@@ -42,7 +42,7 @@ class TestWebSearchTool:
         assert tool.spec.metadata == {"requires_api_key": "TAVILY_API_KEY"}
         assert set(tool.spec.parameters["properties"]) == {"query", "max_results"}
         assert tool.spec.parameters["required"] == ["query"]
-        assert "at most one corrective provider call" in tool.spec.description
+        assert "one call is enough" in tool.spec.description
 
         research_tool = WebSearchTool(api_key="key", force_advanced=True)
         assert research_tool.spec.parameters == tool.spec.parameters
@@ -76,9 +76,11 @@ class TestWebSearchTool:
 
         assert result.success is False
         assert "Tavily search error" in result.content
+        assert "search engine's page" in result.content
         assert "duckduckgo" not in result.content.lower()
-        assert mock_client_cls.return_value.search.call_count == 2
-        assert result.metadata["provider_calls"] == 2
+        # First call, advanced escalation, then the plain fallback.
+        assert mock_client_cls.return_value.search.call_count == 3
+        assert result.metadata["provider_calls"] == 3
 
     def test_to_openai_function(self):
         function = WebSearchTool(api_key="key").to_openai_function()
@@ -1024,16 +1026,62 @@ class TestSearchBudget:
         assert timeouts[0] == SEARCH_BUDGET_SECONDS
         assert 0 < timeouts[1] <= SEARCH_BUDGET_SECONDS
 
-    def test_a_first_call_timeout_says_so_without_retrying(self):
+    def test_a_timeout_twice_says_so(self):
         fake_module, mock_client_cls = _fake_tavily_module(
             search_side_effect=self._TavilyTimeout(8.0)
         )
         with patch.dict(sys.modules, {"tavily": fake_module}):
             result = WebSearchTool(api_key="key").execute(query="OpenJarvis")
-        assert mock_client_cls.return_value.search.call_count == 1
+        # The first call, then one plain fallback.
+        assert mock_client_cls.return_value.search.call_count == 2
         assert result.success is False
-        assert "timed out after 8 s" in result.content
+        assert "timed out twice" in result.content
+        assert "search engine's page" in result.content
         assert result.metadata["timed_out"] is True
+
+    def test_a_timeout_falls_back_to_a_plain_query(self):
+        """2 October: '"SUV driver na nakabangga sa Pasig"' timed out and the
+        turn ended. The fallback drops the quotes and Tagalog filler."""
+        from openjarvis.tools.web_search import FALLBACK_SECONDS
+
+        found = {
+            "results": [
+                _result(
+                    "SUV fatally hits 4-year-old girl in Pasig",
+                    "https://mb.com.ph/2026/09/14/suv-fatally-hits-girl-in-pasig",
+                    "A four-year-old girl died after she was hit by an SUV in Pasig.",
+                ),
+                _result(
+                    "LTO summons SUV driver in fatal Pasig crash",
+                    "https://newsinfo.inquirer.net/2305616/lto-pasig-crash",
+                    "The LTO summoned the SUV driver in the Pasig crash.",
+                ),
+                _result(
+                    "Pasig SUV crash",
+                    "https://www.gmanetwork.com/news/pasig-suv-crash",
+                    "GMA: the SUV driver returned and took the girl to hospital.",
+                ),
+            ]
+        }
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_side_effect=[self._TavilyTimeout(8.0), found]
+        )
+        with (
+            patch.dict(sys.modules, {"tavily": fake_module}),
+            patch("openjarvis.tools.web_search._wants_recent", return_value=False),
+        ):
+            result = WebSearchTool(api_key="key").execute(
+                query='"SUV driver na nakabangga sa Pasig" Philippines news'
+            )
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 2
+        fallback = search.call_args_list[1]
+        assert fallback.args[0] == "SUV driver nakabangga Pasig Philippines news"
+        assert fallback.kwargs["search_depth"] == "basic"
+        assert fallback.kwargs["timeout"] == FALLBACK_SECONDS
+        assert "topic" not in fallback.kwargs
+        assert result.success is True
+        assert "mb.com.ph" in result.content
 
     def test_a_slow_retry_keeps_the_first_results(self):
         thin = {
@@ -1070,3 +1118,239 @@ class TestSearchBudget:
             result = WebSearchTool(api_key="key").execute(query="OpenJarvis")
         assert mock_client_cls.return_value.search.call_count == 1
         assert "kept result" in result.content
+
+
+_CLANCY_EVENT = [
+    _result(
+        "Mistrial declared in Lindsay Clancy case",
+        "https://www.pbs.org/newshour/nation/clancy-mistrial",
+        "The judge declared a mistrial in the Lindsay Clancy case on September 4.",
+    ),
+    _result(
+        "Lindsay Clancy jury deadlocks",
+        "https://www.nytimes.com/2026/09/04/us/clancy-deadlock",
+        "Jurors in the Lindsay Clancy case could not agree.",
+    ),
+    _result(
+        "Clancy trial explained",
+        "https://en.wikipedia.org/wiki/Killing_of_the_Clancy_children",
+        "Lindsay Clancy was tried for the deaths of her three children.",
+    ),
+]
+_CLANCY_RECENT = [
+    _result(
+        "Judge denies Lindsay Clancy motion for not guilty finding",
+        "https://apnews.com/article/clancy-motion-denied",
+        "On October 1 the judge denied Lindsay Clancy's motion; next hearing Nov 2.",
+        published_date="Thu, 01 Oct 2026 18:00:00 GMT",
+    ),
+    # Already in the main results: listed once, as recent.
+    _result(
+        "Mistrial declared in Lindsay Clancy case",
+        "https://www.pbs.org/newshour/nation/clancy-mistrial",
+        "The judge declared a mistrial in the Lindsay Clancy case on September 4.",
+    ),
+]
+
+
+def _by_kind(main, recent=None, *, main_error=None):
+    """A search fake that answers the past-week pass and the main call apart.
+
+    The two run on different threads, so their order is not fixed.
+    """
+
+    def search(query, **kwargs):
+        if kwargs.get("time_range") == "week" and kwargs.get("topic") == "news":
+            if isinstance(recent, BaseException):
+                raise recent
+            return {"results": recent or []}
+        if main_error is not None:
+            raise main_error
+        return {"results": main}
+
+    return search
+
+
+class TestRecentNewsPass:
+    """6 October: an ongoing story also gets the past week's news, so the
+    1 October developments the pinned chats missed come first."""
+
+    def test_wanted_for_ongoing_stories_only(self):
+        from openjarvis.tools.web_search import _build_plan, _wants_recent
+
+        def wants(query):
+            return _wants_recent(query, _build_plan(query, force_advanced=False))
+
+        assert wants("Lindsay Clancy case current status")
+        assert wants("Pasig SUV driver trending news")
+        assert wants("Saudi Arabia news")
+        assert not wants("NVIDIA stock price NVDA")
+        assert not wants("Bujairami Hectic perfume price Philippines")
+        # Already limited to a period, or a picture search: nothing to add.
+        assert not wants("Saudi Arabia news today")
+        assert not wants("show me photos of the Medina attack")
+
+    def test_recent_results_lead_and_are_marked(self):
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_side_effect=_by_kind(_CLANCY_EVENT, _CLANCY_RECENT)
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="Lindsay Clancy case current status"
+            )
+        search = mock_client_cls.return_value.search
+        assert search.call_count == 2
+        recent_call = next(
+            c for c in search.call_args_list if c.kwargs.get("time_range") == "week"
+        )
+        assert recent_call.kwargs["search_depth"] == "basic"
+        assert recent_call.kwargs["topic"] == "news"
+
+        urls = [source["url"] for source in result.metadata["sources"]]
+        assert urls[0] == "https://apnews.com/article/clancy-motion-denied"
+        assert urls.count("https://www.pbs.org/newshour/nation/clancy-mistrial") == 1
+        assert result.content.startswith("Results marked 'From the past week's")
+        assert result.content.count("\nFrom the past week's news: yes") == 2
+        assert result.metadata["provider_calls"] == 2
+
+    def test_a_failed_recent_pass_keeps_the_main_results(self):
+        fake_module, _ = _fake_tavily_module(
+            search_side_effect=_by_kind(_CLANCY_EVENT, RuntimeError("down"))
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="Lindsay Clancy case current status"
+            )
+        assert result.success is True
+        assert "From the past week" not in result.content
+        assert len(result.metadata["sources"]) == 3
+
+    def test_recent_results_alone_answer_when_the_main_call_fails(self):
+        recent = _CLANCY_RECENT + [
+            _result(
+                "Clancy prosecutors weigh retrial",
+                "https://www.bostonglobe.com/2026/10/02/clancy-retrial",
+                "Prosecutors in the Lindsay Clancy case are weighing a retrial.",
+            )
+        ]
+        fake_module, _ = _fake_tavily_module(
+            search_side_effect=_by_kind(
+                [], recent, main_error=TestSearchBudget._TavilyTimeout(8.0)
+            )
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="Lindsay Clancy case current status"
+            )
+        assert result.success is True
+        assert "apnews.com" in result.content
+
+
+class TestExactFactHint:
+    """2-3 October: the latest F1 race, NVIDIA's price and Black Clover's
+    premiere time were each answered, or refused, from summaries alone."""
+
+    def test_exact_figure_points_at_the_official_page(self):
+        from openjarvis.tools.web_search import _read_hint
+
+        sources = [
+            {"url": "https://fan.example/f1", "summary": "x" * 400},
+            {
+                "url": "https://www.formula1.com/en/racing/2026",
+                "summary": "y" * 400,
+                "official_source": True,
+            },
+        ]
+        hint = _read_hint(sources, True, "latest Formula One race completed 2026")
+        assert "exact figure" in hint
+        assert "https://www.formula1.com/en/racing/2026" in hint
+        assert "could not be confirmed" in hint
+
+    def test_ordinary_question_with_full_summaries_gets_no_hint(self):
+        from openjarvis.tools.web_search import _read_hint
+
+        sources = [{"url": "https://a.example/x", "summary": "z" * 400}]
+        assert _read_hint(sources, True, "what is postpartum psychosis") == ""
+
+
+def test_fallback_query_drops_quotes_operators_and_filler():
+    from openjarvis.tools.web_search import _fallback_query
+
+    assert (
+        _fallback_query('"SUV driver na nakabangga sa Pasig" trending')
+        == "SUV driver nakabangga Pasig"
+    )
+    assert _fallback_query("site:crunchyroll.com Black Clover release date") == (
+        "crunchyroll.com Black Clover release date"
+    )
+    assert _fallback_query('"the"') == "the"
+
+
+class TestExactFactPageText:
+    """6 October: an exact-figure search brings the page text with it (same
+    credit, about the same time), so the answer needs no web_read round."""
+
+    _MENU = "Home News Crunchyroll Log In Crunchyroll Premium Crunchyroll Shop " * 60
+    _ARTICLE = (
+        "Here's the Exact Release Date and Time. Black Clover Season 2 premieres "
+        "on Crunchyroll starting October 3 at 8:00 a.m. PT. "
+    )
+
+    def test_only_exact_questions_ask_for_page_text(self):
+        exact = _build_plan("Black Clover exact release date", force_advanced=False)
+        plain = _build_plan("what is Black Clover about", force_advanced=False)
+        assert exact.exact and not plain.exact
+        assert WebSearchTool._search_kwargs(exact, "basic", 4)[
+            "include_raw_content"
+        ] == ("text")
+        assert "include_raw_content" not in WebSearchTool._search_kwargs(
+            plain, "basic", 4
+        )
+
+    def test_excerpt_skips_the_menu_for_the_answer(self):
+        from openjarvis.tools.web_search import PAGE_EXCERPT_CHARS, _page_excerpt
+
+        page = self._MENU + self._ARTICLE + "Related stories. " * 300
+        excerpt = _page_excerpt(page, "Black Clover Crunchyroll premiere date")
+        assert len(excerpt) == PAGE_EXCERPT_CHARS
+        assert "October 3 at 8:00 a.m. PT" in excerpt
+
+    def test_short_page_is_given_whole(self):
+        from openjarvis.tools.web_search import _page_excerpt
+
+        assert _page_excerpt("  Price:\n $240.20  ", "NVDA price") == "Price: $240.20"
+        assert _page_excerpt(None, "NVDA price") == ""
+
+    def test_excerpts_reach_the_model_for_two_results_only(self):
+        pages = [
+            _result(
+                f"Black Clover premiere {n}",
+                f"https://site{n}.example/black-clover",
+                "Black Clover Season 2 premieres in October.",
+                raw_content=self._ARTICLE,
+            )
+            for n in range(3)
+        ]
+        fake_module, _ = _fake_tavily_module(search_return={"results": pages})
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="Black Clover exact release date"
+            )
+        assert result.content.count("Page text (excerpt):") == 2
+        assert "8:00 a.m. PT" in result.content
+
+
+def test_product_photo_requests_are_image_searches():
+    """2 October: "show me a picture of it" reached the tool as "...bottle
+    photo official listing", got no gallery, and the model drew a bottle."""
+    for query in (
+        "Bujairami Hectic perfume bottle photo official listing",
+        "what the Bujairami Hectic bottle looks like",
+    ):
+        assert _build_plan(query, force_advanced=False).explicit_images, query
+    for query in (
+        "camera image quality review",
+        "product photography lighting",
+        "real estate photography tips",
+    ):
+        assert not _build_plan(query, force_advanced=False).explicit_images, query

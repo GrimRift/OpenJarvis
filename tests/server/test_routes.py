@@ -2220,6 +2220,93 @@ class TestSearchRetiresTheBrowserOpener:
         assert "web_open" in turns[0]
 
 
+class TestResearchTurnAnswersInTime:
+    """6 October: a research turn may take about 25 s. Past the answer-by
+    mark, the next round gets no tools, so it answers from what it has."""
+
+    def _tools_after_search(self, monkeypatch, answer_by):
+        import openjarvis.server.routes as routes
+        from openjarvis.agents.orchestrator import OrchestratorAgent
+        from openjarvis.core.types import ToolResult
+        from openjarvis.engine._stubs import StreamChunk
+        from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+        monkeypatch.setattr(routes, "RESEARCH_ANSWER_BY_SECONDS", answer_by)
+        stream_kwargs: list[dict] = []
+
+        def _tool(name):
+            class _Tool(BaseTool):
+                @property
+                def spec(self):
+                    return ToolSpec(
+                        name=name,
+                        description=name,
+                        parameters={"type": "object", "properties": {}},
+                    )
+
+                def execute(self, **params):
+                    return ToolResult(
+                        tool_name=name,
+                        content="Three sources.",
+                        success=True,
+                        metadata={"bounded_search_complete": True, "sources": []},
+                    )
+
+            return _Tool()
+
+        engine = _make_engine(content="ENGINE BYPASS")
+
+        async def mock_stream_full(messages, *, model, **kwargs):
+            stream_kwargs.append(kwargs)
+            if len(stream_kwargs) == 1:
+                yield StreamChunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "web_search", "arguments": "{}"},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                )
+                return
+            yield StreamChunk(content="Done.")
+            yield StreamChunk(finish_reason="stop", usage={})
+
+        engine.stream_full = mock_stream_full
+        agent = OrchestratorAgent(
+            engine,
+            "test-model",
+            tools=[_tool("web_search"), _tool("web_read"), _tool("calculator")],
+            bus=EventBus(),
+            max_turns=3,
+            system_prompt="Use the configured tools.",
+        )
+        app = create_app(
+            engine, "test-model", agent=agent, bus=EventBus(), config=_test_config()
+        )
+        resp = TestClient(app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "news about Pasig"}],
+                "stream": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert len(stream_kwargs) == 2
+        return {
+            (tool.get("function") or {}).get("name")
+            for tool in stream_kwargs[1].get("tools", [])
+        }
+
+    def test_in_time_the_page_reader_stays(self, monkeypatch):
+        assert "web_read" in self._tools_after_search(monkeypatch, 18.0)
+
+    def test_past_the_mark_the_next_round_must_answer(self, monkeypatch):
+        assert self._tools_after_search(monkeypatch, 0.0) == set()
+
+
 class TestExtractionFollowsTheModelThatAnswered:
     """The request's model is not always the one that answered.
 

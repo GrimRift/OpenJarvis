@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -60,7 +61,12 @@ _EXPLICIT_IMAGE_RE = re.compile(
     r"\b(?:images?|pictures?|photos?|screenshots?)\b|"
     r"\b(?:image|photo|picture)\s+search\b|"
     r"^\s*(?:images?|pictures?|photos?|screenshots?)\s+(?:of|for)\b|"
-    r"\b(?:images?|pictures?|photos?|screenshots?)\s*$)",
+    r"\b(?:images?|pictures?|photos?|screenshots?)\s*$|"
+    # "Show me a picture of it" became "Bujairami Hectic perfume bottle photo
+    # official listing" (2 October): no gallery, so the model drew one.
+    r"\b(?:product|bottle|packaging|real|actual)\s+"
+    r"(?:images?|pictures?|photos?)\b|"
+    r"\bwhat\s+(?:[\w-]+\s+){0,5}looks?\s+like\b)",
     re.IGNORECASE,
 )
 _BROAD_WORLD_NEWS_RE = re.compile(
@@ -176,6 +182,8 @@ class _SearchPlan:
     news: bool
     official: bool
     explicit_images: bool
+    #: One exact figure is asked for; the search brings page text with it.
+    exact: bool = False
 
 
 def _clean_text(value: Any) -> str:
@@ -218,6 +226,7 @@ def _build_plan(query: str, *, force_advanced: bool) -> _SearchPlan:
         news=news,
         official=official,
         explicit_images=explicit_images,
+        exact=bool(_EXACT_FACT_RE.search(query)) and not explicit_images,
     )
 
 
@@ -426,8 +435,68 @@ SEARCH_BUDGET_SECONDS = 8.0
 #: Not worth starting a retry with less time than this left.
 _MIN_RETRY_SECONDS = 1.0
 
+#: When the first call times out or fails, one plain basic search follows in
+#: this much more time. The turn only gets one web_search (the stream drops
+#: the tool after it), so a timeout used to end the research: on 2 October
+#: the Pasig question timed out and the model tried to read Google's result
+#: page instead, then asked the user for details.
+FALLBACK_SECONDS = 4.5
 
-def _is_timeout(exc: BaseException) -> bool:
+#: The past-week news pass for an ongoing story. Basic depth (1.3-3.7 s
+#: measured), run alongside the main call, so it adds no wait of its own.
+RECENT_MAX_RESULTS = 4
+
+#: A story that keeps developing: the main search finds the event, the
+#: recent pass finds what changed since. On 2 October Sage reported the
+#: Pasig crash and the Clancy mistrial but missed both stories' 1 October
+#: developments (the LTO's lifetime ban, the judge's ruling).
+_ONGOING_RE = re.compile(
+    r"\b(?:news|headlines?|trending|latest|breaking|update[sd]?|"
+    r"developments?|status|case|trial|verdict|sentenc\w*|lawsuit|charges?|"
+    r"investigation|incident|accident|crash|scandal|controversy|"
+    r"election|war|attack|conflict|protests?|happened|happening)\b",
+    re.IGNORECASE,
+)
+
+#: A question whose answer is one exact figure. Search summaries are the
+#: provider's precis and often stale or partial: on 2-3 October Sage gave
+#: the wrong latest F1 race, a "conflicting" NVIDIA price and no Black
+#: Clover premiere time, each from summaries alone.
+_EXACT_FACT_RE = re.compile(
+    r"\b(?:exact|what\s+time|release\s+(?:date|time)|premieres?|air\s*date|"
+    r"schedule|showtimes?|prices?|cost|stock|score|results?|standings|"
+    r"(?:latest|last|next)\s+(?:[\w-]+\s+){0,3}(?:race|match|game|episode)s?|"
+    r"when\s+(?:will|is|does|did))\b",
+    re.IGNORECASE,
+)
+
+#: Words that carry no search meaning: Tagalog function words, which an
+#: exact-phrase search turns into a requirement ("suv driver na nakabangga
+#: sa pasig" found nothing quoted), plus request filler. Not the whole
+#: relevance noise list: "release", "model" or "game" still matter here.
+_FALLBACK_DROP_WORDS = {
+    "na", "sa", "ng", "nang", "ang", "mga", "si", "ni", "kay", "yung",
+    "iyong", "ay", "at", "ba", "po", "daw", "raw", "lang", "pa",
+    "can", "you", "please", "search", "find", "look", "for", "about",
+    "the", "current", "trending",
+}  # fmt: skip
+
+
+def _fallback_query(query: str) -> str:
+    """*query* without quotes, operators and filler, for the plain retry."""
+    words = re.findall(r"[^\s\"'()]+", query.replace("site:", " "))
+    kept = [word for word in words if word.lower() not in _FALLBACK_DROP_WORDS]
+    return " ".join(kept) or query.replace('"', " ").strip()
+
+
+def _wants_recent(query: str, plan: _SearchPlan) -> bool:
+    """Whether to also search the past week's news for this query."""
+    if plan.explicit_images or plan.time_range is not None:
+        return False
+    return bool(plan.news or _ONGOING_RE.search(query))
+
+
+def _is_timeout(exc: BaseException | None) -> bool:
     # tavily raises its own TimeoutError (not the builtin) on a slow call.
     return isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError"
 
@@ -436,8 +505,9 @@ def _timed_out(provider_calls: int) -> ToolResult:
     return ToolResult(
         tool_name="web_search",
         content=(
-            f"Search timed out after {SEARCH_BUDGET_SECONDS:.0f} s with no "
-            "results. Say so; you may try once more with a shorter query."
+            "Search timed out twice (the second time with a simpler query) "
+            "and returned nothing. Tell the user the search service is not "
+            "answering right now; do not try to open a search engine's page."
         ),
         success=False,
         metadata={
@@ -449,15 +519,32 @@ def _timed_out(provider_calls: int) -> ToolResult:
     )
 
 
-def _read_hint(sources: list[dict[str, Any]], quality_passed: bool) -> str:
+def _read_hint(
+    sources: list[dict[str, Any]], quality_passed: bool, query: str = ""
+) -> str:
     """Point at the page to open when a summary cannot hold the answer.
 
     Offered only when there is a page worth opening. Silent on a search that
     already answered well, so an ordinary lookup does not grow a suggestion to
-    go and browse.
+    go and browse -- unless the question is one exact figure, which a summary
+    may state stale or not at all.
     """
     if not sources:
         return ""
+    if _EXACT_FACT_RE.search(query):
+        best = next(
+            (source for source in sources if source.get("official_source")),
+            sources[0],
+        )
+        return (
+            "This asks for an exact figure (a date, time, price or result). "
+            "Give it only if a summary or page excerpt above states it "
+            "outright; where they "
+            "disagree, trust the official site and the newest published date. "
+            "If none states it clearly, use web_read on the most official "
+            f"page (likely {best['url']}) before answering, rather than "
+            "replying that it could not be confirmed."
+        )
     thin = not quality_passed or all(
         len((source.get("summary") or "").strip()) < 200 for source in sources
     )
@@ -513,6 +600,61 @@ def _retry_query(query: str) -> str:
     if re.search(r"\bgame\b", query, re.IGNORECASE):
         return f"{exact} official game overview"
     return f"{query} {exact} authoritative source"
+
+
+#: Page text given with an exact-figure search: this much, from this many of
+#: the top results. A whole page is 8-30k characters (Crunchyroll 17.9k),
+#: resent every later round, so only the stretch that holds the answer.
+PAGE_EXCERPT_CHARS = 2500
+PAGE_EXCERPT_RESULTS = 2
+
+#: What an exact answer looks like in page text: a time, a date, a price.
+_FIGURE_RE = re.compile(
+    r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)|\b\d{1,2}:\d{2}\b|"
+    r"\b(?:PT|PST|PDT|ET|JST|UTC|GMT|PHT)\b|"
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|"
+    r"[$₱£€¥]\s?\d",
+    re.IGNORECASE,
+)
+
+
+#: Words around an exact answer, whatever the subject.
+_ANSWER_WORDS = (
+    "premiere", "release", "date", "time", "price", "priced", "result",
+    "winner", "won", "schedule", "airs", "starts",
+)  # fmt: skip
+
+
+def _page_excerpt(raw: Any, query: str, limit: int = PAGE_EXCERPT_CHARS) -> str:
+    """The *limit*-long stretch of a page most about *query*'s figure.
+
+    Pages open with menus and sign-in links; the window with the most
+    subject words and times, dates or prices is the part worth sending.
+    """
+    text = re.sub(r"\s+", " ", raw if isinstance(raw, str) else "").strip()
+    if len(text) <= limit:
+        return text
+    # Capped per word: a menu says "Crunchyroll" a dozen times and won the
+    # window over the article's "Exact Release Date and Time" (6 October).
+    terms = _query_subject_terms(query) + list(_ANSWER_WORDS)
+    lowered = text.lower()
+    best_start, best_score = 0, -1
+    for start in range(0, len(text) - limit + 250, 250):
+        window = lowered[start : start + limit]
+        score = sum(min(window.count(term), 2) for term in terms) + 3 * min(
+            len(_FIGURE_RE.findall(window)), 8
+        )
+        # A tie goes to the later window: the same matches with less of the
+        # menu that precedes them.
+        if score >= best_score:
+            best_start, best_score = start, score
+    return text[best_start : best_start + limit]
+
+
+def _url_key(url: str) -> str:
+    """*url* without query and fragment, for spotting the same page twice."""
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
 
 
 def _https_image(value: Any) -> str | None:
@@ -640,8 +782,9 @@ class WebSearchTool(BaseTool):
                 "browse, look up, verify, or requests current information. Pass the "
                 "user's request faithfully with the exact entity. Do not add latest, "
                 "news, release date, official, or image intent unless the user asked "
-                "for it. The tool selects search depth, checks relevance, and performs "
-                "at most one corrective provider call."
+                "for it. The tool selects search depth, checks relevance, retries "
+                "on its own when the provider is slow or thin, and adds the past "
+                "week's news for an ongoing story, so one call is enough."
             ),
             parameters={
                 "type": "object",
@@ -747,7 +890,37 @@ class WebSearchTool(BaseTool):
             kwargs["time_range"] = plan.time_range
         if plan.explicit_images:
             kwargs["include_image_descriptions"] = True
+        if plan.exact:
+            # Same credit and about the same time as without (measured 1.2 s
+            # vs 1.1 s, 1 credit each, 6 October), and it spares a web_read
+            # round: Crunchyroll's schedule page is drawn by script, which a
+            # plain read cannot get and Opera took seconds to.
+            kwargs["include_raw_content"] = "text"
         return kwargs
+
+    @staticmethod
+    def _recent_results(
+        future: Future[dict[str, Any]] | None,
+        query: str,
+        left: Any,
+    ) -> tuple[list[dict[str, Any]], int | float]:
+        """The past-week pass's relevant results and credits, or nothing.
+
+        Waits only for the main search's remaining time: a slow pass is
+        dropped rather than allowed to hold the answer up.
+        """
+        if future is None:
+            return [], 0
+        try:
+            response = future.result(timeout=max(0.5, left()))
+        except Exception as exc:  # noqa: BLE001
+            logger.info(
+                "Recent-news pass %s; skipped",
+                "timed out" if _is_timeout(exc) else f"failed ({exc})",
+            )
+            return [], 0
+        raw = list(response.get("results") or [])
+        return _filter_relevant_results(raw, query, news=True), _credits(response)
 
     def execute(self, **params: Any) -> ToolResult:
         query = str(params.get("query", "") or "").strip()
@@ -818,6 +991,26 @@ class WebSearchTool(BaseTool):
 
         memory_budget.note_web_search()
 
+        # The past week's news for an ongoing story, alongside the main call.
+        pool: ThreadPoolExecutor | None = None
+        recent_future: Future[dict[str, Any]] | None = None
+        if _wants_recent(query, plan):
+            pool = ThreadPoolExecutor(max_workers=1)
+            provider_calls += 1
+            recent_future = pool.submit(
+                client.search,
+                query,
+                timeout=SEARCH_BUDGET_SECONDS,
+                max_results=RECENT_MAX_RESULTS,
+                search_depth="basic",
+                topic="news",
+                time_range="week",
+                include_usage=True,
+            )
+
+        response: dict[str, Any] | None = None
+        failure: BaseException | None = None
+        fell_back = False
         try:
             provider_calls += 1
             response = client.search(
@@ -826,32 +1019,63 @@ class WebSearchTool(BaseTool):
                 **self._search_kwargs(plan, plan.depth, provider_max_results),
             )
         except Exception as exc:
-            if _is_timeout(exc) or left() < _MIN_RETRY_SECONDS:
-                return _timed_out(provider_calls)
-            if plan.depth == "advanced":
-                logger.debug("Tavily search error: %s", exc)
-                return self._error(
-                    f"Tavily search error: {exc}", provider_calls=provider_calls
-                )
-            escalated = True
-            final_depth = "advanced"
+            failure = exc
+            if (
+                not _is_timeout(exc)
+                and plan.depth == "basic"
+                and left() >= _MIN_RETRY_SECONDS
+            ):
+                escalated = True
+                final_depth = "advanced"
+                try:
+                    provider_calls += 1
+                    response = client.search(
+                        _retry_query(query),
+                        timeout=left(),
+                        **self._search_kwargs(plan, "advanced", retry_max_results),
+                    )
+                except Exception as retry_exc:
+                    failure = retry_exc
+
+        if response is None:
+            # One plain search: no quotes, no filler, basic depth, any topic.
+            logger.info(
+                "Tavily search %s; trying a plain fallback",
+                "timed out" if _is_timeout(failure) else f"failed ({failure})",
+            )
+            fell_back = True
+            final_depth = "basic"
             try:
                 provider_calls += 1
                 response = client.search(
-                    _retry_query(query),
-                    timeout=left(),
-                    **self._search_kwargs(plan, "advanced", retry_max_results),
+                    _fallback_query(query),
+                    timeout=FALLBACK_SECONDS,
+                    max_results=max(provider_max_results, 5),
+                    search_depth="basic",
+                    include_images=plan.explicit_images,
+                    include_usage=True,
                 )
-            except Exception as retry_exc:
-                logger.debug("Tavily search error after escalation: %s", retry_exc)
-                if _is_timeout(retry_exc):
+            except Exception as fallback_exc:
+                logger.info("Tavily fallback failed too (%s)", fallback_exc)
+                failure = fallback_exc
+
+        recent_results, recent_credits = self._recent_results(
+            recent_future, query, left
+        )
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+        if response is None:
+            if not recent_results:
+                if _is_timeout(failure):
                     return _timed_out(provider_calls)
                 return self._error(
-                    f"Tavily search error: {retry_exc}",
+                    f"Tavily search error: {failure}. Tell the user the search "
+                    "service failed; do not try to open a search engine's page.",
                     provider_calls=provider_calls,
                 )
+            response = {"results": []}
 
-        credits += _credits(response)
+        credits += _credits(response) + recent_credits
         raw_results = list(response.get("results") or [])
         results = _filter_relevant_results(raw_results, query, news=plan.news)
         images = _gallery_images(response) if plan.explicit_images else []
@@ -862,6 +1086,7 @@ class WebSearchTool(BaseTool):
         if (
             initial_depth == "basic"
             and not escalated
+            and not fell_back
             and not quality_passed
             and left() >= _MIN_RETRY_SECONDS
         ):
@@ -891,6 +1116,20 @@ class WebSearchTool(BaseTool):
                     results, query, plan, images=images
                 )
 
+        # The newest developments lead; the main search found the story. A
+        # story found only by the news pass (the main call failed) is still
+        # accepted when that coverage is sound.
+        recent_keys = {_url_key(str(r.get("url") or "")) for r in recent_results}
+        if recent_results:
+            results = recent_results + [
+                r
+                for r in results
+                if _url_key(str(r.get("url") or "")) not in recent_keys
+            ]
+            quality_passed = quality_passed or _results_are_sufficient(
+                results, query, plan, images=images
+            )
+
         # Social and meme posts after the articles, unless the message is
         # about social media (the user's choice, 2 October). Stable sort, so
         # the order within each group is Tavily's.
@@ -902,12 +1141,12 @@ class WebSearchTool(BaseTool):
         formatted_parts: list[str] = []
         sources: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
+        excerpts_left = PAGE_EXCERPT_RESULTS
         for result in results:
             title = _clean_text(result.get("title")) or "Untitled"
             source_url = str(result.get("url") or "")
+            key = _url_key(source_url)
             if source_url:
-                parsed = urlparse(source_url)
-                key = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
                 if key in seen_urls:
                     continue
                 seen_urls.add(key)
@@ -934,9 +1173,19 @@ class WebSearchTool(BaseTool):
             )
             published_line = f"\nPublished: {published_date}" if published_date else ""
             official_line = "\nOfficial source: yes" if official_source else ""
+            recent_line = (
+                "\nFrom the past week's news: yes" if key in recent_keys else ""
+            )
+            excerpt = ""
+            if plan.exact and excerpts_left > 0 and result.get("raw_content"):
+                excerpt = _page_excerpt(result.get("raw_content"), query)
+                if excerpt:
+                    excerpts_left -= 1
+                    excerpt = f"\nPage text (excerpt): {excerpt}"
             formatted_parts.append(
                 f"### {title}\nSource: {source_url}{published_line}{official_line}"
-                f"\nSummary: {model_summary}"
+                f"{recent_line}"
+                f"\nSummary: {model_summary}{excerpt}"
             )
 
         formatted = "\n\n---\n\n".join(formatted_parts)
@@ -952,13 +1201,20 @@ class WebSearchTool(BaseTool):
                 "and do not invent missing details."
             )
             formatted = f"{warning}\n\n{formatted}" if formatted else warning
+        if recent_keys & seen_urls:
+            formatted = (
+                "Results marked 'From the past week's news: yes' are the newest "
+                "coverage. Lead with anything they add since the original "
+                "event (a ruling, a penalty, a new date), with its date.\n\n"
+                f"{formatted}"
+            )
 
         # Said in the result rather than as a prompt rule, because
         # prompt-level rules have not held here. A summary is the search
         # provider's precis; when the answer is a detail the page draws
         # after loading -- showtimes, a price, a table -- no summary will
         # ever contain it, and the model needs telling where it lives.
-        hint = _read_hint(sources, quality_passed)
+        hint = _read_hint(sources, quality_passed, query)
         if hint:
             formatted = f"{formatted}\n\n{hint}" if formatted else hint
 

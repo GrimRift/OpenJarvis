@@ -1309,6 +1309,12 @@ def _merge_agent_tool_call_fragments(
 # Tools that a bounded/terminal search result retires for the rest of the turn.
 _SEARCH_TOOL_NAMES = frozenset({"web_search"})
 
+#: Once a turn that has searched or read the web is this far in, the next
+#: round gets no tools and answers. The user allows a research turn about
+#: 25 s; this leaves the answer itself room to stream.
+RESEARCH_ANSWER_BY_SECONDS = 18.0
+_RESEARCH_TOOL_NAMES = frozenset({"web_search", "web_read"})
+
 #: Words that make a message a weather question (English and Tagalog). The
 #: card and panel show only then: on 2 October a research answer about an AI
 #: model came with a Calamba forecast card the user never asked for.
@@ -1737,6 +1743,17 @@ async def _handle_streaming_orchestrator(
                             for tool in active_tools
                             if (tool.get("function") or {}).get("name") != "web_read"
                         ]
+                    if (
+                        any(
+                            getattr(result, "tool_name", "") in _RESEARCH_TOOL_NAMES
+                            for result in all_tool_results
+                        )
+                        and time.perf_counter() - clock["start"]
+                        >= RESEARCH_ANSWER_BY_SECONDS
+                    ):
+                        # Answer with what is in hand: the user allows a
+                        # research turn about 25 s (6 October).
+                        active_tools = []
                     continue
 
                 # Nothing after the tools. On 23 September "remind me in one

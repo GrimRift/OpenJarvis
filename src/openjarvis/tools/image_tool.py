@@ -105,7 +105,9 @@ class ImageGenerateTool(_ImageTool):
                 "description: 'draw me a cafe at sunset', 'make an image of...', "
                 "'generate a logo for...'. Takes 15-50 s. The picture appears on "
                 "the user's screen by itself. To change an existing picture use "
-                "image_edit instead."
+                "image_edit instead. Never use it to show what a real product, "
+                "place or person looks like ('show me a picture of it'): a "
+                "drawing is not the real thing. Use web_search for real photos."
             ),
             parameters={
                 "type": "object",
