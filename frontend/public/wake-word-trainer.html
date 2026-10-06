@@ -38,6 +38,7 @@
 <div id="meter"><div id="meterFill"></div></div>
 <button id="recordBtn">Start</button>
 <button id="redoBtn" style="display:none">Redo</button>
+<button id="playBtn" style="display:none">&#9654; Play</button>
 <button id="nextBtn" style="display:none">Next &rarr;</button>
 <div id="status"></div>
 <div id="log"></div>
@@ -317,6 +318,7 @@ const statusEl = document.getElementById('status');
 const logEl = document.getElementById('log');
 const recordBtn = document.getElementById('recordBtn');
 const redoBtn = document.getElementById('redoBtn');
+const playBtn = document.getElementById('playBtn');
 const nextBtn = document.getElementById('nextBtn');
 const meterFill = document.getElementById('meterFill');
 
@@ -418,7 +420,9 @@ async function recordCurrent() {
     // a quiet take is the point of the g_quiet block, not a mistake.
     const expectsVoice = item.isSpeech !== false;
     const deliberatelyQuiet = item.name.startsWith('g_quiet') || item.name.startsWith('g_far') || item.name.startsWith('t_quiet') || item.name.startsWith('t_back');
-    const tooQuiet = expectsVoice && !deliberatelyQuiet && peak < 3000;
+    // Not in the test set: a dynamic mic on the raw path peaks at 3-4% at
+    // 5-15 cm (6 October), and quiet takes are what it has to measure.
+    const tooQuiet = !isTestset && expectsVoice && !deliberatelyQuiet && peak < 3000;
     const silentTake = !expectsVoice && peak > 12000;
     statusEl.innerHTML = tooQuiet
       ? `<span class="warn">Saved, but very quiet (peak ${peakPct}%) — consider Redo</span>`
@@ -435,6 +439,7 @@ async function recordCurrent() {
   // judged (and redone) before it's committed to.
   recordBtn.style.display = 'none';
   redoBtn.style.display = 'inline-block';
+  playBtn.style.display = 'inline-block';
   nextBtn.style.display = 'inline-block';
   nextBtn.textContent = idx + 1 >= items.length ? 'Finish' : 'Next →';
 }
@@ -442,6 +447,7 @@ async function recordCurrent() {
 function advance() {
   idx++;
   redoBtn.style.display = 'none';
+  playBtn.style.display = 'none';
   nextBtn.style.display = 'none';
   if (idx >= items.length) {
     promptEl.textContent = 'All done!';
@@ -550,9 +556,31 @@ redoBtn.addEventListener('click', () => {
   // per-item filename, so a redo overwrites the take it replaces rather
   // than leaving the bad one behind in the training set.
   redoBtn.style.display = 'none';
+  playBtn.style.display = 'none';
   nextBtn.style.display = 'none';
   recordBtn.style.display = 'inline-block';
   recordCurrent();
+});
+
+// Plays the last take back, brought up to a listening level (the raw take
+// from a dynamic mic is a few percent of full scale -- too faint to judge).
+// The gain is shown so loudness is not misread from the playback.
+let playCtx = null;
+playBtn.addEventListener('click', async () => {
+  if (!lastClipBytes) return;
+  const pcm = new Int16Array(lastClipBytes.buffer, lastClipBytes.byteOffset, lastClipBytes.byteLength / 2);
+  const peak = Math.max(1, peakOf(pcm));
+  const gain = Math.min(30, (0.7 * 32768) / peak);
+  playCtx = playCtx || new AudioContext();
+  await playCtx.resume();
+  const buf = playCtx.createBuffer(1, pcm.length, SAMPLE_RATE);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = Math.max(-1, Math.min(1, (pcm[i] / 32768) * gain));
+  const src = playCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(playCtx.destination);
+  src.start();
+  log(`played ${lastClipMeta ? lastClipMeta.name : ''} at ${gain.toFixed(1)}x`);
 });
 
 nextBtn.addEventListener('click', () => {
