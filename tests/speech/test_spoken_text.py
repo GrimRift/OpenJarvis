@@ -30,7 +30,7 @@ class TestTables:
 
     def test_cells_become_a_readable_sentence(self):
         spoken = to_spoken_text(self.TABLE)
-        assert "Sleep reminder, Daily at 10:00 PM, Aug 28 at 10:00 PM." in spoken
+        assert "Sleep reminder: Daily at 10:00 PM, Aug 28 at 10:00 PM." in spoken
 
     def test_the_surrounding_prose_is_kept(self):
         spoken = to_spoken_text(self.TABLE)
@@ -39,6 +39,68 @@ class TestTables:
 
     def test_a_row_of_only_separators_yields_nothing(self):
         assert to_spoken_text("| --- | --- |") == ""
+
+
+def _study_table(rows: int) -> str:
+    """The calculator-shortcut table from the 7 October chat, cut to *rows*."""
+    body = [
+        "| 1 | Arithmetic sequence term | **STAT → Lin**: enter term numbers as x, use ŷ at the target. |",
+        "| 2, 24 | Sum of a sequence | **Σ**: enter the term expression, start, and end. |",
+        "| 3 | Geometric sequence term | **STAT → ab EXP**: enter term numbers and term values. |",
+        "| 4, 21, 84 | Simultaneous linear equations | **EQN → 2 unknowns**: enter the coefficients. |",
+        "| 22, 83, 88 | Combinations | Use **nCr**. |",
+        "| 45 | Degrees-minutes-seconds | Use the ° ' ” conversion key. |",
+        "| 51, 58, 69 | Polynomial roots | Use **EQN → Quad/Cubic**. |",
+    ][:rows]
+    return "\n".join(
+        ["Here is the list.", "", "| Problem(s) | Topic | Shortcut |", "|---|---|---|"]
+        + body
+        + ["", "Next, the formulas."]
+    )
+
+
+class TestSpokenTables:
+    """Reported 7 October: a study table was read cell by cell, left to right,
+    and the user could not follow it by ear."""
+
+    def test_a_short_table_is_one_sentence_per_row(self):
+        spoken = to_spoken_text(_study_table(3))
+        assert (
+            "Problem 1: Arithmetic sequence term. STAT, then Lin: enter term "
+            "numbers as x, use y-hat at the target." in spoken
+        )
+        assert "Problems 2 and 24: Sum of a sequence. sigma: enter" in spoken
+
+    def test_a_number_list_is_said_as_a_list(self):
+        spoken = to_spoken_text(_study_table(4))
+        assert "Problems 4, 21 and 84: Simultaneous linear equations." in spoken
+
+    def test_a_long_table_is_described_not_read(self):
+        spoken = to_spoken_text(_study_table(7))
+        assert (
+            "The table on screen has 7 rows, covering Arithmetic sequence term, "
+            "Sum of a sequence, Geometric sequence term and 4 more." in spoken
+        )
+        assert "Combinations" not in spoken
+        assert spoken.startswith("Here is the list.")
+        assert spoken.endswith("Next, the formulas.")
+
+    def test_a_table_without_a_header_still_reads(self):
+        assert to_spoken_text("| Speed | 50 km/h |") == "Speed: 50 km/h."
+
+
+class TestSpokenSymbols:
+    def test_calculator_notation_is_said_as_words(self):
+        assert to_spoken_text("Press **STAT → Lin**, then read ŷ.") == (
+            "Press STAT, then Lin, then read y-hat."
+        )
+        assert to_spoken_text("Use nCr or nPr.") == "Use n C r or n P r."
+        assert to_spoken_text("Use the ° ' ” key.") == (
+            "Use the degrees-minutes-seconds key."
+        )
+
+    def test_operators_are_said_as_words(self):
+        assert to_spoken_text("2 × 3 ≈ 6 ± 1") == "2 times 3 about 6 plus or minus 1"
 
 
 class TestOtherMarkdown:

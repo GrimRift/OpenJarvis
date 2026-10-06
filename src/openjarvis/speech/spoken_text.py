@@ -227,6 +227,43 @@ def _is_speakable(text: str) -> bool:
     return bool(_SPEAKABLE.search(text))
 
 
+#: How many times the usual pending bound a table being held may reach.
+TABLE_HOLD_FACTOR = 4
+
+
+def _hold_tables(text: str, boundaries: list[int]) -> tuple[list[int], bool]:
+    """Keep each markdown table in one segment, released once it has ended.
+
+    Whether a table is read row by row or described depends on how many rows
+    it has, and a sentence end inside a cell ("number. |") split rows across
+    segments, so a table is never cut: a finished one is one segment, an
+    unfinished one holds everything from its first row. Returns the
+    boundaries and whether a table is still open.
+    """
+    blocks: list[tuple[int, int]] = []
+    offset = 0
+    start: int | None = None
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        stripped = line.lstrip(" \t")
+        is_row = stripped.startswith("|")
+        # A last line still arriving with nothing but indentation may yet
+        # turn out to be a row.
+        undecided = index == len(lines) - 1 and not stripped
+        if is_row and start is None:
+            start = offset
+        elif not is_row and not undecided and start is not None:
+            blocks.append((start, offset))
+            start = None
+        offset += len(line)
+
+    kept = [b for b in boundaries if not any(s < b < e for s, e in blocks)]
+    kept.extend(e for _s, e in blocks)
+    if start is not None:
+        kept = [b for b in kept if b <= start]
+    return sorted(set(kept)), start is not None
+
+
 class SpokenTextStream:
     """Buffer raw model deltas and release only stable sanitized speech."""
 
@@ -245,7 +282,9 @@ class SpokenTextStream:
         if self._finished or not delta:
             return []
         self._pending += delta
-        boundaries = _completed_speech_boundaries(self._pending)
+        boundaries, table_open = _hold_tables(
+            self._pending, _completed_speech_boundaries(self._pending)
+        )
         segments: list[str] = []
         consumed = 0
         for boundary in boundaries:
@@ -256,7 +295,10 @@ class SpokenTextStream:
                 segments.append(spoken)
         if consumed:
             self._pending = self._pending[consumed:].lstrip()
-        if len(self._pending) > self._max_pending_chars:
+        # A table is held whole until it ends, so it may be several sentences
+        # long; the turn's own character cap still bounds it.
+        limit = self._max_pending_chars * (TABLE_HOLD_FACTOR if table_open else 1)
+        if len(self._pending) > limit:
             raise SpokenTextOverflow("unfinished speech segment too long")
         return segments
 
@@ -280,13 +322,127 @@ class SpokenTextStream:
         return [spoken] if spoken and _is_speakable(spoken) else []
 
 
-def _flatten_table_row(line: str) -> str:
-    """Read a table row as its cells, so the bars are never spoken."""
-    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-    spoken = ", ".join(cell for cell in cells if cell)
-    if not spoken:
+#: Up to this many rows a table is read out, one sentence per row. A longer
+#: one is described instead: reading 14 rows of a study table took longer
+#: than reading it, and the user asked for short tables read, long ones
+#: summarized (7 October).
+SPOKEN_TABLE_MAX_ROWS = 5
+#: How many rows a summary names before "and N more".
+_SUMMARY_NAMED_ROWS = 3
+
+#: A cell that is only numbers, like a problem list "4, 21, 84".
+_NUMBER_LIST = re.compile(r"^\d+(?:\s*[,–-]\s*\d+)*$")
+_HEADER_NUMBER = re.compile(r"(?i)^(?:#|no\.?|num\.?)$")
+
+
+def _table_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _spoken_list(items: list[str]) -> str:
+    """'a, b and c' -- how a list is said, not how it is typed."""
+    if len(items) < 2:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _row_lead(header: str, cell: str) -> str:
+    """The row's first cell, named by its column when it is only a number.
+
+    "4, 21, 84" alone is three numbers out of nowhere; under a
+    "Problem(s)" header it is said "Problems 4, 21 and 84".
+    """
+    if not header or not _NUMBER_LIST.match(cell):
+        return cell
+    numbers = [n.strip() for n in cell.split(",")]
+    if _HEADER_NUMBER.match(header):
+        name = "Number"
+    else:
+        name = re.sub(r"\((?:e?s)\)$", "", header).strip()
+        if len(numbers) > 1 and not name.endswith("s"):
+            name += "s"
+    return f"{name} {_spoken_list(numbers)}"
+
+
+def _row_sentence(header: list[str], cells: list[str]) -> str:
+    """One row as a sentence: its lead, then what the row says about it."""
+    lead = _row_lead(header[0] if header else "", cells[0]) if cells else ""
+    rest = [cell for cell in cells[1:] if cell]
+    if not lead:
+        lead, rest = (rest[0], rest[1:]) if rest else ("", [])
+    if not lead:
         return ""
-    return spoken if spoken.endswith((".", "!", "?", ":")) else spoken + "."
+    if not rest:
+        return _ended(lead)
+    # Short values run on with commas ("Daily at 10 PM, Aug 28"); a cell
+    # that is itself an instruction gets its own sentence, or "Arithmetic
+    # sequence term, STAT, then Lin" sounds like one long list.
+    prose = any(len(cell.split()) >= 6 for cell in rest)
+    joiner = ". " if prose else ", "
+    if prose:
+        rest = [cell.rstrip(".") for cell in rest]
+    return _ended(f"{lead}: " + joiner.join(rest))
+
+
+def _label_column(rows: list[list[str]]) -> int:
+    """The column that names each row: the first not made of numbers."""
+    width = max(len(row) for row in rows)
+    for column in range(width):
+        values = [row[column] for row in rows if column < len(row) and row[column]]
+        if values and sum(bool(_NUMBER_LIST.match(v)) for v in values) * 2 < len(values):
+            return column
+    return 0
+
+
+def _speak_table(lines: list[str]) -> list[str]:
+    """A markdown table as speech: short ones read, long ones described."""
+    rows = [_table_cells(line) for line in lines if not _TABLE_DIVIDER.match(line)]
+    rows = [row for row in rows if any(row)]
+    has_header = len(lines) > 1 and bool(_TABLE_DIVIDER.match(lines[1]))
+    header = rows.pop(0) if has_header and rows else []
+    if not rows:
+        return []
+    if len(rows) <= SPOKEN_TABLE_MAX_ROWS:
+        return [s for s in (_row_sentence(header, row) for row in rows) if s]
+    column = _label_column(rows)
+    labels = [
+        row[column] for row in rows if column < len(row) and row[column]
+    ][:_SUMMARY_NAMED_ROWS]
+    more = len(rows) - len(labels)
+    named = _spoken_list(labels + ([f"{more} more"] if more > 0 else []))
+    return [f"The table on screen has {len(rows)} rows, covering {named}."]
+
+
+#: Calculator and maths symbols as they are said. Only the speech changes;
+#: the screen keeps "STAT → Lin" and "ŷ".
+_SPOKEN_SYMBOLS = (
+    (re.compile(r"\s*(?:→|⇒|⟶|(?<=\s)->(?=\s))\s*"), ", then "),
+    (re.compile(r"°\s*['’′]\s*[\"”″]"), " degrees-minutes-seconds "),
+    (re.compile("(?:ŷ|ŷ)"), "y-hat"),
+    (re.compile("(?:x̂)"), "x-hat"),
+    (re.compile("(?:x̄)"), "x-bar"),
+    (re.compile("(?:ȳ|ȳ)"), "y-bar"),
+    (re.compile(r"\bn([CP])r\b"), r"n \1 r"),
+    (re.compile(r"[Σ∑]"), " sigma "),
+    (re.compile(r"∫"), " integral "),
+    (re.compile(r"√"), " square root of "),
+    (re.compile(r"π"), " pi "),
+    (re.compile(r"×"), " times "),
+    (re.compile(r"÷"), " divided by "),
+    (re.compile(r"±"), " plus or minus "),
+    (re.compile(r"≈"), " about "),
+    (re.compile(r"≤"), " less than or equal to "),
+    (re.compile(r"≥"), " greater than or equal to "),
+    (re.compile(r"≠"), " not equal to "),
+)
+
+
+def _speak_symbols(text: str) -> str:
+    for pattern, words in _SPOKEN_SYMBOLS:
+        text = pattern.sub(words, text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]+([,.:;!?)])", r"\1", text)
+    return re.sub(r"([(])[ \t]+", r"\1", text)
 
 
 def _shorten_code(match: re.Match[str]) -> str:
@@ -435,16 +591,16 @@ def to_spoken_text(markdown: str) -> str:
     text = _LONG_CODE.sub(_shorten_code, text)
 
     lines: list[str] = []
-    for line in text.splitlines():
-        if _TABLE_DIVIDER.match(line) and "|" in line:
+    table: list[str] = []
+    for line in [*text.splitlines(), ""]:
+        if _TABLE_ROW.match(line) or (_TABLE_DIVIDER.match(line) and "|" in line):
+            table.append(line)
             continue
-        if _TABLE_ROW.match(line):
-            flattened = _flatten_table_row(line)
-            if flattened:
-                lines.append(flattened)
-            continue
+        if table:
+            lines.extend(_speak_table(table))
+            table = []
         lines.append(line)
-    text = "\n".join(lines)
+    text = "\n".join(lines[:-1])
 
     text = _RULE.sub("", text)
     text = _HEADING.sub("", text)
@@ -453,6 +609,8 @@ def to_spoken_text(markdown: str) -> str:
     # Applied after the line rules so a bullet's "*" is already gone and
     # cannot be mistaken for the opening of an emphasis span.
     text = _EMPHASIS.sub(r"\2", text)
+    # After emphasis, or a padded "** sigma **" no longer reads as a span.
+    text = _speak_symbols(text)
 
     # Dashes are punctuation to the eye and a hazard to the ear. An en dash
     # wedged between words ("Management–Drafting") is read with no gap at

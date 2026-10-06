@@ -28,6 +28,7 @@ import {
 } from '../../lib/link-preview';
 import { protectCurrencyFromMath } from '../../lib/currency-math';
 import { markdownPhotos, usePhotoViewer, type ViewerPhoto } from '../../lib/photo-viewer';
+import { hastText, keepOnOneLine } from '../../lib/table-cell';
 import type { ChatMessage } from '../../types';
 
 function stripThinkTags(text: string): string {
@@ -314,6 +315,12 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
             rehypePlugins={rehypePlugins}
             components={{
               pre: preRenderer,
+              th: ({ node, ...props }) => (
+                <th {...props} className={keepOnOneLine(hastText(node)) ? 'whitespace-nowrap' : undefined} />
+              ),
+              td: ({ node, ...props }) => (
+                <td {...props} className={keepOnOneLine(hastText(node)) ? 'whitespace-nowrap' : undefined} />
+              ),
               a: ({ href, children, node: _node, ...props }) => (
                 <a href={href} {...externalLinkAttributes(href)} {...props}>
                   {children}

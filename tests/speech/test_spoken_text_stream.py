@@ -113,3 +113,34 @@ def test_a_reply_made_entirely_of_punctuation_says_nothing() -> None:
 
     assert stream.push(" ... ") == []
     assert stream.finish() == []
+
+
+def test_a_table_is_held_whole_and_released_when_it_ends() -> None:
+    # A full stop inside a cell ("target. |") used to end a segment mid-row,
+    # and a row count can only be judged once the table has ended.
+    table = (
+        "Here is the list.\n\n"
+        "| Problem(s) | Topic | Shortcut |\n|---|---|---|\n"
+        "| 1 | Arithmetic term | Use STAT. Then read the target. |\n"
+        "| 2, 24 | Sum | Use sigma. |\n"
+        "\nNext, the formulas. "
+    )
+    stream = SpokenTextStream()
+    segments: list[str] = []
+    for start in range(0, len(table), 5):
+        segments += stream.push(table[start : start + 5])
+    segments += stream.finish()
+
+    rows = [s for s in segments if "Problem" in s]
+    assert len(rows) == 1
+    assert rows[0] == (
+        "Problem 1: Arithmetic term. Use STAT. Then read the target.\n"
+        "Problems 2 and 24: Sum, Use sigma."
+    )
+    assert segments[0] == "Here is the list."
+    assert segments[-1] == "Next, the formulas."
+
+
+def test_an_unfinished_table_is_not_spoken_early() -> None:
+    stream = SpokenTextStream()
+    assert stream.push("| A | B |\n|---|---|\n| one. | two. |\n") == []
