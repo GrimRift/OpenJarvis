@@ -164,3 +164,62 @@ def test_a_rise_during_warm_up_is_labelled():
     near.observe(0.6, warming_up=True)
     near.observe(0.5)
     assert near.observe(0.0)["warming_up"] is True
+
+
+class _CountingModel:
+    """Stands in for openWakeWord: counts frames, scores what it is told."""
+
+    def __init__(self) -> None:
+        self.frames = 0
+        self.next_score = 0.0
+        self.prediction_buffer = {"hey_sage": []}
+
+    def predict(self, audio) -> None:
+        self.frames += 1
+        self.prediction_buffer["hey_sage"].append(self.next_score)
+
+    def reset(self) -> None:
+        self.prediction_buffer["hey_sage"].clear()
+
+
+def _primed_detector():
+    from openjarvis.speech.wake_word import WakeWordDetector
+
+    detector = WakeWordDetector(model_path="unused.onnx", threshold=0.5)
+    detector._model = _CountingModel()
+    detector._model_name = "hey_sage"
+    return detector
+
+
+def test_the_warm_up_is_spent_on_silence_not_on_the_user():
+    """In a quiet room the page sends no frames between words, so a warm-up
+    counted in real frames waited for 2 s of the user's own speech: the first
+    "Hey Sage" after a reconnect only warmed the detector up (6 October)."""
+    from openjarvis.speech.wake_word import WARMUP_FRAMES
+
+    detector = _primed_detector()
+    detector._model.next_score = 0.99
+
+    detector.score(bytes(2560))
+    detector.score(bytes(2560))
+
+    assert detector.warming_up is False
+    assert detector.is_detection(0.99) is True
+    # Primed once, then only the two real frames.
+    assert detector._model.frames == WARMUP_FRAMES + 2
+
+
+def test_a_reset_primes_again_on_the_next_frame():
+    from openjarvis.speech.wake_word import WARMUP_FRAMES
+
+    detector = _primed_detector()
+    detector.score(bytes(2560))
+    detector.reset()
+    assert detector.is_detection(0.99) is False
+
+    detector._model.next_score = 0.99
+    detector.score(bytes(2560))
+    detector.score(bytes(2560))
+
+    assert detector.is_detection(0.99) is True
+    assert detector._model.frames == 2 * WARMUP_FRAMES + 3

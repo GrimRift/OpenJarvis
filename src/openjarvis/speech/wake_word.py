@@ -53,6 +53,20 @@ DETECTION_PATIENCE = 2
 # content, only about the window's own fill state, so it's suppressed here
 # instead: detections don't count until comfortably past that fill point.
 WARMUP_FRAMES = 25
+# ...and they are spent on silence (_prime) the moment a session starts or
+# a detection resets it, not on the user. The page only sends frames that
+# carry sound (MIN_FRAME_RMS), so in a quiet room -- a dynamic mic's raw
+# floor is ~18 RMS, NVIDIA Broadcast's ~0 -- the warm-up waited for 2 s of
+# SPEECH, however long the silence: the first "Hey Sage" after a reconnect
+# or a conversation only warmed it up, and the user had to say it twice
+# (6 October; near misses at 0.87 still warming_up=True minutes after a
+# reconnect). Replayed over every recorded clip, a detector warmed on the
+# clip itself caught 81/250 positives; primed on silence first, 214/250 --
+# the same as one warmed on room noise (215/250), same negatives (51 vs 50).
+# Digital silence, not noise: on the PD100X test set through the whole chain
+# a noise-primed detector fired earlier, on "hey sa-", and woke 10/15 with
+# two false wakes; silence-primed, 15/15 with one -- and silence is what a
+# quiet room sends (nothing) and what NVIDIA Broadcast outputs.
 # A score this high that never becomes a detection is logged as a near miss.
 # A "Hey Sage" that does not fire leaves no clip and no trace line, so after
 # a mic change (PD100X, 6 October) the user's "it ignores me" could not be
@@ -146,6 +160,8 @@ class WakeWordDetector:
     def score(self, pcm_frame: bytes) -> float:
         """Feed one 1280-sample (80ms) int16 PCM frame; return the latest score."""
         self._ensure_loaded()
+        if self._frames_since_reset == 0:
+            self._prime()
         audio = np.frombuffer(pcm_frame, dtype=np.int16)
         self._model.predict(audio)
         scores = self._model.prediction_buffer.get(self._model_name)
@@ -157,6 +173,13 @@ class WakeWordDetector:
         else:
             self._consecutive_hits = 0
         return score
+
+    def _prime(self) -> None:
+        """Spend the warm-up on silence now, so the next real frame counts."""
+        silence = np.zeros(CHUNK_SAMPLES, dtype=np.int16)
+        for _ in range(WARMUP_FRAMES):
+            self._model.predict(silence)
+        self._frames_since_reset = WARMUP_FRAMES
 
     @property
     def threshold(self) -> float:
