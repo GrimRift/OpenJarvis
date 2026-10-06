@@ -1354,3 +1354,47 @@ def test_product_photo_requests_are_image_searches():
         "real estate photography tips",
     ):
         assert not _build_plan(query, force_advanced=False).explicit_images, query
+
+
+def test_a_picture_the_user_asked_for_survives_the_models_query():
+    """6 October: "...in the philippines, and show me a picture of it"
+    reached the tool as "...Philippines price bottle": no gallery."""
+    from openjarvis.security import page_access
+
+    found = {
+        "results": [
+            _result("Hectic", "https://shop.example/hectic", "Bujairami Hectic bottle")
+        ],
+        "images": [{"url": "https://img.example/hectic.jpg"}],
+    }
+    fake_module, mock_client_cls = _fake_tavily_module(search_return=found)
+    page_access.clear()
+    token = page_access.set_turn(
+        "Look up bujairami hectic, how much in the philippines, show me a picture of it"
+    )
+    try:
+        with (
+            patch.dict(sys.modules, {"tavily": fake_module}),
+            patch("openjarvis.tools.web_search._wants_recent", return_value=False),
+        ):
+            result = WebSearchTool(api_key="key").execute(
+                query="Bujairami Hectic perfume Philippines price bottle"
+            )
+    finally:
+        page_access._current.reset(token)
+        page_access.clear()
+    assert result.metadata["explicit_image_search"] is True
+    assert result.metadata["images"]
+    first = mock_client_cls.return_value.search.call_args_list[0]
+    assert first.kwargs["include_image_descriptions"] is True
+
+
+def test_recent_query_is_the_subject_words():
+    from openjarvis.tools.web_search import _recent_query
+
+    assert (
+        _recent_query('current trending news in the Philippines "SUV driver" sa Pasig')
+        == "philippines suv pasig"
+    )
+    # No names: the content words, filler dropped.
+    assert _recent_query("what is going on") == "what going"

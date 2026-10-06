@@ -8,7 +8,7 @@ import os
 import re
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
 
@@ -489,6 +489,19 @@ def _fallback_query(query: str) -> str:
     return " ".join(kept) or query.replace('"', " ").strip()
 
 
+def _recent_query(query: str) -> str:
+    """The past-week pass's query: the subject's words alone.
+
+    The news index matches a short query and loses a long one. Sent the
+    model's full query ('current trending news in the Philippines "SUV
+    driver" nakabangga sa Pasig') it returned a Surigao shooting and a
+    California drug bust; "philippines suv pasig" returned the LTO's
+    lifetime ban (6 October).
+    """
+    terms = _query_subject_terms(query)[:5]
+    return " ".join(terms) if terms else _fallback_query(query)
+
+
 def _wants_recent(query: str, plan: _SearchPlan) -> bool:
     """Whether to also search the past week's news for this query."""
     if plan.explicit_images or plan.time_range is not None:
@@ -954,6 +967,13 @@ class WebSearchTool(BaseTool):
             max_results = self._max_results
         max_results = max(1, min(max_results, 10))
         plan = _build_plan(query, force_advanced=self._force_advanced)
+        if not plan.explicit_images and _EXPLICIT_IMAGE_RE.search(
+            page_access.turn_text()
+        ):
+            # The model's query can drop the picture the user asked for:
+            # "...how much in the philippines, and show me a picture of it"
+            # reached this tool as "...Philippines price bottle" (6 October).
+            plan = replace(plan, explicit_images=True, exact=False)
         # ``max_results`` is honoured as given. It used to be quietly capped
         # at 3 for a basic search unless the query *text* happened to name a
         # number ("give 8 sources"), so passing max_results=10 returned 3 and
@@ -999,7 +1019,7 @@ class WebSearchTool(BaseTool):
             provider_calls += 1
             recent_future = pool.submit(
                 client.search,
-                query,
+                _recent_query(query),
                 timeout=SEARCH_BUDGET_SECONDS,
                 max_results=RECENT_MAX_RESULTS,
                 search_depth="basic",
