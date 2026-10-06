@@ -91,7 +91,7 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
         ),
     },
     "media": {
-        "tools": {"spotify_control", "open_app", "close_media"},
+        "tools": {"spotify_control", "open_app", "close_media", "media_pause"},
         "pattern": re.compile(
             r"\b(spotify|music|song|songs|track|tracks|album|artist|"
             r"playlist|play|playing|pause|resume|skip|next|previous|"

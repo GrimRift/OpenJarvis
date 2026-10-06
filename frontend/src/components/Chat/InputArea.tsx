@@ -87,6 +87,7 @@ import {
   mergeTurns,
 } from '../../lib/turn-continuation';
 import { setVoiceTraceSink, voiceTrace } from '../../lib/voice-trace';
+import { holdMedia, MEDIA_RELEASE_IDLE_MS } from '../../lib/media-hold';
 import { replayedToolResult } from '../../lib/link-preview';
 import type {
   ChatMessage,
@@ -1854,6 +1855,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         if (isStopCommand(spoken)) {
           generatingListenRef.current = { active: false, question: '' };
           stopSpeaking();
+          holdMedia('pause');
           voiceTrace('gen.stop', { chars: spoken.length });
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice',
@@ -1891,6 +1893,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         }
         generatingListenRef.current = { active: false, question: '' };
         stopSpeaking();
+        holdMedia('pause');
         voiceTrace('gen.amend', { chars: spoken.length, kind });
         stopStreaming();
         setFluxTurnActive(false);
@@ -1941,6 +1944,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         const heard = spoken.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: 1 }));
         if (isStopCommand(spoken) && !isEchoOf(heard, tail)) {
           voiceTrace('barge.stopAtEnd', { chars: spoken.length });
+          holdMedia('pause');
           bargeVerdictRef.current = null;
           bargeListeningRef.current = false;
           useAppStore.getState().addLogEntry({
@@ -2119,6 +2123,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       listenKindRef.current = 'followUp';
 
       const text = spoken;
+      // The user is talking to Sage: what plays in the room pauses so the
+      // rest of the exchange reaches the mic unmixed (lib/media-hold.ts).
+      holdMedia('pause');
       // A released answer arrives only on a confirmed final, already checked
       // against this turn's identity and transcript server-side. If posting
       // it is declined for any reason, fall through and generate normally
@@ -2373,6 +2380,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         message: describeVerdict(verdict, transcript) ?? 'You interrupted Sage',
       });
       stopSpeaking();
+      holdMedia('pause');
       const store = useAppStore.getState();
       if (store.streamState.isStreaming) {
         // The abort handler in sendMessage appends the mark.
@@ -2786,6 +2794,32 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     continuousConversationEnabled,
     flux.status,
   ]);
+
+  // The media hold (lib/media-hold.ts): other apps turned down while Sage
+  // speaks, and everything given back once the exchange has gone quiet.
+  const lastAudioPlayingRef = useRef(false);
+  useEffect(() => {
+    if (audioPlaying && !lastAudioPlayingRef.current) holdMedia('duck');
+    lastAudioPlayingRef.current = audioPlaying;
+  }, [audioPlaying]);
+  const exchangeIdle =
+    !audioPlaying &&
+    !streamState.isStreaming &&
+    effectiveSpeechState === 'idle' &&
+    !fluxTurnActive;
+  const exchangeBusyRef = useRef(false);
+  useEffect(() => {
+    if (!exchangeIdle) {
+      exchangeBusyRef.current = true;
+      return;
+    }
+    if (!exchangeBusyRef.current) return;
+    const timer = setTimeout(() => {
+      exchangeBusyRef.current = false;
+      holdMedia('release');
+    }, MEDIA_RELEASE_IDLE_MS);
+    return () => clearTimeout(timer);
+  }, [exchangeIdle]);
 
   const { error: wakeWordError, takeRecentAudio, ambientRms } = useWakeWord(
     beginWakeWordRecording,

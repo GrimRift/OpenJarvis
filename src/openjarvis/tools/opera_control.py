@@ -885,6 +885,13 @@ def skip_ad(page, wait_seconds: float = AD_SKIP_WAIT_SECONDS) -> str:
     return "skipped" if skipped else "unskippable"
 
 
+def _keep_media_paused() -> None:
+    with contextlib.suppress(Exception):
+        from openjarvis.speech import media_hold
+
+        media_hold.keep()
+
+
 def _now() -> float:
     import time
 
@@ -1146,6 +1153,8 @@ class YouTubePlayTool(_OperaTool):
         query = str(params.get("query") or "").strip()
         if not query:
             return self._fail("What should I search for?")
+        # A new video or show: what the media hold paused stays paused.
+        _keep_media_paused()
         asked = page_access.turn_text()
         if _ASKS_ABOUT_VIDEO.search(asked) and not _ASKS_TO_PLAY.search(asked):
             # "Tell me more about it, like the summarization of that YouTube
@@ -1333,6 +1342,8 @@ class NetflixPlayTool(_OperaTool):
         query = str(params.get("query") or "").strip()
         if not query:
             return self._fail("What should I search for?")
+        # A new video or show: what the media hold paused stays paused.
+        _keep_media_paused()
         monitor = params.get("monitor")
         search_url = "https://www.netflix.com/search?q=" + urllib.parse.quote_plus(
             query

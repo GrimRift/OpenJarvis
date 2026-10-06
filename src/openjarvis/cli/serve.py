@@ -612,6 +612,15 @@ def serve(
     except Exception as exc:
         logger.debug("Ducking restore failed: %s", exc)
 
+    try:
+        # Every skippable YouTube ad in Opera, mid-rolls included (user's
+        # choice, 6 October); idle while Opera's debugging port is closed.
+        from openjarvis.tools.youtube_ads import start as start_ad_skip
+
+        start_ad_skip()
+    except Exception as exc:
+        logger.debug("YouTube ad watch not started: %s", exc)
+
     # Set up wake-word detector (optional — no-op until a trained model path
     # is set in config.toml's [speech] wake_word_model)
     wake_word_detector = None

@@ -370,6 +370,8 @@ describe('a video playing while Sage works (6 October: PewDiePie added to the qu
     const { isMediaSpeech } = await import('./barge-in');
     expect(isMediaSpeech(check('user', 0.841, 0.571), true)).toBe(false);
     expect(isMediaSpeech(check('user', 0.811, 0.654), true)).toBe(false);
+    // 6 October 22:15:49: the user's words over a video, thrown away at 0.12.
+    expect(isMediaSpeech(check('user', 0.642, 0.546), true)).toBe(false);
   });
 
   it('changes nothing without media or without a voice check', async () => {

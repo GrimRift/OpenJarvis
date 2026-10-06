@@ -33,12 +33,25 @@ _FADE_STEPS = 6
 # Sage's own players run as child processes with their own sessions; ducking
 # them would duck the voice this exists to make audible.
 _OWN_PLAYERS = {"ffplay.exe", "powershell.exe", "pwsh.exe"}
+#: The desktop app speaks replies through its WebView2 children; their
+#: sessions belong to Sage, not to "other apps" (``speech.media_hold`` turns
+#: media down while the app speaks).
+_OWN_APP = "sage-desktop.exe"
 _STATE_ACTIVE = 1
 # The levels a duck in progress will put back, on disk: a process killed
 # mid-sentence (Stop Sage during a moment, a test run interrupted) never
 # reached its restore, and each such kill left the browser at 35% of the
 # time before -- Opera was found at 4%, three unrestored ducks deep.
 _STATE_FILE = "ducking_state.json"
+
+
+def _is_sage_app(process: Any) -> bool:
+    try:
+        if process.name().lower() == _OWN_APP:
+            return True
+        return any(p.name().lower() == _OWN_APP for p in process.parents())
+    except Exception:
+        return False
 
 
 def _sessions(active_only: bool = True) -> List[Tuple[str, Any]]:
@@ -66,7 +79,7 @@ def _sessions(active_only: bool = True) -> List[Tuple[str, Any]]:
             name = process.name()
         except Exception:
             continue
-        if name.lower() in _OWN_PLAYERS:
+        if name.lower() in _OWN_PLAYERS or _is_sage_app(process):
             continue
         if active_only and session.State != _STATE_ACTIVE:
             continue

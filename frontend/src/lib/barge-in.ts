@@ -380,8 +380,12 @@ export interface SpeakerCheck {
  * a video plays counts as the user's. Measured 6 October: the user's own
  * turns cleared Sage's score by 0.16-0.27; a PewDiePie video playing in the
  * room scored "unsure" (0.61 vs 0.61) and then "user" (0.69 vs 0.63).
+ * Lowered from 0.12 the same evening: the user's own words over a video
+ * cleared it by only 0.10 (0.642 vs 0.546) and were thrown away as the
+ * video's. Media now pauses while the user talks (lib/media-hold.ts), so
+ * this only has to judge the first words over it.
  */
-export const MEDIA_VOICE_MARGIN = 0.12;
+export const MEDIA_VOICE_MARGIN = 0.08;
 
 /**
  * Whether speech heard while Sage prepares an answer, with a video or song

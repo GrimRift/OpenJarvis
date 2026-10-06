@@ -669,6 +669,16 @@ class SpotifyControlTool(BaseTool):
                 success=False,
             )
 
+        if action not in {"status", "list_playlists"}:
+            # The user is steering the music: the media hold's pause of
+            # Spotify is theirs to undo, not the hold's to resume.
+            try:
+                from openjarvis.speech import media_hold
+
+                media_hold.keep()
+            except Exception:  # noqa: BLE001
+                pass
+
         if not Path(self._token_path).exists():
             return ToolResult(
                 tool_name="spotify_control",

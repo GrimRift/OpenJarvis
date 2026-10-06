@@ -1,0 +1,26 @@
+import { apiFetch } from './api';
+import { voiceTrace } from './voice-trace';
+
+/**
+ * The page's half of the media hold (server: speech/media_hold.py). A video
+ * in the room mixes into the mic and the user's own words over it scored as
+ * unsure as the video's dialogue (6 October), so other apps' media is held:
+ * "pause" when the user is heard talking to Sage, "duck" (turned down) while
+ * Sage speaks, "release" (all back as it was) when the exchange is over. A
+ * confirmed wake word pauses on the server. Fire-and-forget: the voice never
+ * waits on it.
+ */
+export type MediaHoldAction = 'pause' | 'duck' | 'release';
+
+export function holdMedia(action: MediaHoldAction): void {
+  voiceTrace('media.hold', { action });
+  void apiFetch('/v1/voice/media', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  }).catch(() => {});
+}
+
+/** How long the exchange must stay idle before the media comes back: the
+ * gap between the answer's text and its voice is idle too. */
+export const MEDIA_RELEASE_IDLE_MS = 2500;
