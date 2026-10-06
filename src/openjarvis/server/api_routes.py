@@ -867,11 +867,18 @@ async def wake_word_stream(websocket: WebSocket):
                                 verdict.heard,
                             )
                 if verdict is not None and not verdict.confirmed:
-                    # Reset before saying so: told first, the page (and a
-                    # test) could act on "rejected" while the detector still
-                    # held the rejected phrase's window.
+                    # Not a reset: a reset detector ignores the next 2 s
+                    # (WARMUP_FRAMES), and that was the user's repeat -- on 6
+                    # October every near miss scoring 0.89-0.98 came inside
+                    # that window, e.g. rejected at 15:06:11.9, the repeat at
+                    # 0.97 ignored, a third "Hey Sage" through at 15:06:16.5.
+                    # The dip, as after a pause, is enough: the rejected
+                    # sound still in the window cannot fire again until the
+                    # score falls below the threshold. Set before saying so:
+                    # told first, the page could act on "rejected" while the
+                    # window could still fire.
                     ring.clear()
-                    await asyncio.to_thread(detector.reset)
+                    needs_dip = True
                     await websocket.send_json(
                         {
                             "type": "rejected",

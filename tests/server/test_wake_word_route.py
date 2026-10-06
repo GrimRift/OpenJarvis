@@ -115,7 +115,8 @@ def test_a_firing_without_the_words_is_rejected_with_what_was_heard():
     from openjarvis.speech.wake_word_verify import VERIFY_STAGES
 
     assert len(app.state.speech_backend.audio) == VERIFY_STAGES + 1
-    assert app.state.wake_word_detector.resets == 1
+    # A rejection waits for the score to dip; a reset would cost the warm-up.
+    assert app.state.wake_word_detector.resets == 0
 
 
 def test_a_phrase_already_whole_at_the_firing_is_confirmed_at_once():
@@ -270,6 +271,34 @@ def test_rearmed_it_fires_only_after_the_score_dips():
     # Re-arming never reset the detector (the reset is what cost the
     # warm-up); the only reset is the one after the detection itself.
     assert detector.resets == 1
+
+
+def test_after_a_rejection_the_repeat_fires_once_the_score_dips():
+    # 6 October: a reset after each rejection held the detector in its 2 s
+    # warm-up, and the user's repeat (scoring 0.97) went unheard.
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGE_FRAMES, VERIFY_STAGES
+
+    staged = VERIFY_STAGE_FRAMES * VERIFY_STAGES
+    app = _app("the stage")
+    # The frames gathered for a check are not scored.
+    detector = _Scripted([0.1, 0.9, 0.9, 0.9, 0.2, 0.9])
+    app.state.wake_word_detector = detector
+    frame = b"\x00" * 2560
+    with TestClient(app).websocket_connect("/v1/speech/wake-word") as ws:
+        for _ in range(2 + staged):
+            ws.send_bytes(frame)
+        assert [ws.receive_json()["type"] for _ in range(2)] == ["score", "rejected"]
+        assert detector.resets == 0
+        app.state.speech_backend.text = "Hey Sage."
+        # Still over the threshold from the rejected sound: no firing until
+        # the score dips; then the repeat fires.
+        for _ in range(4):
+            ws.send_bytes(frame)
+        assert [ws.receive_json()["type"] for _ in range(3)] == ["score"] * 3
+        for _ in range(staged):
+            ws.send_bytes(frame)
+        reply = ws.receive_json()
+        assert reply["type"] == "detected" and reply["verified"] is True
 
 
 def _near_misses(caplog):
