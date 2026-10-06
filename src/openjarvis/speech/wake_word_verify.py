@@ -49,6 +49,16 @@ VERIFY_TIMEOUT_SECONDS = 3.0
 #: at +640 ms for 51; the extra audio let no negative through).
 VERIFY_STAGE_FRAMES = 4
 VERIFY_STAGES = 2
+#: ...gathered by the clock, not by count. The page sends only frames that
+#: carry sound, so when the room goes quiet after "Hey Sage" (a dynamic mic
+#: raw ~18 RMS, NVIDIA Broadcast ~0) only 1-3 frames followed a firing, and a
+#: stage waited for the user's NEXT sound before it judged (6 October). A
+#: stage is due this long after the one before, plus the slack below for the
+#: page's frame delivery (~85 ms callbacks); whatever has not arrived by then
+#: was silence, and the ring gets silence in its place.
+VERIFY_STAGE_SECONDS = VERIFY_STAGE_FRAMES * FRAME_SAMPLES / SAMPLE_RATE
+VERIFY_STAGE_SLACK_SECONDS = 0.15
+SILENT_FRAME = bytes(FRAME_SAMPLES * 2)
 
 #: The modes ``[speech] wake_word_verify`` and the browser's setting accept.
 #: There was a Deepgram option for an evening; the small local model was
@@ -689,7 +699,10 @@ def make_verifier(
 
 
 __all__ = [
+    "SILENT_FRAME",
     "VERIFY_STAGE_FRAMES",
+    "VERIFY_STAGE_SECONDS",
+    "VERIFY_STAGE_SLACK_SECONDS",
     "VERIFY_STAGES",
     "AudioRing",
     "NoisyRoom",

@@ -702,7 +702,10 @@ async def wake_word_stream(websocket: WebSocket):
     # transcribed and must contain the words (speech/wake_word_verify.py).
     from openjarvis.speech.player import is_speaking
     from openjarvis.speech.wake_word_verify import (
+        SILENT_FRAME,
         VERIFY_STAGE_FRAMES,
+        VERIFY_STAGE_SECONDS,
+        VERIFY_STAGE_SLACK_SECONDS,
         VERIFY_STAGES,
         AudioRing,
         NoisyRoom,
@@ -756,6 +759,21 @@ async def wake_word_stream(websocket: WebSocket):
             elif kind == "arm" and not armed:
                 armed, needs_dip = True, True
 
+    # One receive in flight at a time, kept across a timeout rather than
+    # cancelled, so a frame or a pause/arm that arrives late is not lost.
+    pending: Optional[asyncio.Future] = None
+
+    async def frame_within(timeout: Optional[float]) -> Optional[bytes]:
+        """The next frame, or None if none arrives within *timeout* s."""
+        nonlocal pending
+        if pending is None:
+            pending = asyncio.ensure_future(next_frame())
+        done, _ = await asyncio.wait({pending}, timeout=timeout)
+        if not done:
+            return None
+        task, pending = pending, None
+        return task.result()
+
     async def keep_verifier_warm() -> None:
         # Every 30 s: the verifier decides whether it has been idle long
         # enough and whether the room is quiet enough (warm_if_idle).
@@ -772,7 +790,7 @@ async def wake_word_stream(websocket: WebSocket):
     )
     try:
         while True:
-            frame = await next_frame()
+            frame = await frame_within(None)
             ring.push(frame)
             score = await asyncio.to_thread(detector.score, frame)
             if needs_dip and score <= threshold:
@@ -836,13 +854,22 @@ async def wake_word_stream(websocket: WebSocket):
                         verifier.verify(ring.pcm(), strict=strict)
                     )
                     for _stage in range(VERIFY_STAGES):
+                        # Due by the clock (VERIFY_STAGE_SECONDS): in a quiet
+                        # room no frame follows the phrase, and a stage that
+                        # counted frames waited for the user's next sound.
+                        due = (
+                            time.monotonic()
+                            + VERIFY_STAGE_SECONDS
+                            + VERIFY_STAGE_SLACK_SECONDS
+                        )
                         for _ in range(VERIFY_STAGE_FRAMES):
                             if early is not None and early.done():
                                 first, early = early.result(), None
                                 if first.confirmed:
                                     verdict = first
                                     break
-                            ring.push(await next_frame())
+                            late = await frame_within(max(0.0, due - time.monotonic()))
+                            ring.push(SILENT_FRAME if late is None else late)
                         if verdict is not None and verdict.confirmed:
                             break
                         if early is not None:
@@ -956,6 +983,8 @@ async def wake_word_stream(websocket: WebSocket):
     finally:
         if warmer is not None:
             warmer.cancel()
+        if pending is not None:
+            pending.cancel()
 
 
 @websocket_router.websocket("/v1/chat/stream")

@@ -378,3 +378,43 @@ def test_a_muffled_hey_sage_in_a_noisy_room_is_rejected():
 def test_a_clear_hey_sage_in_a_noisy_room_still_wakes():
     reply = _after_two_rejections("Hey Sage.", 0.01)
     assert reply["type"] == "detected" and reply["verified"] is True
+
+
+def _fire_then_silence(app):
+    """Three frames (the third fires), then nothing: a quiet room sends no
+    frames after the phrase."""
+    client = TestClient(app)
+    with client.websocket_connect("/v1/speech/wake-word") as ws:
+        out = []
+        for i in range(3):
+            ws.send_bytes(bytes([i]) * 2560)
+            out.append(ws.receive_json())
+    return out
+
+
+def test_a_staged_check_does_not_wait_for_the_next_sound():
+    """6 October: only 1-3 frames followed a firing in a quiet room, and the
+    staged check waited for the user's next sound. Now the missing frames
+    are silence once the stage is due."""
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGE_FRAMES
+
+    app = _app("hey sage")
+    app.state.speech_backend = _Unfolding("")
+    out = _fire_then_silence(app)
+
+    assert out[-1]["type"] == "detected"
+    first, second = app.state.speech_backend.audio[:2]
+    assert len(first) == 44 + 3 * 2560
+    # The phrase, then silence where no frame came.
+    assert len(second) == 44 + (3 + VERIFY_STAGE_FRAMES) * 2560
+    assert second[-VERIFY_STAGE_FRAMES * 2560 :] == bytes(VERIFY_STAGE_FRAMES * 2560)
+
+
+def test_a_rejection_in_a_quiet_room_still_answers():
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGES
+
+    app = _app("the stage")
+    out = _fire_then_silence(app)
+
+    assert out[-1]["type"] == "rejected"
+    assert len(app.state.speech_backend.audio) == VERIFY_STAGES + 1
