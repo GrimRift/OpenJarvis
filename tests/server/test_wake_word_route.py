@@ -277,7 +277,7 @@ def _near_misses(caplog):
 
 
 def test_a_rise_that_never_fires_is_logged_as_a_near_miss(caplog):
-    caplog.set_level("INFO", logger="openjarvis.server.api_routes")
+    caplog.set_level("INFO", logger="openjarvis.wake")
     app = _app("hey sage", verify="off")
     app.state.wake_word_detector = _Scripted([0.35, 0.45, 0.1])
     replies = _run(app, ["frame", "frame", "frame"])
@@ -288,7 +288,7 @@ def test_a_rise_that_never_fires_is_logged_as_a_near_miss(caplog):
 
 
 def test_paused_or_fired_is_not_a_near_miss(caplog):
-    caplog.set_level("INFO", logger="openjarvis.server.api_routes")
+    caplog.set_level("INFO", logger="openjarvis.wake")
     app = _app("hey sage", verify="off")
     app.state.wake_word_detector = _Scripted([0.45, 0.1])
     _run(app, ["pause", "frame", "frame"])

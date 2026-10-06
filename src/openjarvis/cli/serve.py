@@ -1053,16 +1053,19 @@ def serve(
     # model was called, on the event loop (23 September).
     import openjarvis.learning.routing.complexity  # noqa: F401
 
-    # Per-turn timing lines (routes._log_turn_timing) reach the log. Sage's
-    # own loggers have no handler, so their INFO would be dropped; this one
-    # is named on its own rather than switching them all on.
-    _timing = logging.getLogger("openjarvis.timing")
-    if not _timing.handlers:
-        _handler = logging.StreamHandler()
-        _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-        _timing.addHandler(_handler)
-        _timing.setLevel(logging.INFO)
-        _timing.propagate = False
+    # Per-turn timing lines (routes._log_turn_timing) and the wake word's
+    # rejections and near misses reach the log. Sage's own loggers have no
+    # handler, so their INFO would be dropped; these are named on their own
+    # rather than switching them all on. ("Wake word rejected" was written
+    # from the start and never once reached the log, 6 October.)
+    for _name in ("openjarvis.timing", "openjarvis.wake"):
+        _named = logging.getLogger(_name)
+        if not _named.handlers:
+            _handler = logging.StreamHandler()
+            _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+            _named.addHandler(_handler)
+            _named.setLevel(logging.INFO)
+            _named.propagate = False
 
     # Run at full speed even with no window (see core/full_speed.py).
     from openjarvis.core.full_speed import run_at_full_speed

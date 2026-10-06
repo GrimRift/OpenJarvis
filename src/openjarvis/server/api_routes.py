@@ -735,6 +735,9 @@ async def wake_word_stream(websocket: WebSocket):
     from openjarvis.speech.wake_word import NearMiss
 
     near_miss = NearMiss(threshold)
+    # Its own logger, given a handler at startup (cli/serve.py); the module
+    # logger's INFO is dropped.
+    wake_log = logging.getLogger("openjarvis.wake")
 
     async def next_frame() -> bytes:
         nonlocal armed, needs_dip
@@ -858,7 +861,7 @@ async def wake_word_stream(websocket: WebSocket):
                     if not verdict.confirmed:
                         noisy_room.rejected()
                         if verdict.note:
-                            logger.info(
+                            wake_log.info(
                                 "Wake word rejected (%s): heard %r",
                                 verdict.note,
                                 verdict.heard,
@@ -932,7 +935,7 @@ async def wake_word_stream(websocket: WebSocket):
                     score, warming_up=bool(getattr(detector, "warming_up", False))
                 )
                 if miss is not None:
-                    logger.info(
+                    wake_log.info(
                         "Wake word near miss: peak=%.2f frames=%d over=%d"
                         " warming_up=%s",
                         miss["peak"],
