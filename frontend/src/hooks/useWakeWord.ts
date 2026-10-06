@@ -1,7 +1,7 @@
 import { keepOutputAwake } from '../lib/audio-out';
 import { markWake } from '../lib/orb-events';
 import { voiceTrace } from '../lib/voice-trace';
-import { WAKE_MAX_GAIN, applyGain, nextGain } from '../lib/mic-gain';
+import { applyGain, nextGain, wakeGainCeiling } from '../lib/mic-gain';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
 import { buildWsProtocols } from '../lib/useAgentEvents';
@@ -127,6 +127,12 @@ export function useWakeWord(
    * phrase). The server keeps scoring while paused and never fires.
    */
   armed: boolean = true,
+  /**
+   * The Settings "Extra boost". Raises how far the detector's gain may
+   * climb (wakeGainCeiling) for a quiet microphone; read live, so moving
+   * the slider needs no reconnect.
+   */
+  micBoost: number = 1,
 ) {
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -164,6 +170,8 @@ export function useWakeWord(
   const recentFramesRef = useRef<Int16Array[]>([]);
   /** Gentle adaptive gain for what the detector hears. */
   const wakeGainRef = useRef(1);
+  const micBoostRef = useRef(micBoost);
+  micBoostRef.current = micBoost;
   const suppressNoiseRef = useRef(suppressNoise);
   suppressNoiseRef.current = suppressNoise;
   const reconnectAttemptsRef = useRef(0);
@@ -455,7 +463,7 @@ export function useWakeWord(
           // here is bought with false fires.
           if (carriesSound(chunk)) {
             wakeGainRef.current = nextGain(wakeGainRef.current, frameRms(chunk), {
-              max: WAKE_MAX_GAIN,
+              max: wakeGainCeiling(micBoostRef.current),
             });
             ws.send(applyGain(frame, wakeGainRef.current).buffer);
           }

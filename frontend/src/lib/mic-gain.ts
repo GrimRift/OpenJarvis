@@ -30,6 +30,27 @@ export const WAKE_MAX_GAIN = 3;
 /** Everything above the automatic gain, from the Settings slider. */
 export const MAX_TOTAL_GAIN = 16;
 
+/** The wake word's ceiling with the Settings slider at its top (4x). */
+export const WAKE_MAX_TOTAL_GAIN = 12;
+
+/**
+ * How far the wake word's automatic gain may climb, given the Settings
+ * "Extra boost".
+ *
+ * A raised ceiling, not a multiplier: the automatic gain still backs off on
+ * loud speech, so a desk mic is untouched and only a quiet one gets more.
+ * Multiplying the frames instead clipped loud takes into rejections when it
+ * was tried on recorded clips (6 October). Needed because a dynamic USB mic
+ * (PD100X, 6 October) reached the detector at a 0.016-0.05 peak RMS even at
+ * 3x, under the verifier's QUIET_MUFFLED_RMS, so every "Hey Sage" it heard as
+ * muffled was dropped as a faint sound. Replayed through the real verifier,
+ * those takes passed from 2x up; no take that held no words did, at any boost.
+ */
+export function wakeGainCeiling(boost: number): number {
+  const extra = Number.isFinite(boost) && boost > 1 ? boost : 1;
+  return clamp(WAKE_MAX_GAIN * extra, WAKE_MAX_GAIN, WAKE_MAX_TOTAL_GAIN);
+}
+
 /**
  * The most the microphone is boosted while Sage's own voice is playing.
  *

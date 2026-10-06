@@ -1356,8 +1356,8 @@ export function SettingsPage() {
               label="Extra boost"
               description={
                 settings.micBoost > 1
-                  ? `${settings.micBoost.toFixed(1)}x on top of the automatic level. Sage already matches a quiet microphone up to a ceiling on its own; add to this only when you are far from a laptop mic and still not heard.`
-                  : 'Sage matches a quiet microphone to a usable level on its own. Add extra only if you are far from a laptop mic and still not heard — it lifts room noise too.'
+                  ? `${settings.micBoost.toFixed(1)}x on top of the automatic level, for what you say and for "Hey Sage". Sage already matches a quiet microphone up to a ceiling on its own; add to this when a quiet mic (a dynamic one, or a laptop mic far away) still isn't heard.`
+                  : 'Sage matches a quiet microphone to a usable level on its own. Add extra if a quiet mic (a dynamic one, or a laptop mic far away) still isn\'t heard, or "Hey Sage" is often ignored — it lifts room noise too.'
               }
             >
               <div className="flex items-center gap-3">

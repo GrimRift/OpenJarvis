@@ -18,8 +18,10 @@ export const PRE_ROLL_MS = 2500;
  * the firing so the whole phrase is in it, and no further. */
 export const PHRASE_MS = 1000;
 
-/** Nothing heard this long after the wake word: say "Yes, Sir?" as before. */
-export const GREETING_PAUSE_MS = 1000;
+/** Nothing heard this long after the wake word: say "Yes, Sir?" as before.
+ * 1000 until 6 October, when the user chose 800 ms: the greeting felt slow,
+ * at a small risk of landing on a question begun after a breath. */
+export const GREETING_PAUSE_MS = 800;
 /** The timer never fires sooner than this after the browser hears of the
  * detection, so a first partial has a chance to arrive and cancel it. */
 export const GREETING_MIN_DELAY_MS = 150;

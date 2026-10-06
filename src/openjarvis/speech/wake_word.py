@@ -53,6 +53,12 @@ DETECTION_PATIENCE = 2
 # content, only about the window's own fill state, so it's suppressed here
 # instead: detections don't count until comfortably past that fill point.
 WARMUP_FRAMES = 25
+# A score this high that never becomes a detection is logged as a near miss.
+# A "Hey Sage" that does not fire leaves no clip and no trace line, so after
+# a mic change (PD100X, 6 October) the user's "it ignores me" could not be
+# told from a rejection or from nothing said. Room tone scores well under
+# 0.1; the warm-up spike tops out ~0.6, so it is labelled, not filtered.
+NEAR_MISS_SCORE = 0.3
 
 
 # Guards the one-time openwakeword import/model download shared by every
@@ -156,6 +162,11 @@ class WakeWordDetector:
     def threshold(self) -> float:
         return self._threshold
 
+    @property
+    def warming_up(self) -> bool:
+        """Whether detections are still held back after a reset."""
+        return self._frames_since_reset <= WARMUP_FRAMES
+
     def is_detection(self, score: float) -> bool:
         return (
             self._frames_since_reset > WARMUP_FRAMES
@@ -192,6 +203,47 @@ class WakeWordDetector:
         self._frames_since_reset = 0
         if self._model is not None:
             self._model.reset()
+
+
+class NearMiss:
+    """One rise of the score toward the threshold that never became a detection.
+
+    Fed every frame that could have fired; returns a summary once the score
+    falls back under ``NEAR_MISS_SCORE`` without a detection in between.
+    ``cancel`` drops the rise in progress: a detection, a pause or Sage's own
+    voice are not misses.
+    """
+
+    def __init__(self, threshold: float, floor: float = NEAR_MISS_SCORE) -> None:
+        self._threshold = threshold
+        self._floor = floor
+        self.cancel()
+
+    def cancel(self) -> None:
+        self._peak = 0.0
+        self._frames = 0
+        self._over = 0
+        self._warm = False
+
+    def observe(self, score: float, *, warming_up: bool = False) -> Optional[dict]:
+        if score >= self._floor:
+            self._peak = max(self._peak, score)
+            self._frames += 1
+            self._over += score > self._threshold
+            self._warm = self._warm or warming_up
+            return None
+        if not self._frames:
+            return None
+        miss = {
+            "peak": round(self._peak, 3),
+            "frames": self._frames,
+            # Over the threshold, but not for DETECTION_PATIENCE frames in a
+            # row, or only while warming up.
+            "over": self._over,
+            "warming_up": self._warm,
+        }
+        self.cancel()
+        return miss
 
 
 _DETECTOR: Optional[WakeWordDetector] = None

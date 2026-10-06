@@ -88,9 +88,9 @@ describe('the pause', () => {
   });
 
   it('the greeting timer counts from the end of the phrase', async () => {
-    const { greetingDelayMs, GREETING_MIN_DELAY_MS } = await import('./wake-follow');
-    expect(greetingDelayMs(0)).toBe(1000);
-    expect(greetingDelayMs(700)).toBe(300);
+    const { greetingDelayMs, GREETING_MIN_DELAY_MS, GREETING_PAUSE_MS } = await import('./wake-follow');
+    expect(greetingDelayMs(0)).toBe(GREETING_PAUSE_MS);
+    expect(greetingDelayMs(500)).toBe(GREETING_PAUSE_MS - 500);
     expect(greetingDelayMs(1500)).toBe(GREETING_MIN_DELAY_MS);
   });
 

@@ -272,6 +272,31 @@ def test_rearmed_it_fires_only_after_the_score_dips():
     assert detector.resets == 1
 
 
+def _near_misses(caplog):
+    return [r.getMessage() for r in caplog.records if "near miss" in r.getMessage()]
+
+
+def test_a_rise_that_never_fires_is_logged_as_a_near_miss(caplog):
+    caplog.set_level("INFO", logger="openjarvis.server.api_routes")
+    app = _app("hey sage", verify="off")
+    app.state.wake_word_detector = _Scripted([0.35, 0.45, 0.1])
+    replies = _run(app, ["frame", "frame", "frame"])
+    assert [r["type"] for r in replies] == ["score"] * 3
+    assert _near_misses(caplog) == [
+        "Wake word near miss: peak=0.45 frames=2 over=0 warming_up=False"
+    ]
+
+
+def test_paused_or_fired_is_not_a_near_miss(caplog):
+    caplog.set_level("INFO", logger="openjarvis.server.api_routes")
+    app = _app("hey sage", verify="off")
+    app.state.wake_word_detector = _Scripted([0.45, 0.1])
+    _run(app, ["pause", "frame", "frame"])
+    app.state.wake_word_detector = _Scripted([0.4, 0.9, 0.1])
+    _run(app, ["frame", "frame", "frame"])
+    assert _near_misses(caplog) == []
+
+
 class _Room(_Backend):
     """Text and Whisper's no-speech doubt set per firing."""
 

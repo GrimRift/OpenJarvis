@@ -1,5 +1,3 @@
-
-
 def test_reset_clears_audio_held_from_the_previous_session(tmp_path, monkeypatch):
     """A new listening session must not fire on the last one's wake word.
 
@@ -124,3 +122,45 @@ def test_detection_consumes_the_utterance():
     assert detector.is_detection(0.99) is False
     assert detector._frames_since_reset == 0
     assert detector._consecutive_hits == 0
+
+
+def test_a_rise_that_never_fires_is_reported_once_it_falls():
+    """A "Hey Sage" that does not fire leaves no clip; this is its only trace."""
+    from openjarvis.speech.wake_word import NearMiss
+
+    near = NearMiss(threshold=0.65)
+    assert near.observe(0.05) is None  # room tone: nothing to report
+    assert near.observe(0.4) is None
+    assert near.observe(0.7) is None  # over, but one frame: short of patience
+    assert near.observe(0.5) is None
+    miss = near.observe(0.1)
+    assert miss == {"peak": 0.7, "frames": 3, "over": 1, "warming_up": False}
+    # Reported once, then the tracker starts afresh.
+    assert near.observe(0.1) is None
+
+
+def test_a_cancelled_rise_is_not_a_miss():
+    # A detection, a pause or Sage's own voice drop the rise in progress.
+    from openjarvis.speech.wake_word import NearMiss
+
+    near = NearMiss(threshold=0.65)
+    near.observe(0.9)
+    near.cancel()
+    assert near.observe(0.1) is None
+
+
+def test_a_rise_during_warm_up_is_labelled():
+    # The window-fill spike (~0.6) after every reset must be told apart from
+    # a quiet "Hey Sage", not mistaken for one.
+    from openjarvis.speech.wake_word import WARMUP_FRAMES, NearMiss, WakeWordDetector
+
+    detector = WakeWordDetector(model_path="unused.onnx")
+    detector._frames_since_reset = WARMUP_FRAMES
+    assert detector.warming_up is True
+    detector._frames_since_reset = WARMUP_FRAMES + 1
+    assert detector.warming_up is False
+
+    near = NearMiss(threshold=0.65)
+    near.observe(0.6, warming_up=True)
+    near.observe(0.5)
+    assert near.observe(0.0)["warming_up"] is True

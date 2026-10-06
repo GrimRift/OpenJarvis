@@ -7,11 +7,13 @@ import {
   adaptFloor,
   TARGET_RMS,
   WAKE_MAX_GAIN,
+  WAKE_MAX_TOTAL_GAIN,
   applyGain,
   nextGain,
   speechThreshold,
   totalGain,
   trackNoise,
+  wakeGainCeiling,
 } from './mic-gain';
 
 describe('nextGain', () => {
@@ -91,6 +93,32 @@ describe('totalGain', () => {
     expect(totalGain(Number.NaN, 2)).toBe(2);
     expect(totalGain(3, 0)).toBe(3);
     expect(totalGain(-1, -1)).toBe(1);
+  });
+});
+
+describe('wakeGainCeiling', () => {
+  it('is the gentle ceiling until the slider asks for more', () => {
+    expect(wakeGainCeiling(1)).toBe(WAKE_MAX_GAIN);
+    expect(wakeGainCeiling(2)).toBe(WAKE_MAX_GAIN * 2);
+    expect(wakeGainCeiling(4)).toBe(WAKE_MAX_TOTAL_GAIN);
+  });
+
+  it('never goes under the default or over the cap', () => {
+    expect(wakeGainCeiling(0.5)).toBe(WAKE_MAX_GAIN);
+    expect(wakeGainCeiling(Number.NaN)).toBe(WAKE_MAX_GAIN);
+    expect(wakeGainCeiling(100)).toBe(WAKE_MAX_TOTAL_GAIN);
+  });
+
+  it('lifts a quiet dynamic mic, and leaves a loud one alone', () => {
+    // PD100X "Hey Sage" at the desk, raw: ~300 RMS. At the old 3x ceiling
+    // it stays far under target; with the slider at 3 it climbs past it.
+    let quiet = 1;
+    for (let i = 0; i < 400; i++) quiet = nextGain(quiet, 300, { max: wakeGainCeiling(3) });
+    expect(quiet * 300).toBeGreaterThan(WAKE_MAX_GAIN * 300 * 2);
+    // A desk condenser at speech level needs nothing, slider or not.
+    let loud = 1;
+    for (let i = 0; i < 400; i++) loud = nextGain(loud, 6000, { max: wakeGainCeiling(4) });
+    expect(loud).toBe(1);
   });
 });
 

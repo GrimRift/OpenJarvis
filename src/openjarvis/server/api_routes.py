@@ -732,6 +732,9 @@ async def wake_word_stream(websocket: WebSocket):
     # (Resetting the detector did that too, and cost the warm-up again.)
     needs_dip = False
     threshold = float(getattr(detector, "threshold", 0.5))
+    from openjarvis.speech.wake_word import NearMiss
+
+    near_miss = NearMiss(threshold)
 
     async def next_frame() -> bytes:
         nonlocal armed, needs_dip
@@ -778,6 +781,7 @@ async def wake_word_stream(websocket: WebSocket):
                 # the next frames.
                 was_speaking = was_speaking or is_speaking()
                 needs_dip = True
+                near_miss.cancel()
                 await websocket.send_json(
                     {"type": "score", "value": score, "muted": True}
                 )
@@ -788,9 +792,11 @@ async def wake_word_stream(websocket: WebSocket):
                 was_speaking = False
                 ring.clear()
             if needs_dip:
+                near_miss.cancel()
                 await websocket.send_json({"type": "score", "value": score})
                 continue
             if detector.is_detection(score):
+                near_miss.cancel()
                 verdict = None
                 # The browser's pause timer counts from the end of the
                 # phrase, not from when it hears of the detection: the
@@ -922,6 +928,18 @@ async def wake_word_stream(websocket: WebSocket):
                 # before anything can fire again.
                 await asyncio.to_thread(detector.reset)
             else:
+                miss = near_miss.observe(
+                    score, warming_up=bool(getattr(detector, "warming_up", False))
+                )
+                if miss is not None:
+                    logger.info(
+                        "Wake word near miss: peak=%.2f frames=%d over=%d"
+                        " warming_up=%s",
+                        miss["peak"],
+                        miss["frames"],
+                        miss["over"],
+                        miss["warming_up"],
+                    )
                 await websocket.send_json({"type": "score", "value": score})
     except WebSocketDisconnect:
         pass

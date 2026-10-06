@@ -2787,6 +2787,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     wakeWordVerify,
     noiseSuppression === 'all',
     effectiveSpeechState === 'idle' && !audioPlaying && wakeWordSettled,
+    micBoost,
   );
   takeRecentAudioRef.current = takeRecentAudio;
   ambientRmsRef.current = ambientRms;
