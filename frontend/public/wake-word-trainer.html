@@ -82,10 +82,11 @@ const isGuided = params.get('mode') === 'guided';
 // in the same conditions. Recall at a distance and in noise is the gain;
 // precision is the transcript stage's job now.
 const isConditions = params.get('mode') === 'conditions';
+const isTestset = params.get('mode') === 'testset';
 
 const sessionId = isTopup
   ? topupSession
-  : (isFree || isGuided || isConditions)
+  : (isFree || isGuided || isConditions || isTestset)
     ? params.get('session') || 'session_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
     : 'browser_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
 document.getElementById('sessionId').textContent = sessionId + (isTopup ? ' (adding to existing)' : '');
@@ -210,6 +211,46 @@ if (isGuided) {
       durationMs: 3000,
     });
   });
+} else if (isTestset) {
+  // A small labelled TEST set, not training data (6 October, PD100X): fixes
+  // for the detector and the transcript check are measured on it before any
+  // ships. Takes are long enough to replay the detector over the whole
+  // phrase, from the raw frames before the wake word's gain.
+  const take = (label, n, prefix, prompt, note, durationMs, isSpeech = true) => {
+    for (let i = 1; i <= n; i++) {
+      items.push({
+        label,
+        name: `${prefix}_${String(i).padStart(2, '0')}.wav`,
+        prompt,
+        note,
+        durationMs,
+        isSpeech,
+      });
+    }
+  };
+  take('positive', 5, 't_normal', 'Say "Hey Sage"', 'At the desk, exactly how you would really say it.', 4000);
+  take('positive', 4, 't_fast', 'Say "Hey Sage" fast', 'Quick and casual, the way you say it in a hurry.', 4000);
+  take('positive', 3, 't_quiet', 'Say "Hey Sage" quietly', 'At the desk, as if someone were asleep nearby.', 4000);
+  take('positive', 3, 't_back', 'Say "Hey Sage" from 1-2 m', 'Lean back or stand a step or two from the mic; normal volume.', 5000);
+  take('negative', 4, 't_talk', 'Talk normally -- not the wake word',
+    'Anything: what you did today, what is on screen. 5 seconds.', 5000);
+  const withName = [
+    'I asked Sage about it earlier.',
+    'Sage, never mind.',
+    'Hey, say that again?',
+    'The sage in the garden needs water.',
+  ];
+  withName.forEach((s, i) => {
+    items.push({
+      label: 'negative',
+      name: `t_name_${String(i + 1).padStart(2, '0')}.wav`,
+      prompt: `Say: "${s}"`,
+      note: 'Near the wake word on purpose.',
+      durationMs: 4000,
+    });
+  });
+  take('negative', 3, 't_typing', 'Type normally -- do not speak', 'Same mic, same distance.', 5000, false);
+  take('negative', 4, 't_room', 'Stay quiet -- room tone only', 'Just the room, the way it usually sounds.', 6000, false);
 } else if (isTopup) {
   // Top-up pass. The first session's negatives were all speech plus two
   // ambience clips, so the model had never heard a keyboard or a bare
@@ -376,7 +417,7 @@ async function recordCurrent() {
     // voice in them, and only for the ones not deliberately whispered —
     // a quiet take is the point of the g_quiet block, not a mistake.
     const expectsVoice = item.isSpeech !== false;
-    const deliberatelyQuiet = item.name.startsWith('g_quiet') || item.name.startsWith('g_far');
+    const deliberatelyQuiet = item.name.startsWith('g_quiet') || item.name.startsWith('g_far') || item.name.startsWith('t_quiet') || item.name.startsWith('t_back');
     const tooQuiet = expectsVoice && !deliberatelyQuiet && peak < 3000;
     const silentTake = !expectsVoice && peak > 12000;
     statusEl.innerHTML = tooQuiet
