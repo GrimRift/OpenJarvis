@@ -332,6 +332,12 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
                       alt={alt || ''}
                       loading="lazy"
                       referrerPolicy="no-referrer"
+                      // Like a gallery tile: a picture that will not load is
+                      // left out, not shown as a broken box with its alt text.
+                      onError={(event) => {
+                        const button = event.currentTarget.closest('button');
+                        if (button) button.style.display = 'none';
+                      }}
                       className="max-h-80 rounded-xl"
                     />
                   </button>
