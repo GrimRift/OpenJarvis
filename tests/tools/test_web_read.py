@@ -309,3 +309,116 @@ class TestSourceSummary:
         )
         summary = source_summary("", body)
         assert summary.startswith("2026 Spanish Grand Prix")
+
+
+def _fake_extract(text):
+    """A tavily module whose extract returns *text* for any URL."""
+    import sys
+    from types import ModuleType
+    from unittest.mock import MagicMock
+
+    module = ModuleType("tavily")
+    client = MagicMock()
+    client.extract.side_effect = lambda urls, **kw: {
+        "results": [{"url": urls[0], "raw_content": text, "title": "Article"}]
+    }
+    module.TavilyClient = MagicMock(return_value=client)
+    return patch.dict(sys.modules, {"tavily": module}), client
+
+
+class TestProviderRead:
+    """6 October: the search provider's reader goes before the browser, for
+    pages a search returned only (the user's rule)."""
+
+    ARTICLE = "The LTO revoked the driver's license for life. " * 60
+
+    @pytest.fixture(autouse=True)
+    def _key(self, monkeypatch):
+        monkeypatch.setenv("TAVILY_API_KEY", "key")
+
+    def test_a_search_result_is_read_by_the_provider(self):
+        page_access.set_turn("pasig suv news")
+        page_access.allow_search_results([PAGE])
+        fake, client = _fake_extract(self.ARTICLE)
+        with fake, patch.object(WebReadTool, "_render") as render:
+            result = _tool().execute(url=PAGE)
+        assert result.success is True
+        assert result.metadata["mode"] == "extract"
+        assert "revoked" in result.content
+        render.assert_not_called()
+        assert client.extract.call_args.kwargs["urls"] == [PAGE]
+
+    def test_a_url_the_user_typed_is_never_sent(self):
+        page_access.set_turn(f"read {PAGE}")
+        # Typed AND returned by a search: still the user's, still not sent.
+        page_access.allow_search_results([PAGE])
+        fake, client = _fake_extract(self.ARTICLE)
+        with (
+            fake,
+            patch.object(WebReadTool, "_render", return_value=("Page", 1.0, "")),
+            patch("openjarvis.tools.web_read.ensure_opera", return_value=None),
+        ):
+            result = _tool().execute(url=PAGE)
+        client.extract.assert_not_called()
+        assert result.metadata["mode"] == "browser"
+
+    def test_a_shell_from_the_provider_goes_on_to_the_browser(self):
+        page_access.set_turn("showtimes at sm calamba")
+        page_access.allow_search_results([PAGE])
+        fake, _ = _fake_extract("Loading... Enable JavaScript.")
+        with (
+            fake,
+            patch.object(WebReadTool, "_render", return_value=("Showtimes", 1.0, "")),
+            patch("openjarvis.tools.web_read.ensure_opera", return_value=None),
+        ):
+            result = _tool().execute(url=PAGE)
+        assert result.metadata["mode"] == "browser"
+
+    def test_a_stuck_browser_is_given_up_on(self, monkeypatch):
+        """One NYT read held its turn 51 s when Opera stopped answering."""
+        import time
+
+        import openjarvis.tools.web_read as web_read
+
+        monkeypatch.setattr(web_read, "RENDER_CAP_SECONDS", 0.2)
+        page_access.allow([PAGE])
+
+        def stuck(*_args, **_kwargs):
+            time.sleep(1.0)
+            return ("late", 1.0, "")
+
+        started = time.monotonic()
+        with (
+            patch.object(WebReadTool, "_render", side_effect=stuck),
+            patch("openjarvis.tools.web_read.ensure_opera", return_value=None),
+        ):
+            result = _tool().execute(url=PAGE)
+        assert time.monotonic() - started < 0.8
+        assert result.success is False
+        assert "skipped" in result.content
+
+
+def test_a_bot_check_page_is_reported_not_read():
+    """mb.com.ph rendered Cloudflare's 263-character check (6 October)."""
+    page_access.allow([PAGE])
+    check = (
+        "mb.com.ph Performing security verification This website uses a "
+        "security service to protect against malicious bots."
+    )
+    with (
+        patch.object(WebReadTool, "_render", return_value=(check, 1.0, "")),
+        patch("openjarvis.tools.web_read.ensure_opera", return_value=None),
+    ):
+        result = _tool().execute(url=PAGE)
+    assert result.success is False
+    assert "bot check" in result.content
+
+
+def test_a_long_article_mentioning_a_captcha_is_still_read():
+    page_access.allow([PAGE])
+    article = "Are you a robot? the quiz asked. " + "Real reporting. " * 200
+    with (
+        patch.object(WebReadTool, "_render", return_value=(article, 1.0, "")),
+        patch("openjarvis.tools.web_read.ensure_opera", return_value=None),
+    ):
+        assert _tool().execute(url=PAGE).success is True

@@ -1194,7 +1194,7 @@ class WebSearchTool(BaseTool):
         # are permitted for the rest of the turn. A link found later
         # *inside* one of these pages is not, which is the distinction
         # `web_read` enforces.
-        page_access.allow(source["url"] for source in sources)
+        page_access.allow_search_results(source["url"] for source in sources)
         if not quality_passed:
             warning = (
                 "Search results were insufficient or off-topic. State that clearly "

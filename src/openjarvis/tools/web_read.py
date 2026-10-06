@@ -14,6 +14,9 @@ longer hardcoded. Most pages are not that shell: an article's HTML already
 holds the article, and a plain request for it takes a fraction of a second
 where the browser took seconds (23 September: a turn sat over 20 s on one
 page, whose waits could add up to 52 s). So the plain request goes first.
+Then, for a page a search returned, the search provider's own reader, which
+gets past most bot walls and paywall shells in 1-2 s; the browser is last,
+for what neither can read (6 October), and capped at 10 s in all.
 
 Everything it returns was written by someone else. It is reported as data and
 marked untrusted, never followed as instructions, and the URL it will open has
@@ -24,11 +27,15 @@ exactly the one that must not be followed.
 
 from __future__ import annotations
 
+import contextvars
 import html as _html
 import json
 import logging
+import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -101,6 +108,31 @@ SETTLE_STABLE_SAMPLES = 2
 #: Cap on returned text. Enough for a long article, bounded so one enormous
 #: page cannot crowd the rest of the conversation out of the context window.
 MAX_CHARS = 24000
+
+#: The search provider's page reader: how long it may take, and the least
+#: text that counts as the page. The plain read's bar: a script-drawn shell
+#: (the showtimes page above) must still go on to the browser.
+EXTRACT_TIMEOUT_SECONDS = 6.0
+EXTRACT_MIN_CHARS = STATIC_MIN_CHARS
+
+#: Longest one browser read may take, Opera start-up included.
+RENDER_CAP_SECONDS = 10.0
+
+
+#: A page that is only a bot check or "are you human" screen. Such pages are
+#: short; a long article that mentions a captcha is still an article.
+BOT_CHECK_MAX_CHARS = 1500
+_BOT_CHECK_RE = re.compile(
+    r"performing security verification|verify(?:ing)? you are (?:not a bot|human)|"
+    r"checking (?:if the site connection is secure|your browser)|"
+    r"just a moment\.\.\.|enable javascript and cookies to continue|"
+    r"attention required! \| cloudflare|are you a robot",
+    re.IGNORECASE,
+)
+
+
+class _ReadProblem(Exception):
+    """Opera cannot be used; the message says why."""
 
 #: Read the meaningful part of the page when it says which part that is.
 _EXTRACT_JS = (
@@ -225,21 +257,39 @@ class WebReadTool(BaseTool):
         # source card (set by whichever read ran).
         self._description = ""
         served = self._fetch_static(url, wait_for)
+        extracted = None if served is not None else self._extract(url, wait_for)
         if served is not None:
             text, title = served
             mode = "direct"
             waited = time.monotonic() - started
+        elif extracted is not None:
+            text, title = extracted
+            mode = "extract"
+            waited = time.monotonic() - started
         else:
-            problem = ensure_opera(minimized=True)
-            if problem:
-                return self._fail(problem)
             try:
-                text, waited, title = self._render(url, wait_for)
+                text, waited, title = self._render_capped(url, wait_for)
+            except _ReadProblem as problem:
+                return self._fail(str(problem))
+            except FutureTimeout:
+                logger.info("web_read: browser read of %s passed the cap", url)
+                return self._fail(
+                    f"{url} took over {RENDER_CAP_SECONDS:.0f} s to load in the "
+                    "browser, so it was skipped. Answer from the other sources."
+                )
             except Exception as error:  # noqa: BLE001
                 logger.debug("web_read failed for %s", url, exc_info=True)
                 return self._fail(f"could not read {url}: {error}")
             mode = "browser"
 
+        if len(text) < BOT_CHECK_MAX_CHARS and _BOT_CHECK_RE.search(text):
+            # Not got past: a check like this is the site's to make. Said so,
+            # so the answer does not rest on "Performing security
+            # verification" as if it were the article (mb.com.ph, 6 October).
+            return self._fail(
+                f"{urlparse(url).netloc} showed a bot check instead of the "
+                "page, so it cannot be read. Answer from the other sources."
+            )
         if not text.strip():
             return self._fail(
                 f"{url} rendered no readable text. It may need a sign-in, or "
@@ -317,6 +367,61 @@ class WebReadTool(BaseTool):
         if wait_for and wait_for.lower() not in text.lower():
             return None
         return text, title
+
+    def _extract(self, url: str, wait_for: str) -> Optional[Tuple[str, str]]:
+        """The page's text from the search provider's own reader, or None.
+
+        Second, before the browser: measured 6 October, it read five pages
+        at once in 1.6 s -- the NYT, Crunchyroll's script-drawn schedule and
+        a Lazada listing among them -- where the browser took 1.5-2 s a page
+        and once 51 s for the NYT before failing. Only for a URL a search
+        returned: one the user typed may be private and is never sent out.
+        """
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key or not page_access.from_search(url):
+            return None
+        try:
+            from tavily import TavilyClient
+
+            response = TavilyClient(api_key=api_key).extract(
+                urls=[url],
+                extract_depth="basic",
+                format="text",
+                timeout=EXTRACT_TIMEOUT_SECONDS,
+            )
+        except Exception as error:  # noqa: BLE001
+            logger.info("web_read: provider read of %s failed (%s)", url, error)
+            return None
+        for result in response.get("results") or []:
+            text = re.sub(r"[ \t]+", " ", str(result.get("raw_content") or ""))
+            text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
+            if len(text) < EXTRACT_MIN_CHARS:
+                continue
+            if wait_for and wait_for.lower() not in text.lower():
+                continue
+            return text, str(result.get("title") or "")
+        return None
+
+    def _render_capped(self, url: str, wait_for: str) -> Tuple[str, float, str]:
+        """:meth:`_render`, given up on after ``RENDER_CAP_SECONDS`` in all.
+
+        Each step inside has its own limit, but a browser that stops
+        answering held one read for 51 s (6 October). The worker is left to
+        finish and close its tab on its own; the answer does not wait for it.
+        """
+
+        def run() -> Tuple[str, float, str]:
+            problem = ensure_opera(minimized=True)
+            if problem:
+                raise _ReadProblem(problem)
+            return self._render(url, wait_for)
+
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="web_read")
+        try:
+            future = pool.submit(contextvars.copy_context().run, run)
+            return future.result(timeout=RENDER_CAP_SECONDS)
+        finally:
+            pool.shutdown(wait=False)
 
     def _render(self, url: str, wait_for: str) -> Tuple[str, float, str]:
         """Open *url*, let it finish drawing, and take its text and title."""

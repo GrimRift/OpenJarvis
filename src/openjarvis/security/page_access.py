@@ -51,6 +51,10 @@ READ_WINDOW_SECONDS = 300.0
 
 _lock = threading.Lock()
 _allowed: Dict[str, float] = {}
+#: The subset a search returned, which may be handed to the search provider's
+#: page reader. A URL the user typed may be private (a shared doc, an
+#: intranet page), so it is never sent there (the user's rule, 6 October).
+_searched: Dict[str, float] = {}
 
 
 @dataclass
@@ -119,6 +123,34 @@ def allow(urls: Iterable[str]) -> None:
             normalised = normalise(url)
             if normalised:
                 _allowed[normalised] = now + ALLOW_SECONDS
+
+
+def allow_search_results(urls: Iterable[str]) -> None:
+    """Permit *urls*, which a search returned, and remember where they came
+    from (see :func:`from_search`)."""
+    listed = [url for url in urls or ()]
+    allow(listed)
+    now = time.monotonic()
+    with _lock:
+        for url in listed:
+            normalised = normalise(url)
+            if normalised:
+                _searched[normalised] = now + ALLOW_SECONDS
+
+
+def from_search(url: str) -> bool:
+    """Whether *url* came from a search and not from the user's own message.
+
+    Only these may go to the search provider's page reader. One the user also
+    typed counts as theirs.
+    """
+    normalised = normalise(url)
+    if not normalised or normalised in urls_in(turn_text()):
+        return False
+    now = time.monotonic()
+    with _lock:
+        _expire(now)
+        return normalised in _searched
 
 
 def set_turn(user_text: Any) -> Token:
@@ -246,6 +278,8 @@ def reads_used() -> int:
 def _expire(now: float) -> None:
     for url in [url for url, until in _allowed.items() if until <= now]:
         del _allowed[url]
+    for url in [url for url, until in _searched.items() if until <= now]:
+        del _searched[url]
     state = _state()
     state.reads[:] = [until for until in state.reads if until > now]
 
@@ -254,6 +288,7 @@ def clear() -> None:
     """Drop everything remembered. For tests."""
     with _lock:
         _allowed.clear()
+        _searched.clear()
         _current.set(None)
 
 
@@ -261,7 +296,9 @@ __all__ = [
     "ALLOW_SECONDS",
     "READ_WINDOW_SECONDS",
     "allow",
+    "allow_search_results",
     "clear",
+    "from_search",
     "is_allowed",
     "normalise",
     "note_read",
