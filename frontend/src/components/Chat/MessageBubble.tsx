@@ -27,6 +27,7 @@ import {
   selectSources,
 } from '../../lib/link-preview';
 import { protectCurrencyFromMath } from '../../lib/currency-math';
+import { markdownPhotos, usePhotoViewer, type ViewerPhoto } from '../../lib/photo-viewer';
 import type { ChatMessage } from '../../types';
 
 function stripThinkTags(text: string): string {
@@ -179,6 +180,20 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   const visibleImages = searchImages
     .filter((image) => !failedImages.has(image.url))
     .slice(0, GALLERY_IMAGE_LIMIT);
+  // Every picture in the reply, in reading order: the viewer steps through
+  // them all, whichever was clicked.
+  const viewerPhotos: ViewerPhoto[] = [
+    ...markdownPhotos(cleanContent),
+    ...visibleImages.map((image) => ({
+      src: image.url,
+      description: image.description,
+      page: image.page,
+    })),
+  ];
+  const openPhoto = (src: string) => {
+    const index = viewerPhotos.findIndex((photo) => photo.src === src);
+    if (index >= 0) usePhotoViewer.getState().open(viewerPhotos, index);
+  };
 
   // Build a ref→source lookup once per render. Memoized so the rehype plugin
   // identity stays stable until the source list actually changes.
@@ -230,13 +245,24 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
           {sessionImages && sessionImages.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
               {sessionImages.map((src, index) => (
-                <img
+                <button
                   key={index}
-                  src={src}
-                  alt="Attached"
-                  className="max-h-40 rounded-lg"
-                  style={{ border: '1px solid var(--color-input-border)' }}
-                />
+                  type="button"
+                  className="p-0 border-0 bg-transparent cursor-zoom-in"
+                  aria-label="Open attached image"
+                  onClick={() =>
+                    usePhotoViewer
+                      .getState()
+                      .open(sessionImages.map((image) => ({ src: image })), index)
+                  }
+                >
+                  <img
+                    src={src}
+                    alt="Attached"
+                    className="max-h-40 rounded-lg"
+                    style={{ border: '1px solid var(--color-input-border)' }}
+                  />
+                </button>
               ))}
             </div>
           )}
@@ -293,6 +319,25 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
                   {children}
                 </a>
               ),
+              img: ({ src, alt, node: _node }) =>
+                typeof src === 'string' && /^https?:\/\//.test(src) ? (
+                  <button
+                    type="button"
+                    onClick={() => openPhoto(src)}
+                    className="block p-0 border-0 bg-transparent cursor-zoom-in"
+                    aria-label={alt || 'Open picture'}
+                  >
+                    <img
+                      src={src}
+                      alt={alt || ''}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="max-h-80 rounded-xl"
+                    />
+                  </button>
+                ) : (
+                  <img src={src} alt={alt || ''} />
+                ),
             }}
           >
             {markdownContent}
@@ -314,12 +359,11 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
       {visibleImages.length > 0 && (
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {visibleImages.map((image) => (
-            <a
+            <button
               key={image.url}
-              href={image.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block overflow-hidden rounded-xl border"
+              type="button"
+              onClick={() => openPhoto(image.url)}
+              className="block overflow-hidden rounded-xl border p-0 bg-transparent cursor-zoom-in"
               style={{ borderColor: 'var(--color-border)' }}
               aria-label={image.description || 'Open search image'}
             >
@@ -339,7 +383,7 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
                 }
                 className="aspect-video h-full w-full object-cover"
               />
-            </a>
+            </button>
           ))}
         </div>
       )}

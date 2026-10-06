@@ -753,6 +753,10 @@ def _gallery_images(
                 return output
             entry = _image_entry(image, seen)
             if entry and not _NON_PHOTO_RE.search(entry["url"]):
+                # The page it came from, for the viewer's "Open source page"
+                # (6 October). Tavily's curated list above carries no page.
+                if result.get("url"):
+                    entry["page"] = str(result["url"])
                 output.append(entry)
     return output
 

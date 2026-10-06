@@ -13,6 +13,8 @@ export interface LinkPreview {
 export interface SearchImage {
   url: string;
   description?: string;
+  /** The page the picture was found on, when the search says. */
+  page?: string;
 }
 
 function remoteHttpUrl(value: unknown): string | undefined {
@@ -107,7 +109,8 @@ export function selectSearchImages(message: ChatMessage): SearchImage[] {
       const description = typeof record.description === 'string' && record.description.trim()
         ? record.description.trim()
         : undefined;
-      return [{ url, description }];
+      const page = remoteHttpUrl(record.page);
+      return [{ url, description, ...(page ? { page } : {}) }];
     });
   }
   return [];
