@@ -1855,7 +1855,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         if (isStopCommand(spoken)) {
           generatingListenRef.current = { active: false, question: '' };
           stopSpeaking();
-          holdMedia('pause');
+          holdMedia('duck');
           voiceTrace('gen.stop', { chars: spoken.length });
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice',
@@ -1893,7 +1893,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         }
         generatingListenRef.current = { active: false, question: '' };
         stopSpeaking();
-        holdMedia('pause');
+        holdMedia('duck');
         voiceTrace('gen.amend', { chars: spoken.length, kind });
         stopStreaming();
         setFluxTurnActive(false);
@@ -1944,7 +1944,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         const heard = spoken.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: 1 }));
         if (isStopCommand(spoken) && !isEchoOf(heard, tail)) {
           voiceTrace('barge.stopAtEnd', { chars: spoken.length });
-          holdMedia('pause');
+          holdMedia('duck');
           bargeVerdictRef.current = null;
           bargeListeningRef.current = false;
           useAppStore.getState().addLogEntry({
@@ -2123,9 +2123,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       listenKindRef.current = 'followUp';
 
       const text = spoken;
-      // The user is talking to Sage: what plays in the room pauses so the
-      // rest of the exchange reaches the mic unmixed (lib/media-hold.ts).
-      holdMedia('pause');
+      // The user is talking to Sage: what plays in the room is turned down
+      // so the rest of the exchange reaches the mic clearer (lib/media-hold.ts).
+      holdMedia('duck');
       // A released answer arrives only on a confirmed final, already checked
       // against this turn's identity and transcript server-side. If posting
       // it is declined for any reason, fall through and generate normally
@@ -2380,7 +2380,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         message: describeVerdict(verdict, transcript) ?? 'You interrupted Sage',
       });
       stopSpeaking();
-      holdMedia('pause');
+      holdMedia('duck');
       const store = useAppStore.getState();
       if (store.streamState.isStreaming) {
         // The abort handler in sendMessage appends the mark.
@@ -2796,7 +2796,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   ]);
 
   // The media hold (lib/media-hold.ts): other apps turned down while Sage
-  // speaks, and everything given back once the exchange has gone quiet.
+  // speaks, and their volume given back once the exchange has gone quiet.
   const lastAudioPlayingRef = useRef(false);
   useEffect(() => {
     if (audioPlaying && !lastAudioPlayingRef.current) holdMedia('duck');

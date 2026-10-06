@@ -4,9 +4,8 @@ The user asked for it on 6 October ("I tried to pause the video") and there
 was nothing to do it with: spotify_control pauses Spotify only, through its
 web API, and a YouTube video could only be closed. This goes through
 Windows' media controls, so it reaches Opera's YouTube, Spotify and any
-other player alike. A pause asked for here also outlasts the media hold
-(``speech.media_hold``), which would otherwise resume the player when the
-exchange ends.
+other player alike. (Talking to Sage only turns media down, see
+``speech.media_hold``; pausing is the user's to ask for.)
 """
 
 from __future__ import annotations
@@ -52,9 +51,8 @@ class MediaPauseTool(BaseTool):
                 "'stop the video' -> action='pause', what='video'; 'pause the "
                 "music' -> what='music'; 'pause everything' -> 'all'; 'resume "
                 "the video' / 'play it again' -> action='resume'. Media is "
-                "already paused while the user talks to Sage and comes back "
-                "on its own afterwards: call this when the user wants it to "
-                "STAY paused, or to resume it. Use spotify_control for "
+                "only turned down while the user talks to Sage, never "
+                "paused on its own. Use spotify_control for "
                 "changing the song or playlist, close_media to close it."
             ),
             parameters={
@@ -85,7 +83,7 @@ class MediaPauseTool(BaseTool):
         if action == "pause":
             apps = media_hold.pause_for_user(what)
             content = (
-                "Paused " + ", ".join(_label(a) for a in apps) + "; it stays paused."
+                "Paused " + ", ".join(_label(a) for a in apps) + "."
                 if apps
                 else "Nothing of that kind is playing."
             )

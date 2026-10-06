@@ -1,10 +1,74 @@
-"""The media hold: pause on the user's voice, turn down for Sage's, give back."""
+"""The media hold turns other apps down while the user talks, then back up;
+the user's own "pause the video" pauses only what they named."""
 
 from __future__ import annotations
 
 import pytest
 
-from openjarvis.speech import media_hold
+from openjarvis.speech import ducking, media_hold
+
+
+class _Volume:
+    def __init__(self, level: float) -> None:
+        self.level = level
+
+    def GetMasterVolume(self):  # noqa: N802 -- the COM name
+        return self.level
+
+    def SetMasterVolume(self, level, _ctx):  # noqa: N802
+        self.level = level
+
+
+class _Proc:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+
+
+class _AudioSession:
+    def __init__(self, pid: int, level: float = 1.0) -> None:
+        self.Process = _Proc(pid)
+        self.SimpleAudioVolume = _Volume(level)
+
+
+@pytest.fixture
+def apps(monkeypatch):
+    opera = _AudioSession(1, 0.8)
+    spotify = _AudioSession(2, 1.0)
+    sessions = [("opera.exe", opera), ("Spotify.exe", spotify)]
+    monkeypatch.setattr(ducking, "_sessions", lambda active_only=True: sessions)
+    monkeypatch.setattr(ducking, "_remember", lambda _levels: None)
+    monkeypatch.setattr(ducking, "_forget", lambda: None)
+    monkeypatch.setattr(ducking, "_FADE_STEPS", 1)
+    monkeypatch.setattr(media_hold, "_arm_timer", lambda: None)
+    media_hold.release()
+    yield opera, spotify
+    media_hold.release()
+
+
+def test_duck_turns_every_app_down_and_release_puts_it_back(apps):
+    opera, spotify = apps
+    assert media_hold.duck() == ["opera.exe", "Spotify.exe"]
+    assert opera.SimpleAudioVolume.level == pytest.approx(0.8 * media_hold.LEVEL)
+    assert spotify.SimpleAudioVolume.level == pytest.approx(media_hold.LEVEL)
+    assert media_hold.release() == ["opera.exe", "Spotify.exe"]
+    assert opera.SimpleAudioVolume.level == pytest.approx(0.8)
+    assert spotify.SimpleAudioVolume.level == pytest.approx(1.0)
+
+
+def test_a_second_duck_does_not_go_lower(apps):
+    """The wake word ducks, then Sage starts speaking: one step down only."""
+    opera, _ = apps
+    media_hold.duck()
+    assert media_hold.duck() == []
+    assert opera.SimpleAudioVolume.level == pytest.approx(0.8 * media_hold.LEVEL)
+    media_hold.release()
+    assert opera.SimpleAudioVolume.level == pytest.approx(0.8)
+
+
+def test_release_with_nothing_held_touches_nothing(apps):
+    opera, _ = apps
+    assert media_hold.release() == []
+    assert opera.SimpleAudioVolume.level == pytest.approx(0.8)
 
 
 class _Session:
@@ -29,69 +93,38 @@ class _Session:
         return True
 
 
-class _Manager:
-    def __init__(self, sessions) -> None:
-        self.sessions = sessions
-
-    def get_sessions(self):
-        return self.sessions
-
-
 @pytest.fixture
-def media(monkeypatch):
+def players(monkeypatch):
     spotify = _Session("SpotifyAB.SpotifyMusic!Spotify", playing=True)
     opera = _Session("OperaSoftware.OperaGXWebBrowser.1", playing=True)
-    manager = _Manager([spotify, opera])
+
+    class _Manager:
+        def get_sessions(self):
+            return [spotify, opera]
 
     async def fake_manager():
-        return manager
+        return _Manager()
 
     monkeypatch.setattr(media_hold, "_manager", fake_manager)
     monkeypatch.setattr(media_hold.sys, "platform", "win32")
-    monkeypatch.setattr(media_hold, "_arm_timer", lambda: None)
-    media_hold.release()
-    yield spotify, opera
-    media_hold.release()
+    media_hold._user_paused.clear()
+    return spotify, opera
 
 
-def test_pause_then_release_resumes_what_was_playing(media):
-    spotify, opera = media
-    assert sorted(media_hold.pause()) == sorted(
-        [spotify.source_app_user_model_id, opera.source_app_user_model_id]
-    )
-    assert not spotify.playing and not opera.playing
-    out = media_hold.release()
-    assert spotify.playing and opera.playing
-    assert len(out["resumed"]) == 2
-
-
-def test_something_paused_before_the_hold_is_not_resumed(media):
-    spotify, opera = media
-    spotify.playing = False  # the user had paused it themselves
-    media_hold.pause()
-    media_hold.release()
-    assert not spotify.playing
-    assert opera.playing
-
-
-def test_a_media_request_keeps_everything_paused(media):
-    spotify, opera = media
-    media_hold.pause()
-    media_hold.keep()  # e.g. youtube_play opened a new video
-    media_hold.release()
-    assert not spotify.playing and not opera.playing
-
-
-def test_pause_the_video_keeps_only_the_video(media):
-    spotify, opera = media
-    media_hold.pause()  # the wake word paused both
-    chosen = media_hold.pause_for_user("video")
-    assert chosen == [opera.source_app_user_model_id]
-    media_hold.release()
-    assert spotify.playing
-    assert not opera.playing
+def test_pause_the_video_leaves_the_music_playing(players):
+    spotify, opera = players
+    assert media_hold.pause_for_user("video") == [opera.source_app_user_model_id]
+    assert spotify.playing and not opera.playing
     assert media_hold.resume_for_user("video") == [opera.source_app_user_model_id]
     assert opera.playing
+
+
+def test_resume_brings_back_only_what_the_user_paused(players):
+    spotify, opera = players
+    spotify.playing = False  # paused in Spotify itself, earlier
+    media_hold.pause_for_user("video")
+    media_hold.resume_for_user("all")
+    assert opera.playing and not spotify.playing
 
 
 @pytest.mark.parametrize(
@@ -108,14 +141,14 @@ def test_kind_of(app, kind):
 
 def test_nothing_happens_off_windows(monkeypatch):
     monkeypatch.setattr(media_hold.sys, "platform", "linux")
-    assert media_hold.pause() == []
     assert media_hold.pause_for_user() == []
+    assert media_hold.resume_for_user() == []
 
 
 def test_sage_app_is_never_ducked():
     from openjarvis.speech.ducking import _is_sage_app
 
-    class _Proc:
+    class _P:
         def __init__(self, name, parents=()):
             self._name = name
             self._parents = parents
@@ -126,6 +159,6 @@ def test_sage_app_is_never_ducked():
         def parents(self):
             return list(self._parents)
 
-    app = _Proc("sage-desktop.exe")
-    assert _is_sage_app(_Proc("msedgewebview2.exe", [app, _Proc("explorer.exe")]))
-    assert not _is_sage_app(_Proc("opera.exe", [_Proc("explorer.exe")]))
+    app = _P("sage-desktop.exe")
+    assert _is_sage_app(_P("msedgewebview2.exe", [app, _P("explorer.exe")]))
+    assert not _is_sage_app(_P("opera.exe", [_P("explorer.exe")]))

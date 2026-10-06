@@ -441,3 +441,26 @@ class TestNoisyRoom:
             room.rejected()
         clear = Verdict(True, "Hey Sage.", "")
         assert room.judge(clear) is clear
+
+
+def test_an_early_check_beside_a_confirmed_one_is_kept_as_early(tmp_path, monkeypatch):
+    """The first check runs while "hey sa-" is still being said; once a later
+    check of the same firing confirms, its clip is "early", not "rejected"
+    (6 October: one read as a miss). A rejection before begin_firing -- a
+    separate firing -- keeps its name."""
+    import openjarvis.speech.wake_word_verify as wwv
+
+    monkeypatch.setattr(wwv, "_KEEP_DIR", str(tmp_path))
+    backend = _Backend("Something else entirely.")
+    verifier = WakeWordVerifier(backend)
+    pcm = _voice(0.2)
+    asyncio.run(verifier.verify(pcm))  # an earlier, separate firing
+    verifier.begin_firing()
+    backend.text = "That's the only means to think."
+    asyncio.run(verifier.verify(pcm))
+    backend.text = "Hey Sage."
+    assert asyncio.run(verifier.verify(pcm)).confirmed
+    names = sorted(p.name for p in tmp_path.glob("*.wav"))
+    assert any("_rejected_something_else" in n for n in names)
+    assert any("_early_that_s_the_only" in n for n in names)
+    assert any("_ok_hey_sage" in n for n in names)

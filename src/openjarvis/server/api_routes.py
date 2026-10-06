@@ -831,6 +831,7 @@ async def wake_word_stream(websocket: WebSocket):
                     # was let through by the extra audio. So: a few more
                     # frames, judge; not confirmed, a few more, judge again.
                     fired_at = time.monotonic()
+                    verifier.begin_firing()
                     # Asked only when it decides the verdict, once per
                     # firing (see WakeWordVerifier.verify).
                     lookup: Optional[asyncio.Future] = None
@@ -942,13 +943,13 @@ async def wake_word_stream(websocket: WebSocket):
                         "since_firing_ms": since_firing_ms,
                     }
                 )
-                # The user is about to speak: pause what plays (any app) so
-                # their words reach the mic unmixed (speech.media_hold).
+                # The user is about to speak: turn down what plays (any app)
+                # so their words reach the mic clearer (speech.media_hold).
                 if verdict is not None and verdict.confirmed:
                     from openjarvis.speech import media_hold
 
                     asyncio.get_running_loop().run_in_executor(
-                        None, media_hold.pause
+                        None, media_hold.duck
                     )
                 # A "Hey Sage" confirmed by its words is the user's voice.
                 # Not while other audio plays (strict), nor a muffled one.

@@ -4,13 +4,13 @@ import { voiceTrace } from './voice-trace';
 /**
  * The page's half of the media hold (server: speech/media_hold.py). A video
  * in the room mixes into the mic and the user's own words over it scored as
- * unsure as the video's dialogue (6 October), so other apps' media is held:
- * "pause" when the user is heard talking to Sage, "duck" (turned down) while
- * Sage speaks, "release" (all back as it was) when the exchange is over. A
- * confirmed wake word pauses on the server. Fire-and-forget: the voice never
- * waits on it.
+ * unsure as the video's dialogue (6 October), so other apps' media is turned
+ * down ("duck") when the user is heard talking to Sage and while Sage speaks,
+ * and given back ("release") when the exchange is over -- turned down, not
+ * paused, by the user's choice. A confirmed wake word ducks on the server.
+ * Fire-and-forget: the voice never waits on it.
  */
-export type MediaHoldAction = 'pause' | 'duck' | 'release';
+export type MediaHoldAction = 'duck' | 'release';
 
 export function holdMedia(action: MediaHoldAction): void {
   voiceTrace('media.hold', { action });

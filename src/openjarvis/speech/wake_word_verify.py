@@ -16,6 +16,7 @@ from __future__ import annotations
 import array
 import asyncio
 import concurrent.futures
+import contextlib
 import inspect
 import io
 import logging
@@ -443,6 +444,13 @@ class WakeWordVerifier:
         self._timeout = timeout
         self._language = language
         self._initial_prompt = initial_prompt
+        #: Clips this firing's checks kept as rejected; renamed "early" if a
+        #: later check confirms (see ``begin_firing``).
+        self._firing_clips: list[Path] = []
+
+    def begin_firing(self) -> None:
+        """A new detection: its staged checks' clips are judged together."""
+        self._firing_clips = []
 
     @property
     def backend_id(self) -> str:
@@ -583,7 +591,17 @@ class WakeWordVerifier:
             strict,
             wait_ms,
         )
-        keep_clip(pcm, verdict)
+        kept = keep_clip(pcm, verdict)
+        if verdict.confirmed:
+            # The checks before this one ran while the phrase was still being
+            # said; "rejected" beside an "ok" read as a miss (6 October).
+            for old in self._firing_clips:
+                with contextlib.suppress(OSError):
+                    early = old.name.replace("_rejected_", "_early_", 1)
+                    old.rename(old.with_name(early))
+            self._firing_clips = []
+        elif kept is not None:
+            self._firing_clips.append(kept)
         return verdict
 
 
@@ -593,20 +611,23 @@ _KEEP_DIR = os.environ.get("OPENJARVIS_WAKE_WORD_KEEP_CLIPS", "")
 _KEEP_MAX = 30
 
 
-def keep_clip(pcm: bytes, verdict: Verdict) -> None:
+def keep_clip(pcm: bytes, verdict: Verdict) -> Optional[Path]:
     if not _KEEP_DIR:
-        return
+        return None
     try:
         folder = Path(_KEEP_DIR)
         folder.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
         tag = "ok" if verdict.confirmed else "rejected"
         heard = re.sub(r"[^a-z0-9]+", "_", verdict.heard.lower())[:30] or "nothing"
-        (folder / f"{stamp}_{tag}_{heard}.wav").write_bytes(pcm_to_wav(pcm))
+        path = folder / f"{stamp}_{tag}_{heard}.wav"
+        path.write_bytes(pcm_to_wav(pcm))
         for old in sorted(folder.glob("*.wav"))[:-_KEEP_MAX]:
             old.unlink()
+        return path
     except OSError as exc:
         logger.debug("Could not keep wake-word clip: %s", exc)
+        return None
 
 
 def _accepts(func: Any, name: str) -> bool:

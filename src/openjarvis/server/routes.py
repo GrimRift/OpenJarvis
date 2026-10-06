@@ -524,20 +524,16 @@ async def voice_addition(request: Request):
 
 @router.post("/v1/voice/media")
 async def voice_media(request: Request):
-    """The page's half of the media hold (speech.media_hold): "pause" when
-    the user is heard over Sage, "duck" when Sage starts to speak, "release"
-    when the exchange is over. A confirmed wake word pauses on the server."""
+    """The page's half of the media hold (speech.media_hold): "duck" when the
+    user is heard over Sage or Sage starts to speak, "release" when the
+    exchange is over. A confirmed wake word turns media down on the server."""
     from openjarvis.speech import media_hold
 
     body = await request.json()
     action = str((body or {}).get("action") or "") if isinstance(body, dict) else ""
-    actions = {
-        "pause": media_hold.pause,
-        "duck": media_hold.duck,
-        "release": media_hold.release,
-    }
+    actions = {"duck": media_hold.duck, "release": media_hold.release}
     if action not in actions:
-        raise HTTPException(status_code=400, detail="action: pause, duck or release")
+        raise HTTPException(status_code=400, detail="action: duck or release")
     result = await asyncio.to_thread(actions[action])
     return {"action": action, "result": result}
 
