@@ -44,10 +44,14 @@ class TestTables:
 def _study_table(rows: int) -> str:
     """The calculator-shortcut table from the 7 October chat, cut to *rows*."""
     body = [
-        "| 1 | Arithmetic sequence term | **STAT → Lin**: enter term numbers as x, use ŷ at the target. |",
-        "| 2, 24 | Sum of a sequence | **Σ**: enter the term expression, start, and end. |",
-        "| 3 | Geometric sequence term | **STAT → ab EXP**: enter term numbers and term values. |",
-        "| 4, 21, 84 | Simultaneous linear equations | **EQN → 2 unknowns**: enter the coefficients. |",
+        "| 1 | Arithmetic sequence term | **STAT → Lin**: "
+        "enter term numbers as x, use ŷ at the target. |",
+        "| 2, 24 | Sum of a sequence | **Σ**: "
+        "enter the term expression, start, and end. |",
+        "| 3 | Geometric sequence term | **STAT → ab EXP**: "
+        "enter term numbers and term values. |",
+        "| 4, 21, 84 | Simultaneous linear equations | **EQN → 2 unknowns**: "
+        "enter the coefficients. |",
         "| 22, 83, 88 | Combinations | Use **nCr**. |",
         "| 45 | Degrees-minutes-seconds | Use the ° ' ” conversion key. |",
         "| 51, 58, 69 | Polynomial roots | Use **EQN → Quad/Cubic**. |",

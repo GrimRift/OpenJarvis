@@ -389,7 +389,8 @@ def _label_column(rows: list[list[str]]) -> int:
     width = max(len(row) for row in rows)
     for column in range(width):
         values = [row[column] for row in rows if column < len(row) and row[column]]
-        if values and sum(bool(_NUMBER_LIST.match(v)) for v in values) * 2 < len(values):
+        numeric = sum(bool(_NUMBER_LIST.match(v)) for v in values)
+        if values and numeric * 2 < len(values):
             return column
     return 0
 
