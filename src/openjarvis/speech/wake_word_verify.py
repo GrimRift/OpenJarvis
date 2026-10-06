@@ -152,8 +152,30 @@ MUFFLED_NO_SPEECH = 0.45
 QUIET_MUFFLED_RMS = 0.05
 
 
+#: Strict mode (another app playing) caps on the transcript. Every real take
+#: recorded with media on ends in the name or has at most two words after it
+#: ("Hey Sage. What's up?", "Sage, S-H.") and runs to six words at most
+#: ("Good morning Sage. Good morning Sage."). A video's line with the name
+#: anywhere in it opened the mic twice on 6 October: "Let's see until the
+#: second stage of the body." and Whisper's invented outro "Thanks for
+#: watching Sage and ourselves. Don't forget to subscribe to our channel for
+#: more content." -- sixteen words out of a two-second clip.
+_STRICT_MAX_WORDS = 7
+_STRICT_MAX_AFTER_NAME = 2
+#: Whisper's stock YouTube outro, made up from video audio.
+_OUTRO = re.compile(r"thanks? (?:you )?for watching|subscribe")
+
+
 def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^a-z']+", text.lower()) if t]
+
+
+def _named_at_the_end(words: list[str]) -> bool:
+    """The strict rule: the name spelt out, near the end of a short line."""
+    if len(words) > _STRICT_MAX_WORDS or _OUTRO.search(" ".join(words)):
+        return False
+    last = max((i for i, w in enumerate(words) if w in _SAGE), default=-1)
+    return last >= 0 and len(words) - 1 - last <= _STRICT_MAX_AFTER_NAME
 
 
 def heard_wake_phrase(
@@ -176,7 +198,7 @@ def heard_wake_phrase(
     """
     words = [w.rstrip("'s") if w.endswith("'s") else w for w in _tokens(text)]
     if strict:
-        return any(w in _SAGE for w in words)
+        return _named_at_the_end(words)
     for i, word in enumerate(words):
         if word not in _HEY:
             continue

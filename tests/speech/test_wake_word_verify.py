@@ -283,6 +283,34 @@ class TestTheShapeNeedsAHeyLead:
         for said in ["hazage", "Easy", "Peace English.", "Peace in you."]:
             assert not heard_wake_phrase(said, strict=True), said
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hey Sage. What's up?",
+            "Sage, S-H.",
+            "Hello Sage. Hello.",
+            "Good morning Sage. Good morning Sage.",
+            "All right, thanks for coming, Sage.",
+        ],
+    )
+    def test_strict_keeps_real_takes_heard_over_media(self, text):
+        assert heard_wake_phrase(text, strict=True)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # A video, 6 October 2026: both opened the mic.
+            "Let's see until the second stage of the body.",
+            "Thanks for watching Sage and ourselves. Don't forget to "
+            "subscribe to our channel for more content.",
+            "Thanks for watching, Sage.",
+            "I'm going to play a stage for you.",
+            "I'm Sage, your personal AI.",
+        ],
+    )
+    def test_strict_rejects_a_video_line_with_the_name_in_it(self, text):
+        assert not heard_wake_phrase(text, strict=True)
+
 
 def test_verify_passes_strict_through_to_the_verdict():
     pcm = bytes(3200)
