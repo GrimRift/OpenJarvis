@@ -255,6 +255,10 @@ async function checkAddition(
 
 /** A turn ending this soon after Sage's reply finished may be Sage's tail. */
 const HANDOFF_ECHO_MS = 5000;
+/** A lone "stop" this soon after Sage was stopped by voice repeats it. The
+ * user says "stop" again when the first did not seem to land; on 7 October
+ * the second arrived 1 s after the cut and was answered as a question. */
+const STOP_REPEAT_MS = 5000;
 
 export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const [input, setInput] = useState('');
@@ -325,6 +329,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // The last verdict on the open turn, so its end can be logged with a reason.
   const bargeVerdictRef = useRef<BargeVerdict | null>(null);
   const interruptedRef = useRef(false);
+  // When the user last stopped Sage by voice: a second "stop" said before
+  // they heard the first one land is the same stop, not a request.
+  const stoppedByVoiceAtRef = useRef(0);
   // Distinguishes a hands-free (wake-word / continuous-mode) recording from
   // a manual mic-button click, so only the hands-free path auto-stops on a
   // timeout and auto-sends — a manual stop always leaves the transcribed
@@ -1858,6 +1865,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           stopSpeaking();
           holdMedia('duck');
           voiceTrace('gen.stop', { chars: spoken.length });
+          stoppedByVoiceAtRef.current = Date.now();
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice',
             message: `You stopped Sage: "${spoken}"`,
@@ -1945,6 +1953,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         const heard = spoken.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: 1 }));
         if (isStopCommand(spoken) && !isEchoOf(heard, tail)) {
           voiceTrace('barge.stopAtEnd', { chars: spoken.length });
+          stoppedByVoiceAtRef.current = Date.now();
           holdMedia('duck');
           bargeVerdictRef.current = null;
           bargeListeningRef.current = false;
@@ -2113,6 +2122,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // thirty minutes".
       if (wasBargeIn && isStopCommand(spoken)) {
         voiceTrace('barge.stopOnly', { chars: spoken.length });
+        stoppedByVoiceAtRef.current = Date.now();
+        setFluxTurnActive(false);
+        return;
+      }
+      if (
+        isStopCommand(spoken) &&
+        Date.now() - stoppedByVoiceAtRef.current < STOP_REPEAT_MS
+      ) {
+        voiceTrace('barge.stopRepeat', { chars: spoken.length });
         setFluxTurnActive(false);
         return;
       }
