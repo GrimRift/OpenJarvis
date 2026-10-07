@@ -84,10 +84,13 @@ const isGuided = params.get('mode') === 'guided';
 // precision is the transcript stage's job now.
 const isConditions = params.get('mode') === 'conditions';
 const isTestset = params.get('mode') === 'testset';
+// The same kind of TEST set, all of it over a video (7 October): over a
+// talking video the wake word only fired with the user ~1 cm from the mic.
+const isVideo = params.get('mode') === 'video';
 
 const sessionId = isTopup
   ? topupSession
-  : (isFree || isGuided || isConditions || isTestset)
+  : (isFree || isGuided || isConditions || isTestset || isVideo)
     ? params.get('session') || 'session_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
     : 'browser_' + new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
 document.getElementById('sessionId').textContent = sessionId + (isTopup ? ' (adding to existing)' : '');
@@ -252,6 +255,37 @@ if (isGuided) {
   });
   take('negative', 3, 't_typing', 'Type normally -- do not speak', 'Same mic, same distance.', 5000, false);
   take('negative', 4, 't_room', 'Stay quiet -- room tone only', 'Just the room, the way it usually sounds.', 6000, false);
+} else if (isVideo) {
+  const take = (label, n, prefix, prompt, note, durationMs, isSpeech = true) => {
+    for (let i = 1; i <= n; i++) {
+      items.push({
+        label,
+        name: `${prefix}_${String(i).padStart(2, '0')}.wav`,
+        prompt,
+        note,
+        durationMs,
+        isSpeech,
+      });
+    }
+  };
+  const playing = 'Keep the video playing at your usual volume the whole session.';
+  take('positive', 8, 'v_normal', 'Say "Hey Sage" over the video',
+    `Where you usually sit, normal voice. ${playing}`, 4000);
+  take('positive', 4, 'v_louder', 'Say "Hey Sage" a bit louder',
+    `As you would to be heard over the video. ${playing}`, 4000);
+  take('negative', 4, 'v_talk', 'Talk over the video -- not the wake word',
+    `Anything, 5 seconds. ${playing}`, 5000);
+  ['Hey, say that again?', 'I asked Sage about it earlier.'].forEach((s, i) => {
+    items.push({
+      label: 'negative',
+      name: `v_name_${String(i + 1).padStart(2, '0')}.wav`,
+      prompt: `Say: "${s}"`,
+      note: `Near the wake word on purpose. ${playing}`,
+      durationMs: 4000,
+    });
+  });
+  take('negative', 2, 'v_only', 'Let the video play -- do not speak',
+    `One minute of the video alone. ${playing}`, 60000, false);
 } else if (isTopup) {
   // Top-up pass. The first session's negatives were all speech plus two
   // ambience clips, so the model had never heard a keyboard or a bare
@@ -422,8 +456,9 @@ async function recordCurrent() {
     const deliberatelyQuiet = item.name.startsWith('g_quiet') || item.name.startsWith('g_far') || item.name.startsWith('t_quiet') || item.name.startsWith('t_back');
     // Not in the test set: a dynamic mic on the raw path peaks at 3-4% at
     // 5-15 cm (6 October), and quiet takes are what it has to measure.
-    const tooQuiet = !isTestset && expectsVoice && !deliberatelyQuiet && peak < 3000;
-    const silentTake = !expectsVoice && peak > 12000;
+    const tooQuiet = !isTestset && !isVideo && expectsVoice && !deliberatelyQuiet && peak < 3000;
+    // The video alone is meant to be loud.
+    const silentTake = !expectsVoice && !isVideo && peak > 12000;
     statusEl.innerHTML = tooQuiet
       ? `<span class="warn">Saved, but very quiet (peak ${peakPct}%) — consider Redo</span>`
       : silentTake
