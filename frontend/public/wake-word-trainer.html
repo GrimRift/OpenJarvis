@@ -364,9 +364,24 @@ async function ensureAudio() {
   if (stream) return;
   // Same constraints as useWakeWord.ts's live capture -- the whole point is
   // matching train-time and inference-time signal chains exactly.
-  stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
-  });
+  const audio = { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+  stream = await navigator.mediaDevices.getUserMedia({ audio });
+  // ?mic=<part of a name>: a mic other than the Windows default, as the
+  // Settings picker would open it (7 October: the raw PD100X under NVIDIA
+  // Broadcast, for the echo-cancellation test). Labels need the permission
+  // the first open just got.
+  const wanted = (params.get('mic') || '').toLowerCase();
+  if (wanted) {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const match = devices.find((d) => d.kind === 'audioinput' && d.deviceId !== 'default'
+      && d.deviceId !== 'communications' && d.label.toLowerCase().includes(wanted));
+    if (!match) throw new Error(`no microphone named like "${wanted}"`);
+    stream.getTracks().forEach((t) => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { ...audio, deviceId: { exact: match.deviceId } } });
+  }
+  const micLabel = stream.getAudioTracks()[0]?.label || 'unknown';
+  log(`microphone: ${micLabel}`);
+  document.getElementById('sessionId').textContent += ` · mic: ${micLabel}`;
   audioCtx = new AudioContext();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
   source = audioCtx.createMediaStreamSource(stream);
