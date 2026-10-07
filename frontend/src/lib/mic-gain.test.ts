@@ -234,3 +234,26 @@ describe('the gain while Sage is speaking', () => {
     expect(Math.min(totalGain(1, 1), SPEAKING_MAX_GAIN)).toBe(1);
   });
 });
+
+describe('the wake gain remembered per microphone', () => {
+  const items = new Map<string, string>();
+  (globalThis as unknown as { localStorage: Pick<Storage, 'getItem' | 'setItem'> }).localStorage = {
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => void items.set(key, String(value)),
+  };
+
+  it('comes back for the same mic and not for another', async () => {
+    const { loadWakeGain, saveWakeGain } = await import('./mic-gain');
+    saveWakeGain('Microphone (PD100X Podcast Microphone)', 5.437);
+    expect(loadWakeGain('Microphone (PD100X Podcast Microphone)')).toBe(5.44);
+    expect(loadWakeGain('Microphone (NVIDIA Broadcast)')).toBeNull();
+  });
+
+  it('ignores nonsense and an unnamed mic', async () => {
+    const { loadWakeGain, saveWakeGain } = await import('./mic-gain');
+    localStorage.setItem('sage-wake-gain:Odd mic', 'abc');
+    expect(loadWakeGain('Odd mic')).toBeNull();
+    saveWakeGain('', 4);
+    expect(loadWakeGain('')).toBeNull();
+  });
+});

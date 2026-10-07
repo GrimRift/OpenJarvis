@@ -1329,11 +1329,21 @@ export function SettingsPage() {
               label="Microphone"
               description={
                 settings.micDeviceId
-                  ? 'Sage listens with this one for the wake word, what you say and dictation. If it is unplugged or closed, Sage falls back to the Windows default.'
+                  ? `Sage listens with this one for ${settings.wakeMicDeviceId ? '' : 'the wake word, '}what you say and dictation. If it is unplugged or closed, Sage falls back to the Windows default.`
                   : 'Sage listens with whatever Windows has as its default input. Pick one here to use a different mic, such as NVIDIA Broadcast, without changing Windows.'
               }
             >
               <MicrophonePicker onSaved={showSaved} />
+            </SettingRow>
+            <SettingRow
+              label="Wake word microphone"
+              description={
+                settings.wakeMicDeviceId
+                  ? 'Only "Hey Sage" is listened for on this one; what you say after it, and "stop", use the microphone above. Over a video, a raw mic hears "Hey Sage" far better than NVIDIA Broadcast, which is the better mic for everything else.'
+                  : '"Hey Sage" is listened for on the microphone above. Pick a different one here to split them, e.g. the raw mic for the wake word and NVIDIA Broadcast for the rest.'
+              }
+            >
+              <MicrophonePicker onSaved={showSaved} wake />
             </SettingRow>
             <SettingRow
               label="Remove background noise"

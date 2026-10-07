@@ -399,6 +399,12 @@ interface Settings {
    * re-issuing ids; see lib/mic-device.ts. */
   micDeviceId: string;
   micDeviceLabel: string;
+  /** A separate microphone for the wake word only ('' = the one above).
+   * Over a talking video the raw PD100X woke Sage on 10 of 10 "Hey Sage"
+   * where NVIDIA Broadcast woke on about 5, while Broadcast stays the
+   * better mic for what is said after it (8 October). */
+  wakeMicDeviceId: string;
+  wakeMicDeviceLabel: string;
   /** Where the browser strips steady background noise:
    * 'conversation' (default), 'all' (also the wake word) or 'off'. */
   noiseSuppression: 'conversation' | 'all' | 'off';
@@ -486,6 +492,8 @@ export function defaultSettings(): Settings {
     micBoost: 1,
     micDeviceId: '',
     micDeviceLabel: '',
+    wakeMicDeviceId: '',
+    wakeMicDeviceLabel: '',
     noiseSuppression: 'conversation',
     diagramsEnabled: true,
     diagramsAutomatic: true,

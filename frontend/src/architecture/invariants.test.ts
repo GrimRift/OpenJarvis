@@ -730,3 +730,20 @@ describe('the microphone streams honour the noise setting', () => {
     expect(wake).toMatch(/suppressNoise: boolean = false/);
   });
 });
+
+describe('a separate wake word microphone', () => {
+  const area = () => readFileSync(join(SRC, 'components', 'Chat', 'InputArea.tsx'), 'utf8');
+
+  it('opens the wake word on its own choice, the rest on the main one', () => {
+    // 8 October: the raw PD100X for "Hey Sage" over a video, NVIDIA
+    // Broadcast for what is said after it and for "stop".
+    expect(area()).toMatch(/micBoost,\s*wakeMicDevice,\s*\);/);
+    expect(area()).toMatch(/suppressNoise: noiseSuppression !== 'off',\s*micDevice,/);
+  });
+
+  it('takes the phrase for Deepgram from the conversation mic when split', () => {
+    // Pre-roll from the wake mic would reach Deepgram at the other mic's
+    // level under this stream's gain.
+    expect(area()).toMatch(/split \? flux\.takeRecentAudio\(preRollMs\)/);
+  });
+});

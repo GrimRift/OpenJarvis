@@ -399,6 +399,15 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     () => ({ id: micDeviceId ?? '', label: micDeviceLabel ?? '' }),
     [micDeviceId, micDeviceLabel],
   );
+  // The wake word may listen on a mic of its own (Settings); '' = the same.
+  const wakeMicDeviceId = useAppStore((s) => s.settings.wakeMicDeviceId) ?? '';
+  const wakeMicDeviceLabel = useAppStore((s) => s.settings.wakeMicDeviceLabel) ?? '';
+  const wakeMicDevice = useMemo(
+    () => (wakeMicDeviceId ? { id: wakeMicDeviceId, label: wakeMicDeviceLabel } : micDevice),
+    [wakeMicDeviceId, wakeMicDeviceLabel, micDevice],
+  );
+  const splitMicsRef = useRef(false);
+  splitMicsRef.current = wakeMicDevice.id !== micDevice.id;
   const diagramsAutomatic = useAppStore((s) => s.settings.diagramsAutomatic);
   const wakeWordGreetingEnabled = useAppStore((s) => s.settings.wakeWordGreetingEnabled);
   const wakeWordFastFollow = useAppStore((s) => s.settings.wakeWordFastFollow);
@@ -2544,8 +2553,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           // end a turn, so every spare second is a second before "Yes,
           // Sir?" when the user paused.
           const preRollMs = Math.min(PRE_ROLL_MS, sinceFiringMs + PHRASE_MS);
-          const speechRms = flux.setSpeechLevel(ambientRmsRef.current?.() ?? 0);
-          flux.beginTurn(takeRecentAudioRef.current?.(preRollMs));
+          // With the wake word on its own mic, the phrase and the words after
+          // it are taken from the conversation mic, which Flux's gain and
+          // room level are measured on.
+          const split = splitMicsRef.current;
+          const speechRms = flux.setSpeechLevel(
+            split ? flux.ambientRms() : (ambientRmsRef.current?.() ?? 0),
+          );
+          flux.beginTurn(
+            split ? flux.takeRecentAudio(preRollMs) : takeRecentAudioRef.current?.(preRollMs),
+          );
           armFluxSilenceTimer('wake');
           voiceTrace('wake.fastFollow', { sinceFiringMs, preRollMs, speechRms });
           if (wakeWordGreetingEnabled) {
@@ -2871,7 +2888,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     noiseSuppression === 'all',
     effectiveSpeechState === 'idle' && !audioPlaying && wakeWordSettled,
     micBoost,
-    micDevice,
+    wakeMicDevice,
   );
   takeRecentAudioRef.current = takeRecentAudio;
   ambientRmsRef.current = ambientRms;

@@ -64,6 +64,37 @@ export function wakeGainCeiling(boost: number): number {
  */
 export const SPEAKING_MAX_GAIN = 3;
 
+const WAKE_GAIN_KEY = 'sage-wake-gain:';
+
+/**
+ * The wake word's gain as last settled on this microphone, or null.
+ *
+ * It started at 1x on every page load and, on a quiet raw mic (PD100X,
+ * speech ~100-300 RMS), climbs only on the few frames over SILENCE_RMS:
+ * still 1.9x of 6x four minutes after a reload (8 October), while the
+ * user's "Hey Sage" reached the detector at RMS ~50. Remembered per mic,
+ * not started at the ceiling: a loud mic's first "Hey Sage" at the ceiling
+ * would clip before the gain came down.
+ */
+export function loadWakeGain(micLabel: string): number | null {
+  if (!micLabel) return null;
+  try {
+    const value = Number(localStorage.getItem(WAKE_GAIN_KEY + micLabel));
+    return Number.isFinite(value) && value >= 1 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveWakeGain(micLabel: string, gain: number): void {
+  if (!micLabel || !Number.isFinite(gain)) return;
+  try {
+    localStorage.setItem(WAKE_GAIN_KEY + micLabel, gain.toFixed(2));
+  } catch {
+    // Storage blocked: the gain just starts at 1x next time.
+  }
+}
+
 /** Coming down is urgent (it prevents clipping); going up is not. */
 const FALL = 0.34;
 const RISE = 0.06;

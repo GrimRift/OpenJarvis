@@ -41,6 +41,8 @@ const CHUNK_SAMPLES = 800;
 // runs longer than this is past the point where re-transcribing locally is
 // a better experience than reporting the failure.
 const MAX_FALLBACK_SECONDS = 30;
+/** How much of this microphone is kept between turns (see recentRef). */
+const RECENT_SAMPLES = 3 * TARGET_SAMPLE_RATE;
 
 export type FluxStatus =
   | 'idle'
@@ -390,6 +392,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const manualGainRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingRef = useRef<number[]>([]);
+  // This microphone's last few seconds, raw, kept between turns too: with
+  // the wake word on a different mic (Settings), the phrase and the words
+  // after it must come from THIS mic, at this stream's level.
+  const recentRef = useRef<Int16Array[]>([]);
 
   // Gates transmission without tearing the socket down, so a turn can start
   // again without paying for a new handshake.
@@ -444,6 +450,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
 
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    recentRef.current = [];
 
     if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
       audioCtxRef.current.close().catch(() => undefined);
@@ -641,14 +648,21 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     processorRef.current = processor;
 
     processor.onaudioprocess = (event) => {
-      if (!sendingRef.current) return;
-      if (wsRef.current?.readyState !== WebSocket.OPEN) return;
-      if (Date.now() < holdUntilRef.current) return;
-
       const raw = downsample(
         event.inputBuffer.getChannelData(0),
         ctx.sampleRate,
       );
+      const recent = recentRef.current;
+      recent.push(raw);
+      let kept = recent.reduce((n, chunk) => n + chunk.length, 0);
+      while (recent.length > 1 && kept - recent[0].length >= RECENT_SAMPLES) {
+        kept -= recent[0].length;
+        recent.shift();
+      }
+      if (!sendingRef.current) return;
+      if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+      if (Date.now() < holdUntilRef.current) return;
+
       // Deepgram gets the boosted frame: the laptop's own microphone at
       // arm's length arrives far under the level a desk mic gives, and the
       // stream is opened with autoGainControl off on purpose.
@@ -890,10 +904,35 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, model]);
 
+  /** The last `ms` of this microphone, raw (for a wake word on another mic). */
+  const takeRecentAudio = useCallback((ms: number): Int16Array => {
+    const all = recentRef.current;
+    const total = all.reduce((n, chunk) => n + chunk.length, 0);
+    const out = new Int16Array(total);
+    let at = 0;
+    for (const chunk of all) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out.slice(Math.max(0, total - Math.round((ms / 1000) * TARGET_SAMPLE_RATE)));
+  }, []);
+
+  /** The room's level on this microphone: median 80 ms RMS of the oldest second kept. */
+  const ambientRms = useCallback((): number => {
+    const audio = takeRecentAudio(3000).slice(0, TARGET_SAMPLE_RATE);
+    const levels: number[] = [];
+    for (let i = 0; i + 1280 <= audio.length; i += 1280) levels.push(rms(audio.subarray(i, i + 1280)));
+    if (levels.length === 0) return 0;
+    levels.sort((a, b) => a - b);
+    return levels[Math.floor(levels.length / 2)];
+  }, [takeRecentAudio]);
+
   return {
     status,
     reason,
     beginTurn,
+    takeRecentAudio,
+    ambientRms,
     endTurn,
     holdAudio,
     lastSoundAt,

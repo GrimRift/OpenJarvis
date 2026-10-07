@@ -1,7 +1,7 @@
 import { keepOutputAwake } from '../lib/audio-out';
 import { markWake } from '../lib/orb-events';
 import { voiceTrace } from '../lib/voice-trace';
-import { applyGain, nextGain, wakeGainCeiling } from '../lib/mic-gain';
+import { applyGain, loadWakeGain, nextGain, saveWakeGain, wakeGainCeiling } from '../lib/mic-gain';
 import { openMicrophone, type MicChoice } from '../lib/mic-device';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from '../lib/api';
@@ -423,6 +423,12 @@ export function useWakeWord(
       const resampleRatio = TARGET_SAMPLE_RATE / nativeSampleRate;
 
       const track = stream.getAudioTracks()[0];
+      const micLabel = track?.label ?? '';
+      const saved = loadWakeGain(micLabel);
+      wakeGainRef.current = saved === null
+        ? 1
+        : Math.min(saved, wakeGainCeiling(micBoostRef.current));
+      let savedAt = Date.now();
       if (track) {
         trackMutedRef.current = track.muted;
         track.onmute = () => {
@@ -478,6 +484,10 @@ export function useWakeWord(
               max: wakeGainCeiling(micBoostRef.current),
             });
             ws.send(applyGain(frame, wakeGainRef.current).buffer);
+            if (Date.now() - savedAt > 5000) {
+              savedAt = Date.now();
+              saveWakeGain(micLabel, wakeGainRef.current);
+            }
           }
         }
       };
