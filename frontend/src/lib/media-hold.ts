@@ -12,7 +12,20 @@ import { voiceTrace } from './voice-trace';
  */
 export type MediaHoldAction = 'duck' | 'release';
 
+let held = false;
+
+/**
+ * Whether the page last asked for other apps to be turned down. While they
+ * are, a video's voice reaches the echo-cancelled microphone far under the
+ * user's (peak 697 against 3.2-4.2k, 7 October), so the reply may dip for
+ * the user over it (lib/voice-duck.ts); at full volume it may not.
+ */
+export function mediaHeld(): boolean {
+  return held;
+}
+
 export function holdMedia(action: MediaHoldAction): void {
+  held = action === 'duck';
   voiceTrace('media.hold', { action });
   void apiFetch('/v1/voice/media', {
     method: 'POST',

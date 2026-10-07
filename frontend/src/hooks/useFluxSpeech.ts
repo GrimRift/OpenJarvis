@@ -6,6 +6,7 @@ import type { FluxWord, SpeakerCheck } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
 import { openMicrophone, type MicChoice } from '../lib/mic-device';
 import { voiceOverSage } from '../lib/voice-duck';
+import { mediaHeld } from '../lib/media-hold';
 import {
   SPEAKING_MAX_GAIN,
   adaptFloor,
@@ -660,9 +661,14 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // estimate may move while that is the dominant sound; the audio is
       // still SENT at its true level, so a real interruption still lands.
       const sageSpeaking = speakingRef.current;
-      // A video's voice is as loud as the user's and echo cancellation
-      // does not know it, so with one audible the reply never dips.
-      if (sageSpeaking && !mediaAudibleRef.current && voiceOverSage(raw, autoGainRef.current)) {
+      // Echo cancellation does not know a video's voice, so with one
+      // audible the reply dips only while Sage has it turned down: at full
+      // volume it is as loud as the user.
+      if (
+        sageSpeaking &&
+        (!mediaAudibleRef.current || mediaHeld()) &&
+        voiceOverSage(raw, autoGainRef.current)
+      ) {
         optsRef.current.onVoiceOverSage?.();
       }
       if (!sageSpeaking) {
