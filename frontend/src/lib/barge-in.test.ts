@@ -380,3 +380,14 @@ describe('a video playing while Sage works (6 October: PewDiePie added to the qu
     expect(isMediaSpeech(undefined, true)).toBe(false);
   });
 });
+
+describe('a refused media tool', () => {
+  it('plays nothing, so "stop" is listened for again', async () => {
+    const { mediaToolRefused } = await import('./barge-in');
+    // 8 October: youtube_play refused "explain that video" in 0.02 s.
+    expect(mediaToolRefused(false, 'This asks about a video, not to play one. Read it with web_read.')).toBe(true);
+    // A play that ran past its time limit may still be playing (29 September).
+    expect(mediaToolRefused(false, "Tool 'youtube_play' timed out after 30s.")).toBe(false);
+    expect(mediaToolRefused(true, 'Playing.')).toBe(false);
+  });
+});

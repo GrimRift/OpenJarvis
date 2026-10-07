@@ -403,6 +403,22 @@ export function isMediaSpeech(
 }
 
 /**
+ * Whether a media tool's end means nothing started playing.
+ *
+ * The page treats a turn as a media turn from the tool's START (a play that
+ * ran past its time limit was reported failed and played anyway, 29
+ * September), which also stops listening for "stop" over the reply. But a
+ * refusal plays nothing: on 8 October youtube_play refused "explain that
+ * video" in 0.02 s, the reply ran 33 s with nothing playing, and "stop" was
+ * not listened for. A failure is a refusal unless it timed out.
+ */
+export function mediaToolRefused(success: boolean, result: unknown): boolean {
+  if (success) return false;
+  const text = typeof result === 'string' ? result.toLowerCase() : '';
+  return !/timed out|timeout/.test(text);
+}
+
+/**
  * A turn heard over Sage with Sage's own words cut out of it. `text` is
  * empty when every word was Sage's -- unless the voice check says the user
  * spoke, in which case they repeated Sage on purpose and keep their words.

@@ -60,6 +60,7 @@ import {
   isEchoTurn,
   isLoopedBack,
   isMediaSpeech,
+  mediaToolRefused,
   isStopCommand,
   judge,
   STOP_ECHO_WINDOW_CHARS,
@@ -1234,6 +1235,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               tc.status = data.success ? 'success' : 'error';
               tc.latency = data.latency;
               tc.result = data.result;
+              // Nothing plays after a refusal: listen for "stop" again.
+              if (MEDIA_TOOLS.has(data.tool) && mediaToolRefused(!!data.success, data.result)) {
+                mediaTurnRef.current = false;
+                voiceTrace('media.refused', { tool: data.tool });
+              }
               if (data.metadata && typeof data.metadata === 'object') {
                 tc.metadata = data.metadata;
               }
