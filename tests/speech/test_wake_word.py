@@ -130,11 +130,18 @@ def test_a_rise_that_never_fires_is_reported_once_it_falls():
 
     near = NearMiss(threshold=0.65)
     assert near.observe(0.05) is None  # room tone: nothing to report
-    assert near.observe(0.4) is None
-    assert near.observe(0.7) is None  # over, but one frame: short of patience
-    assert near.observe(0.5) is None
+    assert near.observe(0.4, level=900.0) is None
+    assert near.observe(0.7, level=1500.4) is None  # over, one frame: no patience
+    assert near.observe(0.5, level=1200.0) is None
     miss = near.observe(0.1)
-    assert miss == {"peak": 0.7, "frames": 3, "over": 1, "warming_up": False}
+    # loud: the loudest frame of the rise, as the detector got it.
+    assert miss == {
+        "peak": 0.7,
+        "frames": 3,
+        "over": 1,
+        "warming_up": False,
+        "loud": 1500,
+    }
     # Reported once, then the tracker starts afresh.
     assert near.observe(0.1) is None
 
