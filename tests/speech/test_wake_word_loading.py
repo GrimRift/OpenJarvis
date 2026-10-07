@@ -116,3 +116,19 @@ def test_a_missing_model_still_raises_before_any_import(model_file):
 
     with pytest.raises(RuntimeError, match="not configured"):
         detector._ensure_loaded()
+
+
+def test_the_threshold_drops_only_while_media_is_audible():
+    from openjarvis.speech.wake_word import (
+        DEFAULT_THRESHOLD,
+        MEDIA_THRESHOLD,
+        WakeWordDetector,
+    )
+
+    detector = WakeWordDetector(model_path="")
+    assert detector.threshold == DEFAULT_THRESHOLD
+    detector.media = True
+    assert detector.threshold == MEDIA_THRESHOLD
+    assert detector.base_threshold == DEFAULT_THRESHOLD
+    # A fresh detector per socket starts without media.
+    assert detector.clone().threshold == DEFAULT_THRESHOLD

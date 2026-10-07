@@ -292,6 +292,9 @@ class Verdict:
 NOISY_ROOM_REJECTIONS = 2
 NOISY_ROOM_SECONDS = 60.0
 NOISY_ROOM_NOTE = "muffled, noisy room"
+#: A firing under the normal threshold (only the media threshold let it
+#: fire) when the media had stopped by the check.
+LOW_SCORE_NOTE = "low score, media stopped"
 
 
 class NoisyRoom:

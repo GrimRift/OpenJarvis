@@ -39,6 +39,15 @@ SAMPLE_RATE = 16000
 # margin above comes down: a firing costs ~200 ms of GPU, a miss costs
 # the user a repeat.
 DEFAULT_THRESHOLD = 0.65
+# While another app is audible (a video, music). Over a talking video the
+# user's voice reaches the mic about as loud as the video's (7 October, the
+# `video_20261007` test set: phrase peaks 1.1-2.0k RMS, video ~2.0-2.2k), and
+# the detector scores the phrase low: 1/12 woke at 0.65, 5/12 at 0.3. The
+# video alone fires it either way; the strict transcript rule (name at the
+# end, no outro) rejected every one, and no take of talk over the video got
+# through at 0.3. Not used without media: in a quiet room 0.3 woke nothing
+# more (15/15 at both) and let "I asked Sage about it earlier" through.
+MEDIA_THRESHOLD = 0.3
 # How many consecutive 80ms frames must clear the threshold before a
 # detection counts — a single high-scoring frame from a noise transient is
 # common; a sustained ~160ms run of them is not.
@@ -98,6 +107,8 @@ class WakeWordDetector:
         # avoids that self-referential deadlock.
         self._consecutive_hits = 0
         self._frames_since_reset = 0
+        # Whether another app is audible (MEDIA_THRESHOLD), set by the socket.
+        self.media = False
 
     @property
     def available(self) -> bool:
@@ -168,7 +179,7 @@ class WakeWordDetector:
         score = float(scores[-1]) if scores else 0.0
         self._frames_since_reset += 1
 
-        if score > self._threshold:
+        if score > self.threshold:
             self._consecutive_hits += 1
         else:
             self._consecutive_hits = 0
@@ -183,6 +194,13 @@ class WakeWordDetector:
 
     @property
     def threshold(self) -> float:
+        """The threshold now: lower while another app is audible."""
+        if self.media:
+            return min(self._threshold, MEDIA_THRESHOLD)
+        return self._threshold
+
+    @property
+    def base_threshold(self) -> float:
         return self._threshold
 
     @property
@@ -193,7 +211,7 @@ class WakeWordDetector:
     def is_detection(self, score: float) -> bool:
         return (
             self._frames_since_reset > WARMUP_FRAMES
-            and score > self._threshold
+            and score > self.threshold
             and self._consecutive_hits >= DETECTION_PATIENCE
         )
 

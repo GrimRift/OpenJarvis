@@ -700,8 +700,11 @@ async def wake_word_stream(websocket: WebSocket):
     # The detector judges acoustic shape; a loud transient can pass for the
     # phrase. Before a detection is announced, the last two seconds are
     # transcribed and must contain the words (speech/wake_word_verify.py).
+    from dataclasses import replace
+
     from openjarvis.speech.player import is_speaking
     from openjarvis.speech.wake_word_verify import (
+        LOW_SCORE_NOTE,
         SILENT_FRAME,
         VERIFY_STAGE_FRAMES,
         VERIFY_STAGE_SECONDS,
@@ -734,7 +737,10 @@ async def wake_word_stream(websocket: WebSocket):
     # from the question or the reply must not fire the moment it re-arms.
     # (Resetting the detector did that too, and cost the warm-up again.)
     needs_dip = False
-    threshold = float(getattr(detector, "threshold", 0.5))
+    # The normal threshold; detector.threshold drops while media plays.
+    threshold = float(
+        getattr(detector, "base_threshold", getattr(detector, "threshold", 0.5))
+    )
     from openjarvis.speech.wake_word import NearMiss
 
     near_miss = NearMiss(threshold)
@@ -782,18 +788,36 @@ async def wake_word_stream(websocket: WebSocket):
             with contextlib.suppress(Exception):
                 await verifier.warm_if_idle()
 
+    async def watch_media() -> None:
+        # While another app is audible the detector's threshold drops
+        # (wake_word.MEDIA_THRESHOLD): the user's voice is no louder than a
+        # video's at the mic. Same meter and memory as the Flux socket's.
+        from openjarvis.server.flux_routes import MEDIA_POLL_SECONDS, MediaRecency
+
+        recency = MediaRecency()
+        while True:
+            try:
+                playing = await asyncio.to_thread(media_is_playing)
+            except Exception:  # noqa: BLE001 -- the meter is optional
+                playing = False
+            detector.media = recency.update(playing, time.monotonic())
+            await asyncio.sleep(MEDIA_POLL_SECONDS)
+
     await websocket.accept(subprotocol=subprotocol)
     warmer = (
         asyncio.create_task(keep_verifier_warm())
         if verifier is not None and hasattr(verifier, "warm_if_idle")
         else None
     )
+    media_watch = (
+        asyncio.create_task(watch_media()) if hasattr(detector, "media") else None
+    )
     try:
         while True:
             frame = await frame_within(None)
             ring.push(frame)
             score = await asyncio.to_thread(detector.score, frame)
-            if needs_dip and score <= threshold:
+            if needs_dip and score <= getattr(detector, "threshold", threshold):
                 needs_dip = False
             if is_speaking() or not armed:
                 # The server's own voice (a greeting, a reminder) is what
@@ -884,6 +908,19 @@ async def wake_word_stream(websocket: WebSocket):
                     if early is not None:
                         early.cancel()
                     since_firing_ms = int((time.monotonic() - fired_at) * 1000)
+                if (
+                    verdict is not None
+                    and verdict.confirmed
+                    and score <= threshold
+                    and not await strict()
+                ):
+                    # Only the media threshold let this fire, and the media
+                    # had stopped by the check (the threshold stays low for
+                    # MEDIA_RECENT_SECONDS): without media, 0.3 woke nothing
+                    # more and let "I asked Sage about it" through.
+                    verdict = replace(
+                        verdict, confirmed=False, note=LOW_SCORE_NOTE
+                    )
                 if verdict is not None:
                     verdict = noisy_room.judge(verdict)
                     if not verdict.confirmed:
@@ -992,6 +1029,8 @@ async def wake_word_stream(websocket: WebSocket):
     finally:
         if warmer is not None:
             warmer.cancel()
+        if media_watch is not None:
+            media_watch.cancel()
         if pending is not None:
             pending.cancel()
 

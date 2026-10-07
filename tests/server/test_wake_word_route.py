@@ -418,3 +418,58 @@ def test_a_rejection_in_a_quiet_room_still_answers():
 
     assert out[-1]["type"] == "rejected"
     assert len(app.state.speech_backend.audio) == VERIFY_STAGES + 1
+
+
+class _MediaAware(_Scripted):
+    """Its threshold drops while the socket says media is audible, as the
+    real detector's does (wake_word.MEDIA_THRESHOLD)."""
+
+    base_threshold = 0.65
+
+    def __init__(self, scores):
+        super().__init__(scores)
+        self.media = False
+
+    @property
+    def threshold(self):
+        return 0.3 if self.media else self.base_threshold
+
+
+def _fire_over_media(app, monkeypatch, playing):
+    """A frame, a moment for the media meter, then a 0.4 frame."""
+    import time
+
+    monkeypatch.setattr("openjarvis.speech.wake_word_verify.media_is_playing", playing)
+    app.state.wake_word_detector = _MediaAware([0.1, 0.4])
+    with TestClient(app).websocket_connect("/v1/speech/wake-word") as ws:
+        ws.send_bytes(b"\x00" * 2560)
+        assert ws.receive_json()["type"] == "score"
+        time.sleep(0.3)
+        ws.send_bytes(b"\x00" * 2560)
+        return ws.receive_json()
+
+
+def test_over_a_video_a_low_scoring_hey_sage_wakes(monkeypatch):
+    # 7 October: over a talking video the phrase scored 0.12-0.4; at 0.65
+    # 1 of 12 woke.
+    reply = _fire_over_media(_app("Hey Sage."), monkeypatch, lambda: True)
+    assert reply["type"] == "detected"
+    assert reply["verified"] is True
+
+
+def test_a_low_score_judged_after_the_media_stopped_is_rejected(monkeypatch):
+    # The meter said media at the poll, nothing by the check: without media
+    # a 0.3 threshold let "I asked Sage about it" through.
+    calls = []
+
+    def playing():
+        calls.append(1)
+        return len(calls) == 1
+
+    reply = _fire_over_media(_app("Hey Sage."), monkeypatch, playing)
+    assert reply["type"] == "rejected"
+
+
+def test_without_media_a_low_score_never_fires(monkeypatch):
+    reply = _fire_over_media(_app("Hey Sage."), monkeypatch, lambda: False)
+    assert reply["type"] == "score"
