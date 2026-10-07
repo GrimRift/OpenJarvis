@@ -690,6 +690,10 @@ class TestParakeetProvider:
                     events = []
                     while True:
                         event = ws.receive_json()
+                        # The media watcher's first {"type": "Media"} can
+                        # land between turn events (on CI it always did).
+                        if event.get("type") == "Media":
+                            continue
                         events.append(event)
                         if event["event"] == "EndOfTurn":
                             break
