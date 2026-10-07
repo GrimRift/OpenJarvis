@@ -473,3 +473,27 @@ def test_a_low_score_judged_after_the_media_stopped_is_rejected(monkeypatch):
 def test_without_media_a_low_score_never_fires(monkeypatch):
     reply = _fire_over_media(_app("Hey Sage."), monkeypatch, lambda: False)
     assert reply["type"] == "score"
+
+
+def test_video_firings_do_not_make_the_room_noisy(monkeypatch):
+    # 8 October: rejected firings on the video itself switched the
+    # noisy-room rule on, and it dropped the user's muffled "Hey Sage".
+    from openjarvis.server.api_routes import websocket_router  # noqa: F401
+    from openjarvis.speech import wake_word_verify as wv
+
+    counted = []
+    monkeypatch.setattr(wv.NoisyRoom, "rejected", lambda self: counted.append(1))
+    monkeypatch.setattr(
+        "openjarvis.speech.wake_word_verify.media_is_playing", lambda: True
+    )
+    app = _app("Thank you for watching.")
+    app.state.wake_word_detector = _MediaAware([0.1, 0.4])
+    import time
+
+    with TestClient(app).websocket_connect("/v1/speech/wake-word") as ws:
+        ws.send_bytes(b"\x00" * 2560)
+        ws.receive_json()
+        time.sleep(0.3)
+        ws.send_bytes(b"\x00" * 2560)
+        assert ws.receive_json()["type"] == "rejected"
+    assert counted == []

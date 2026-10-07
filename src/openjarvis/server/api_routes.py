@@ -935,7 +935,12 @@ async def wake_word_stream(websocket: WebSocket):
                     )
                 if verdict is not None:
                     verdict = noisy_room.judge(verdict)
-                    if not verdict.confirmed:
+                    # Not while media plays: at MEDIA_THRESHOLD the video
+                    # fires the detector every few seconds, each rejected
+                    # (strict rule), and counting them kept the noisy-room
+                    # rule on -- it dropped the user's muffled "Hey Sage"
+                    # ("I'm Sage.", 8 October 07:39:24).
+                    if not verdict.confirmed and not getattr(detector, "media", False):
                         noisy_room.rejected()
                         if verdict.note:
                             wake_log.info(
