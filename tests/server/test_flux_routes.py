@@ -707,3 +707,15 @@ class TestParakeetProvider:
             {"word": "up", "confidence": 0.7},
         ]
         assert "speculative_answer" not in final
+
+
+def test_media_recency_holds_audible_through_a_quiet_stretch():
+    """A pause in a video, or the video turned down while Sage speaks,
+    must not let the reply dip at the video's voice (lib/voice-duck.ts)."""
+    from openjarvis.server.flux_routes import MediaRecency
+
+    recency = MediaRecency(recent=10.0)
+    assert recency.update(False, 0.0) is False
+    assert recency.update(True, 1.0) is True
+    assert recency.update(False, 10.9) is True
+    assert recency.update(False, 11.0) is False

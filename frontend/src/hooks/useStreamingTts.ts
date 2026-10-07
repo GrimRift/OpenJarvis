@@ -3,6 +3,7 @@ import { IncrementalTtsOutbox } from '../lib/incremental-tts';
 import { limiter, outputContext } from '../lib/audio-out';
 import { gainFor } from '../lib/volume';
 import { voiceTrace } from '../lib/voice-trace';
+import { DUCK_HOLD_MS, DUCK_LEVEL } from '../lib/voice-duck';
 import {
   chunkDuration,
   decodePcmF32,
@@ -77,6 +78,10 @@ function createStreamingTtsPlayer() {
   const generationsRef = ref(new PlaybackGeneration());
   // Where each chunk of the voice enters the graph, before the volume.
   const inputRef = ref<GainNode | null>(null);
+  // The volume stage, and the level the user set it to.
+  const volumeRef = ref<{ node: GainNode; level: number } | null>(null);
+  const restoreAtRef = ref(0);
+  const restoreTimerRef = ref<number | null>(null);
   const stopAnalyserRef = ref<(() => void) | null>(null);
 
   const teardown = () => {
@@ -104,6 +109,11 @@ function createStreamingTtsPlayer() {
     stopAnalyserRef.current?.();
     stopAnalyserRef.current = null;
     inputRef.current = null;
+    volumeRef.current = null;
+    if (restoreTimerRef.current !== null) {
+      window.clearTimeout(restoreTimerRef.current);
+      restoreTimerRef.current = null;
+    }
     try {
       socketRef.current?.close();
     } catch {
@@ -191,6 +201,7 @@ function createStreamingTtsPlayer() {
     // The user's chat-reply volume (Settings → Volume), master × chat,
     // with the boost on top; the limiter keeps a loud stretch clean.
     gain.gain.value = gainFor('chat');
+    volumeRef.current = { node: gain, level: gain.gain.value };
     input.connect(gain);
     inputRef.current = input;
     const limit = limiter(ctx);
@@ -450,7 +461,40 @@ function createStreamingTtsPlayer() {
     return result !== 'failed-before-audio' && result !== 'blocked';
   };
 
-  return { begin, speak, stop: teardown, unlock };
+  /**
+   * Turn the reply down while the user talks over it, and back up once they
+   * stop (lib/voice-duck.ts). Called again while they talk, it only moves
+   * the moment of coming back. Returns whether this call turned it down.
+   */
+  const duck = (): boolean => {
+    const volume = volumeRef.current;
+    const ctx = ctxRef.current;
+    if (!volume || !ctx) return false;
+    const wasDown = restoreTimerRef.current !== null;
+    restoreAtRef.current = Date.now() + DUCK_HOLD_MS;
+    if (!wasDown) {
+      const param = volume.node.gain;
+      param.cancelScheduledValues(ctx.currentTime);
+      param.setValueAtTime(param.value, ctx.currentTime);
+      param.linearRampToValueAtTime(volume.level * DUCK_LEVEL, ctx.currentTime + 0.03);
+      const check = () => {
+        const wait = restoreAtRef.current - Date.now();
+        if (wait > 0) {
+          restoreTimerRef.current = window.setTimeout(check, wait);
+          return;
+        }
+        restoreTimerRef.current = null;
+        if (volumeRef.current !== volume) return;
+        param.cancelScheduledValues(ctx.currentTime);
+        param.setValueAtTime(param.value, ctx.currentTime);
+        param.linearRampToValueAtTime(volume.level, ctx.currentTime + 0.3);
+      };
+      restoreTimerRef.current = window.setTimeout(check, DUCK_HOLD_MS);
+    }
+    return !wasDown;
+  };
+
+  return { begin, speak, stop: teardown, unlock, duck };
 }
 
 let player: ReturnType<typeof createStreamingTtsPlayer> | null = null;

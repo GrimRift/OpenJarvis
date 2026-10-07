@@ -60,6 +60,29 @@ CONNECT_ATTEMPTS = 2
 PROVIDER_FLUX = "flux"
 PROVIDER_PARAKEET = "parakeet"
 
+#: How often the page is told whether another app is audible. The page
+#: turns Sage's reply down when the user talks over it, and must not do so
+#: for a video's voice (frontend lib/voice-duck.ts).
+MEDIA_POLL_SECONDS = 0.5
+#: Counted as audible this long after it was last heard. A quiet bar of
+#: music or a pause in dialogue is not the end of the video, and other apps
+#: are turned down while Sage speaks (speech/media_hold.py), which can take
+#: their meter under the threshold.
+MEDIA_RECENT_SECONDS = 10.0
+
+
+class MediaRecency:
+    """Whether another app has been audible within ``MEDIA_RECENT_SECONDS``."""
+
+    def __init__(self, recent: float = MEDIA_RECENT_SECONDS) -> None:
+        self._recent = recent
+        self._heard_at: Optional[float] = None
+
+    def update(self, playing: bool, now: float) -> bool:
+        if playing:
+            self._heard_at = now
+        return self._heard_at is not None and now - self._heard_at < self._recent
+
 #: How long to stop trying Deepgram after every attempt has failed.
 #:
 #: Deliberately short. The cooldown exists only to stop a burst of turns each
@@ -462,8 +485,26 @@ async def _relay_turns(
 
             await websocket.send_json(payload)
 
+    async def pump_media() -> None:
+        """Server -> browser: whether another app is audible, on change."""
+        from openjarvis.speech.wake_word_verify import media_is_playing
+
+        recency = MediaRecency()
+        told: Optional[bool] = None
+        while True:
+            try:
+                playing = await asyncio.to_thread(media_is_playing)
+            except Exception:  # noqa: BLE001 -- the meter is optional
+                playing = False
+            audible = recency.update(playing, time.monotonic())
+            if audible != told:
+                await websocket.send_json({"type": "Media", "audible": audible})
+                told = audible
+            await asyncio.sleep(MEDIA_POLL_SECONDS)
+
     audio_task = asyncio.create_task(pump_audio())
     events_task = asyncio.create_task(pump_events())
+    media_task = asyncio.create_task(pump_media())
     try:
         done, pending = await asyncio.wait(
             {audio_task, events_task}, return_when=asyncio.FIRST_COMPLETED
@@ -482,7 +523,7 @@ async def _relay_turns(
         pass
     finally:
         activity.flux_transmitting(False)
-        for task in (audio_task, events_task):
+        for task in (audio_task, events_task, media_task):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task

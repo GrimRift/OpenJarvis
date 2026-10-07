@@ -5,6 +5,7 @@ import { getBase } from '../lib/api';
 import type { FluxWord, SpeakerCheck } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
 import { openMicrophone, type MicChoice } from '../lib/mic-device';
+import { voiceOverSage } from '../lib/voice-duck';
 import {
   SPEAKING_MAX_GAIN,
   adaptFloor,
@@ -129,6 +130,11 @@ export interface UseFluxSpeechOptions {
   ) => void;
   onTurnResumed?: (turnIndex: number) => void;
   /**
+   * The user's voice is in the microphone while Sage speaks and no other
+   * app is audible (lib/voice-duck.ts). Called on every such frame.
+   */
+  onVoiceOverSage?: () => void;
+  /**
    * Flux cannot be used, or failed mid-session. `audio` carries whatever of
    * the current turn was captured so the caller can transcribe it locally
    * instead of losing the utterance.
@@ -154,6 +160,8 @@ export type FluxAction =
   | { kind: 'ready' }
   | { kind: 'unavailable'; reason: string }
   | { kind: 'turnStarted'; turnIndex: number }
+  /** Whether another app (a video, music) has been audible lately. */
+  | { kind: 'media'; audible: boolean }
   /**
    * A partial transcript of the turn in progress. Nothing in the UI shows
    * it; it exists so barge-in can count words while Sage is speaking.
@@ -249,6 +257,7 @@ export function interpretFluxMessage(
   if (kind === 'FluxUnavailable' || kind === 'FluxError') {
     return { kind: 'unavailable', reason: String(data.reason ?? 'Flux unavailable') };
   }
+  if (kind === 'Media') return { kind: 'media', audible: data.audible === true };
   if (kind !== 'TurnInfo') return { kind: 'ignore' };
 
   const turnIndex = Number(data.turn_index ?? 0);
@@ -375,6 +384,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const noiseRef = useRef(0);
   /** Whether Sage's own voice is playing right now. */
   const speakingRef = useRef(false);
+  /** Another app has been audible lately (the server's word for it). */
+  const mediaAudibleRef = useRef(false);
   const manualGainRef = useRef(1);
   const streamRef = useRef<MediaStream | null>(null);
   const pendingRef = useRef<number[]>([]);
@@ -484,6 +495,12 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         case 'turnStarted':
           voiceTrace('flux.startOfTurn', { turn: action.turnIndex });
           cb.onTurnStarted?.(action.turnIndex);
+          break;
+        case 'media':
+          if (action.audible !== mediaAudibleRef.current) {
+            voiceTrace('flux.media', { audible: action.audible });
+          }
+          mediaAudibleRef.current = action.audible;
           break;
         case 'update':
           cb.onUpdate?.(action.transcript, action.turnIndex, action.words, {
@@ -643,6 +660,11 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // estimate may move while that is the dominant sound; the audio is
       // still SENT at its true level, so a real interruption still lands.
       const sageSpeaking = speakingRef.current;
+      // A video's voice is as loud as the user's and echo cancellation
+      // does not know it, so with one audible the reply never dips.
+      if (sageSpeaking && !mediaAudibleRef.current && voiceOverSage(raw, autoGainRef.current)) {
+        optsRef.current.onVoiceOverSage?.();
+      }
       if (!sageSpeaking) {
         // Sage's own voice is not the room, and must not teach the gain
         // what "loud" means -- so neither estimate moves while it plays.

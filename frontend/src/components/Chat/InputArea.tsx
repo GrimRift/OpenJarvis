@@ -349,6 +349,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     speak: speakStreaming,
     stop: stopSpeaking,
     unlock: unlockSpeech,
+    duck: duckSpeech,
   } = useStreamingTts();
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
@@ -2398,6 +2399,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     onTurnResumed: () => {
       // The speaker carried on; the server has already discarded its
       // speculative work. Nothing was shown here, so nothing to undo.
+    },
+    // Echo cancellation chops a word said over the reply; with the reply
+    // turned down the next one arrives whole (lib/voice-duck.ts). Only a
+    // dip: whether to stop is still barge-in's decision, from words.
+    onVoiceOverSage: () => {
+      if (duckSpeech()) voiceTrace('barge.duck');
     },
     onUnavailable: handleFluxUnavailable,
   });
