@@ -571,6 +571,22 @@ recordBtn.addEventListener('click', async () => {
   }
   if (idx === -1) {
     recordBtn.disabled = true;
+    // Uploads need Sage's API key from this browser's storage. Opened in a
+    // browser that never ran Sage (Edge, 7 October), every take of a whole
+    // session was refused and only the status line said so. Asked with a
+    // bad label: 400 = the key works, 401/403 = it doesn't.
+    statusEl.textContent = 'Checking the connection to Sage...';
+    const headers = {};
+    const key = apiKey();
+    if (key) headers['Authorization'] = `Bearer ${key}`;
+    const check = await fetch(`${apiBase()}/v1/speech/wake-word-sample?label=check`, { method: 'POST', headers })
+      .then((r) => r.status, () => 0);
+    if (check === 401 || check === 403 || check === 0) {
+      statusEl.innerHTML = `<span class="warn">Sage won't accept recordings from this browser (${check || 'no connection'}). ` +
+        'Open this page in the browser where you have used Sage.</span>';
+      recordBtn.disabled = false;
+      return;
+    }
     statusEl.textContent = 'Requesting microphone...';
     try {
       await ensureAudio();
