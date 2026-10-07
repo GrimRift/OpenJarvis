@@ -312,7 +312,7 @@ def test_a_rise_that_never_fires_is_logged_as_a_near_miss(caplog):
     replies = _run(app, ["frame", "frame", "frame"])
     assert [r["type"] for r in replies] == ["score"] * 3
     assert _near_misses(caplog) == [
-        "Wake word near miss: peak=0.45 frames=2 over=0 warming_up=False"
+        "Wake word near miss: peak=0.45 frames=2 over=0 warming_up=False loud=0"
     ]
 
 

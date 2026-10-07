@@ -147,11 +147,18 @@ export function useWakeWord(
   onRejectedRef.current = onRejected;
   const verifyRef = useRef(verify);
   verifyRef.current = verify;
+  /** Gentle adaptive gain for what the detector hears. */
+  const wakeGainRef = useRef(1);
   const lastEnabledRef = useRef<boolean | null>(null);
   const live = enabled && armed;
   if (lastEnabledRef.current !== live) {
     lastEnabledRef.current = live;
-    voiceTrace(live ? 'wakeword.armed' : 'wakeword.disarmed');
+    // The gain with it: after a spoken "stop" the wake word felt dead (8
+    // October) while the server scored the user's "Hey Sage" low.
+    voiceTrace(
+      live ? 'wakeword.armed' : 'wakeword.disarmed',
+      live ? { gain: Number(wakeGainRef.current.toFixed(2)) } : undefined,
+    );
   }
   const armedRef = useRef(armed);
   armedRef.current = armed;
@@ -172,8 +179,6 @@ export function useWakeWord(
   // opened after the wake word can start from the phrase itself rather
   // than from the moment the greeting ended (lib/wake-follow.ts).
   const recentFramesRef = useRef<Int16Array[]>([]);
-  /** Gentle adaptive gain for what the detector hears. */
-  const wakeGainRef = useRef(1);
   const micBoostRef = useRef(micBoost);
   micBoostRef.current = micBoost;
   const suppressNoiseRef = useRef(suppressNoise);

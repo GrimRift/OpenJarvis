@@ -659,6 +659,18 @@ def _record_ws_trace(
     )
 
 
+def _frame_rms(frame: bytes) -> float:
+    """RMS of one int16 PCM frame, on the int16 scale."""
+    import array
+    import math
+
+    samples = array.array("h")
+    samples.frombytes(frame[: len(frame) - len(frame) % 2])
+    if not samples:
+        return 0.0
+    return math.sqrt(sum(s * s for s in samples) / len(samples))
+
+
 @websocket_router.websocket("/v1/speech/wake-word")
 async def wake_word_stream(websocket: WebSocket):
     """Continuous local wake-word detection.
@@ -1012,16 +1024,19 @@ async def wake_word_stream(websocket: WebSocket):
                 await asyncio.to_thread(detector.reset)
             else:
                 miss = near_miss.observe(
-                    score, warming_up=bool(getattr(detector, "warming_up", False))
+                    score,
+                    warming_up=bool(getattr(detector, "warming_up", False)),
+                    level=_frame_rms(frame),
                 )
                 if miss is not None:
                     wake_log.info(
                         "Wake word near miss: peak=%.2f frames=%d over=%d"
-                        " warming_up=%s",
+                        " warming_up=%s loud=%d",
                         miss["peak"],
                         miss["frames"],
                         miss["over"],
                         miss["warming_up"],
+                        miss["loud"],
                     )
                 await websocket.send_json({"type": "score", "value": score})
     except WebSocketDisconnect:

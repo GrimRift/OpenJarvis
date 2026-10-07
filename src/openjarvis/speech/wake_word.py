@@ -265,13 +265,20 @@ class NearMiss:
         self._frames = 0
         self._over = 0
         self._warm = False
+        self._loud = 0.0
 
-    def observe(self, score: float, *, warming_up: bool = False) -> Optional[dict]:
+    def observe(
+        self, score: float, *, warming_up: bool = False, level: float = 0.0
+    ) -> Optional[dict]:
         if score >= self._floor:
             self._peak = max(self._peak, score)
             self._frames += 1
             self._over += score > self._threshold
             self._warm = self._warm or warming_up
+            # The loudest frame the detector got (after the page's gain): a
+            # low score from a quiet arrival reads differently from a low
+            # score at full level (8 October, "dead after a stop").
+            self._loud = max(self._loud, level)
             return None
         if not self._frames:
             return None
@@ -282,6 +289,7 @@ class NearMiss:
             # row, or only while warming up.
             "over": self._over,
             "warming_up": self._warm,
+            "loud": round(self._loud),
         }
         self.cancel()
         return miss
