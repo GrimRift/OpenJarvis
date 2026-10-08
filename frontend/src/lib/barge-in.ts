@@ -403,6 +403,20 @@ export function isMediaSpeech(
 }
 
 /**
+ * Whether an "unsure" turn heard over Sage leans clearly to Sage's voice.
+ *
+ * 8 October: "What is this?" (user 0.606, Sage 0.707) was Sage's own reply
+ * coming back through the speakers, judged by its words as an addition, and
+ * Sage answered a question nobody asked. The user's real words over Sage
+ * leaned Sage by at most 0.05 that morning ("Stop." 0.674 / 0.727), so the
+ * same margin as a video's voice (MEDIA_VOICE_MARGIN) separates them.
+ */
+export function leansSage(speaker: SpeakerCheck | undefined): boolean {
+  if (!speaker || speaker.verdict !== 'unsure' || speaker.sage === null) return false;
+  return speaker.sage - speaker.user >= MEDIA_VOICE_MARGIN;
+}
+
+/**
  * Whether a media tool's end means nothing started playing.
  *
  * The page treats a turn as a media turn from the tool's START (a play that

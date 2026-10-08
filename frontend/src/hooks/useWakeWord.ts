@@ -480,9 +480,15 @@ export function useWakeWord(
           // gently: its threshold was tuned on unboosted audio, so range
           // here is bought with false fires.
           if (carriesSound(chunk)) {
-            wakeGainRef.current = nextGain(wakeGainRef.current, frameRms(chunk), {
-              max: wakeGainCeiling(micBoostRef.current),
-            });
+            // Only while armed: paused, the mic hears a conversation -- a
+            // "stop" said at 1 cm over Sage took the gain from ~6x to 1.2x
+            // and the next "Hey Sage"s went unheard (8 October, re-armed
+            // at 1.19, 1.37, 1.54 after two stops).
+            if (armedRef.current) {
+              wakeGainRef.current = nextGain(wakeGainRef.current, frameRms(chunk), {
+                max: wakeGainCeiling(micBoostRef.current),
+              });
+            }
             ws.send(applyGain(frame, wakeGainRef.current).buffer);
             if (Date.now() - savedAt > 5000) {
               savedAt = Date.now();

@@ -391,3 +391,22 @@ describe('a refused media tool', () => {
     expect(mediaToolRefused(true, 'Playing.')).toBe(false);
   });
 });
+
+describe('an unsure turn over Sage', () => {
+  const check = (verdict: 'user' | 'sage' | 'unsure', user: number, sage: number) => ({
+    verdict,
+    user,
+    sage,
+    seconds: 2,
+  });
+
+  it('is Sage when it leans clearly to Sage', async () => {
+    const { leansSage } = await import('./barge-in');
+    // 8 October: "What is this?" was Sage's own reply through the speakers.
+    expect(leansSage(check('unsure', 0.606, 0.707))).toBe(true);
+    // The user's real "Stop." over Sage that morning.
+    expect(leansSage(check('unsure', 0.674, 0.727))).toBe(false);
+    expect(leansSage(check('user', 0.6, 0.75))).toBe(false);
+    expect(leansSage(undefined)).toBe(false);
+  });
+});

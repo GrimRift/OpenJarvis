@@ -61,6 +61,7 @@ import {
   isLoopedBack,
   isMediaSpeech,
   mediaToolRefused,
+  leansSage,
   isStopCommand,
   judge,
   STOP_ECHO_WINDOW_CHARS,
@@ -2002,8 +2003,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           !over.removed &&
           lastVerdict?.decision === 'reject' &&
           lastVerdict.reason !== 'low-confidence';
+        // Unsure but clearly nearer Sage's voice is Sage, too ("What is
+        // this?", 8 October, answered as the user's question).
+        const heardSpeaker = useAppStore.getState().settings.recogniseMyVoice
+          ? detail?.speaker
+          : undefined;
         const echo =
           voice === 'sage' ||
+          leansSage(heardSpeaker) ||
           (voice !== 'user' && (partialSaidEcho || isEchoOf(heard, spokenTextRef.current)));
         if (spoken && !echo && !isIdleSpeech(spoken)) {
           bargeVerdictRef.current = null;
