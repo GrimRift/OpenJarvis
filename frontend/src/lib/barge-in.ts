@@ -602,6 +602,21 @@ export function isStopCommand(transcript: string): boolean {
   return words.every((w) => vocab.has(w));
 }
 
+/**
+ * Whether a stop phrase heard at the end of a turn is Sage's own voice.
+ *
+ * Only if Sage itself said a stop word just now: on 8 October the user's
+ * "Can you stop?" was dropped as echo because "can" and "you" were in
+ * Sage's last sentence (two of three words, in order), was then sent as a
+ * question, and Sage went quiet for 30 minutes instead of stopping.
+ */
+export function isStopEcho(spoken: string, tail: string): boolean {
+  const said = tail.toLowerCase();
+  if (!/\b(stop|wait|hold on|hang on|pause|enough|shut up|quiet)\b/.test(said)) return false;
+  const heard = spoken.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: 1 }));
+  return isEchoOf(heard, tail);
+}
+
 /** Between the question and words added while Sage prepared the answer.
  * Must match server/addressee.py AMEND_SEPARATOR, which the note names. */
 export const AMEND_SEPARATOR = '\n\n(Then, while you were answering:) ';

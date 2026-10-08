@@ -418,3 +418,14 @@ describe('an unsure turn over Sage', () => {
     expect(leansSage(undefined)).toBe(false);
   });
 });
+
+describe('a stop heard at the end of a turn', () => {
+  it('is echo only if Sage itself just said a stop word', async () => {
+    const { isStopEcho } = await import('./barge-in');
+    // 8 October: Sage's sentence had "can" and "you", never "stop".
+    const said = 'If you can, leave around 7 AM tomorrow, when you can expect little rain.';
+    expect(isStopEcho('Can you stop?', said)).toBe(false);
+    // Sage saying "stop" itself and hearing it back is still echo.
+    expect(isStopEcho('you can stop', 'You can stop the timer whenever you like.')).toBe(true);
+  });
+});

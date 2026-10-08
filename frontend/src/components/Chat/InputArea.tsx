@@ -62,6 +62,7 @@ import {
   isMediaSpeech,
   mediaToolRefused,
   leansSage,
+  isStopEcho,
   isStopCommand,
   judge,
   STOP_ECHO_WINDOW_CHARS,
@@ -1967,7 +1968,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // Sage's own voice (24 September, "stop" said three or four times).
         const tail = spokenTextRef.current.slice(-STOP_ECHO_WINDOW_CHARS);
         const heard = spoken.split(/\s+/).filter(Boolean).map((word) => ({ word, confidence: 1 }));
-        if (isStopCommand(spoken) && !isEchoOf(heard, tail)) {
+        if (isStopCommand(spoken) && !isStopEcho(spoken, tail)) {
           voiceTrace('barge.stopAtEnd', { chars: spoken.length });
           stoppedByVoiceAtRef.current = Date.now();
           holdMedia('duck');
