@@ -171,12 +171,30 @@ def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^a-z']+", text.lower()) if t]
 
 
+#: Words that may come just before the name while media plays: the hey-words
+#: plus the greetings the user really said over music ("Hello Sage", "Good
+#: morning Sage", 22-30 September).
+_GREETING = _HEY | {"hello", "morning", "evening", "afternoon"}
+
+
 def _named_at_the_end(words: list[str]) -> bool:
-    """The strict rule: the name spelt out, near the end of a short line."""
+    """The strict rule: "sage" itself, right after a greeting, near the end
+    of a short line.
+
+    The name alone near the end was not enough: on 8 October a Kurzgesagt
+    video woke Sage three times in five minutes -- "I'm gonna have a day
+    with Sage.", "It's a secret to Sage.", "Let's set the stage." -- and
+    its narration was then answered as the user's request. Of 100 strict
+    accepts in the trace, every "Hey/Hi/Thanks/Hello/Good morning Sage"
+    passes this; the video lines, "This is my favorite stage." and
+    "Thanks for watching Sage..." do not.
+    """
     if len(words) > _STRICT_MAX_WORDS or _OUTRO.search(" ".join(words)):
         return False
-    last = max((i for i, w in enumerate(words) if w in _SAGE), default=-1)
-    return last >= 0 and len(words) - 1 - last <= _STRICT_MAX_AFTER_NAME
+    last = max((i for i, w in enumerate(words) if w == "sage"), default=-1)
+    if last < 0 or len(words) - 1 - last > _STRICT_MAX_AFTER_NAME:
+        return False
+    return any(words[i] in _GREETING for i in (last - 1, last - 2) if i >= 0)
 
 
 def heard_wake_phrase(

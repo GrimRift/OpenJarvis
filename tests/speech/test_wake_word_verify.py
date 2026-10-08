@@ -273,24 +273,25 @@ class TestTheShapeNeedsAHeyLead:
         rarely the word."""
         yes = [
             "Hey Sage.",
-            "hey stage",
             "Thank you, Sage.",
             "And Sage.",
             "In the Sage.",
         ]
         for said in yes:
             assert heard_wake_phrase(said, strict=True), said
-        for said in ["hazage", "Easy", "Peace English.", "Peace in you."]:
+        # "stage" no longer stands in for the name with media on: a video
+        # said "Let's set the stage." and woke Sage (8 October).
+        for said in ["hazage", "Easy", "Peace English.", "Peace in you.", "hey stage"]:
             assert not heard_wake_phrase(said, strict=True), said
 
     @pytest.mark.parametrize(
         "text",
         [
             "Hey Sage. What's up?",
-            "Sage, S-H.",
             "Hello Sage. Hello.",
             "Good morning Sage. Good morning Sage.",
-            "All right, thanks for coming, Sage.",
+            "Good evening, Sage.",
+            "Hi Sage.",
         ],
     )
     def test_strict_keeps_real_takes_heard_over_media(self, text):
@@ -299,6 +300,15 @@ class TestTheShapeNeedsAHeyLead:
     @pytest.mark.parametrize(
         "text",
         [
+            # A Kurzgesagt video, 8 October: all three woke Sage and its
+            # narration was answered as the user's request. The name alone
+            # near the end is no longer enough; it must follow a greeting.
+            "I'm gonna have a day with Sage.",
+            "It's a secret to Sage.",
+            "Let's set the stage.",
+            # Given up with them: the same shape as the video's lines.
+            "Sage, S-H.",
+            "All right, thanks for coming, Sage.",
             # A video, 6 October 2026: both opened the mic.
             "Let's see until the second stage of the body.",
             "Thanks for watching Sage and ourselves. Don't forget to "
