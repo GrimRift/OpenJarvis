@@ -61,6 +61,7 @@ import {
   isLoopedBack,
   isMediaSpeech,
   mediaToolRefused,
+  startsMedia,
   leansSage,
   isStopEcho,
   isStopCommand,
@@ -101,8 +102,6 @@ import type {
   ToolCallInfo,
 } from '../../types';
 
-/** Tools that start a video playing (see mediaTurnRef). */
-const MEDIA_TOOLS = new Set(['youtube_play', 'netflix_play']);
 
 /** A diagram, a generated picture or the weather panel is over the app ("close it" applies). */
 function overlayOpen(): boolean {
@@ -314,6 +313,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
    *  listened over, and the mic does not reopen after it: the wake word
    *  starts the next turn. Cleared when the next turn is sent. */
   const mediaTurnRef = useRef(false);
+  // The tool calls this turn that started media (startsMedia).
+  const mediaStartIdsRef = useRef(new Set<string>());
   // Barge-in (lib/barge-in.ts). While a voice reply plays the Flux turn is
   // kept open so the user can talk over it; `bargeTriggeredRef` records
   // that this turn cut the reply, which is what separates the user's
@@ -1212,7 +1213,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             // Set as the tool starts, not when it succeeds: a play that ran
             // past its time limit was reported failed and played anyway, and
             // its sound was answered (29 September).
-            if (MEDIA_TOOLS.has(data.tool)) {
+            if (startsMedia(data.tool, data.arguments)) {
+              mediaStartIdsRef.current.add(tc.id);
               mediaTurnRef.current = true;
               voiceTrace('media.started', { tool: data.tool });
             }
@@ -1238,7 +1240,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               tc.latency = data.latency;
               tc.result = data.result;
               // Nothing plays after a refusal: listen for "stop" again.
-              if (MEDIA_TOOLS.has(data.tool) && mediaToolRefused(!!data.success, data.result)) {
+              if (mediaStartIdsRef.current.has(tc.id) && mediaToolRefused(!!data.success, data.result)) {
                 mediaTurnRef.current = false;
                 voiceTrace('media.refused', { tool: data.tool });
               }

@@ -429,3 +429,15 @@ describe('a stop heard at the end of a turn', () => {
     expect(isStopEcho('you can stop', 'You can stop the timer whenever you like.')).toBe(true);
   });
 });
+
+describe('tools that start media', () => {
+  it('include a Spotify song, not other Spotify actions', async () => {
+    const { startsMedia } = await import('./barge-in');
+    expect(startsMedia('youtube_play', {})).toBe(true);
+    expect(startsMedia('spotify_control', { action: 'play', query: 'Daylight' })).toBe(true);
+    expect(startsMedia('spotify_control', '{"action": "play_playlist"}')).toBe(true);
+    expect(startsMedia('spotify_control', { action: 'pause' })).toBe(false);
+    expect(startsMedia('spotify_control', { action: 'status' })).toBe(false);
+    expect(startsMedia('weather', {})).toBe(false);
+  });
+});

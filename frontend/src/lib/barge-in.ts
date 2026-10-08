@@ -416,6 +416,29 @@ export function leansSage(speaker: SpeakerCheck | undefined): boolean {
   return speaker.sage - speaker.user >= MEDIA_VOICE_MARGIN;
 }
 
+/** Spotify actions that start music playing. */
+const SPOTIFY_PLAY_ACTIONS = new Set(['play', 'play_playlist', 'play_liked', 'next', 'previous']);
+
+/**
+ * Whether this tool call starts media that the room will hear: a video,
+ * or a song. Spotify was missing (8 October): a song Sage started played
+ * into the mic while Sage still listened, unlike a YouTube video.
+ */
+export function startsMedia(tool: string, args: unknown): boolean {
+  if (tool === 'youtube_play' || tool === 'netflix_play') return true;
+  if (tool !== 'spotify_control') return false;
+  let parsed: unknown = args;
+  if (typeof args === 'string') {
+    try {
+      parsed = JSON.parse(args);
+    } catch {
+      return false;
+    }
+  }
+  const action = (parsed as { action?: unknown } | null)?.action;
+  return typeof action === 'string' && SPOTIFY_PLAY_ACTIONS.has(action.trim().toLowerCase());
+}
+
 /**
  * Whether a media tool's end means nothing started playing.
  *
