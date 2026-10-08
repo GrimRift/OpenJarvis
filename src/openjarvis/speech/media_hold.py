@@ -30,8 +30,10 @@ logger = logging.getLogger(__name__)
 
 #: Share of its own volume an app keeps while held. Lower than the 35% the
 #: server-spoken announcements use: here the point is a clean mic, not only
-#: an audible voice.
-LEVEL = 0.25
+#: an audible voice. 25% until 8 October: after a "Hey Sage" over a
+#: Kurzgesagt video, Deepgram still took the narration at 25% as the user's
+#: request ("Do you not twitch twitch still?"); the user chose 10%.
+LEVEL = 0.10
 #: A hold the page never released (closed mid-exchange, server error) lets
 #: go on its own after this long, so music is not left quiet for good.
 HOLD_MAX_SECONDS = 600.0
