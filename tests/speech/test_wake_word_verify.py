@@ -75,6 +75,12 @@ class TestRing:
             assert f.getnframes() == 1600
 
 
+@pytest.fixture(autouse=True)
+def _no_faint_floor(monkeypatch):
+    """Most tests feed silence; the clear-speech floor has its own test."""
+    monkeypatch.setattr("openjarvis.speech.wake_word_verify.QUIET_CLEAR_RMS", 0.0)
+
+
 def _voice(rms: float, seconds: float = 2.0) -> bytes:
     """A steady tone at *rms* of full scale, as 16 kHz int16 PCM."""
     import math as _math
@@ -474,3 +480,17 @@ def test_an_early_check_beside_a_confirmed_one_is_kept_as_early(tmp_path, monkey
     assert any("_rejected_something_else" in n for n in names)
     assert any("_early_that_s_the_only" in n for n in names)
     assert any("_ok_hey_sage" in n for n in names)
+
+
+def test_a_faint_clear_take_is_too_quiet(monkeypatch):
+    """8 October: a TikTok on a phone 2 m away woke Sage four times, the
+    last at a loudest 0.023 ("Yes, yes, yes."). The user's quietest real
+    "Hey Sage" on the labelled sets read 0.027; the floor sits between."""
+    from openjarvis.speech import wake_word_verify as wv
+
+    monkeypatch.setattr(wv, "QUIET_CLEAR_RMS", 0.025)
+    verifier = WakeWordVerifier(_Backend("Hey Sage."))
+    faint = asyncio.run(verifier.verify(_voice(0.02)))
+    assert not faint.confirmed and faint.note == "too quiet"
+    quietest_real = asyncio.run(verifier.verify(_voice(0.027)))
+    assert quietest_real.confirmed and quietest_real.note == ""

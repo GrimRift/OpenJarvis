@@ -151,6 +151,13 @@ MUFFLED_NO_SPEECH = 0.45
 #: to drop both. Real firings kept that day were 0.105 and louder; the
 #: quietest recorded muffled take that still passes read 0.085.
 QUIET_MUFFLED_RMS = 0.05
+#: The same floor for a CLEAR transcript, set just under the user's quietest
+#: real "Hey Sage" (8 October: 0.027, raw PD100X leaning back, of 164 clear
+#: accepts on the labelled sets). A TikTok on the user's phone 2 m away woke
+#: Sage four times in 90 minutes -- "Thank you, Sage, for listening to this
+#: music series.", "Yes, yes, yes." at 0.023 -- lifted by the wake gain and
+#: filled in by the "Hey Sage." prompt. The user chose the cut-off.
+QUIET_CLEAR_RMS = 0.025
 
 
 #: Strict mode (another app playing) caps on the transcript. Every real take
@@ -603,11 +610,21 @@ class WakeWordVerifier:
             named = heard_wake_phrase(heard, strict=True, muffled=muffled)
             strict = bool(await strict()) if relaxed != named else False
         ms = int((time.perf_counter() - started) * 1000)
-        quiet = muffled and loudest_rms(pcm) < QUIET_MUFFLED_RMS
+        loudest = loudest_rms(pcm)
+        quiet = muffled and loudest < QUIET_MUFFLED_RMS
+        faint = not muffled and loudest < QUIET_CLEAR_RMS
         verdict = Verdict(
-            not quiet and heard_wake_phrase(heard, strict=strict, muffled=muffled),
+            not quiet
+            and not faint
+            and heard_wake_phrase(heard, strict=strict, muffled=muffled),
             heard,
-            "muffled, too quiet" if quiet else "muffled" if muffled else "",
+            "muffled, too quiet"
+            if quiet
+            else "too quiet"
+            if faint
+            else "muffled"
+            if muffled
+            else "",
             ms,
             strict,
             wait_ms,
