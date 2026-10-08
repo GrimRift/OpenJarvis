@@ -57,9 +57,70 @@ def _arm_timer() -> None:
     _timer.start()
 
 
-def duck(level: float = LEVEL) -> List[str]:
+#: How often a held exchange looks for an app that started playing after it
+#: began. 8 October: Sage started a YouTube video while still answering, an
+#: ad played at full volume during the answer, and the mic could take it
+#: for the user's next words -- the hold only knew the apps playing when it
+#: started.
+WATCH_SECONDS = 1.0
+#: Browser players the hold PAUSED at a "Hey Sage" (resumed at release).
+_hold_paused: List[str] = []
+_watcher: Any = None
+
+
+def duck(level: float = LEVEL, *, pause_video: bool = False) -> List[str]:
     """Turn down every other app playing now; returns their names. An app
-    already turned down by this hold stays where it is."""
+    already turned down by this hold stays where it is.
+
+    ``pause_video`` (a confirmed "Hey Sage") pauses a browser's player
+    instead: at 10% a Kurzgesagt narration was still taken as the user's
+    request (8 October), and the user chose pausing for videos, the volume
+    for music. While held, apps that start playing later are turned down
+    too (WATCH_SECONDS)."""
+    if pause_video and sys.platform == "win32":
+        with _lock:
+            try:
+                for app in _run(_pause("video")):
+                    if app not in _hold_paused:
+                        _hold_paused.append(app)
+                if _hold_paused:
+                    logger.info("Video paused for the user: %s", _hold_paused)
+            except Exception:  # noqa: BLE001
+                logger.debug("Video pause for the hold unavailable", exc_info=True)
+    names = _duck(level, arm=True)
+    _start_watcher(level)
+    return names
+
+
+def _start_watcher(level: float) -> None:
+    global _watcher
+    with _lock:
+        if _watcher is not None and _watcher.is_alive():
+            return
+        stop = threading.Event()
+
+        def watch() -> None:
+            while not stop.wait(WATCH_SECONDS):
+                with _lock:
+                    if _watcher is None or _watcher.stop is not stop:
+                        return
+                _duck(level, arm=False)
+
+        thread = threading.Thread(target=watch, name="media-hold-watch", daemon=True)
+        thread.stop = stop  # type: ignore[attr-defined]
+        _watcher = thread
+        thread.start()
+
+
+def _stop_watcher() -> None:
+    global _watcher
+    with _lock:
+        if _watcher is not None:
+            _watcher.stop.set()
+            _watcher = None
+
+
+def _duck(level: float, *, arm: bool) -> List[str]:
     from openjarvis.speech import ducking
 
     with _lock:
@@ -83,7 +144,7 @@ def duck(level: float = LEVEL) -> List[str]:
                 ducking._remember([(n, o) for _, n, o in _ducked])
                 ducking._fade(lowered, ducking.DEFAULT_FADE_MS)
                 logger.info("Media turned down for the user: %s", names)
-            if _ducked:
+            if _ducked and (arm or names):
                 _arm_timer()
         except Exception:  # noqa: BLE001
             logger.debug("Media duck unavailable", exc_info=True)
@@ -95,10 +156,19 @@ def release() -> List[str]:
     from openjarvis.speech import ducking
 
     global _timer
+    _stop_watcher()
     with _lock:
         if _timer is not None:
             _timer.cancel()
             _timer = None
+        if _hold_paused and sys.platform == "win32":
+            try:
+                resumed = _run(_play("video", list(_hold_paused)))
+                if resumed:
+                    logger.info("Video resumed: %s", resumed)
+            except Exception:  # noqa: BLE001
+                logger.debug("Video resume after the hold failed", exc_info=True)
+        _hold_paused.clear()
         restored: List[str] = []
         if _ducked:
             try:
@@ -201,6 +271,11 @@ def pause_for_user(what: str = "all") -> List[str]:
         except Exception:  # noqa: BLE001
             logger.debug("Media pause unavailable", exc_info=True)
             return []
+        # A video the hold paused and the user now asks to pause stays
+        # paused: it is theirs now, not the hold's to resume.
+        for app in [a for a in _hold_paused if _wanted(a, what)]:
+            _hold_paused.remove(app)
+            paused.append(app)
         for app in paused:
             if app not in _user_paused:
                 _user_paused.append(app)
@@ -222,6 +297,8 @@ def resume_for_user(what: str = "all") -> List[str]:
         for app in resumed:
             if app in _user_paused:
                 _user_paused.remove(app)
+            if app in _hold_paused:
+                _hold_paused.remove(app)
         return resumed
 
 

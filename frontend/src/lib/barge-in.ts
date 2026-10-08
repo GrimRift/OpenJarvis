@@ -590,6 +590,10 @@ export function isStopCommand(transcript: string): boolean {
     .split(/\s+/)
     .filter(Boolean);
   if (words.length === 0 || words.length > 8) return false;
+  // Up to four words ending in "stop" (the user's choice, 8 October):
+  // "can you stop" came back as "and you stop" and was not a stop, and it
+  // took three more tries.
+  if (words.length <= 4 && words[words.length - 1] === 'stop') return true;
   const text = words.join(' ');
   if (!/\b(stop|wait|hold on|hang on|pause|enough|shut up|quiet)\b/.test(text)) return false;
   // Every word must belong to the stop vocabulary: "stop and tell me the

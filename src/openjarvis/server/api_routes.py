@@ -998,12 +998,16 @@ async def wake_word_stream(websocket: WebSocket):
                     }
                 )
                 # The user is about to speak: turn down what plays (any app)
-                # so their words reach the mic clearer (speech.media_hold).
+                # so their words reach the mic clearer (speech.media_hold);
+                # a video is paused -- its narration was taken as the
+                # request even at 10% (8 October).
                 if verdict is not None and verdict.confirmed:
+                    import functools
+
                     from openjarvis.speech import media_hold
 
                     asyncio.get_running_loop().run_in_executor(
-                        None, media_hold.duck
+                        None, functools.partial(media_hold.duck, pause_video=True)
                     )
                 # A "Hey Sage" confirmed by its words is the user's voice.
                 # Not while other audio plays (strict), nor a muffled one.

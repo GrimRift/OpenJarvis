@@ -176,6 +176,14 @@ describe('isStopCommand', () => {
     }
   });
 
+  it('takes up to four words ending in stop as a stop', () => {
+    // 8 October: "can you stop" came back as "and you stop".
+    for (const said of ['and you stop', 'Can you stop?', 'please just stop', 'you stop']) {
+      expect(isStopCommand(said), said).toBe(true);
+    }
+    expect(isStopCommand('I think you should stop')).toBe(false); // five words
+  });
+
   it('is not a stop when there is a question in it', () => {
     for (const said of ['stop and tell me the weather', 'wait, make it shorter', 'no, the other one', 'stop, what about tomorrow']) {
       expect(isStopCommand(said), said).toBe(false);

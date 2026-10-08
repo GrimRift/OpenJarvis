@@ -72,6 +72,9 @@ def _no_small_model(monkeypatch):
     # The frames here are near-silent placeholders, not voices: the floor
     # for faint clear takes is tested in tests/speech.
     monkeypatch.setattr("openjarvis.speech.wake_word_verify.QUIET_CLEAR_RMS", 0.0)
+    # A confirmed wake pauses videos and turns apps down: never the
+    # machine's real ones from a test run.
+    monkeypatch.setattr("openjarvis.speech.media_hold.duck", lambda *a, **k: [])
 
 
 def _app(heard, verify="local"):

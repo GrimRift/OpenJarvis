@@ -162,3 +162,41 @@ def test_sage_app_is_never_ducked():
     app = _P("sage-desktop.exe")
     assert _is_sage_app(_P("msedgewebview2.exe", [app, _P("explorer.exe")]))
     assert not _is_sage_app(_P("opera.exe", [_P("explorer.exe")]))
+
+
+def test_hey_sage_pauses_the_video_and_turns_the_music_down(apps, players):
+    # 8 October: at 10% a Kurzgesagt narration still became the request.
+    opera_volume, spotify_volume = apps
+    spotify, opera = players
+    media_hold.duck(pause_video=True)
+    assert not opera.playing and spotify.playing
+    assert spotify_volume.SimpleAudioVolume.level == pytest.approx(media_hold.LEVEL)
+    media_hold.release()
+    assert opera.playing
+    assert spotify_volume.SimpleAudioVolume.level == pytest.approx(1.0)
+
+
+def test_a_video_the_user_asks_to_pause_stays_paused(apps, players):
+    _opera_volume, _spotify_volume = apps
+    _spotify, opera = players
+    media_hold.duck(pause_video=True)
+    media_hold.pause_for_user("video")  # "pause the video", said to Sage
+    media_hold.release()
+    assert not opera.playing
+
+
+def test_an_app_that_starts_during_the_hold_is_turned_down(apps, monkeypatch):
+    # An ad at full volume in a video Sage had just started, while it was
+    # still answering (8 October).
+    import time
+
+    opera, spotify = apps
+    monkeypatch.setattr(media_hold, "WATCH_SECONDS", 0.05)
+    sessions = [("Spotify.exe", spotify)]
+    monkeypatch.setattr(ducking, "_sessions", lambda active_only=True: sessions)
+    media_hold.duck()
+    sessions.append(("opera.exe", opera))
+    time.sleep(0.3)
+    assert opera.SimpleAudioVolume.level == pytest.approx(0.8 * media_hold.LEVEL)
+    media_hold.release()
+    assert opera.SimpleAudioVolume.level == pytest.approx(0.8)
