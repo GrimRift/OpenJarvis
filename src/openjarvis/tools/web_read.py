@@ -235,7 +235,7 @@ class WebReadTool(BaseTool):
 
         def one(url: str) -> ToolResult:
             return context.copy().run(
-                WebReadTool(self._allowed_dirs)._read_one,
+                type(self)(self._allowed_dirs)._read_one,
                 url,
                 {"url": url, "wait_for": wait_for},
             )

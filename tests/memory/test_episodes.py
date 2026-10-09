@@ -124,13 +124,18 @@ class TestStore:
         # Four days without a conversation, then "what were we working on
         # yesterday": a calendar window found nothing. The last conversations
         # are what is wanted, however long ago, and the gap is stated.
-        today = date(2026, 9, 13)
-        save_episode(Episode("2026-09-08", "tuesday work", 5, time.time()), tmp_path)
+        # Dated from today: saving prunes episodes older than its window, so a
+        # fixed 2026-09-08 was pruned once the real date passed it (9 October).
+        today = date.today()
+        last = today - timedelta(days=5)
+        weekday = last.strftime("%A")
+        episode = Episode(last.isoformat(), "earlier work", 5, time.time())
+        save_episode(episode, tmp_path)
         recent = recent_episodes(count=3, today=today, config_dir=tmp_path)
-        assert [e.day for e in recent] == ["2026-09-08"]
+        assert [e.day for e in recent] == [last.isoformat()]
         text = format_recent_days(recent, today=today)
-        assert text.startswith("Tuesday: tuesday work")
-        assert "no conversations between Tuesday and today (5 days)" in text
+        assert text.startswith(f"{weekday}: earlier work")
+        assert f"no conversations between {weekday} and today (5 days)" in text
 
     def test_today_is_never_recent(self, tmp_path: Path) -> None:
         today = date.today()

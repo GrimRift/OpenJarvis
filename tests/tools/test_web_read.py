@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from unittest.mock import patch
 
 import pytest
@@ -426,44 +427,52 @@ def test_a_long_article_mentioning_a_captcha_is_still_read():
 
 class TestReadAhead:
     """9 October: the top search results are read while the model decides,
-    so the read it asks for is already there."""
+    so the read it asks for is already there.
+
+    The class is taken from the module each time: test_tool_registration
+    reloads every tool module, and the read-ahead builds its reader from
+    the module's current class, not the one imported at the top here."""
 
     ARTICLE = ("AirPods 5 last up to 5 hours with ANC. " * 60, "AirPods 5")
 
     def test_a_read_ahead_page_is_not_fetched_again(self, monkeypatch):
-        from openjarvis.tools import web_read
+        web_read = importlib.import_module("openjarvis.tools.web_read")
 
         monkeypatch.setattr(web_read, "PREFETCH_TOP", 3)
         page_access.set_turn("airpods 5 vs airpods 4")
         page_access.allow_search_results([PAGE])
         with patch.object(
-            WebReadTool, "_fetch_static", return_value=self.ARTICLE
+            web_read.WebReadTool, "_fetch_static", return_value=self.ARTICLE
         ) as fetch:
             web_read.prefetch([PAGE])
-            result = _tool().execute(url=PAGE)
+            result = web_read.WebReadTool().execute(url=PAGE)
         assert result.success is True
         assert result.metadata["mode"] == "direct"
         assert "5 hours" in result.content
         assert fetch.call_count == 1
 
     def test_read_ahead_never_skips_the_checks(self, monkeypatch):
-        from openjarvis.tools import web_read
+        web_read = importlib.import_module("openjarvis.tools.web_read")
 
         monkeypatch.setattr(web_read, "PREFETCH_TOP", 3)
         page_access.set_turn("airpods")
-        with patch.object(WebReadTool, "_fetch_static", return_value=self.ARTICLE):
+        with patch.object(
+            web_read.WebReadTool, "_fetch_static", return_value=self.ARTICLE
+        ):
             web_read.prefetch([PAGE])
-            result = _tool().execute(url=PAGE)
+            result = web_read.WebReadTool().execute(url=PAGE)
         # Read ahead, but never returned by a search: still refused.
         assert result.success is False
         assert "only open a page you named yourself" in result.content
 
     def test_only_the_top_results_are_read_ahead(self, monkeypatch):
-        from openjarvis.tools import web_read
+        web_read = importlib.import_module("openjarvis.tools.web_read")
 
         monkeypatch.setattr(web_read, "PREFETCH_TOP", 2)
         urls = [f"https://example.org/{i}" for i in range(5)]
-        with patch.object(WebReadTool, "_fetch_static", return_value=None) as fetch:
+        with patch.object(
+            web_read.WebReadTool, "_fetch_static", return_value=None
+        ) as fetch:
             web_read.prefetch(urls)
             for url in urls:
                 web_read._take_prefetched(url)
