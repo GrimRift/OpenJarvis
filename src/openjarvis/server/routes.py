@@ -496,6 +496,8 @@ def _log_tool_timing(call: Any, result: Any, seconds: float) -> None:
             parts.append(f"host={host}")
         if metadata.get("early_search") is True:
             parts.append("early=yes")
+        if metadata.get("cached") is True:
+            parts.append("cached=yes")
         if type(metadata.get("pages_read")) is int:
             pages = len(metadata.get("urls") or [])
             parts.append(f"pages={metadata['pages_read']}/{pages}")
