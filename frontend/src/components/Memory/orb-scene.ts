@@ -76,7 +76,7 @@ const VERTEX = /* glsl */ `
   }`;
 
 const FRAGMENT = /* glsl */ `
-  uniform float uTime;
+  uniform float uTime, uFocusDim;
   varying vec3 vColor; varying vec4 vFlags; varying float vRim; varying float vPhase; varying float vBeat;
   varying float vTwinkle; varying float vStar; varying float vWave;
   void main() {
@@ -89,11 +89,12 @@ const FRAGMENT = /* glsl */ `
     float a = core + glow * 0.5;
     #ifdef SOFT
     float soft = smoothstep(0.5, 0.0, d);
+    float focusDim = mix(1.0, 0.15, uFocusDim); // a fact is open: the dust steps back
     a = soft * soft * 0.8;
     // a star: a small bright centre and a faint four-point glint
     float glint = vStar * (smoothstep(0.1, 0.0, d) * 1.6
       + (smoothstep(0.05, 0.0, abs(q.x)) + smoothstep(0.05, 0.0, abs(q.y))) * smoothstep(0.5, 0.0, d) * 0.5);
-    a = (a + glint) * vTwinkle;
+    a = (a + glint) * vTwinkle * focusDim;
     #endif
     if (vFlags.x > 0.5) {
       // Pinned: drawn ~2.2x. A hot core, soft rays turning slowly, ripples
@@ -180,7 +181,7 @@ export class OrbScene {
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
   private uniforms = {
-    uTime: { value: 0 }, uPR: { value: 1 }, uKick: { value: 1 },
+    uTime: { value: 0 }, uPR: { value: 1 }, uKick: { value: 1 }, uFocusDim: { value: 0 },
     uWaveA: { value: new THREE.Vector4(0, 0, 0, -1) }, uWaveAK: { value: new THREE.Vector4(1.35, 0.16, 0.14, 1.6) },
     uWaveB: { value: new THREE.Vector4(0, 0, 0, -1) }, uWaveBK: { value: new THREE.Vector4(2.4, 0.14, 0.07, 1.1) },
   };
@@ -189,7 +190,10 @@ export class OrbScene {
   private waveB = -1;
   private pulseFact = -1;
   private nextPulse = 0;
-  private pulseCount = 0; // pulses sent for the open fact: the first is strong
+  private pulseCount = 0;
+  // The open fact and everything its panel links to: lit, hoverable; the rest dims.
+  private focus = new Set<number>();
+  private focusLinked: number[] = []; // pulses sent for the open fact: the first is strong
   private opened = false;
   private openIn = 0; // frames until the opening wave starts
   private pointMat: THREE.ShaderMaterial;
@@ -317,6 +321,9 @@ export class OrbScene {
     this.neighbours = facts.map(() => []);
     for (const [i, j, s] of this.sim) { this.neighbours[i].push([j, s]); this.neighbours[j].push([i, s]); }
     this.selected = selectedId ? facts.findIndex((f) => f.id === selectedId) : -1;
+    this.focusLinked = this.selected >= 0 ? this.linkedIdx(this.selected) : [];
+    this.focus = new Set(this.selected >= 0 ? [this.selected, ...this.focusLinked] : []);
+    if (this.pulseFact >= 0) this.pulseFact = this.selected;
 
     this.factGeo.dispose(); this.factGeo = makePoints(Math.max(1, facts.length)); this.factPts.geometry = this.factGeo;
     this.hubGeo.dispose(); this.hubGeo = makePoints(Math.max(1, this.hubs.length)); this.hubPts.geometry = this.hubGeo;
@@ -342,6 +349,8 @@ export class OrbScene {
     this.selected = id ? this.facts.findIndex((f) => f.id === id) : -1;
     // A clicked fact pulses at once (strong), then softly every 5 s while it stays open.
     this.pulseFact = this.calm ? -1 : this.selected;
+    this.focusLinked = this.selected >= 0 ? this.linkedIdx(this.selected) : [];
+    this.focus = new Set(this.selected >= 0 ? [this.selected, ...this.focusLinked] : []);
     this.nextPulse = performance.now();
     this.pulseCount = 0;
     if (this.selected >= 0) {
@@ -369,10 +378,24 @@ export class OrbScene {
   linked(id: string): { fact: GraphFact; score: number | null }[] {
     const i = this.facts.findIndex((f) => f.id === id);
     if (i < 0) return [];
-    const near = [...this.neighbours[i]].sort((a, b) => b[1] - a[1]).map(([j, s]) => ({ fact: this.facts[j], score: s }));
-    const nearIds = new Set(near.map((n) => n.fact.id));
-    const same = this.facts.filter((f, j) => j !== i && f.topic === this.facts[i].topic && !nearIds.has(f.id)).slice(0, 4);
-    return [...near, ...same.map((fact) => ({ fact, score: null }))];
+    const score = new Map(this.neighbours[i]);
+    return this.linkedIdx(i).map((j) => ({ fact: this.facts[j], score: score.get(j) ?? null }));
+  }
+
+  /** What the panel lists for fact *i*: similar facts (best first), its line
+   * neighbours in the topic, then up to four more of the topic. */
+  private linkedIdx(i: number): number[] {
+    const out = [...this.neighbours[i]].sort((a, b) => b[1] - a[1]).map(([j]) => j);
+    const seen = new Set([i, ...out]);
+    for (const [a, b] of this.web) {
+      const j = a === i ? b : b === i ? a : -1;
+      if (j >= 0 && !seen.has(j)) { seen.add(j); out.push(j); }
+    }
+    let extra = 0;
+    this.facts.forEach((f, j) => {
+      if (extra < 4 && !seen.has(j) && f.topic === this.facts[i].topic) { seen.add(j); out.push(j); extra++; }
+    });
+    return out;
   }
 
   dispose(): void {
@@ -454,16 +477,19 @@ export class OrbScene {
   private refresh(): void {
     const g = this.factGeo;
     const sel = this.selected;
-    const near = new Set(sel >= 0 ? this.neighbours[sel].map(([j]) => j) : []);
+    const white = new THREE.Color(1, 1, 1);
     this.facts.forEach((f, k) => {
+      const lit = sel >= 0 && this.focus.has(k) && k !== sel; // linked to the open fact
       const c = this.color(f), p = this.pos[k];
+      if (lit) c.lerp(white, 0.3);
       g.getAttribute('position').setXYZ(k, p.x, p.y, p.z);
       g.getAttribute('color').setXYZ(k, c.r, c.g, c.b);
-      g.getAttribute('size').setX(k, 9);
+      g.getAttribute('size').setX(k, lit ? 11 : 9);
+      // a fact is open: everything outside it and its links fades to ~15%
       let dim = !this.visible(f) ? 1
         : this.query && !this.matches(f) ? 0.92
-        : sel >= 0 && sel !== k && !near.has(k) && f.topic !== this.facts[sel].topic ? 0.75 : 0;
-      if (!dim && CORE_TOPICS.has(f.topic) && !f.pinned && sel !== k && !this.query) dim = this.coreDim;
+        : sel >= 0 && !this.focus.has(k) ? 0.92 : 0;
+      if (!dim && sel < 0 && CORE_TOPICS.has(f.topic) && !f.pinned && !this.query) dim = this.coreDim;
       g.getAttribute('flags').setXYZW(k, f.pinned ? 1 : 0, f.isNew ? 1 : 0, dim, sel === k ? 1 : 0);
     });
     markDirty(g);
@@ -473,7 +499,7 @@ export class OrbScene {
       this.hubGeo.getAttribute('position').setXYZ(k, h.pos[0], h.pos[1], h.pos[2]);
       this.hubGeo.getAttribute('color').setXYZ(k, c.r, c.g, c.b);
       this.hubGeo.getAttribute('size').setX(k, 30 + Math.min(16, h.n / 4));
-      this.hubGeo.getAttribute('flags').setXYZW(k, 0, 0, this.hidden.has(h.region) ? 1 : this.query ? 0.9 : 0.72, 0);
+      this.hubGeo.getAttribute('flags').setXYZW(k, 0, 0, this.hidden.has(h.region) ? 1 : this.query || sel >= 0 ? 0.92 : 0.72, 0);
     });
     markDirty(this.hubGeo);
 
@@ -502,7 +528,8 @@ export class OrbScene {
         B.A.push(n / last, phase, (n + 1) / last, phase);
       }
     };
-    const push = (pts: THREE.Vector3[], c: THREE.Color, k: number) => pushTo(main, pts, c, k);
+    const rest = this.selected >= 0 ? 0.15 : 1; // links outside the open fact step back
+    const push = (pts: THREE.Vector3[], c: THREE.Color, k: number) => pushTo(main, pts, c, k * rest);
     const thin = Math.max(0.4, Math.min(1, Math.sqrt(450 / Math.max(1, this.facts.length))));
     const curveOf = (i: number, j: number) => curve(this.pos[i].toArray() as Vec3, this.pos[j].toArray() as Vec3).map(v3);
     this.curves = [];
@@ -524,9 +551,18 @@ export class OrbScene {
 
     const sel = this.selected;
     if (sel >= 0) {
+      // the open fact's links, brighter: similar ones strongest, then its
+      // line neighbours, then the rest of the topic the panel lists
       const glow = new THREE.Color(0.6, 0.95, 1);
-      for (const [j] of this.neighbours[sel]) pushTo(hi, curveOf(sel, j), glow, 1);
-      for (const [i, j] of this.web) if (i === sel || j === sel) pushTo(hi, curveOf(i, j), glow, 0.7);
+      const similar = new Set(this.neighbours[sel].map(([j]) => j));
+      const webbed = new Set(this.web.flatMap(([a, b]) => (a === sel ? [b] : b === sel ? [a] : [])));
+      const focusCurves: THREE.Vector3[][] = [];
+      for (const j of this.focusLinked) {
+        const pts = curveOf(sel, j);
+        pushTo(hi, pts, glow, similar.has(j) ? 1.5 : webbed.has(j) ? 1.1 : 0.7);
+        focusCurves.push(pts);
+      }
+      if (focusCurves.length) this.curves = focusCurves; // signals run on the open fact's links
     }
     this.hiLines = this.replaceLines(this.hiLines, hi);
   }
@@ -561,6 +597,8 @@ export class OrbScene {
     }
     this.moveSparks(dt);
     this.moveWaves(now);
+    const fd = this.uniforms.uFocusDim;
+    fd.value += ((this.selected >= 0 ? 1 : 0) - fd.value) * Math.min(1, dt * 5);
     this.controls.update();
     this.placeLabels();
     this.renderer.render(this.scene, this.camera);
@@ -583,25 +621,25 @@ export class OrbScene {
       u.uWaveB.value.set(o.x, o.y, o.z, 0);
       // radius, width, push, strength: the click itself vs. the soft repeats
       if (this.pulseCount++ === 0) u.uWaveBK.value.set(2.4, 0.14, 0.07, 1.1);
-      else u.uWaveBK.value.set(2.4, 0.14, 0.012, 0.37);
+      else u.uWaveBK.value.set(2.4, 0.14, 0.035, 0.73);
       this.waveB = now;
       this.nextPulse = now + 5000;
     }
     if (this.waveB >= 0) {
       const p = (now - this.waveB) / 1800;
       const sizes = this.factGeo.getAttribute('size');
-      const linked = this.pulseFact >= 0 ? this.neighbours[this.pulseFact] : [];
+      const linked = this.pulseFact >= 0 ? this.focusLinked : [];
       if (p >= 1) {
         this.waveB = -1; u.uWaveB.value.w = -1;
-        for (const [j] of linked) sizes.setX(j, 9);
+        for (const j of linked) sizes.setX(j, 11);
       } else {
         u.uWaveB.value.w = p;
         // its linked facts flash as the front reaches them
         const k = u.uWaveBK.value, o = u.uWaveB.value;
         const front = k.x * (1 - (1 - p) ** 2);
-        for (const [j] of linked) {
+        for (const j of linked) {
           const d = this.pos[j].distanceTo(new THREE.Vector3(o.x, o.y, o.z));
-          sizes.setX(j, 9 * (1 + (this.pulseCount > 1 ? 0.9 : 2.5) * Math.exp(-(((d - front) / 0.2) ** 2))));
+          sizes.setX(j, 11 * (1 + (this.pulseCount > 1 ? 1.6 : 2.5) * Math.exp(-(((d - front) / 0.2) ** 2))));
         }
       }
       sizes.needsUpdate = true;
@@ -688,12 +726,14 @@ export class OrbScene {
     this.idleTimer = window.setTimeout(() => { if (this.selected < 0) this.controls.autoRotate = true; }, 8000);
   }
 
-  private pick(cx: number, cy: number): number {
+  /** The fact nearest the cursor (14 px); *focusOnly*: only the open fact and its links. */
+  private pick(cx: number, cy: number, focusOnly = false): number {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const x0 = cx - rect.left, y0 = cy - rect.top, v = new THREE.Vector3();
     let best = -1, bd = 14 * 14;
     this.facts.forEach((f, k) => {
       if (!this.visible(f)) return;
+      if (focusOnly && this.selected >= 0 && !this.focus.has(k)) return;
       v.copy(this.pos[k]).project(this.camera);
       if (v.z > 1) return;
       const d = ((v.x * 0.5 + 0.5) * rect.width - x0) ** 2 + ((-v.y * 0.5 + 0.5) * rect.height - y0) ** 2;
@@ -766,7 +806,7 @@ export class OrbScene {
     const now = performance.now();
     if (now - this.lastHover < 40) return;
     this.lastHover = now;
-    const k = e.buttons ? -1 : this.pick(e.clientX, e.clientY);
+    const k = e.buttons ? -1 : this.pick(e.clientX, e.clientY, true);
     this.renderer.domElement.style.cursor = k >= 0 ? 'pointer' : 'grab';
     this.cb.onHover(k >= 0 ? this.facts[k] : null, e.clientX, e.clientY);
   };

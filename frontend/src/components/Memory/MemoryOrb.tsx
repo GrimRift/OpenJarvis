@@ -223,7 +223,7 @@ export default function MemoryOrb({ fail, focusId, onFocused }: {
       )}
       {!facts && <div className="absolute inset-0 grid place-items-center text-sm" style={{ color: faint }}>Gathering memories…</div>}
 
-      {hover && !selected && (
+      {hover && (
         <div
           className="fixed z-50 max-w-xs text-xs rounded-lg px-2.5 py-1.5 pointer-events-none"
           style={{ ...glass, left: Math.min(hover.x + 14, window.innerWidth - 330), top: hover.y + 14 }}
