@@ -28,6 +28,7 @@ import {
 } from '../../lib/link-preview';
 import { protectCurrencyFromMath } from '../../lib/currency-math';
 import { cleanCitations } from '../../lib/citations';
+import { comparisonTablesToGrids } from '../../lib/comparison-table';
 import { markdownPhotos, usePhotoViewer, type ViewerPhoto } from '../../lib/photo-viewer';
 import { hastText, keepOnOneLine } from '../../lib/table-cell';
 import type { ChatMessage } from '../../types';
@@ -152,8 +153,11 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
   // Escaped only for rendering. Copy must still yield "$200", not "\$200".
   const markdownContent = useMemo(
-    () => normaliseMathDelimiters(protectCurrencyFromMath(cleanContent)),
-    [cleanContent],
+    () =>
+      normaliseMathDelimiters(
+        protectCurrencyFromMath(comparisonTablesToGrids(cleanContent, !isLive)),
+      ),
+    [cleanContent, isLive],
   );
   const linkPreview = useMemo(() => selectLinkPreview(message), [message]);
   const otherSources = useMemo(

@@ -36,7 +36,7 @@ def test_a_comparison_gets_the_grid_hint_next_to_the_question():
         turn_context=True,
     )
     turn = [m for m in out if m.metadata.get("turn_context")]
-    assert turn and "do NOT also write a markdown table" in turn[0].content
+    assert turn and "draws it as a grid" in turn[0].content
     system = [m for m in out if m.role == Role.SYSTEM]
     assert all("This question compares options" not in m.content for m in system)
 
