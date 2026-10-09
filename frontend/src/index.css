@@ -27,6 +27,7 @@
     --color-accent-hover: #0e7490;
     --color-accent-subtle: rgba(8, 145, 178, 0.08);
     --color-accent-glow: rgba(8, 145, 178, 0.25);
+    --color-highlight: #0e7490;
 
     --color-accent-amber: #f59e0b;
     --color-accent-amber-hover: #d97706;
@@ -86,6 +87,7 @@
     --color-accent-hover: #67e8f9;
     --color-accent-subtle: rgba(34, 211, 238, 0.1);
     --color-accent-glow: rgba(34, 211, 238, 0.3);
+    --color-highlight: #8fdcec;
 
     --color-accent-amber: #f5a524;
     --color-accent-amber-hover: #fbbf24;
@@ -134,6 +136,7 @@
       --color-accent-hover: #67e8f9;
       --color-accent-subtle: rgba(34, 211, 238, 0.1);
       --color-accent-glow: rgba(34, 211, 238, 0.3);
+      --color-highlight: #8fdcec;
 
       --color-accent-amber: #f5a524;
       --color-accent-amber-hover: #fbbf24;
@@ -381,7 +384,7 @@
      text colour so it reads as a highlight, not a link. */
   .prose strong,
   .prose .sage-quote {
-    color: color-mix(in srgb, var(--color-accent) 45%, var(--color-text));
+    color: var(--color-highlight);
   }
 
   .prose a strong {
