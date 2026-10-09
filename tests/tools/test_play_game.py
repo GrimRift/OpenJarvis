@@ -176,3 +176,16 @@ class TestRouting:
 
     def test_not_offered_for_other_talk(self):
         assert "play_game" not in self._kept("what's the capital of Japan?")
+
+
+def test_a_game_left_for_half_an_hour_stops_steering_routing(tmp_path):
+    import os
+    import time
+
+    _play(action="start", game="tic tac toe")
+    assert games.in_progress()
+    old = time.time() - games.IDLE_SECONDS - 60
+    os.utime(tmp_path / "current.json", (old, old))
+    assert not games.in_progress()
+    # Still saved: the game carries on when the user comes back to it.
+    assert "1 | 2 | 3" in _play(action="show").content

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -60,8 +61,19 @@ def save(session: Optional[Session]) -> None:
         path.write_text(json.dumps(session.to_json()), encoding="utf-8")
 
 
+#: A game left this long is set aside for routing: short messages get the
+#: memory search again. The board stays saved; "let's continue the game"
+#: brings the tool back.
+IDLE_SECONDS = 30 * 60
+
+
 def in_progress() -> bool:
     """Whether a game is waiting for the user's move (for tool routing)."""
+    try:
+        if time.time() - _path().stat().st_mtime > IDLE_SECONDS:
+            return False
+    except OSError:
+        return False
     session = load()
     if session is None or session.game not in GAMES:
         return False
