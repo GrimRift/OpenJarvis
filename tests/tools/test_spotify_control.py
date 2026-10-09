@@ -5,8 +5,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from openjarvis.core.registry import ToolRegistry
+from openjarvis.core.types import ToolResult
 
 
 def test_tools_registered():
@@ -413,3 +415,30 @@ class TestPlaylistsAndLibrary:
 
         enum = SpotifyControlTool().spec.parameters["properties"]["action"]["enum"]
         assert set(enum) == _ACTIONS
+
+
+@pytest.mark.parametrize(
+    "text,opens",
+    [
+        (
+            "can you look for current steam sales, and games on sale that you"
+            " would recommend to me",
+            False,
+        ),
+        ("open spotify", True),
+        ("spotify please", True),
+        ("open that Shopee email for me", True),
+    ],
+)
+def test_open_app_only_when_the_user_asks(text, opens):
+    """10 October: asked about Steam sales, the model opened Spotify."""
+    from openjarvis.security import page_access
+    from openjarvis.tools.open_app import OpenAppTool
+
+    tool = OpenAppTool()
+    launched = ToolResult(tool_name="open_app", content="opened", success=True)
+    with patch.object(tool, "launch", return_value=launched) as launch:
+        with page_access.scope(text):
+            result = tool.execute(app="spotify")
+    assert launch.called is opens
+    assert result.success is opens

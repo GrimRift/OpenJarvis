@@ -513,6 +513,62 @@ def test_a_game_reply_is_sent_as_the_game_wrote_it():
     assert len(calls) == 1
 
 
+def test_a_game_reply_does_not_replace_a_search_turn():
+    """10 October: a stray chess start ended a Steam-sales turn with a board."""
+    from openjarvis.core.types import ToolResult
+    from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+    class Search(BaseTool):
+        @property
+        def spec(self):
+            return ToolSpec(
+                name="web_search",
+                description="search",
+                parameters={"type": "object", "properties": {}},
+            )
+
+        def execute(self, **params):
+            return ToolResult(tool_name="web_search", content="sales", success=True)
+
+    class Game(BaseTool):
+        @property
+        def spec(self):
+            return ToolSpec(
+                name="play_game",
+                description="game",
+                parameters={"type": "object", "properties": {}},
+            )
+
+        def execute(self, **params):
+            return ToolResult(
+                tool_name="play_game",
+                content="board",
+                success=True,
+                metadata={"say": "New game of chess, Sir."},
+            )
+
+    client, calls = _stream_app(
+        [Search(), Game()],
+        [
+            ("web_search", '{"query": "steam sales"}'),
+            ("play_game", '{"action": "start"}'),
+            "Here are the Steam deals.",
+        ],
+    )
+    result = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "stream": True,
+            "messages": [{"role": "user", "content": "steam sales?"}],
+        },
+    )
+    assert result.status_code == 200
+    assert "Here are the Steam deals." in result.text
+    assert "New game of chess" not in result.text
+    assert len(calls) == 3
+
+
 def test_leaked_tool_text_is_taken_back_and_answered_again():
     leak = 'assistant to=functions.play_game {"action":"move"} We accidentally output'
     from openjarvis.core.types import ToolResult

@@ -8,6 +8,7 @@ this package and one line in ``GAMES``.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -88,18 +89,49 @@ def in_progress() -> bool:
     return not GAMES[session.game].outcome(session.state).over
 
 
+_GAME_NAME = (
+    r"(?:chess|tic[\s-]?tac[\s-]?toe|tik[\s-]?tak[\s-]?toe|tictactoe|xo"
+    r"|x\s+and\s+o)"
+)
+_PLAY_WORD = (
+    r"(?:play\w*|game|games|match|round|again|start|vs|versus|against"
+    r"|with\s+me|laro|maglaro)"
+)
+#: The user asking for a game, not mentioning games. 10 October: "games on
+#: sale that you would recommend" started a chess game over the answer.
+ASKS_TO_PLAY = re.compile(
+    rf"\b{_GAME_NAME}\b(?:\W+\w+){{0,4}}?\W+{_PLAY_WORD}\b"
+    rf"|\b{_PLAY_WORD}\b(?:\W+\w+){{0,4}}?\W+{_GAME_NAME}\b"
+    r"|\bplay\w*\b(?:\W+\w+){0,4}?\W+(?:game|round|match)\b"
+    r"|\banother\s+(?:game|round|match)\b"
+    r"|\brematch\b",
+    re.IGNORECASE,
+)
+_ONLY_A_GAME_NAME = re.compile(
+    rf"^\W*(?:\w+\W+){{0,2}}?{_GAME_NAME}\W*$", re.IGNORECASE
+)
+
+
+def asks_to_play(text: str) -> bool:
+    """Whether *text* asks for a game ("let's play chess", "tic tac toe?")."""
+    text = str(text or "")
+    return bool(ASKS_TO_PLAY.search(text) or _ONLY_A_GAME_NAME.search(text))
+
+
 def use_path_for_tests(path: Optional[Path]) -> None:
     global _path_override
     _path_override = path
 
 
 __all__ = [
+    "ASKS_TO_PLAY",
     "DIFFICULTIES",
     "GAMES",
     "Game",
     "MoveError",
     "Outcome",
     "Session",
+    "asks_to_play",
     "find_game",
     "in_progress",
     "load",

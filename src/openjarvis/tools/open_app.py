@@ -9,6 +9,7 @@ strictly separate from general mouse/keyboard/screen automation.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -72,6 +73,27 @@ _APPS: Dict[str, Dict[str, Any]] = {
         "candidates": ["calc.exe"],
     },
 }
+
+
+#: Words that name each app in the user's message.
+_APP_WORDS: Dict[str, str] = {
+    "spotify": r"spotify",
+    "obsidian": r"obsidian",
+    "explorer": r"explorer|file\s+manager|files|folders?",
+    "notepad": r"notepad",
+    "calculator": r"calculator|calc",
+}
+_OPEN_VERB = re.compile(
+    r"\b(open\w*|launch\w*|start|run|bring\s+up|pull\s+up|show)\b", re.IGNORECASE
+)
+
+
+def asks_to_open(app: str, text: str) -> bool:
+    """Whether the user's *text* names *app* or asks to open something."""
+    words = _APP_WORDS.get(app, re.escape(app))
+    return bool(
+        _OPEN_VERB.search(text) or re.search(rf"\b({words})\b", text, re.IGNORECASE)
+    )
 
 
 def is_app_running(app_key: str) -> bool:
@@ -312,7 +334,25 @@ class OpenAppTool(BaseTool):
         )
 
     def execute(self, **params: Any) -> ToolResult:
+        from openjarvis.security import page_access
+
         app = str(params.get("app", "")).strip().lower()
+        asked = page_access.turn_text()
+        if app and asked and not asks_to_open(app, asked):
+            # 10 October: asked about Steam sales, the model opened Spotify.
+            return ToolResult(
+                tool_name="open_app",
+                content=(
+                    f"Not opened: the user did not ask to open {app} or any"
+                    " app. Answer their message instead."
+                ),
+                success=False,
+            )
+        return self.launch(app)
+
+    def launch(self, app: str) -> ToolResult:
+        """Open or focus *app*, for Sage's own code (no check on the turn)."""
+        app = str(app or "").strip().lower()
 
         if not app:
             return ToolResult(

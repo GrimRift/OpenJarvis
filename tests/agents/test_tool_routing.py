@@ -359,3 +359,36 @@ class TestHealthToolsOnlyWhenAsked:
         )
         assert "system_health" not in kept
         assert "apply_health_fix" not in kept
+
+
+class TestGamesOnlyWhenAskedToPlay:
+    """10 October: "games on sale" offered play_game and chess started."""
+
+    def _kept(self, text):
+        from unittest.mock import patch
+
+        schemas = ALL_SCHEMAS + [_schema("play_game")]
+        with patch(
+            "openjarvis.agents.tool_routing._game_in_progress", return_value=False
+        ):
+            return {
+                s["function"]["name"] for s in route_tools(schemas, routing_text(text))
+            }
+
+    @pytest.mark.parametrize(
+        "text", ["let's play chess", "tic tac toe?", "play a game with me", "rematch"]
+    )
+    def test_offered_when_asked(self, text):
+        assert "play_game" in self._kept(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "can you look for current steam sales, and games on sale that you"
+            " would recommend to me",
+            "what's the best move for my career?",
+            "is the board meeting today?",
+        ],
+    )
+    def test_not_for_other_messages(self, text):
+        assert "play_game" not in self._kept(text)

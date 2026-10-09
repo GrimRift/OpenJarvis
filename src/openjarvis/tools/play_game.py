@@ -18,6 +18,7 @@ from openjarvis.games import (
     GAMES,
     MoveError,
     Session,
+    asks_to_play,
     find_game,
     load,
     save,
@@ -160,6 +161,20 @@ class PlayGameTool(BaseTool):
     # -- actions ------------------------------------------------------------
 
     def _start(self, params: dict) -> ToolResult:
+        from openjarvis.security import page_access
+
+        asked = page_access.turn_text()
+        if asked and not asks_to_play(asked):
+            # 10 October: "games on sale that you would recommend" started a
+            # chess game, and its board replaced the answer.
+            return ToolResult(
+                tool_name="play_game",
+                content=(
+                    "Not started: the user did not ask to play a game. Answer"
+                    " their message instead."
+                ),
+                success=False,
+            )
         name = str(params.get("game") or "tic-tac-toe")
         game = find_game(name)
         if game is None:

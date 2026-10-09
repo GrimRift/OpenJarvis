@@ -131,12 +131,14 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             re.IGNORECASE,
         ),
     },
+    # Asking for a game, not mentioning one: "games on sale" offered it and
+    # the model started chess (10 October). Moves mid-game come in through
+    # `_game_in_progress` in `route_tools`.
     "games": {
         "tools": {"play_game"},
         "pattern": re.compile(
-            r"\b(play|playing|game|games|tic|tac|toe|tik|tak|tictactoe|chess|"
-            r"board|move|moves|square|squares|corner|center|centre|xo|"
-            r"resign|rematch|difficulty)\b",
+            r"\b(tic|tac|toe|tik|tak|tictactoe|chess|xo|resign|rematch)\b"
+            r"|\bplay\w*\b(?:\W+\w+){0,4}?\W+(game|round|match)\b",
             re.IGNORECASE,
         ),
     },

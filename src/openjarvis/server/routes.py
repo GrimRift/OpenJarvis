@@ -1908,8 +1908,11 @@ async def _handle_streaming_orchestrator(
                             for tool in active_tools
                             if (tool.get("function") or {}).get("name") != "web_read"
                         ]
+                    # Only a turn of nothing but the game: on 10 October a
+                    # stray game start ended a Steam-sales search turn, and
+                    # the board went out in place of the answer.
                     direct = _direct_reply(list(results_by_index.values()))
-                    if direct:
+                    if direct and _direct_reply(all_tool_results):
                         # The game wrote the reply (tools/play_game.py): sent
                         # as it is, with no model round to misstate the move.
                         direct_chunk = ChatCompletionChunk(

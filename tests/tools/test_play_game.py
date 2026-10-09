@@ -219,3 +219,47 @@ class TestTheReplyIsWrittenByTheGame:
         _play(action="move", move="5")
         refused = _play(action="move", move="5")
         assert refused.metadata["say"].startswith("Square 5 (the center) is already")
+
+
+class TestOnlyWhenAskedToPlay:
+    """10 October: "games on sale that you would recommend" started chess."""
+
+    def test_a_message_about_games_does_not_start_one(self):
+        steam = (
+            "can you look for current steam sales, and games on sale that you"
+            " would recommend to me"
+        )
+        with page_access.scope(steam):
+            result = _play(action="start", game="chess", user_first=True)
+        assert result.success is False
+        assert "did not ask to play" in result.content
+        assert not (result.metadata or {}).get("say")
+        assert games.load() is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "let's play chess",
+            "chess",
+            "tic tac toe?",
+            "play a game with me",
+            "wanna play tic-tac-toe",
+            "rematch",
+            "laro tayo ng chess",
+        ],
+    )
+    def test_asking_to_play_starts_it(self, text):
+        with page_access.scope(text):
+            result = _play(action="start", game="chess")
+        assert result.success is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "what games should I play this weekend",
+            "who won the chess world championship",
+            "is the new game from Capcom good",
+        ],
+    )
+    def test_talking_about_games_is_not_asking(self, text):
+        assert not games.asks_to_play(text)

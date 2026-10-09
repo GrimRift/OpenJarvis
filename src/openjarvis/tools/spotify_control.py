@@ -358,7 +358,7 @@ def _wake_spotify_app(token: str, timeout_seconds: float = 30.0) -> str:
 
     from openjarvis.tools.open_app import OpenAppTool, is_app_running
 
-    if not OpenAppTool().execute(app="spotify").success:
+    if not OpenAppTool().launch("spotify").success:
         return ""
 
     deadline = time.monotonic() + timeout_seconds
