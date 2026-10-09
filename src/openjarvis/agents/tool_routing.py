@@ -117,6 +117,15 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             re.IGNORECASE,
         ),
     },
+    "games": {
+        "tools": {"play_game"},
+        "pattern": re.compile(
+            r"\b(play|playing|game|games|tic|tac|toe|tik|tak|tictactoe|chess|"
+            r"board|move|moves|square|squares|corner|center|centre|xo|"
+            r"resign|rematch|difficulty)\b",
+            re.IGNORECASE,
+        ),
+    },
     "media": {
         "tools": {"spotify_control", "open_app", "close_media", "media_pause"},
         "pattern": re.compile(
@@ -169,13 +178,31 @@ def route_tools(
 
     grouped = _grouped_tools()
     allowed = selected_tool_names(text)
+    newest = text.split(TURN_SEPARATOR)[-1]
+    playing = _game_in_progress()
+    if playing:
+        allowed.add("play_game")
+    # A move in a game ("5", "top left") is not a question about the user's
+    # notes: on 9 October each one searched memory first, 1.6-5.8 s a move.
+    skip = {"retrieval"} if playing and len(newest.split()) <= 5 else set()
 
     kept: List[Dict[str, Any]] = []
     for schema in openai_tools:
         name = (schema.get("function") or {}).get("name", "")
+        if name in skip:
+            continue
         if name not in grouped or name in allowed:
             kept.append(schema)
     return kept
+
+
+def _game_in_progress() -> bool:
+    try:
+        from openjarvis.games import in_progress
+
+        return in_progress()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _role_of(item: Any) -> str:
