@@ -303,3 +303,31 @@ class TestWeatherAndClockOnlyWhenAsked:
         ]
         kept = self._kept("how fast is the rtx 5060 ti in tokens/s", prior)
         assert not set(self.WEATHER) & kept
+
+
+class TestASlashIsNotAFile:
+    """9 October: "token/s" in a GPU question sent the file tools, and the
+    model called directory_list."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "how fast is the rtx 5060 ti in token/s",
+            "the speed limit is 60 km/h",
+            "open 24/7, e.g. on weekends",
+        ],
+    )
+    def test_no_file_tools(self, text):
+        assert "directory_list" not in _routed(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "open C:\\AI\\notes",
+            "look at src/lib/store.ts",
+            "what does README.md say",
+            "check config.toml",
+        ],
+    )
+    def test_a_real_path_still_gets_them(self, text):
+        assert "file_read" in _routed(text)

@@ -80,7 +80,13 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             r"scripts|test|tests|pytest|python|npm|node|npx|function|"
             r"refactor|bug|lint|build|read|write|edit|create|delete|"
             r"rename|move|copy|search|grep|log|logs|source|project)\b"
-            r"|[\\/]|\.\w{1,4}\b",
+            # A real path or file name, not any slash or dot: "token/s" in a
+            # GPU question (9 October) sent the file tools, and the model
+            # listed a directory. Likewise "km/h", "e.g.", "24/7".
+            r"|\b[A-Za-z]:[\\/]"
+            r"|[\w.-]*[\\/][\w./\\-]*\.\w{1,5}\b"
+            r"|\b[\w-]+\.(?:py|pyi|ts|tsx|js|jsx|mjs|json|md|toml|ya?ml|txt|"
+            r"ps1|bat|rs|css|html|cfg|ini|csv|lock|sh)\b",
             re.IGNORECASE,
         ),
     },
