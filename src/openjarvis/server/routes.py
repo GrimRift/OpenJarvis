@@ -225,15 +225,20 @@ def _ensure_identity_prompt(
         from openjarvis.prompt.answer_hints import (
             budget_hint,
             events_hint,
+            follow_up_hint,
             numbers_hint,
+            title_math_hint,
         )
 
         asked = question if isinstance(question, str) else ""
+        has_history = any(m.role == Role.ASSISTANT for m in messages)
         hints = (
             turn_hint(diagrams, asked),
             budget_hint(asked),
             numbers_hint(asked),
             events_hint(asked),
+            follow_up_hint(asked, has_history),
+            title_math_hint(asked),
         )
         for hint in hints:
             if hint:
@@ -1526,6 +1531,9 @@ async def _handle_streaming_orchestrator(
         preamble = ""
         asked_again = False
         leak_retried = False
+        #: Every tool call of the turn, for its trace (Dashboard debugger).
+        tool_log: list[dict] = []
+        tool_seconds: dict[str, tuple[float, float]] = {}
         # A follow-up voice turn may be declined with the marker; its first
         # words are held until they show whether they are it.
         watch = IgnoreWatch() if getattr(req, "voice_followup", False) else None
@@ -1744,6 +1752,10 @@ async def _handle_streaming_orchestrator(
                                     early_result,
                                     time.perf_counter() - early_began,
                                 )
+                                tool_seconds[call.id] = (
+                                    time.time(),
+                                    time.perf_counter() - early_began,
+                                )
                                 results_by_index[index] = early_result
                                 pending = [p for p in pending if p[0] != index]
                     # Only the first round's search can use it.
@@ -1751,8 +1763,11 @@ async def _handle_streaming_orchestrator(
 
                     def _run_timed(call: ToolCall) -> ToolResult:
                         began = time.perf_counter()
+                        started_wall = time.time()
                         outcome = ledger.run(agent._executor.execute, call)
-                        _log_tool_timing(call, outcome, time.perf_counter() - began)
+                        took = time.perf_counter() - began
+                        _log_tool_timing(call, outcome, took)
+                        tool_seconds[call.id] = (started_wall, took)
                         return outcome
 
                     if agent._parallel_tools and len(pending) > 1:
@@ -1783,6 +1798,22 @@ async def _handle_streaming_orchestrator(
                                 tool_result.success,
                             )
                         all_tool_results.append(tool_result)
+                        started_wall, took = tool_seconds.get(
+                            tool_call.id, (time.time(), 0.0)
+                        )
+                        tool_log.append(
+                            {
+                                "tool": tool_call.name,
+                                "arguments": tool_call.arguments,
+                                "success": bool(tool_result.success),
+                                "result": str(tool_result.content or ""),
+                                "seconds": round(took, 3),
+                                "started": started_wall,
+                                "metadata": tool_result.metadata
+                                if isinstance(tool_result.metadata, dict)
+                                else {},
+                            }
+                        )
                         messages.append(
                             Message(
                                 role=Role.TOOL,
@@ -2111,6 +2142,7 @@ async def _handle_streaming_orchestrator(
                     "cached_tokens": int(clock.get("cached_tokens", 0)),
                     "rounds": len(rounds),
                 },
+                tools=tool_log,
             )
 
         if full_content:

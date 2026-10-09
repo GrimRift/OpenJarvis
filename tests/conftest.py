@@ -44,6 +44,20 @@ def _no_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_game(tmp_path_factory: pytest.TempPathFactory):
+    """A test must never see (or overwrite) the user's saved game: routing
+    reads it, and a live game made the routing tests drop the memory tool."""
+    try:
+        from openjarvis import games
+    except Exception:  # noqa: BLE001
+        yield
+        return
+    games.use_path_for_tests(tmp_path_factory.mktemp("game") / "current.json")
+    yield
+    games.use_path_for_tests(None)
+
+
+@pytest.fixture(autouse=True)
 def _no_search_read_ahead(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test search must not start real page reads in the background."""
     try:

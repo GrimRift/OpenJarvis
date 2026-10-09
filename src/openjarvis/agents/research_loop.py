@@ -1003,6 +1003,8 @@ class ResearchAgent:
             NUMBERS_RULE,
             budget_hint,
             events_hint,
+            follow_up_hint,
+            title_math_hint,
         )
 
         last_question = next(
@@ -1014,6 +1016,8 @@ class ResearchAgent:
             budget_hint(f"{query}\n{last_question}"),
             NUMBERS_RULE,
             events_hint(query),
+            follow_up_hint(query, bool(earlier)),
+            title_math_hint(query),
         ]
         asked = query + "".join(f"\n\n({note})" for note in notes if note)
         messages: List[Message] = [

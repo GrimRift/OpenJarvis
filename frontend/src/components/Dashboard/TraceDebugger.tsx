@@ -1,36 +1,26 @@
 import { useState, useEffect, useCallback } from 'react';
-import { GitBranch, Clock, ChevronRight, ChevronDown } from 'lucide-react';
+import { GitBranch, Clock, ChevronRight, ChevronDown, Check, X } from 'lucide-react';
 import { apiFetch } from '../../lib/api';
-
-interface TraceStepData {
-  model?: string;
-  tokens?: number;
-  tool?: string;
-  input?: string;
-  output?: string;
-  [key: string]: unknown;
-}
-
-interface TraceStep {
-  step_type: string;
-  duration_ms: number;
-  data: TraceStepData;
-}
-
-interface TraceSummary {
-  id: string;
-  query: string;
-  steps: TraceStep[];
-  created_at: string;
-}
+import {
+  type Trace,
+  type TraceStep,
+  failedTools,
+  stepLabel,
+  stepSeconds,
+  traceSeconds,
+} from '../../lib/traces';
 
 const STEP_COLORS: Record<string, string> = {
   route: 'var(--color-accent)',
   retrieve: 'var(--color-success)',
   generate: 'var(--color-warning)',
   tool_call: 'var(--color-accent-purple)',
-  respond: 'var(--color-accent-purple)',
+  respond: 'var(--color-accent)',
 };
+
+function seconds(value: number): string {
+  return value >= 10 ? `${value.toFixed(0)} s` : `${value.toFixed(1)} s`;
+}
 
 function StepBadge({ type }: { type: string }) {
   const color = STEP_COLORS[type] || 'var(--color-text-tertiary)';
@@ -40,14 +30,14 @@ function StepBadge({ type }: { type: string }) {
       style={{ background: `color-mix(in srgb, ${color} 15%, transparent)`, color }}
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-      {type}
+      {type.replace('_', ' ')}
     </span>
   );
 }
 
-function TraceCard({ trace, isActive, onClick }: { trace: TraceSummary; isActive: boolean; onClick: () => void }) {
-  const totalMs = trace.steps.reduce((sum, s) => sum + s.duration_ms, 0);
-
+function TraceCard({ trace, isActive, onClick }: { trace: Trace; isActive: boolean; onClick: () => void }) {
+  const failed = failedTools(trace);
+  const tools = (trace.steps ?? []).filter((s) => s.step_type === 'tool_call').length;
   return (
     <button
       onClick={onClick}
@@ -56,62 +46,104 @@ function TraceCard({ trace, isActive, onClick }: { trace: TraceSummary; isActive
         background: isActive ? 'var(--color-bg-tertiary)' : 'transparent',
         border: isActive ? '1px solid var(--color-border)' : '1px solid transparent',
       }}
-      onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--color-bg-secondary)'; }}
-      onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
     >
       <div className="text-sm truncate mb-1" style={{ color: 'var(--color-text)' }}>
         {trace.query || 'Untitled query'}
       </div>
       <div className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
-        <span>{trace.steps.length} steps</span>
+        <span>{seconds(traceSeconds(trace))}</span>
         <span>&middot;</span>
-        <span>{totalMs.toFixed(0)}ms</span>
+        <span>{tools} {tools === 1 ? 'tool' : 'tools'}</span>
+        {failed > 0 && (
+          <span style={{ color: 'var(--color-error, #ef4444)' }}>&middot; {failed} failed</span>
+        )}
         <span>&middot;</span>
-        <span>{new Date(trace.created_at).toLocaleTimeString()}</span>
+        <span>{trace.created_at ? new Date(trace.created_at).toLocaleTimeString() : ''}</span>
       </div>
     </button>
   );
 }
 
+function Field({ name, value }: { name: string; value: unknown }) {
+  if (value === undefined || value === null || value === '') return null;
+  let text = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+  if (name === 'arguments') {
+    // Arguments arrive as a JSON string; shown pretty when they parse.
+    try {
+      text = JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      // Not JSON: shown as it is.
+    }
+  }
+  return (
+    <div className="py-1">
+      <div className="font-mono text-[11px] mb-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
+        {name}
+      </div>
+      <pre
+        className="whitespace-pre-wrap break-words text-xs m-0"
+        style={{ color: 'var(--color-text-secondary)', fontFamily: 'inherit' }}
+      >
+        {text}
+      </pre>
+    </div>
+  );
+}
+
 function StepDetail({ step, index }: { step: TraceStep; index: number }) {
-  const [expanded, setExpanded] = useState(false);
-  const dataEntries = Object.entries(step.data).filter(([_, v]) => v != null);
+  const [expanded, setExpanded] = useState(step.step_type === 'tool_call' && step.output?.success === false);
+  const isTool = step.step_type === 'tool_call';
+  const ok = step.output?.success;
+  const input = step.input ?? {};
+  const output = step.output ?? {};
+  const meta = step.metadata ?? {};
 
   return (
-    <div
-      className="rounded-lg overflow-hidden"
-      style={{ border: '1px solid var(--color-border)' }}
-    >
+    <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--color-border)' }}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors cursor-pointer"
         style={{ background: 'var(--color-bg-secondary)' }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-bg-tertiary)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--color-bg-secondary)')}
       >
         {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         <span className="text-xs font-mono" style={{ color: 'var(--color-text-tertiary)' }}>
           {index + 1}
         </span>
         <StepBadge type={step.step_type} />
+        <span className="text-xs truncate" style={{ color: 'var(--color-text-secondary)' }}>
+          {stepLabel(step)}
+        </span>
+        {isTool && ok !== undefined && (
+          ok ? (
+            <Check size={13} style={{ color: 'var(--color-success)' }} aria-label="succeeded" />
+          ) : (
+            <X size={13} style={{ color: 'var(--color-error, #ef4444)' }} aria-label="failed" />
+          )
+        )}
         <span className="flex-1" />
         <span className="text-xs font-mono flex items-center gap-1" style={{ color: 'var(--color-text-tertiary)' }}>
           <Clock size={10} />
-          {step.duration_ms.toFixed(0)}ms
+          {seconds(stepSeconds(step))}
         </span>
       </button>
-      {expanded && dataEntries.length > 0 && (
+      {expanded && (
         <div className="px-3 py-2 text-xs" style={{ borderTop: '1px solid var(--color-border)' }}>
-          {dataEntries.map(([key, value]) => (
-            <div key={key} className="flex gap-2 py-1">
-              <span className="font-mono shrink-0" style={{ color: 'var(--color-text-tertiary)', minWidth: '80px' }}>
-                {key}
-              </span>
-              <span className="truncate" style={{ color: 'var(--color-text-secondary)' }}>
-                {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-              </span>
-            </div>
-          ))}
+          {isTool ? (
+            <>
+              <Field name="tool" value={input.tool} />
+              <Field name="arguments" value={input.arguments} />
+              {ok === false && <Field name="error" value={output.error ?? output.result} />}
+              {ok !== false && <Field name="result (start)" value={output.result} />}
+              {Object.keys(meta).length > 0 && <Field name="notes" value={meta} />}
+            </>
+          ) : step.step_type === 'respond' ? (
+            <Field name="reply" value={output.content} />
+          ) : (
+            <>
+              {Object.entries(input).map(([k, v]) => <Field key={`i-${k}`} name={k} value={v} />)}
+              {Object.entries(output).map(([k, v]) => <Field key={`o-${k}`} name={k} value={v} />)}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -119,7 +151,7 @@ function StepDetail({ step, index }: { step: TraceStep; index: number }) {
 }
 
 export function TraceDebugger() {
-  const [traces, setTraces] = useState<TraceSummary[]>([]);
+  const [traces, setTraces] = useState<Trace[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,14 +162,10 @@ export function TraceDebugger() {
       const res = await apiFetch('/v1/traces?limit=50');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setTraces(data.traces || []);
+      setTraces(Array.isArray(data.traces) ? data.traces : []);
       setError(null);
     } catch (err) {
-      // Naming the cause matters: the generic message hid a 401 for as long
-      // as it existed.
-      setError(
-        `Cannot load traces (${err instanceof Error ? err.message : 'unknown'})`,
-      );
+      setError(`Cannot load traces (${err instanceof Error ? err.message : 'unknown'})`);
     }
   }, []);
 
@@ -147,34 +175,30 @@ export function TraceDebugger() {
 
   const selected = traces.find((t) => t.id === selectedId);
 
-  if (error) {
-    return (
-      <div className="hud-panel p-6">
-        <h3 className="hud-label flex items-center gap-2 mb-4">
-          <GitBranch size={12} style={{ color: 'var(--color-accent)' }} />
-          Trace Debugger
-        </h3>
-        <div className="h-48 flex items-center justify-center text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-          <span className="hud-mono">{error}</span>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="hud-panel p-6">
       <h3 className="hud-label flex items-center gap-2 mb-4">
         <GitBranch size={12} style={{ color: 'var(--color-accent)' }} />
         Trace Debugger
+        <button
+          onClick={fetchTraces}
+          className="ml-auto text-[11px] cursor-pointer"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
+          Refresh
+        </button>
       </h3>
 
-      {traces.length === 0 ? (
+      {error ? (
+        <div className="h-48 flex items-center justify-center text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
+          <span className="hud-mono">{error}</span>
+        </div>
+      ) : traces.length === 0 ? (
         <div className="h-48 flex items-center justify-center text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
           No traces yet. Start making queries to see them here.
         </div>
       ) : (
-        <div className="flex gap-4 h-80">
-          {/* Trace list */}
+        <div className="flex gap-4 h-96">
           <div className="w-1/3 overflow-y-auto flex flex-col gap-1 pr-2" style={{ borderRight: '1px solid var(--color-border)' }}>
             {traces.map((trace) => (
               <TraceCard
@@ -186,14 +210,19 @@ export function TraceDebugger() {
             ))}
           </div>
 
-          {/* Trace detail */}
           <div className="flex-1 overflow-y-auto">
             {selected ? (
               <div className="flex flex-col gap-2">
-                <div className="text-sm font-medium mb-2" style={{ color: 'var(--color-text)' }}>
+                <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
                   {selected.query}
                 </div>
-                {selected.steps.map((step, i) => (
+                <div className="text-[11px] mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
+                  {[selected.model, selected.engine].filter(Boolean).join(' · ')}
+                  {' · '}
+                  {seconds(traceSeconds(selected))}
+                  {selected.total_tokens ? ` · ${selected.total_tokens.toLocaleString()} tokens` : ''}
+                </div>
+                {(selected.steps ?? []).map((step, i) => (
                   <StepDetail key={i} step={step} index={i} />
                 ))}
               </div>

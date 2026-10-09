@@ -179,3 +179,44 @@ class TestStreamedTrace:
         )
         assert [s.step_type for s in store.trace.steps] == [StepType.RESPOND]
         assert store.trace.total_tokens == 0
+
+    def test_each_tool_is_a_step_with_its_outcome(self):
+        """9 October: the debugger showed no tools; now each one is a step
+        with what was asked, whether it worked and why not."""
+        from openjarvis.traces.collector import record_response_trace
+
+        class _Store:
+            def save(self, trace):
+                self.trace = trace
+
+        store = _Store()
+        record_response_trace(
+            store,
+            query="play the latest Kurzgesagt video",
+            result="Opera isn't available.",
+            started_at=1.0,
+            ended_at=5.0,
+            tools=[
+                {
+                    "tool": "youtube_play",
+                    "arguments": '{"query": "Kurzgesagt", "latest": true}',
+                    "success": False,
+                    "result": "Opera GX is not listening on port 9222. " * 40,
+                    "seconds": 3.02,
+                    "started": 1.5,
+                    "metadata": {"mode": "browser", "secret": "x"},
+                }
+            ],
+        )
+        steps = store.trace.steps
+        assert [s.step_type for s in steps] == [StepType.TOOL_CALL, StepType.RESPOND]
+        tool = steps[0]
+        assert tool.input == {
+            "tool": "youtube_play",
+            "arguments": '{"query": "Kurzgesagt", "latest": true}',
+        }
+        assert tool.output["success"] is False
+        assert tool.output["error"].startswith("Opera GX is not listening")
+        assert len(tool.output["result"]) == 500
+        assert tool.duration_seconds == 3.02
+        assert tool.metadata == {"mode": "browser"}

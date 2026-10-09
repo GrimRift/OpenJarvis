@@ -225,6 +225,10 @@ class TraceCollector:
         )
 
 
+#: How much of a tool's result a trace keeps.
+TOOL_RESULT_PREVIEW = 500
+
+
 def record_response_trace(
     store: Optional[TraceStore],
     *,
@@ -236,6 +240,7 @@ def record_response_trace(
     started_at: float,
     ended_at: float,
     usage: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Trace]:
     """Persist a minimal single-step ``Trace`` for a non-agent response.
 
@@ -274,6 +279,32 @@ def record_response_trace(
                         "cached_tokens": int(usage.get("cached_tokens", 0) or 0),
                         "rounds": int(usage.get("rounds", 0) or 0),
                         "tokens": total,
+                    },
+                )
+            )
+        # Each tool the turn used: what was asked, whether it worked and why
+        # not, how long, and the start of what came back (the user's choice,
+        # 9 October: the debugger showed no tools at all).
+        for call in tools or []:
+            ok = bool(call.get("success"))
+            preview = str(call.get("result") or "")[:TOOL_RESULT_PREVIEW]
+            output: Dict[str, Any] = {"success": ok, "result": preview}
+            if not ok:
+                output["error"] = preview
+            steps.append(
+                TraceStep(
+                    step_type=StepType.TOOL_CALL,
+                    timestamp=float(call.get("started") or started_at),
+                    duration_seconds=float(call.get("seconds") or 0.0),
+                    input={
+                        "tool": str(call.get("tool") or ""),
+                        "arguments": str(call.get("arguments") or "")[:1000],
+                    },
+                    output=output,
+                    metadata={
+                        k: v
+                        for k, v in (call.get("metadata") or {}).items()
+                        if k in ("early_search", "cached", "pages_read", "mode")
                     },
                 )
             )

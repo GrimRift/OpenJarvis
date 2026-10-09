@@ -68,3 +68,28 @@ def test_no_event_no_rule():
     from openjarvis.prompt.answer_hints import events_hint
 
     assert events_hint("how much is the iPhone 17 in the Philippines?") == ""
+
+
+def test_a_follow_up_uses_the_chats_figures_first():
+    """9 October: "is it still possible for Lewis to win?" swapped the chat's
+    standings for a months-old page's, with no maths."""
+    from openjarvis.prompt.answer_hints import (
+        FOLLOW_UP_RULE,
+        TITLE_MATH_RULE,
+        follow_up_hint,
+        title_math_hint,
+    )
+
+    question = "Is it still possible for lewis to win?"
+    assert follow_up_hint(question, has_history=True) == FOLLOW_UP_RULE
+    assert follow_up_hint(question, has_history=False) == ""
+    assert title_math_hint(question) == TITLE_MATH_RULE
+    assert "25 per Grand Prix, 8 per sprint" in TITLE_MATH_RULE
+    assert "never swap numbers silently" in FOLLOW_UP_RULE
+
+
+def test_the_events_rule_does_not_call_a_real_race_wrong():
+    """The "Bahrain Grand Prix in Malaysia" was real (moved to Sepang)."""
+    from openjarvis.prompt.answer_hints import EVENTS_RULE
+
+    assert "can be real" in EVENTS_RULE

@@ -63,14 +63,61 @@ EVENTS_RULE = (
     "Events: take the event's name, date and place TOGETHER from one source"
     " and name that source; never combine a name from one result with a"
     " date or place from another. If sources disagree, say so plainly"
-    " (\"BBC says X, ESPN says Y\") instead of blending them. (9 October: a"
-    " reply named the \"Bahrain Grand Prix in Malaysia\".)"
+    ' ("BBC says X, ESPN says Y") instead of blending them. An unusual'
+    ' name can be real (2026\'s "Bahrain Grand Prix in Malaysia" was held'
+    " at Sepang): report what the source says."
+)
+
+# Follow-ups (the user's choices, 9 October). After a full standings table
+# (Antonelli 320, Hamilton 214), "is it still possible for Lewis to win?"
+# searched again, got a months-old page (219 / 169), answered with figures
+# from neither (224 / 171) under the formula1.com link, and did no maths.
+FOLLOW_UP_RULE = (
+    "Follow-up: figures already given earlier in this chat come first. Work"
+    " from them and search only for what is missing. If a source gives"
+    " different figures, check its date: use the newer one and say plainly"
+    ' that the figures changed ("after Sepang it was X; now it is Y"),'
+    " never swap numbers silently. Quote a figure only from the source you"
+    " link it to."
+)
+
+TITLE_MATH_RULE = (
+    "Can-they-still-win: show the maths before the opinion -- the gap in"
+    " points, the rounds left (and sprints), the most points still available"
+    " (in F1: 25 per Grand Prix, 8 per sprint), and whether the gap can"
+    " still be closed. Then the view."
+)
+
+_REFERS_BACK = re.compile(
+    r"\b(he|she|they|him|her|them|it|that|those|these|still|now|then|so|"
+    r"instead|again|same|also)\b",
+    re.IGNORECASE,
+)
+_TITLE_MATH_RE = re.compile(
+    r"\b(still\s+(?:possible|win|make|catch|qualify|have\s+a\s+chance)|"
+    r"mathematically|can\s+\w+\s+still|chance(?:s)?\s+(?:of|to)\s+win|"
+    r"clinch|catch\s+up|title\s+race|win\s+the\s+(?:title|championship|league))",
+    re.IGNORECASE,
 )
 
 
 def events_hint(text: str) -> str:
     """The one-source rule when *text* asks about an event or a result."""
     return EVENTS_RULE if _EVENT_RE.search(text or "") else ""
+
+
+def follow_up_hint(text: str, has_history: bool) -> str:
+    """Earlier figures first, for a question that builds on the chat."""
+    if not has_history:
+        return ""
+    if _REFERS_BACK.search(text or "") or _TITLE_MATH_RE.search(text or ""):
+        return FOLLOW_UP_RULE
+    return ""
+
+
+def title_math_hint(text: str) -> str:
+    """Show the maths for a 'can they still win?' question."""
+    return TITLE_MATH_RULE if _TITLE_MATH_RE.search(text or "") else ""
 
 
 def budget_hint(text: str) -> str:
@@ -86,8 +133,12 @@ def numbers_hint(text: str) -> str:
 __all__ = [
     "BUDGET_HINT",
     "EVENTS_RULE",
+    "FOLLOW_UP_RULE",
+    "TITLE_MATH_RULE",
     "NUMBERS_RULE",
     "budget_hint",
     "events_hint",
+    "follow_up_hint",
+    "title_math_hint",
     "numbers_hint",
 ]
