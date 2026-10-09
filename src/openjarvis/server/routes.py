@@ -214,11 +214,17 @@ def _ensure_identity_prompt(
         volatile = builder.volatile_text() if turn_context else ""
         # Appended rather than built in: the frozen prefix is what keeps the
         # prompt cacheable, and this section changes with a Settings switch.
-        from openjarvis.prompt.diagrams import instruction
+        from openjarvis.prompt.diagrams import instruction, turn_hint
 
         drawing = instruction(diagrams)
         if drawing:
             prompt = prompt + "\n\n" + drawing
+        question = next(
+            (m.text for m in reversed(messages) if m.role == Role.USER), ""
+        )
+        hint = turn_hint(diagrams, question if isinstance(question, str) else "")
+        if hint:
+            volatile = (volatile + "\n\n" + hint).strip()
         own = _model_line(model)
         if own and turn_context:
             volatile = (volatile + "\n" + own).strip()

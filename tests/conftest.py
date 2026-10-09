@@ -44,6 +44,16 @@ def _no_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_search_read_ahead(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test search must not start real page reads in the background."""
+    try:
+        import openjarvis.tools.web_read as web_read
+    except Exception:  # noqa: BLE001
+        return
+    monkeypatch.setattr(web_read, "PREFETCH_TOP", 0)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_analytics_senders(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test-created SDK clients must not send events or leave exit hooks waiting.
 

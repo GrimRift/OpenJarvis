@@ -23,6 +23,8 @@ user's rule, in their words: not everything needs a colour.
 
 from __future__ import annotations
 
+import re
+
 #: The fenced-code language the browser looks for.
 LANGUAGE = "sage-diagram"
 
@@ -34,8 +36,10 @@ MODES = (AUTOMATIC, ON_REQUEST, OFF)
 
 _WHEN_AUTOMATIC = """Draw one whenever the answer is a process, a structure, a
 plan, or a set of parts -- "how does X work", "how is X made", "how do I build
-X", "what goes into X", "X versus Y" -- and whenever the user asks to see it
-("show me how", "illustrate that", "diagram it")."""
+X", "what goes into X" -- whenever options are compared ("X versus Y",
+"which is better") -- and whenever the user asks to see it ("show me how",
+"illustrate that", "diagram it"). A comparison is drawn as a `comparison`
+grid INSTEAD of a markdown table, never both."""
 
 _WHEN_ON_REQUEST = """Draw one ONLY when the user asks to see it in words like
 "show me how", "illustrate that", "draw that", "diagram it". Never draw one
@@ -69,7 +73,8 @@ The object:
 ```
 
 * `shape` -- `flow` for steps that lead to one another, `parts` for what a
-  thing is made of, `comparison` for two options weighed against each other.
+  thing is made of, `comparison` for 2 to 4 options weighed side by side (it replaces a
+  markdown table; do not write both).
 * `title` -- a short phrase, no trailing full stop.
 * `nodes` -- 3 to 8 of them. `label` is two or three words. `note` is one
   short sentence, under about nine words; leave it out if it would only
@@ -143,6 +148,34 @@ ICONS = (
 )
 
 
+#: A question that weighs options against each other.
+_COMPARISON_RE = re.compile(
+    r"\b(?:vs\.?|versus|compare[ds]?|comparing|comparison"
+    r"|differences?\s+between|which\s+(?:one\s+|of\s+them\s+)?is\s+(?:better|best)"
+    r"|which\s+should\s+i\s+(?:get|buy|choose|pick))\b",
+    re.IGNORECASE,
+)
+
+_COMPARISON_HINT = (
+    "This question compares options: draw a `comparison` "
+    f"{LANGUAGE} grid (one column per option, the rows that separate them) "
+    "and do NOT also write a markdown table -- the grid is the table. Rows "
+    "where every option is the same go in one prose sentence instead."
+)
+
+
+def turn_hint(mode: str, question: str) -> str:
+    """A nudge for this turn only, or "".
+
+    "airpods 5 vs airpods 4?" (9 October) got a markdown table with
+    diagrams on Automatic: the system prompt's "X versus Y" alone was not
+    enough. Said next to the question, it is.
+    """
+    if mode != AUTOMATIC or not _COMPARISON_RE.search(question or ""):
+        return ""
+    return _COMPARISON_HINT
+
+
 def instruction(mode: str) -> str:
     """The prompt section for *mode*, or "" when diagrams are switched off."""
     if mode not in (AUTOMATIC, ON_REQUEST):
@@ -163,4 +196,5 @@ __all__ = [
     "OFF",
     "ON_REQUEST",
     "instruction",
+    "turn_hint",
 ]

@@ -552,7 +552,9 @@ def _read_hint(
         return (
             "This asks for an exact figure (a date, time, price or result). "
             "Give it only if a summary or page excerpt above states it "
-            "outright; where they "
+            "outright, for exactly the model or item asked about -- a Pro, "
+            "Max, Plus or other variant's page is not its price (9 October: "
+            "the iPhone 17 Pro's price was given as the iPhone 17's); where they "
             "disagree, trust the official site and the newest published date. "
             "If none states it clearly, use web_read on the most official "
             f"page (likely {best['url']}) before answering, rather than "
@@ -1219,6 +1221,13 @@ class WebSearchTool(BaseTool):
         # *inside* one of these pages is not, which is the distinction
         # `web_read` enforces.
         page_access.allow_search_results(source["url"] for source in sources)
+        if quality_passed:
+            try:
+                from openjarvis.tools.web_read import prefetch
+
+                prefetch([source["url"] for source in sources])
+            except Exception:  # noqa: BLE001
+                logger.debug("web_search: read-ahead did not start", exc_info=True)
         if not quality_passed:
             warning = (
                 "Search results were insufficient or off-topic. State that clearly "

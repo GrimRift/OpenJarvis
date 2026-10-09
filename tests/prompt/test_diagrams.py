@@ -12,6 +12,7 @@ from openjarvis.prompt.diagrams import (
     OFF,
     ON_REQUEST,
     instruction,
+    turn_hint,
 )
 
 
@@ -54,3 +55,35 @@ class TestTheModeDecidesWhatIsAsked:
 
     def test_colour_is_rationed(self):
         assert "at most two nodes" in instruction(AUTOMATIC)
+
+
+class TestComparisonsGetAGrid:
+    """9 October: "airpods 5 vs airpods 4?" got a markdown table with
+    diagrams on Automatic."""
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "airpods 5 vs airpods 4?",
+            "Mazda3 versus Civic",
+            "compare the S24 and the Pixel 9",
+            "what's the difference between ANC and transparency",
+            "which one is better, the Kindle or the Kobo?",
+        ],
+    )
+    def test_a_comparison_gets_the_hint(self, question):
+        hint = turn_hint(AUTOMATIC, question)
+        assert "`comparison`" in hint and "do NOT also write a markdown table" in hint
+
+    @pytest.mark.parametrize(
+        "question", ["what's the weather", "play some music", "how does a CPU work"]
+    )
+    def test_other_questions_do_not(self, question):
+        assert turn_hint(AUTOMATIC, question) == ""
+
+    @pytest.mark.parametrize("mode", [ON_REQUEST, OFF])
+    def test_only_on_automatic(self, mode):
+        assert turn_hint(mode, "airpods 5 vs airpods 4?") == ""
+
+    def test_the_prompt_says_grid_instead_of_table(self):
+        assert "INSTEAD of a markdown table" in instruction(AUTOMATIC)

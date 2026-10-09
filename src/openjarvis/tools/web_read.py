@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -256,7 +257,11 @@ class WebReadTool(BaseTool):
         # The page's own one-line description, when it has one, for the
         # source card (set by whichever read ran).
         self._description = ""
-        served = self._fetch_static(url, wait_for)
+        early = None if wait_for else _take_prefetched(url)
+        if early is not None:
+            served, self._description = early
+        else:
+            served = self._fetch_static(url, wait_for)
         extracted = None if served is not None else self._extract(url, wait_for)
         if served is not None:
             text, title = served
@@ -472,6 +477,66 @@ class WebReadTool(BaseTool):
 
 
 _JSON_STRING = r'("(?:[^"\\]|\\.)*")'
+
+
+#: How many of a search's top results are read ahead, and for how long the
+#: copy is kept. A turn's reads come 2-4 s after its search (the model's
+#: round in between), and the plain read takes 0.5-2.5 s: done in that gap,
+#: the read the model asks for is already there (9 October).
+PREFETCH_TOP = 3
+PREFETCH_KEEP_SECONDS = 90.0
+
+_prefetch_pool = ThreadPoolExecutor(
+    max_workers=PREFETCH_TOP, thread_name_prefix="web-prefetch"
+)
+_prefetch_lock = threading.Lock()
+_prefetched: dict[str, Tuple[float, Any]] = {}
+
+
+def _plain_read(url: str) -> Tuple[Optional[Tuple[str, str]], str]:
+    tool = WebReadTool()
+    tool._description = ""
+    return tool._fetch_static(url, ""), tool._description
+
+
+def prefetch(urls: List[str]) -> None:
+    """Start plain reads of the first few search results in the background.
+
+    Only the plain request, never the provider's reader or the browser: it
+    costs nothing and opens nothing if the model never asks. The read itself
+    still goes through every check in :meth:`WebReadTool.execute`.
+    """
+    now = time.monotonic()
+    with _prefetch_lock:
+        for key in [k for k, (until, _) in _prefetched.items() if until < now]:
+            del _prefetched[key]
+        started = 0
+        for url in urls:
+            if started >= PREFETCH_TOP:
+                break
+            key = page_access.normalise(url)
+            if not key or key in _prefetched:
+                continue
+            if page_access.is_social(url) and not page_access.social_wanted():
+                continue
+            _prefetched[key] = (
+                now + PREFETCH_KEEP_SECONDS,
+                _prefetch_pool.submit(_plain_read, url),
+            )
+            started += 1
+
+
+def _take_prefetched(url: str) -> Optional[Tuple[Optional[Tuple[str, str]], str]]:
+    """The read-ahead result for *url*, waiting for it if still running; None
+    when there is none, so the caller reads it itself."""
+    with _prefetch_lock:
+        entry = _prefetched.pop(page_access.normalise(url), None)
+    if entry is None or entry[0] < time.monotonic():
+        return None
+    try:
+        return entry[1].result(timeout=STATIC_TIMEOUT_SECONDS + 1.0)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def youtube_text(url: str, markup: str) -> Optional[Tuple[str, str]]:

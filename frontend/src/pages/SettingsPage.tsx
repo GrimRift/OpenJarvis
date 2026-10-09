@@ -10,7 +10,7 @@ import {
   Brain,
   RotateCcw,
 } from 'lucide-react';
-import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
+import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, exportConversationsJson, replaceConversations, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import { MicrophonePicker } from '../components/Settings/MicrophonePicker';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
@@ -801,7 +801,7 @@ export function SettingsPage() {
   };
 
   const handleExport = () => {
-    const data = localStorage.getItem('openjarvis-conversations') || '{}';
+    const data = exportConversationsJson();
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -823,8 +823,11 @@ export function SettingsPage() {
         try {
           const data = JSON.parse(ev.target?.result as string);
           if (data.version === 1) {
-            localStorage.setItem('openjarvis-conversations', JSON.stringify(data));
-            useAppStore.getState().loadConversations();
+            replaceConversations({
+              version: 1,
+              conversations: data.conversations ?? {},
+              activeId: data.activeId ?? null,
+            });
             showSaved();
           }
         } catch {}
@@ -841,8 +844,7 @@ export function SettingsPage() {
       setTimeout(() => setConfirmClear(false), 3000);
       return;
     }
-    localStorage.removeItem('openjarvis-conversations');
-    useAppStore.getState().loadConversations();
+    replaceConversations({ version: 1, conversations: {}, activeId: null });
     setConfirmClear(false);
     showSaved();
   };

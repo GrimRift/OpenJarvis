@@ -14,6 +14,7 @@ tables, and the two server speech paths stripped nothing at all.
 
 from __future__ import annotations
 
+import json
 import re
 
 from openjarvis.speech.spoken_math import speak_math
@@ -395,6 +396,88 @@ def _label_column(rows: list[list[str]]) -> int:
     return 0
 
 
+#: First header cells that mark a table as options weighed side by side
+#: ("| | AirPods 4 | AirPods 5 |"), as opposed to a list with columns
+#: ("| Day | Time | Room |").
+_COMPARISON_CORNERS = frozenset(
+    {
+        "",
+        "feature",
+        "features",
+        "spec",
+        "specs",
+        "specification",
+        "specifications",
+        "category",
+        "aspect",
+        "criteria",
+        "criterion",
+        "metric",
+        "attribute",
+        "dimension",
+        "factor",
+        "detail",
+        "details",
+    }
+)
+
+
+def _plain_cell(cell: str) -> str:
+    return _EMPHASIS.sub(r"\2", cell).strip()
+
+
+def _same_value(cells: list[str]) -> bool:
+    values = {re.sub(r"[\s.]+", " ", _plain_cell(c).lower()).strip() for c in cells}
+    return len(values) == 1
+
+
+def _speak_comparison(header: list[str], rows: list[list[str]]) -> list[str]:
+    """Options side by side, said as what differs.
+
+    Read row by row, the AirPods table came out "ANC option: ₱10,990,
+    ₱9,490" -- which price is whose? -- and "Up to 4 hours, Up to 4
+    hours". The user's choice (9 October): name the option with each value,
+    and fold the rows where every option is the same into one sentence.
+    """
+    names = [_plain_cell(name) for name in header[1:]]
+    same: list[str] = []
+    sentences: list[str] = []
+    for row in rows:
+        label = _plain_cell(row[0]) if row else ""
+        cells = [_plain_cell(c) for c in row[1 : len(names) + 1]]
+        if not label or not cells or not any(cells):
+            continue
+        if len(cells) == len(names) and _same_value(cells):
+            value = cells[0].rstrip(".")
+            if len(value) > 1 and value[1].islower():
+                value = value[0].lower() + value[1:]
+            short = len(value.split()) <= 4
+            same.append(
+                f"{label[0].lower()}{label[1:]}, {value}"
+                if short
+                else f"{label[0].lower()}{label[1:]}"
+            )
+            continue
+        pairs = [
+            f"{name}, {cell.rstrip('.')}" for name, cell in zip(names, cells) if cell
+        ]
+        prose = any(len(cell.split()) >= 6 for cell in cells)
+        sentences.append(_ended(f"{label}: " + (". " if prose else "; ").join(pairs)))
+    if same:
+        count = {3: "three", 4: "four"}.get(len(names), str(len(names)))
+        who = "Both" if len(names) == 2 else f"All {count}"
+        sentences.insert(
+            0,
+            _ended(
+                f"{who} are the same on "
+                + "; ".join(same[:-1])
+                + ("; and " if len(same) > 1 else "")
+                + same[-1]
+            ),
+        )
+    return sentences
+
+
 def _speak_table(lines: list[str]) -> list[str]:
     """A markdown table as speech: short ones read, long ones described."""
     rows = [_table_cells(line) for line in lines if not _TABLE_DIVIDER.match(line)]
@@ -403,12 +486,18 @@ def _speak_table(lines: list[str]) -> list[str]:
     header = rows.pop(0) if has_header and rows else []
     if not rows:
         return []
+    if (
+        len(header) >= 3
+        and _plain_cell(header[0]).lower() in _COMPARISON_CORNERS
+        and all(_plain_cell(name) for name in header[1:])
+    ):
+        return _speak_comparison(header, rows)
     if len(rows) <= SPOKEN_TABLE_MAX_ROWS:
         return [s for s in (_row_sentence(header, row) for row in rows) if s]
     column = _label_column(rows)
-    labels = [
-        row[column] for row in rows if column < len(row) and row[column]
-    ][:_SUMMARY_NAMED_ROWS]
+    labels = [row[column] for row in rows if column < len(row) and row[column]][
+        :_SUMMARY_NAMED_ROWS
+    ]
     more = len(rows) - len(labels)
     named = _spoken_list(labels + ([f"{more} more"] if more > 0 else []))
     return [f"The table on screen has {len(rows)} rows, covering {named}."]
@@ -417,6 +506,7 @@ def _speak_table(lines: list[str]) -> list[str]:
 #: Calculator and maths symbols as they are said. Only the speech changes;
 #: the screen keeps "STAT → Lin" and "ŷ".
 _SPOKEN_SYMBOLS = (
+    (re.compile(r"₱\s?(\d[\d,]*(?:\.\d+)?)"), r"\1 pesos"),
     (re.compile(r"\s*(?:→|⇒|⟶|(?<=\s)->(?=\s))\s*"), ", then "),
     (re.compile(r"°\s*['’′]\s*[\"”″]"), " degrees-minutes-seconds "),
     (re.compile("(?:ŷ|ŷ)"), "y-hat"),
@@ -506,6 +596,38 @@ def _ended(line: str) -> str:
     return line + "."
 
 
+_CITATION = re.compile("[^]*(?:|$)|[-]")
+_DIAGRAM_BLOCK = re.compile(r"```sage-diagram[^\n]*\n(.*?)```", re.DOTALL)
+
+
+def _diagram_as_table(match: re.Match[str]) -> str:
+    """A comparison diagram, said like the table it replaced.
+
+    Comparisons are drawn as a grid instead of a markdown table (9 October),
+    and a fenced block is otherwise silent -- the voice would lose the
+    comparison altogether. Other diagram shapes stay silent; the prose
+    around them carries the answer.
+    """
+    try:
+        diagram = json.loads(match.group(1))
+        columns = [str(c) for c in diagram["columns"]]
+        rows = [
+            (str(r["label"]), [str(c) for c in r["cells"]]) for r in diagram["rows"]
+        ]
+    except (ValueError, KeyError, TypeError):
+        return " "
+    if diagram.get("shape") != "comparison" or len(columns) < 2 or not rows:
+        return " "
+    clean = lambda s: s.replace("|", "/").replace("\n", " ")  # noqa: E731
+    lines = ["| | " + " | ".join(clean(c) for c in columns) + " |"]
+    lines.append("|" + "---|" * (len(columns) + 1))
+    for label, cells in rows:
+        lines.append(
+            f"| {clean(label)} | " + " | ".join(clean(c) for c in cells) + " |"
+        )
+    return "\n" + "\n".join(lines) + "\n"
+
+
 def to_spoken_text(markdown: str) -> str:
     """Create speech-only prose without changing the source chat reply."""
     if not markdown:
@@ -562,7 +684,11 @@ def to_spoken_text(markdown: str) -> str:
             return value
         return hide_value("sensitive", "an identifier")
 
-    text = _FENCED_CODE.sub(" ", markdown)
+    # The model's private-use citation markers ("cite<url>",
+    # 9 October): a URL read aloud, and invisible on screen.
+    text = _CITATION.sub("", markdown)
+    text = _DIAGRAM_BLOCK.sub(_diagram_as_table, text)
+    text = _FENCED_CODE.sub(" ", text)
     # Formulas become words before anything else looks at them: the
     # identifier and path rules below would otherwise read "\sum F_x" as an
     # identifier to hide, and the dash rule would break "a - b".

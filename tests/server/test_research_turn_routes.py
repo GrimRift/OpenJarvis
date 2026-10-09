@@ -27,6 +27,20 @@ def test_each_turn_states_the_model_answering():
     assert all("gpt-6-luna" not in m.content for m in system)
 
 
+def test_a_comparison_gets_the_grid_hint_next_to_the_question():
+    """9 October: "airpods 5 vs airpods 4?" got a markdown table."""
+    out = routes._ensure_identity_prompt(
+        [Message(role=Role.USER, content="airpods 5 vs airpods 4?")],
+        _test_config(),
+        "auto",
+        turn_context=True,
+    )
+    turn = [m for m in out if m.metadata.get("turn_context")]
+    assert turn and "do NOT also write a markdown table" in turn[0].content
+    system = [m for m in out if m.role == Role.SYSTEM]
+    assert all("This question compares options" not in m.content for m in system)
+
+
 def test_no_model_no_line():
     assert routes._model_line("") == ""
 

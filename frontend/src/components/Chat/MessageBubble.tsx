@@ -27,12 +27,13 @@ import {
   selectSources,
 } from '../../lib/link-preview';
 import { protectCurrencyFromMath } from '../../lib/currency-math';
+import { cleanCitations } from '../../lib/citations';
 import { markdownPhotos, usePhotoViewer, type ViewerPhoto } from '../../lib/photo-viewer';
 import { hastText, keepOnOneLine } from '../../lib/table-cell';
 import type { ChatMessage } from '../../types';
 
 function stripThinkTags(text: string): string {
-  let cleaned = text.replace(/<think>[\s\S]*?<\/think>\s*/gi, '');
+  let cleaned = cleanCitations(text).replace(/<think>[\s\S]*?<\/think>\s*/gi, '');
   cleaned = cleaned.replace(/^[\s\S]*?<\/think>\s*/i, '');
   return cleaned.trim();
 }

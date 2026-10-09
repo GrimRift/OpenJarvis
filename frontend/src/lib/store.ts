@@ -75,6 +75,7 @@ export interface AgentEvent {
 }
 
 import { withoutImages } from './image-attach';
+import { chatDbReady, takePreloadedChats, writeChats } from './chat-db';
 
 /**
  * Attached images, held for the life of the tab and keyed by message id.
@@ -190,9 +191,25 @@ function loadConversations(): ConversationStore {
 
 function readConversations(): ConversationStore {
   try {
-    const raw = localStorage.getItem(CONVERSATIONS_KEY);
-    if (!raw) return { version: 1, conversations: {}, activeId: null };
-    const parsed = JSON.parse(raw);
+    const fromDb = takePreloadedChats();
+    let parsed;
+    if (fromDb) {
+      parsed = { version: 1, ...fromDb };
+      // Already in the database as they are: the first save writes only what
+      // changes, not all of them again.
+      for (const [id, conversation] of Object.entries(fromDb.conversations)) {
+        savedJson.set(id, {
+          conversation,
+          updatedAt: conversation.updatedAt,
+          count: conversation.messages.length,
+          json: '',
+        });
+      }
+    } else {
+      const raw = localStorage.getItem(CONVERSATIONS_KEY);
+      if (!raw) return { version: 1, conversations: {}, activeId: null };
+      parsed = JSON.parse(raw);
+    }
     if (parsed.version === 1) {
       let repaired = false;
       for (const conversation of Object.values(parsed.conversations ?? {}) as Conversation[]) {
@@ -241,7 +258,7 @@ function readConversations(): ConversationStore {
           repaired = true;
         }
       }
-      if (repaired) {
+      if (repaired && !fromDb) {
         try {
           localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(parsed));
         } catch {
@@ -270,23 +287,25 @@ function writeConversations(store: ConversationStore): void {
   //
   // Only a conversation that changed is encoded again: the other 170 are
   // the text they were last time.
+  const toDb = chatDbReady();
   const parts: string[] = [];
+  const changed: Conversation[] = [];
   const live = new Set<string>();
   for (const [id, conversation] of Object.entries(store.conversations)) {
     live.add(id);
-    const last = conversation.messages[conversation.messages.length - 1];
     const known = savedJson.get(id);
     let json: string;
     if (
       known &&
       known.conversation === conversation &&
       known.updatedAt === conversation.updatedAt &&
-      known.count === conversation.messages.length &&
-      last === conversation.messages[conversation.messages.length - 1]
+      known.count === conversation.messages.length
     ) {
       json = known.json;
     } else {
-      json = JSON.stringify(withoutImages(conversation));
+      const clean = withoutImages(conversation);
+      json = toDb ? '' : JSON.stringify(clean);
+      if (toDb) changed.push(clean);
       savedJson.set(id, {
         conversation,
         updatedAt: conversation.updatedAt,
@@ -294,14 +313,52 @@ function writeConversations(store: ConversationStore): void {
         json,
       });
     }
-    parts.push(`${JSON.stringify(id)}:${json}`);
+    if (!toDb) parts.push(`${JSON.stringify(id)}:${json}`);
   }
-  for (const id of savedJson.keys()) if (!live.has(id)) savedJson.delete(id);
+  const removed = [...savedJson.keys()].filter((id) => !live.has(id));
+  for (const id of removed) savedJson.delete(id);
+  if (toDb) {
+    if (!changed.length && !removed.length) return;
+    writeChats(changed, removed, store.activeId ?? null).then(
+      () => {
+        // Moved over: the old copy only crowds the settings out of their
+        // 10 MB.
+        if (localStorage.getItem(CONVERSATIONS_KEY) !== null) {
+          localStorage.removeItem(CONVERSATIONS_KEY);
+        }
+      },
+      (error) => {
+        // Not saved: try these chats again on the next save.
+        for (const conversation of changed) savedJson.delete(conversation.id);
+        reportSaveFailure(error);
+      },
+    );
+    return;
+  }
   const head = JSON.stringify({ version: store.version, activeId: store.activeId ?? null });
   localStorage.setItem(
     CONVERSATIONS_KEY,
     `${head.slice(0, -1)},"conversations":{${parts.join(',')}}}`,
   );
+}
+
+let saveFailureReported = false;
+
+/**
+ * Said once, not swallowed: on 8 October a full localStorage dropped every
+ * save for a day and nothing showed it.
+ */
+function reportSaveFailure(error: unknown): void {
+  console.error('[Sage] Chats could not be saved:', error);
+  if (saveFailureReported) return;
+  saveFailureReported = true;
+  void import('sonner')
+    .then(({ toast }) =>
+      toast.error('Chats could not be saved. Keep this window open and tell Claude.', {
+        duration: 15000,
+      }),
+    )
+    .catch(() => {});
 }
 
 function flushConversations(): void {
@@ -311,8 +368,9 @@ function flushConversations(): void {
   if (!store) return;
   try {
     writeConversations(store);
-  } catch {
-    // Storage full or read-only: the chats stay usable in memory.
+  } catch (error) {
+    // The chats stay usable in memory; say so instead of losing them quietly.
+    reportSaveFailure(error);
   }
 }
 
@@ -338,6 +396,26 @@ function saveConversations(store: ConversationStore): void {
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('pagehide', flushConversations);
   window.addEventListener('beforeunload', flushConversations);
+  // A database write finishes after the call returns, so start it when the
+  // window is hidden (tray, minimise), well before it can be closed.
+  if (typeof document !== 'undefined') {
+    document.addEventListener?.('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushConversations();
+    });
+  }
+}
+
+/** Every chat as JSON, for Settings' export. */
+export function exportConversationsJson(): string {
+  return JSON.stringify(loadConversations());
+}
+
+/** Replace every chat (Settings' import, or clear with an empty store). */
+export function replaceConversations(store: ConversationStore): void {
+  cachedStore = store;
+  saveConversations(store);
+  flushConversations();
+  useAppStore.getState().loadConversations();
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';

@@ -93,6 +93,59 @@ class TestSpokenTables:
         assert to_spoken_text("| Speed | 50 km/h |") == "Speed: 50 km/h."
 
 
+_AIRPODS = "\n".join(
+    [
+        "| | AirPods 4 | AirPods 5 |",
+        "|---|---|---|",
+        "| **Price** | ₱10,990 | ₱9,490 |",
+        "| **Battery with ANC** | Up to 4 hours | Up to 4 hours |",
+        "| **Fit** | Open fit, no silicone tips | Open fit, no silicone tips |",
+        "| **Case** | Wireless charging | USB-C only |",
+    ]
+)
+
+
+class TestSpokenComparisons:
+    """Reported 9 October: "ANC option: ₱10,990, ₱9,490" never said which
+    price was whose, and identical cells were read twice."""
+
+    def test_each_value_is_said_with_its_option(self):
+        spoken = to_spoken_text(_AIRPODS)
+        assert "Price: AirPods 4, 10,990 pesos; AirPods 5, 9,490 pesos." in spoken
+        assert "Case: AirPods 4, Wireless charging; AirPods 5, USB-C only." in spoken
+
+    def test_rows_that_match_are_folded_into_one_sentence(self):
+        spoken = to_spoken_text(_AIRPODS)
+        assert spoken.startswith(
+            "Both are the same on battery with ANC, up to 4 hours; and fit."
+        )
+        assert "Up to 4 hours, Up to 4 hours" not in spoken
+
+    def test_a_list_with_columns_is_still_read_by_row(self):
+        table = "| Day | Time | Room |\n|---|---|---|\n| Mon | 9:40 | HSSH-502 |"
+        assert to_spoken_text(table) == "Mon: 9:40, HSSH-502."
+
+    def test_a_comparison_diagram_is_spoken_like_its_table(self):
+        reply = (
+            "Get the AirPods 5.\n\n```sage-diagram\n"
+            '{"shape": "comparison", "title": "AirPods", '
+            '"columns": ["AirPods 4", "AirPods 5", "AirPods 5 Wireless"], '
+            '"rows": [{"label": "Price", "cells": ["₱10,990", "₱9,490", "₱10,990"]}, '
+            '{"label": "Fit", "cells": ["Open fit", "Open fit", "Open fit"]}]}\n'
+            "```\n\nThat is all."
+        )
+        spoken = to_spoken_text(reply)
+        assert "All three are the same on fit, open fit." in spoken
+        assert "Price: AirPods 4, 10,990 pesos; AirPods 5, 9,490 pesos; " in spoken
+        assert "shape" not in spoken and spoken.endswith("That is all.")
+
+    def test_other_diagrams_stay_silent(self):
+        reply = (
+            '```sage-diagram\n{"shape": "flow", "title": "x", "nodes": []}\n```\nDone.'
+        )
+        assert to_spoken_text(reply) == "Done."
+
+
 class TestSpokenSymbols:
     def test_calculator_notation_is_said_as_words(self):
         assert to_spoken_text("Press **STAT → Lin**, then read ŷ.") == (
@@ -286,3 +339,9 @@ class TestDashesAreHeardAsPauses:
         assert "Management, Drafting" in spoken
         # And nothing was duplicated on the way through.
         assert spoken.lower().count("sir") == 1
+
+
+def test_a_leaked_citation_marker_is_not_spoken():
+    """9 October: gpt-6-luna wrote "\ue200cite\ue202<url>\ue201" into a reply."""
+    reply = "About 6% faster. \ue200cite\ue202https://www.xda-developers.com/x\ue201\n\nChoose."
+    assert to_spoken_text(reply) == "About 6% faster.\n\nChoose."
