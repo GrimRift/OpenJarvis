@@ -339,6 +339,59 @@ def resolve_place(
     return configured, current_coordinates()
 
 
+#: OpenStreetMap's reverse lookup, for the town the PC is in (the user's
+#: choice, 9 October: "In Lucban: ..." rather than an unnamed "here").
+REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
+_REVERSE_TIMEOUT = 3.0
+_towns: Dict[Tuple[float, float], Dict[str, str]] = {}
+_towns_lock = threading.Lock()
+
+
+def town_at(coords: Tuple[float, float]) -> Dict[str, str]:
+    """{"name": town, "admin2": province} at *coords*, or {"name": ""}.
+
+    Cached per ~1 km square for the process, so a fix that has not moved
+    never asks again; OpenStreetMap allows one request a second and wants a
+    named client. Any failure leaves the place unnamed -- the weather itself
+    does not depend on it.
+    """
+    key = (round(coords[0], 2), round(coords[1], 2))
+    with _towns_lock:
+        if key in _towns:
+            return dict(_towns[key])
+    found: Dict[str, str] = {"name": ""}
+    try:
+        response = httpx.get(
+            REVERSE_URL,
+            params={
+                "lat": f"{coords[0]:.5f}",
+                "lon": f"{coords[1]:.5f}",
+                "format": "json",
+                "zoom": "12",
+                "accept-language": "en",
+            },
+            headers={"User-Agent": "Sage personal assistant (single user)"},
+            timeout=_REVERSE_TIMEOUT,
+        )
+        response.raise_for_status()
+        address = response.json().get("address") or {}
+        name = next(
+            (
+                address[k]
+                for k in ("town", "city", "municipality", "village", "suburb")
+                if address.get(k)
+            ),
+            "",
+        )
+        province = address.get("province") or address.get("state") or ""
+        found = {"name": name, "admin2": province} if name else {"name": ""}
+    except Exception:  # noqa: BLE001
+        return found
+    with _towns_lock:
+        _towns[key] = found
+    return dict(found)
+
+
 def locate(
     config: Dict[str, Any], explicit: Optional[str] = None
 ) -> Tuple[Dict[str, Any], bool]:
@@ -361,7 +414,11 @@ def locate(
             <= HOME_RADIUS_KM
         ):
             return {**home, "latitude": coords[0], "longitude": coords[1]}, True
-        return {"name": "", "latitude": coords[0], "longitude": coords[1]}, True
+        return {
+            **town_at(coords),
+            "latitude": coords[0],
+            "longitude": coords[1],
+        }, True
     if home is None:
         raise WeatherAPIError(f"Could not find a place called {name!r}.")
     return home, False

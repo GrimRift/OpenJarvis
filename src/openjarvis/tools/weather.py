@@ -13,6 +13,7 @@ answer can stay one or two sentences.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -20,7 +21,9 @@ from typing import Any, Dict, List, Optional
 from openjarvis.connectors.weather import (
     RAIN_LIKELY,
     _hour_label,
+    home_place,
     load_config,
+    place_label,
     report_for,
     summarize,
 )
@@ -207,6 +210,11 @@ class WeatherTool(BaseTool):
             config = {}
 
         asked_for = str(params.get("location") or "").strip() or None
+        if asked_for and not _named_by_user(asked_for):
+            # The model filled in a place the user never said -- on 9 October
+            # "Calamba, Laguna, Philippines" from the profile, while the user
+            # was in Lucban. Their own location is the PC's, so use that.
+            asked_for = None
         try:
             report, located_here = report_for(config, asked_for)
         except Exception as exc:
@@ -223,7 +231,11 @@ class WeatherTool(BaseTool):
         # about here; and the configured place is named too, because seeing
         # it is the signal that the location fix did not happen.
         place = report.get("place") or ""
-        spoken = summary if located_here or not place else f"{place}: {summary}"
+        # Away from home (Lucban, 9 October) the town is named, so "here" is
+        # never mistaken for the saved place.
+        home = home_place(config) if located_here else None
+        at_home = bool(home) and place == place_label(home)
+        spoken = summary if not place or at_home else f"{place}: {summary}"
         days = _days_line(report)
         content = spoken
         hours = _hours_line(report)
@@ -261,6 +273,32 @@ class WeatherTool(BaseTool):
                 "weather": {**report, "summary": summary, "focus_day": focus},
             },
         )
+
+
+#: Words in a place name that say nothing about which place it is.
+_GENERIC_PLACE_WORDS = frozenset(
+    {"city", "province", "of", "the", "municipality", "town", "philippines", "ph"}
+)
+
+
+def _named_by_user(location: str) -> bool:
+    """Whether the user's own message names *location*.
+
+    Only a place the user asked about overrides where they are ("weather in
+    Manila"). With no message to check against -- a scheduled briefing, a
+    call outside a chat turn -- the place is taken as given.
+    """
+    from openjarvis.security import page_access
+
+    text = page_access.turn_text().lower()
+    if not text.strip():
+        return True
+    words = [
+        word
+        for word in re.split(r"[^\w]+", location.lower())
+        if len(word) > 2 and word not in _GENERIC_PLACE_WORDS
+    ]
+    return any(re.search(rf"\b{re.escape(word)}\b", text) for word in words)
 
 
 __all__ = ["WeatherTool"]

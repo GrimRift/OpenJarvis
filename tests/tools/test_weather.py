@@ -165,12 +165,76 @@ class TestTheTool:
 
     def test_a_fix_far_from_home_is_not_labelled_home(self, tmp_path):
         tool = self._tool(tmp_path, use_device_location=True)
-        with patch(
-            "openjarvis.core.device_location.current_coordinates",
-            return_value=(10.3157, 123.8854),  # Cebu
+        with (
+            patch(
+                "openjarvis.core.device_location.current_coordinates",
+                return_value=(10.3157, 123.8854),  # Cebu
+            ),
+            patch.object(connector, "town_at", return_value={"name": ""}),
         ):
             result, _ = self._run(tool)
         assert result.metadata["weather"]["place"] == ""
+
+    def test_away_from_home_the_town_is_named(self, tmp_path):
+        """9 October: the user was in Lucban; the answer says so."""
+        tool = self._tool(tmp_path, use_device_location=True)
+        with (
+            patch(
+                "openjarvis.core.device_location.current_coordinates",
+                return_value=(14.1177, 121.5494),
+            ),
+            patch.object(
+                connector,
+                "town_at",
+                return_value={"name": "Lucban", "admin2": "Quezon"},
+            ),
+        ):
+            result, fetch = self._run(tool)
+        assert result.content.startswith("Lucban, Quezon: 28°C")
+        assert fetch.call_args.args[:2] == (14.1177, 121.5494)
+
+    def test_a_place_the_user_never_said_is_ignored(self, tmp_path):
+        """The model wrote "Calamba, Laguna, Philippines" from the profile while
+        the user, in Lucban, only asked "will it rain later?"."""
+        from openjarvis.security import page_access
+
+        tool = self._tool(tmp_path, use_device_location=True)
+        with (
+            page_access.scope("whats up, will it rain later?"),
+            patch(
+                "openjarvis.core.device_location.current_coordinates",
+                return_value=(14.1177, 121.5494),
+            ),
+            patch.object(
+                connector,
+                "town_at",
+                return_value={"name": "Lucban", "admin2": "Quezon"},
+            ),
+        ):
+            result, fetch = self._run(tool, location="Calamba, Laguna, Philippines")
+        assert fetch.call_args.args[:2] == (14.1177, 121.5494)
+        assert result.content.startswith("Lucban, Quezon:")
+
+    def test_a_place_the_user_names_still_wins(self, tmp_path):
+        from openjarvis.security import page_access
+
+        tool = self._tool(tmp_path, use_device_location=True)
+        tokyo = {
+            **CALAMBA,
+            "name": "Tokyo",
+            "admin2": "",
+            "admin1": "Tokyo",
+            "latitude": 35.68,
+            "longitude": 139.69,
+        }
+        with (
+            page_access.scope("what's the weather in Tokyo tomorrow?"),
+            patch("openjarvis.core.device_location.current_coordinates") as fix,
+            patch.object(connector, "geocode", return_value=tokyo),
+        ):
+            _, fetch = self._run(tool, location="Tokyo, Japan")
+        assert fetch.call_args.args[:2] == (35.68, 139.69)
+        assert not fix.called
 
     def test_a_named_place_is_echoed_back(self, tmp_path):
         """An answer about Tokyo must not be mistaken for one about here."""
@@ -492,3 +556,27 @@ class TestADaysOwnHoursAndAdvice:
         assert connector.day_advice(day) == (
             "Clear sky, no rain expected. UV is very high around midday. 24–33°C"
         )
+
+
+def test_the_town_is_read_from_openstreetmap_once_per_area():
+    from unittest.mock import MagicMock
+
+    reply = MagicMock()
+    reply.json.return_value = {
+        "address": {"village": "Palola", "town": "Lucban", "province": "Quezon"}
+    }
+    connector._towns.clear()
+    with patch.object(connector.httpx, "get", return_value=reply) as get:
+        first = connector.town_at((14.11766, 121.54938))
+        again = connector.town_at((14.11801, 121.54990))  # same ~1 km square
+    assert first == again == {"name": "Lucban", "admin2": "Quezon"}
+    assert get.call_count == 1
+    assert "Sage" in get.call_args.kwargs["headers"]["User-Agent"]
+    connector._towns.clear()
+
+
+def test_a_failed_town_lookup_leaves_the_place_unnamed():
+    connector._towns.clear()
+    with patch.object(connector.httpx, "get", side_effect=OSError("offline")):
+        assert connector.town_at((14.1, 121.5)) == {"name": ""}
+    connector._towns.clear()
