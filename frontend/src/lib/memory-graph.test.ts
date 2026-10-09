@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MemoryFact } from './api';
-import { CORE_TOPICS, curve, layout, regionOf, similarLinks, toGraphFact, topicOf, webLinks, type GraphFact } from './memory-graph';
+import { CORE_TOPICS, curve, layout, regionOf, similarLinks, toGraphFact, topicOf, webLinks, type GraphFact, type Vec3 } from './memory-graph';
 
 const fact = (id: string, text: string, topic: string, extra: Partial<MemoryFact> = {}): GraphFact =>
   toGraphFact({
@@ -87,5 +87,32 @@ describe('links', () => {
     const pts = curve([1, 0, 0], [0, 0, 1]);
     expect(pts[0][0]).toBeCloseTo(1, 1);
     expect(pts[pts.length - 1][2]).toBeCloseTo(1, 1);
+  });
+
+  // 10 Oct: the ends sat 0.012 off the shell, so links missed their dots.
+  it.each([
+    [[0.9, 0.1, 0.2], [0.8, 0.3, 0.25]], // close: over the shell
+    [[1, 0, 0], [-0.2, 0.1, 0.95]], // far: through the inside
+  ] as [Vec3, Vec3][])('starts and ends exactly on the two facts', (a, b) => {
+    const pts = curve(a, b);
+    expect(pts[0]).toEqual(a);
+    expect(pts[pts.length - 1]).toEqual(b);
+  });
+
+  it('a close link bows out over the facts between, smoothly', () => {
+    const a: Vec3 = [1, 0, 0], b: Vec3 = [0.92, 0.39, 0];
+    const pts = curve(a, b);
+    const r = (v: Vec3) => Math.hypot(v[0], v[1], v[2]);
+    expect(r(pts[Math.floor(pts.length / 2)])).toBeGreaterThan(1);
+    // no corners: consecutive pieces turn only a little
+    for (let k = 1; k < pts.length - 1; k++) {
+      const u = pts[k].map((x, i) => x - pts[k - 1][i]), w = pts[k + 1].map((x, i) => x - pts[k][i]);
+      const cos = (u[0] * w[0] + u[1] * w[1] + u[2] * w[2]) / (Math.hypot(...u) * Math.hypot(...w));
+      expect(cos).toBeGreaterThan(0.97);
+    }
+  });
+
+  it('a far link uses enough points to look curved', () => {
+    expect(curve([1, 0, 0], [-0.5, 0.5, 0.7]).length).toBeGreaterThan(30);
   });
 });

@@ -222,22 +222,31 @@ export function webLinks(facts: GraphFact[], positions: Vec3[]): [number, number
 }
 
 /**
- * Points along a link: hugging the surface when the two facts are close,
- * bending through the inside (a fibre tract) when they are far apart.
+ * Points along a link, from exactly one fact to exactly the other.
+ * Close facts: an arc that bows a little OUT of the shell, so it passes over
+ * the facts in between instead of through them. Far apart: a gentle bend
+ * through the inside (a fibre tract). Enough points that neither shows
+ * corners. (10 Oct, user: "the line connecting the memories is kinda off" --
+ * every point, the ends too, sat 0.012 off the shell, and far links dived
+ * to 22% of the way to the centre in 14 straight pieces.)
  */
 export function curve(a: Vec3, b: Vec3): Vec3[] {
   const dist = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-  const far = dist > 0.55, steps = far ? 14 : 6;
+  const far = dist > 0.55;
+  const steps = Math.max(8, Math.min(40, Math.round(dist * 36)));
   const pts: Vec3[] = [];
-  const ctrl = scale(add(a, b), far ? 0.22 : 0.5);
+  const ctrl = scale(add(a, b), 0.36);
+  const ra = len(a), rb = len(b), lift = 0.01 + 0.05 * dist;
   for (let k = 0; k <= steps; k++) {
     const t = k / steps;
     if (far) {
       pts.push(add(add(scale(a, (1 - t) ** 2), scale(ctrl, 2 * t * (1 - t))), scale(b, t * t)));
     } else {
       const q: Vec3 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-      pts.push(scale(normalize(q), len(a) * (1 - t) + len(b) * t + 0.012));
+      pts.push(scale(normalize(q), ra * (1 - t) + rb * t + lift * Math.sin(Math.PI * t)));
     }
   }
+  pts[0] = [a[0], a[1], a[2]];
+  pts[steps] = [b[0], b[1], b[2]];
   return pts;
 }
