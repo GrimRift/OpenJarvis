@@ -1547,6 +1547,8 @@ export interface MemoryFact {
   pending: boolean;
   removed_at: number | null;
   removed_reason: string;
+  /** One of memory/topics.py TOPICS; '' until the model has tagged it. */
+  topic?: string;
   score?: number;
 }
 

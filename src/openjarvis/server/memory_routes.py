@@ -55,6 +55,7 @@ def _fact_dict(fact: Any, score: Optional[float] = None) -> Dict[str, Any]:
         and now - fact.created_at < PENDING_SECONDS,
         "removed_at": fact.removed_at,
         "removed_reason": fact.removed_reason,
+        "topic": getattr(fact, "topic", "") or "",
     }
     if score is not None:
         data["score"] = score
@@ -100,6 +101,9 @@ async def add_fact(request: Request):
     )
     if not added:
         raise HTTPException(status_code=409, detail="Sage already remembers that")
+    service = getattr(request.app.state, "memory_service", None)
+    if service is not None and hasattr(service, "tag_soon"):
+        service.tag_soon()
     fact = next((f for f in reversed(store.list()) if f.text == text), None)
     return {"fact": _fact_dict(fact) if fact else None}
 

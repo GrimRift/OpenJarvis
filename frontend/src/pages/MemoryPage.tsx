@@ -1,12 +1,14 @@
 /**
  * Memory (M38): everything Sage remembers, in one place.
  *
- * Facts (search / add / edit / delete / pin / private), the daily diary,
+ * Brain (the default): every fact as a neural orb, three.js loaded only
+ * when it opens (components/Memory/MemoryOrb.tsx). Then the Facts list
+ * (search / add / edit / delete / pin / private), the daily diary,
  * indexed documents with upload, and the profile. Fact search uses the same
  * ranking recall does, so what this page shows is what the model can reach.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Brain, Pin, PinOff, EyeOff, Eye, Trash2, RotateCcw, Upload, RefreshCw, Search, Plus } from 'lucide-react';
 import {
   addMemoryFact,
@@ -36,7 +38,10 @@ import {
   type MemoryPageSettings,
 } from '../lib/api';
 
-type Tab = 'facts' | 'episodes' | 'documents' | 'profile';
+type Tab = 'brain' | 'facts' | 'episodes' | 'documents' | 'profile';
+
+// three.js is a separate chunk, fetched the first time the Brain tab opens.
+const MemoryOrb = lazy(() => import('../components/Memory/MemoryOrb'));
 
 const panel = { background: 'var(--color-surface)', border: '1px solid var(--color-border)' } as const;
 const input = {
@@ -67,13 +72,14 @@ function Button({ onClick, children, title, danger, disabled }: {
 }
 
 export function MemoryPage() {
-  const [tab, setTab] = useState<Tab>('facts');
+  const [tab, setTab] = useState<Tab>('brain');
   const [error, setError] = useState<string | null>(null);
-  const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
+  const fail = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), []);
+  const brain = tab === 'brain';
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-10">
-      <div className="max-w-4xl mx-auto">
+    <div className={brain ? 'flex-1 flex flex-col overflow-hidden px-6 pt-10 pb-6' : 'flex-1 overflow-y-auto px-6 py-10'}>
+      <div className={brain ? 'w-full max-w-[1400px] mx-auto flex-1 flex flex-col min-h-0' : 'max-w-4xl mx-auto'}>
         <div className="flex items-center gap-3 mb-1">
           <Brain size={22} style={{ color: 'var(--color-accent)' }} />
           <h1 className="text-xl font-semibold" style={{ color: 'var(--color-text)' }}>Memory</h1>
@@ -83,7 +89,7 @@ export function MemoryPage() {
         </p>
 
         <div className="flex gap-1 mb-6 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          {(['facts', 'episodes', 'documents', 'profile'] as Tab[]).map((t) => (
+          {(['brain', 'facts', 'episodes', 'documents', 'profile'] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -104,6 +110,13 @@ export function MemoryPage() {
           </div>
         )}
 
+        {brain && (
+          <div className="flex-1 min-h-[480px]">
+            <Suspense fallback={<div className="h-full rounded-xl grid place-items-center text-sm" style={{ background: '#0a0a0b', color: '#8b8b94' }}>Loading the memory orb…</div>}>
+              <MemoryOrb fail={fail} />
+            </Suspense>
+          </div>
+        )}
         {tab === 'facts' && <FactsTab fail={fail} />}
         {tab === 'episodes' && <EpisodesTab fail={fail} />}
         {tab === 'documents' && <DocumentsTab fail={fail} />}

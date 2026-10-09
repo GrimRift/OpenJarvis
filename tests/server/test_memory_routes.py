@@ -12,6 +12,10 @@ from openjarvis.memory.store import LocalFactStore
 class _Service:
     def __init__(self, store):
         self._store = store
+        self.tag_requests = 0
+
+    def tag_soon(self):
+        self.tag_requests += 1
 
 
 @pytest.fixture
@@ -93,6 +97,20 @@ class TestFacts:
         assert removed[0]["id"] == fid and "Memory page" in removed[0]["removed_reason"]
         assert client.post(f"/v1/memory/facts/{fid}/restore").status_code == 200
         assert fid in [f["id"] for f in client.get("/v1/memory/facts").json()["facts"]]
+
+    def test_facts_carry_their_topic_and_a_new_one_gets_tagged(self, store) -> None:
+        """The Memory brain places each fact by topic; an added fact is
+        tagged on the worker right away instead of after the next chat."""
+        fid = store.list()[0].id
+        store.set_topics({fid: "school"})
+        client = _client(store)
+        by_id = {f["id"]: f for f in client.get("/v1/memory/facts").json()["facts"]}
+        assert by_id[fid]["topic"] == "school"
+        assert all("topic" in f for f in by_id.values())
+
+        service = client.app.state.memory_service
+        client.post("/v1/memory/facts", json={"text": "User owns a cat"})
+        assert service.tag_requests == 1
 
     def test_validation(self, store) -> None:
         client = _client(store)

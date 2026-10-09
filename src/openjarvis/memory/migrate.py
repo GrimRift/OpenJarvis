@@ -62,14 +62,32 @@ def fold_memory_md(store: Any, config_dir: Optional[Path] = None) -> int:
     return added
 
 
-def pin_curated(store: Any) -> int:
+_PIN_CURATED_DONE = "memory_pin_curated.done"
+
+
+def pin_curated(store: Any, config_dir: Optional[Path] = None) -> int:
     """Curated facts written before pins existed are the identity core;
-    pin them once so relevance recall never drops them."""
+    pin them once so relevance recall never drops them.
+
+    Once: it ran on every start until 9 Oct, so a curated fact the user
+    unpinned on the Memory page was pinned again at the next restart. A
+    marker file now records that the migration ran; a store that already
+    has a pinned curated fact ran it before the marker existed.
+    """
+    marker = (config_dir or DEFAULT_CONFIG_DIR) / _PIN_CURATED_DONE
+    if marker.exists():
+        return 0
+    facts = store.list()
     pinned = 0
-    for fact in store.list():
-        if fact.source == "curated" and not fact.pinned:
-            if store.update(fact.id, pinned=True) is not None:
-                pinned += 1
+    if not any(f.source == "curated" and f.pinned for f in facts):
+        for fact in facts:
+            if fact.source == "curated" and not fact.pinned:
+                if store.update(fact.id, pinned=True) is not None:
+                    pinned += 1
+    try:
+        marker.write_text("pinned curated facts once\n", encoding="utf-8")
+    except OSError:
+        logger.warning("Could not record that curated facts were pinned", exc_info=True)
     return pinned
 
 

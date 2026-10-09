@@ -37,6 +37,7 @@ _BLOCKING_THREAT_LEVELS = frozenset({"high", "critical"})
 
 # Sentinel pushed onto the queue to wake the worker for shutdown.
 _STOP = object()
+_TAG = object()  # tag untagged facts now (a fact added on the Memory page)
 
 
 class MemoryService:
@@ -92,6 +93,19 @@ class MemoryService:
         self._thread = None
         self._unsubscribe_events()
         logger.debug("Memory service stopped")
+
+    def tag_soon(self) -> None:
+        """Give untagged facts a topic on the worker, off the request path.
+
+        A fact added on the Memory page would otherwise wait for the next
+        conversation; the brain view places facts by topic.
+        """
+        if not self._running.is_set():
+            return
+        try:
+            self._queue.put_nowait(_TAG)
+        except queue.Full:
+            pass  # the next extraction job tags it anyway
 
     @property
     def is_running(self) -> bool:
@@ -166,6 +180,10 @@ class MemoryService:
             if job is _STOP:
                 self._queue.task_done()
                 break
+            if job is _TAG:
+                self._tag_topics()
+                self._queue.task_done()
+                continue
             try:
                 self._process(job)
                 # Facts saved by this job, or by `remember` since the last

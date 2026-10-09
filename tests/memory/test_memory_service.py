@@ -85,6 +85,21 @@ class FakeScanner:
         )
 
 
+def test_tag_soon_tags_on_the_worker(tmp_path):
+    svc = _service(tmp_path, FakeExtractor())
+    calls = []
+    svc._tag_topics = lambda: calls.append(threading.current_thread())
+    svc.tag_soon()  # not running: ignored
+    svc.start()
+    try:
+        assert _wait_until(lambda: len(calls) == 1)  # the start-up backfill
+        svc.tag_soon()
+        assert _wait_until(lambda: len(calls) == 2)
+        assert calls[1] is not threading.current_thread()
+    finally:
+        svc.stop()
+
+
 def test_clean_facts_are_tagged_auto_and_stay_recallable(tmp_path):
     svc = _service(tmp_path, FakeExtractor(["User likes hiking"]))
     svc.start()

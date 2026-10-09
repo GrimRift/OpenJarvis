@@ -816,3 +816,21 @@ html[data-app-hidden] *::after {
 @media (prefers-reduced-motion: reduce) {
   .sage-wordmark { animation: none; }
 }
+
+/* Memory orb: topic and region names placed over the 3D view each frame */
+.memory-orb-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: nowrap;
+  font-size: 11px;
+  color: rgba(231, 231, 234, 0.75);
+  text-shadow: 0 0 6px #000, 0 0 2px #000;
+  will-change: transform, opacity;
+}
+.memory-orb-region {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
