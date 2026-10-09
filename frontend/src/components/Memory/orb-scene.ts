@@ -20,13 +20,37 @@ const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 const HASH = /* glsl */ `
   float hash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }`;
 
+// Shockwaves, like the voice orb's wake ripple but bigger: A opens the Brain
+// (from the core, everything pushed out as the front passes, the orb kicks
+// in size), B pulses from a clicked fact every 3 s. w = origin + progress
+// (0..1, <0 none); k = max radius, front width, push, strength.
+const WAVE = /* glsl */ `
+  uniform vec4 uWaveA, uWaveAK, uWaveB, uWaveBK;
+  uniform float uKick;
+  float waveAmp(vec3 p, vec4 w, vec4 k) {
+    if (w.w < 0.0 || w.w >= 1.0) return 0.0;
+    float front = k.x * (1.0 - (1.0 - w.w) * (1.0 - w.w));
+    float d = distance(p, w.xyz);
+    return exp(-pow((d - front) / k.y, 2.0)) * pow(1.0 - w.w, 1.3) * k.w;
+  }
+  vec3 waved(vec3 p, out float amp) {
+    float a = waveAmp(p, uWaveA, uWaveAK), b = waveAmp(p, uWaveB, uWaveBK);
+    amp = a + b;
+    vec3 q = p + normalize(p - uWaveA.xyz + 1e-4) * a * uWaveAK.z + normalize(p - uWaveB.xyz + 1e-4) * b * uWaveBK.z;
+    return q * uKick;
+  }`;
+
 const VERTEX = /* glsl */ `
   attribute vec3 color; attribute float size; attribute vec4 flags; // pinned, new, dim, selected
   uniform float uTime, uPR;
   varying vec3 vColor; varying vec4 vFlags; varying float vRim; varying float vPhase; varying float vBeat;
-  varying float vTwinkle; varying float vStar;
+  varying float vTwinkle; varying float vStar; varying float vWave;
   ${HASH}
+  ${WAVE}
   void main() {
+    float wv;
+    vec3 pos = waved(position, wv);
+    vWave = wv;
     vRim = 1.0;
     vPhase = fract(uTime * 0.55 + position.x * 1.7 + position.z);
     vBeat = 0.5 + 0.5 * sin(uTime * 2.2 + position.z * 4.0);
@@ -38,9 +62,9 @@ const VERTEX = /* glsl */ `
     #ifdef RIM
     vRim = 1.0 - abs(normalize(normalMatrix * position).z);
     #endif
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    float s = size;
-    if (flags.x > 0.5) s *= 2.6 + 0.3 * sin(uTime * 2.2 + position.z * 4.0);
+    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+    float s = size * (1.0 + 1.6 * wv);
+    if (flags.x > 0.5) s *= 2.2 + 0.3 * sin(uTime * 2.2 + position.z * 4.0);
     if (flags.y > 0.5) s *= 2.4;
     if (flags.w > 0.5) s *= flags.x > 0.5 ? 1.35 : 2.2; // a pinned one is already large
     #ifdef SOFT
@@ -54,7 +78,7 @@ const VERTEX = /* glsl */ `
 const FRAGMENT = /* glsl */ `
   uniform float uTime;
   varying vec3 vColor; varying vec4 vFlags; varying float vRim; varying float vPhase; varying float vBeat;
-  varying float vTwinkle; varying float vStar;
+  varying float vTwinkle; varying float vStar; varying float vWave;
   void main() {
     vec2 q = gl_PointCoord - 0.5;
     float d = length(q);
@@ -72,20 +96,18 @@ const FRAGMENT = /* glsl */ `
     a = (a + glint) * vTwinkle;
     #endif
     if (vFlags.x > 0.5) {
-      // Pinned: drawn ~2.6x. A hot core, soft rays turning slowly, ripples
-      // running out to the beating ring, and a dashed halo turning the other way.
+      // Pinned: drawn ~2.2x. A hot core, soft rays turning slowly, ripples
+      // running outward and a soft glow that beats (rings removed, user 10 Oct).
       float ang = atan(q.y, q.x);
       float hot = smoothstep(0.13, 0.0, d);
       float rays = pow(abs(sin(ang * 4.0 + uTime * 0.35)), 10.0) * smoothstep(0.42, 0.1, d) * 0.4;
-      float ripple = (0.5 + 0.5 * sin(d * 60.0 - uTime * 3.2)) * smoothstep(0.08, 0.14, d) * smoothstep(0.3, 0.2, d) * 0.35;
-      float ring = smoothstep(0.022, 0.0, abs(d - 0.33)) * (0.6 + 0.9 * vBeat);
-      float dash = step(0.5, fract(ang / 6.2832 * 14.0 - uTime * 0.12)) * smoothstep(0.012, 0.0, abs(d - 0.43)) * 0.7;
+      float ripple = (0.5 + 0.5 * sin(d * 60.0 - uTime * 3.2)) * smoothstep(0.08, 0.14, d) * smoothstep(0.36, 0.22, d) * 0.35;
       float halo = smoothstep(0.5, 0.0, d); halo = halo * halo * (0.18 + 0.18 * vBeat);
       vec3 warm = vec3(1.0, 0.92, 0.72);
       c = mix(c, warm, 0.6);
-      a = hot * 1.05 + rays + ripple + ring + dash + halo;
-      // the outer halo and dashes lean cyan, like Sage's orb
-      c = mix(c, vec3(0.55, 0.95, 1.0), smoothstep(0.3, 0.45, d) * 0.6);
+      a = hot * 1.05 + rays + ripple + halo;
+      // the outer glow leans cyan, like Sage's orb
+      c = mix(c, vec3(0.55, 0.95, 1.0), smoothstep(0.25, 0.45, d) * 0.6);
     }
     if (vFlags.y > 0.5) {
       // drawn 2.4x larger: a small core plus a ring that expands and fades
@@ -95,6 +117,9 @@ const FRAGMENT = /* glsl */ `
       a = small * 1.4 + glow * 0.25 + wave * 1.3;
     }
     if (vFlags.w > 0.5) a += glow * 0.8;
+    float wave = clamp(vWave, 0.0, 2.0);
+    a += wave * (core + glow) * 1.4;
+    c = mix(c, vec3(0.8, 1.0, 1.0), min(wave, 1.0) * 0.5);
     a *= mix(1.0, 0.08, vFlags.z);
     #ifdef RIM
     a *= mix(0.45, 1.5, pow(vRim, 1.5));
@@ -108,12 +133,15 @@ const LINE_VERTEX = /* glsl */ `
   attribute vec3 color; attribute vec2 along; // x: 0..1 along the link, y: the link's phase
   uniform float uTime;
   varying vec3 vColor; varying float vPulse;
+  ${WAVE}
   void main() {
+    float wv;
+    vec3 pos = waved(position, wv);
     float w = fract(uTime * 0.28 + along.y);
     float pulse = exp(-pow((along.x - w) * 9.0, 2.0)) * smoothstep(0.0, 0.1, w) * smoothstep(1.0, 0.9, w);
     vPulse = pulse;
-    vColor = color * (0.75 + 0.25 * sin(uTime * 1.2)) * (1.0 + 3.2 * pulse);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vColor = color * (0.75 + 0.25 * sin(uTime * 1.2)) * (1.0 + 3.2 * pulse + 4.0 * wv);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
   }`;
 
 const LINE_FRAGMENT = /* glsl */ `
@@ -149,7 +177,17 @@ export class OrbScene {
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
-  private uniforms = { uTime: { value: 0 }, uPR: { value: 1 } };
+  private uniforms = {
+    uTime: { value: 0 }, uPR: { value: 1 }, uKick: { value: 1 },
+    uWaveA: { value: new THREE.Vector4(0, 0, 0, -1) }, uWaveAK: { value: new THREE.Vector4(1.35, 0.16, 0.14, 1.6) },
+    uWaveB: { value: new THREE.Vector4(0, 0, 0, -1) }, uWaveBK: { value: new THREE.Vector4(2.4, 0.14, 0.07, 1.1) },
+  };
+  // Shockwave clocks (ms since page load; -1 = none) and the click pulse's fact.
+  private waveA = -1;
+  private waveB = -1;
+  private pulseFact = -1;
+  private nextPulse = 0;
+  private opened = false;
   private pointMat: THREE.ShaderMaterial;
   private rimMat: THREE.ShaderMaterial;
   private softMat: THREE.ShaderMaterial;
@@ -285,6 +323,9 @@ export class OrbScene {
     this.sparkGeo.dispose(); this.sparkGeo = makePoints(Math.max(1, sparkCount * 3 + this.flashes.length)); this.sparkPts.geometry = this.sparkGeo;
     this.buildLabels();
     this.refresh();
+    // The Brain opens with a shockwave from the core (each time it is shown:
+    // the view remounts when the tab comes back).
+    if (!this.opened && facts.length) { this.opened = true; if (!this.calm) this.waveA = performance.now(); }
   }
 
   setQuery(q: string): void { this.query = q.trim().toLowerCase(); this.refresh(); }
@@ -292,6 +333,9 @@ export class OrbScene {
 
   select(id: string | null, fly: boolean): void {
     this.selected = id ? this.facts.findIndex((f) => f.id === id) : -1;
+    // A clicked fact pulses at once, then every 3 s while it stays open.
+    this.pulseFact = this.calm ? -1 : this.selected;
+    this.nextPulse = performance.now();
     if (this.selected >= 0) {
       this.controls.autoRotate = false;
       if (fly) {
@@ -508,10 +552,49 @@ export class OrbScene {
       if (t >= 1) this.flight = null;
     }
     this.moveSparks(dt);
+    this.moveWaves(now);
     this.controls.update();
     this.placeLabels();
     this.renderer.render(this.scene, this.camera);
   };
+
+  private moveWaves(now: number): void {
+    const u = this.uniforms;
+    if (this.waveA >= 0) {
+      const p = (now - this.waveA) / 1300;
+      if (p >= 1) { this.waveA = -1; u.uWaveA.value.w = -1; u.uKick.value = 1; }
+      else {
+        u.uWaveA.value.w = p;
+        // the orb jumps outward and settles in the first ~0.6 s
+        u.uKick.value = p < 0.45 ? 1 + 0.09 * Math.sin(Math.PI * (p / 0.45)) : 1;
+      }
+    }
+    if (this.pulseFact >= 0 && now >= this.nextPulse) {
+      const o = this.pos[this.pulseFact];
+      u.uWaveB.value.set(o.x, o.y, o.z, 0);
+      this.waveB = now;
+      this.nextPulse = now + 3000;
+    }
+    if (this.waveB >= 0) {
+      const p = (now - this.waveB) / 1800;
+      const sizes = this.factGeo.getAttribute('size');
+      const linked = this.pulseFact >= 0 ? this.neighbours[this.pulseFact] : [];
+      if (p >= 1) {
+        this.waveB = -1; u.uWaveB.value.w = -1;
+        for (const [j] of linked) sizes.setX(j, 9);
+      } else {
+        u.uWaveB.value.w = p;
+        // its linked facts flash as the front reaches them
+        const k = u.uWaveBK.value, o = u.uWaveB.value;
+        const front = k.x * (1 - (1 - p) ** 2);
+        for (const [j] of linked) {
+          const d = this.pos[j].distanceTo(new THREE.Vector3(o.x, o.y, o.z));
+          sizes.setX(j, 9 * (1 + 2.5 * Math.exp(-(((d - front) / 0.2) ** 2))));
+        }
+      }
+      sizes.needsUpdate = true;
+    }
+  }
 
   private moveSparks(dt: number): void {
     if (!this.sparks.length) return;
