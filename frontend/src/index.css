@@ -377,6 +377,17 @@
     font-weight: 600;
   }
 
+  /* Bold and "quoted" phrases in replies: Sage's cyan, softened toward the
+     text colour so it reads as a highlight, not a link. */
+  .prose strong,
+  .prose .sage-quote {
+    color: color-mix(in srgb, var(--color-accent) 55%, var(--color-text));
+  }
+
+  .prose a strong {
+    color: inherit;
+  }
+
   .prose a {
     color: var(--color-accent);
     text-decoration: underline;

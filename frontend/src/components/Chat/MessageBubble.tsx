@@ -18,6 +18,7 @@ import { imagesFor, documentsFor } from '../../lib/store';
 import { AudioPlayer } from './AudioPlayer';
 import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
+import { rehypeQuotes } from '../../lib/rehype-quotes';
 import { XRayFooter } from './XRayFooter';
 import { LinkPreviewCard, SourceList } from './LinkPreviewCard';
 import {
@@ -212,7 +213,7 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
   }, [message.researchSources]);
 
   const rehypePlugins = useMemo(() => {
-    const base: any[] = [[rehypeHighlight, { detect: true }], rehypeKatex];
+    const base: any[] = [[rehypeHighlight, { detect: true }], rehypeKatex, rehypeQuotes];
     if (sourcesMap.size > 0) base.push([rehypeCitations, { sources: sourcesMap }]);
     return base;
   }, [sourcesMap]);
