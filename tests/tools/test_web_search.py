@@ -1459,3 +1459,34 @@ class TestTheShortCache:
         from openjarvis.tools.web_search import cache_seconds
 
         assert cache_seconds(query) == seconds
+
+
+def test_a_site_web_read_cannot_open_is_flagged_in_the_results():
+    """mb.com.ph walls every reader: said in the results, so the one reading
+    step goes to a page that opens (the result itself stays listed)."""
+    from openjarvis.tools import unreadable_hosts
+
+    unreadable_hosts.mark("https://mb.com.ph/x", "bot check")
+    fake_module, _ = _fake_tavily_module(
+        search_return={
+            "results": [
+                _result(
+                    "LTO bans driver",
+                    "https://mb.com.ph/2026/10/06/lto-ban",
+                    "The LTO revoked the driver's license for life in Pasig.",
+                ),
+                _result(
+                    "Pasig road rage",
+                    "https://www.gmanetwork.com/news/pasig",
+                    "The LTO revoked the driver's license for life in Pasig.",
+                ),
+            ]
+        }
+    )
+    with patch.dict(sys.modules, {"tavily": fake_module}):
+        result = WebSearchTool(api_key="key").execute(query="Pasig road rage LTO")
+    blocks = result.content.split("---")
+    mb = next(b for b in blocks if "mb.com.ph" in b)
+    gma = next(b for b in blocks if "gmanetwork" in b)
+    assert "Cannot be opened with web_read: bot check" in mb
+    assert "Cannot be opened" not in gma

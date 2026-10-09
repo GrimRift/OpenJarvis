@@ -18,6 +18,7 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.security import page_access
 from openjarvis.security.ssrf import check_ssrf
+from openjarvis.tools import unreadable_hosts
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -1305,6 +1306,12 @@ class WebSearchTool(BaseTool):
             recent_line = (
                 "\nFrom the past week's news: yes" if key in recent_keys else ""
             )
+            # A site that blocked web_read before: said here, so the model
+            # spends its one reading step on pages that open (mb.com.ph).
+            blocked = unreadable_hosts.reason_for(source_url) if source_url else ""
+            blocked_line = (
+                f"\nCannot be opened with web_read: {blocked}" if blocked else ""
+            )
             excerpt = ""
             if plan.exact and excerpts_left > 0 and result.get("raw_content"):
                 excerpt = _page_excerpt(result.get("raw_content"), query)
@@ -1313,7 +1320,7 @@ class WebSearchTool(BaseTool):
                     excerpt = f"\nPage text (excerpt): {excerpt}"
             formatted_parts.append(
                 f"### {title}\nSource: {source_url}{published_line}{official_line}"
-                f"{recent_line}"
+                f"{recent_line}{blocked_line}"
                 f"\nSummary: {model_summary}{excerpt}"
             )
 

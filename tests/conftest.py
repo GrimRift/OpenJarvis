@@ -58,6 +58,22 @@ def _no_real_game(tmp_path_factory: pytest.TempPathFactory):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_unreadable_hosts(tmp_path_factory: pytest.TempPathFactory):
+    """web_read remembers sites that blocked it in the data folder; a test
+    must neither read the user's list nor add its own hosts to it."""
+    try:
+        from openjarvis.tools import unreadable_hosts
+    except Exception:  # noqa: BLE001
+        yield
+        return
+    unreadable_hosts.use_path_for_tests(
+        tmp_path_factory.mktemp("hosts") / "unreadable_hosts.json"
+    )
+    yield
+    unreadable_hosts.use_path_for_tests(None)
+
+
+@pytest.fixture(autouse=True)
 def _no_search_read_ahead(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test search must not start real page reads in the background."""
     try:

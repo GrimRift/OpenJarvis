@@ -523,3 +523,67 @@ class TestSeveralAtOnce:
         with patch.object(WebReadTool, "_fetch_static", return_value=self.ARTICLE):
             result = _tool().execute(url=PAGE)
         assert result.metadata["mode"] == "direct"
+
+
+def _walled(tool, url, wait_for):
+    """A plain read that met Cloudflare's check."""
+    tool._walled = True
+    return None
+
+
+class TestUnreadableSites:
+    """mb.com.ph: Cloudflare's check on every request, so each research turn
+    that picked it spent the browser's whole 10 s cap for nothing."""
+
+    def test_a_bot_wall_skips_the_browser_and_is_remembered(self):
+        from openjarvis.tools import unreadable_hosts
+
+        page_access.allow([PAGE])
+        with (
+            patch.object(WebReadTool, "_fetch_static", _walled),
+            patch.object(WebReadTool, "_extract", return_value=None),
+            patch.object(WebReadTool, "_render_capped") as render,
+        ):
+            first = _tool().execute(url=PAGE)
+        assert first.success is False
+        assert "bot check" in first.content
+        render.assert_not_called()
+        assert unreadable_hosts.reason_for(PAGE) == "bot check"
+
+        with patch.object(WebReadTool, "_fetch_static") as fetch:
+            again = _tool().execute(url=PAGE)
+        assert again.success is False
+        assert "Skipped" in again.content
+        fetch.assert_not_called()
+
+    def test_the_providers_reader_is_still_tried_past_a_wall(self):
+        page_access.allow_search_results([PAGE])
+        article = ("Showtimes at SM City Calamba today. " * 60, "Showtimes")
+        with (
+            patch.object(WebReadTool, "_fetch_static", _walled),
+            patch.object(WebReadTool, "_extract", return_value=article),
+        ):
+            assert _tool().execute(url=PAGE).success is True
+
+    def test_one_slow_browser_read_is_not_enough(self):
+        from openjarvis.tools import unreadable_hosts
+
+        unreadable_hosts.mark(PAGE, "timeout")
+        assert unreadable_hosts.reason_for(PAGE) == ""
+        unreadable_hosts.mark(PAGE, "timeout")
+        assert unreadable_hosts.reason_for(PAGE) == "too slow"
+
+    def test_a_cloudflare_challenge_header_is_a_wall(self):
+        from openjarvis.tools.web_read import _is_bot_wall
+
+        class Response:
+            def __init__(self, headers, body):
+                self.headers = headers
+                self._body = body
+
+            def iter_bytes(self):
+                yield self._body
+
+        assert _is_bot_wall(Response({"cf-mitigated": "challenge"}, b""))
+        assert _is_bot_wall(Response({}, b"<title>Just a moment...</title>"))
+        assert not _is_bot_wall(Response({}, b"<title>403 Forbidden</title>"))

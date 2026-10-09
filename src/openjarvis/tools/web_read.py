@@ -44,6 +44,7 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.security import page_access
 from openjarvis.security.ssrf import check_ssrf
+from openjarvis.tools import unreadable_hosts
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.opera_control import (
     _NAV_TIMEOUT,
@@ -299,6 +300,13 @@ class WebReadTool(BaseTool):
                 "opened unless the user asks about social media. Use the "
                 "article sources instead."
             )
+        known = unreadable_hosts.reason_for(url)
+        if known:
+            # Before the read budget, like a social page: nothing is opened.
+            return self._fail(
+                f"Skipped: {unreadable_hosts.host_of(url)} cannot be read "
+                f"({known} on an earlier read). Answer from the other sources."
+            )
         reserved = page_access.reserve_read(url, self._max_reads)
         if reserved == "duplicate":
             # The same page again cost a whole model round and resent its
@@ -322,9 +330,10 @@ class WebReadTool(BaseTool):
         # The page's own one-line description, when it has one, for the
         # source card (set by whichever read ran).
         self._description = ""
+        self._walled = False
         early = None if wait_for else _take_prefetched(url)
         if early is not None:
-            served, self._description = early
+            served, self._description, self._walled = early
         else:
             served = self._fetch_static(url, wait_for)
         extracted = None if served is not None else self._extract(url, wait_for)
@@ -336,6 +345,14 @@ class WebReadTool(BaseTool):
             text, title = extracted
             mode = "extract"
             waited = time.monotonic() - started
+        elif self._walled:
+            # The plain request met a bot check and the provider's reader got
+            # nothing: the browser only sits at the same check for 10 s.
+            unreadable_hosts.mark(url, "bot check")
+            return self._fail(
+                f"{urlparse(url).netloc} showed a bot check instead of the "
+                "page, so it cannot be read. Answer from the other sources."
+            )
         else:
             try:
                 text, waited, title = self._render_capped(url, wait_for)
@@ -343,6 +360,7 @@ class WebReadTool(BaseTool):
                 return self._fail(str(problem))
             except FutureTimeout:
                 logger.info("web_read: browser read of %s passed the cap", url)
+                unreadable_hosts.mark(url, "timeout")
                 return self._fail(
                     f"{url} took over {RENDER_CAP_SECONDS:.0f} s to load in the "
                     "browser, so it was skipped. Answer from the other sources."
@@ -356,6 +374,7 @@ class WebReadTool(BaseTool):
             # Not got past: a check like this is the site's to make. Said so,
             # so the answer does not rest on "Performing security
             # verification" as if it were the article (mb.com.ph, 6 October).
+            unreadable_hosts.mark(url, "bot check")
             return self._fail(
                 f"{urlparse(url).netloc} showed a bot check instead of the "
                 "page, so it cannot be read. Answer from the other sources."
@@ -366,6 +385,8 @@ class WebReadTool(BaseTool):
                 "be built entirely from images or an embedded viewer."
             )
 
+        if mode == "browser":
+            unreadable_hosts.clear(url)
         truncated = len(text) > MAX_CHARS
         body = text[:MAX_CHARS]
         notice = f"\n\n[truncated at {MAX_CHARS} characters]" if truncated else ""
@@ -408,6 +429,8 @@ class WebReadTool(BaseTool):
             ) as client:
                 with client.stream("GET", url) as response:
                     if response.status_code >= 400:
+                        if response.status_code in (403, 429, 503):
+                            self._walled = _is_bot_wall(response)
                         return None
                     if check_ssrf(str(response.url)):
                         return None
@@ -558,10 +581,27 @@ _prefetch_lock = threading.Lock()
 _prefetched: dict[str, Tuple[float, Any]] = {}
 
 
-def _plain_read(url: str) -> Tuple[Optional[Tuple[str, str]], str]:
+def _plain_read(url: str) -> Tuple[Optional[Tuple[str, str]], str, bool]:
     tool = WebReadTool()
     tool._description = ""
-    return tool._fetch_static(url, ""), tool._description
+    tool._walled = False
+    return tool._fetch_static(url, ""), tool._description, tool._walled
+
+
+def _is_bot_wall(response: Any) -> bool:
+    """A refused plain request that is a bot check (Cloudflare's "Just a
+    moment...") rather than a missing page or a plain error."""
+    if response.headers.get("cf-mitigated", "").lower() == "challenge":
+        return True
+    try:
+        head = b""
+        for chunk in response.iter_bytes():
+            head += chunk
+            if len(head) >= 8192:
+                break
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(_BOT_CHECK_RE.search(head.decode("utf-8", errors="replace")))
 
 
 def prefetch(urls: List[str]) -> None:
@@ -584,6 +624,8 @@ def prefetch(urls: List[str]) -> None:
                 continue
             if page_access.is_social(url) and not page_access.social_wanted():
                 continue
+            if unreadable_hosts.reason_for(url):
+                continue
             _prefetched[key] = (
                 now + PREFETCH_KEEP_SECONDS,
                 _prefetch_pool.submit(_plain_read, url),
@@ -591,7 +633,9 @@ def prefetch(urls: List[str]) -> None:
             started += 1
 
 
-def _take_prefetched(url: str) -> Optional[Tuple[Optional[Tuple[str, str]], str]]:
+def _take_prefetched(
+    url: str,
+) -> Optional[Tuple[Optional[Tuple[str, str]], str, bool]]:
     """The read-ahead result for *url*, waiting for it if still running; None
     when there is none, so the caller reads it itself."""
     with _prefetch_lock:
