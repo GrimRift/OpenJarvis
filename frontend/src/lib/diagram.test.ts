@@ -346,4 +346,37 @@ describe('finding the diagram inside an answer', () => {
     expect(diagramSourceIn('Just prose, no diagram.')).toBeNull();
     expect(diagramSourceIn('```sage-diagram\n{"shape":"flow"')).toBeNull();
   });
+
+  // 9 October: comparisons come as a table the chat draws as a grid; the
+  // AirPods grid was drawn in the bubble but never opened while spoken.
+  const comparison = [
+    'Sir, AirPods 5 are the better buy.',
+    '',
+    '| | AirPods 5 | AirPods 4 |',
+    '|---|---|---|',
+    '| Noise cancelling | Stronger ANC | Good ANC |',
+    '| Water resistance | IP57 | IP54 |',
+    '',
+    'Both keep the open-fit design.',
+  ].join('\n');
+
+  it('opens a comparison table as its grid', async () => {
+    const { diagramSourceIn, openDiagramFromAnswer, useDiagramPresenter } =
+      await import('./diagram-presenter');
+    const source = diagramSourceIn(comparison);
+    expect(parseDiagram(source!)?.columns).toEqual(['AirPods 5', 'AirPods 4']);
+
+    useDiagramPresenter.getState().close();
+    openDiagramFromAnswer('airpods-msg', comparison);
+    expect(useDiagramPresenter.getState().current?.shape).toBe('comparison');
+  });
+
+  it('uses the same diagram as the card in the chat, so it opens once', async () => {
+    const { diagramKey, diagramSourceIn } = await import('./diagram-presenter');
+    const { comparisonTablesToGrids } = await import('./comparison-table');
+    const inBubble = comparisonTablesToGrids(comparison, true)
+      .split('```sage-diagram\n')[1]
+      .split('\n```')[0];
+    expect(diagramKey('m', diagramSourceIn(comparison)!)).toBe(diagramKey('m', inBubble));
+  });
 });

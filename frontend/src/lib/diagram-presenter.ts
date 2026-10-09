@@ -7,6 +7,7 @@
  */
 
 import { create } from 'zustand';
+import { comparisonTablesToGrids } from './comparison-table';
 import { type Diagram, parseDiagram } from './diagram';
 
 interface DiagramPresenterState {
@@ -54,9 +55,17 @@ export function diagramKey(messageId: string, source: string): string {
 
 const BLOCK = /```sage-diagram\s*([\s\S]*?)```/;
 
-/** The diagram inside an answer, if it holds a finished one. */
+/**
+ * The diagram inside an answer, if it holds a finished one.
+ *
+ * Since 9 October a comparison arrives as a markdown table that the chat
+ * draws as a grid (lib/comparison-table.ts). Looking only for a
+ * `sage-diagram` block, the AirPods comparison was drawn in the bubble but
+ * never opened while Sage spoke it; the same conversion is applied here, so
+ * the overlay and the card are one diagram with one key.
+ */
 export function diagramSourceIn(content: string): string | null {
-  const found = BLOCK.exec(content || '');
+  const found = BLOCK.exec(comparisonTablesToGrids(content || '', true));
   return found ? found[1].trim() : null;
 }
 
