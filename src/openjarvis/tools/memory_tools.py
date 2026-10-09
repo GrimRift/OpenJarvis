@@ -82,6 +82,7 @@ class RememberTool(BaseTool):
             return ToolResult(
                 tool_name=self.tool_id, content="Nothing to remember.", success=False
             )
+        from openjarvis.memory import turns
         from openjarvis.memory.store import TRUST_TRUSTED
 
         added = _store().add(
@@ -90,6 +91,8 @@ class RememberTool(BaseTool):
             trust=TRUST_TRUSTED,
             pinned=True,
             private=bool(params.get("private", False)),
+            # A rewind past this message forgets it (memory/turns.py).
+            turn=turns.current(),
         )
         return ToolResult(
             tool_name=self.tool_id,

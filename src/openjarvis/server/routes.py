@@ -601,6 +601,9 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         page_access.previous_user_text(request_body.messages),
     )
     _memory_budget.start_message()
+    from openjarvis.memory import turns as _turns
+
+    _turns.set_turn(request_body.turn_id)
 
     # The image pasted this turn, for `image_edit(image="attached")`; a turn
     # without one clears the last turn's. Process-level, so once is enough.
@@ -2205,6 +2208,8 @@ async def _handle_streaming_orchestrator(
     async def scoped_generate():
         from contextlib import aclosing
 
+        from openjarvis.memory import turns as _turns
+
         # This body runs in Starlette's streaming task. Binding only in the
         # endpoint/response factory loses context across BaseHTTPMiddleware.
         with (
@@ -2212,6 +2217,7 @@ async def _handle_streaming_orchestrator(
                 query_text, page_access.previous_user_text(req.messages)
             ),
             _memory_budget.scope(),
+            _turns.scope(req.turn_id),
         ):
             async with aclosing(generate()) as stream:
                 async for event in stream:
@@ -2280,6 +2286,9 @@ async def _handle_agent_stream(
             _page_access.previous_user_text(req.messages),
         )
         _memory_budget.start_message()
+        from openjarvis.memory import turns as _turns
+
+        _turns.set_turn(req.turn_id)
 
         first_chunk = ChatCompletionChunk(
             id=chunk_id,

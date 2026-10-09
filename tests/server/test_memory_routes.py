@@ -237,3 +237,13 @@ def test_forget_turns_removes_what_a_rewound_message_taught(tmp_path):
     assert result.status_code == 200
     assert len(result.json()["removed"]) == 1
     assert [f.text for f in store.list()] == ["User has a cat"]
+
+
+def test_remember_carries_the_chat_turn(store) -> None:
+    from openjarvis.memory import turns
+    from openjarvis.tools.memory_tools import RememberTool
+
+    with turns.scope("m-9"):
+        RememberTool().execute(fact="User keeps a cactus on the desk")
+    saved = next(f for f in store.list() if "cactus" in f.text)
+    assert saved.turn == "m-9"

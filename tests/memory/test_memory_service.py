@@ -462,13 +462,16 @@ class TestRewoundTurns:
         finally:
             svc.stop()
 
-    def test_pinned_and_other_turns_stay(self, tmp_path):
+    def test_pinned_ones_go_too_and_other_turns_stay(self, tmp_path):
+        """10 October live test: the model ALSO saved the fact with
+        `remember` (pinned) unasked; leaving it would defeat the rewind."""
         store = LocalFactStore(tmp_path / "facts.jsonl")
         store.add("User likes jazz", source="auto", turn="m-3")
-        store.add("User studies engineering", source="auto", turn="m-3", pinned=True)
+        store.add("User has a cactus", source="you", turn="m-3", pinned=True)
         store.add("User has a cat", source="auto", turn="m-4")
+        store.add("User studies engineering", source="curated", pinned=True)
         svc = MemoryService(store, FakeExtractor())
-        assert len(svc.forget_turns(["m-3", ""])) == 1
+        assert len(svc.forget_turns(["m-3", ""])) == 2
         assert sorted(f.text for f in store.list()) == [
             "User has a cat",
             "User studies engineering",

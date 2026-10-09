@@ -326,7 +326,9 @@ class MemoryService:
         if not wanted or remove is None:
             return removed
         for fact in self._store.list():
-            if getattr(fact, "turn", "") in wanted and not fact.pinned:
+            # Pinned too: the `remember` tool pins what it saves, and the
+            # model calls it unasked ("side note: I keep a cactus").
+            if getattr(fact, "turn", "") in wanted:
                 if remove(fact.id, "chat rewound"):
                     removed.append(fact.id)
         return removed
