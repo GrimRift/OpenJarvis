@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react';
 import { orbStateLabel as labelFor } from '../../lib/orb-state';
 import { useNavigate } from 'react-router';
 import { MessageBubble } from './MessageBubble';
+import { rewindChat } from '../../lib/rewind';
 import { ComposerSlot } from './ComposerSlot';
 import { StreamingDots } from './StreamingDots';
 import { OrbVisual, useOrbGenerating, useOrbState } from './OrbVisual';
@@ -206,6 +207,11 @@ export function ChatArea() {
                   key={msg.id}
                   message={displayedMessage}
                   isLive={isLastAssistant && isCurrentChatStreaming}
+                  onRewind={
+                    msg.role === 'user' && activeId && !streamState.isStreaming
+                      ? () => rewindChat(activeId, msg.id)
+                      : undefined
+                  }
                 />
               );
             })}

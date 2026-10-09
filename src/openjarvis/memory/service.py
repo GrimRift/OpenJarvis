@@ -18,7 +18,8 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from typing import Any, List, Optional
+from collections import OrderedDict
+from typing import Any, Iterable, List, Optional
 
 from openjarvis.core.events import Event, EventBus, EventType
 from openjarvis.memory.extractor import FactExtractor
@@ -38,6 +39,7 @@ _BLOCKING_THREAT_LEVELS = frozenset({"high", "critical"})
 # Sentinel pushed onto the queue to wake the worker for shutdown.
 _STOP = object()
 _TAG = object()  # tag untagged facts now (a fact added on the Memory page)
+_REWOUND_KEPT = 500  # rewound chat turns remembered for late extractions
 
 
 class MemoryService:
@@ -61,6 +63,9 @@ class MemoryService:
         self._thread: Optional[threading.Thread] = None
         self._running = threading.Event()
         self._tag_tried: set[str] = set()
+        # Chat turns rewound away: facts extracted from them afterwards are
+        # dropped. Memory only; the extraction queue does not outlive a restart.
+        self._rewound: "OrderedDict[str, None]" = OrderedDict()
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -118,6 +123,8 @@ class MemoryService:
         user_text: str,
         assistant_text: str = "",
         answered_by: str = "",
+        *,
+        turn: str = "",
     ) -> bool:
         """Queue an exchange for extraction. Non-blocking; never raises.
 
@@ -130,7 +137,7 @@ class MemoryService:
         if not user_text or not user_text.strip():
             return False
         try:
-            self._queue.put_nowait((user_text, assistant_text, answered_by))
+            self._queue.put_nowait((user_text, assistant_text, answered_by, turn))
             return True
         except queue.Full:
             logger.debug("Memory service queue full; dropping exchange")
@@ -163,6 +170,7 @@ class MemoryService:
             str(data.get("user_text", "") or ""),
             str(data.get("assistant_text", "") or ""),
             str(data.get("model", "") or ""),
+            turn=str(data.get("turn", "") or ""),
         )
 
     # -- worker -------------------------------------------------------------
@@ -260,6 +268,9 @@ class MemoryService:
         # job stays valid and simply extracts with the configured model.
         user_text, assistant_text, *rest = job
         answered_by = rest[0] if rest else ""
+        turn = rest[1] if len(rest) > 1 else ""
+        if turn and turn in self._rewound:
+            return  # the chat was rewound past this message before extraction
         # Scan BEFORE extraction so an overt injection attempt never reaches the
         # extraction model or the store at all.
         if self._blocks_exchange(self._scan(f"{user_text}\n{assistant_text}")):
@@ -279,10 +290,14 @@ class MemoryService:
         for fact in facts:
             target = quarantined if self._flagged(self._scan(fact)) else clean
             target.append(fact)
-        stored = self._store.add_many_with_trust(clean, source="auto", trust=TRUST_AUTO)
+        if turn and turn in self._rewound:
+            return  # rewound while the model was extracting
+        stored = self._store.add_many_with_trust(
+            clean, source="auto", trust=TRUST_AUTO, turn=turn
+        )
         if quarantined:
             stored += self._store.add_many_with_trust(
-                quarantined, source="auto", trust=TRUST_UNTRUSTED
+                quarantined, source="auto", trust=TRUST_UNTRUSTED, turn=turn
             )
             logger.info(
                 "Memory: quarantined %d extracted fact(s) as untrusted",
@@ -292,6 +307,29 @@ class MemoryService:
             logger.debug("Memory service stored %d new fact(s)", stored)
 
     # -- store passthroughs -------------------------------------------------
+
+    def forget_turns(self, turns: Iterable[str]) -> List[str]:
+        """Forget the facts learned from these chat turns (the chat was
+        rewound to before them). Soft delete: restorable from Removed.
+
+        Returns the ids of the facts removed. A turn still waiting for
+        extraction is remembered, so its facts are never stored.
+        """
+        wanted = {str(t) for t in turns or () if t}
+        for turn in wanted:
+            self._rewound[turn] = None
+            self._rewound.move_to_end(turn)
+        while len(self._rewound) > _REWOUND_KEPT:
+            self._rewound.popitem(last=False)
+        removed: List[str] = []
+        remove = getattr(self._store, "remove", None)  # legacy stores have none
+        if not wanted or remove is None:
+            return removed
+        for fact in self._store.list():
+            if getattr(fact, "turn", "") in wanted and not fact.pinned:
+                if remove(fact.id, "chat rewound"):
+                    removed.append(fact.id)
+        return removed
 
     def list_facts(self) -> List[Fact]:
         return self._store.list()
@@ -364,6 +402,7 @@ def publish_completed_exchange(
     *,
     source: str = "",
     model: str = "",
+    turn: str = "",
 ) -> bool:
     """Publish a completed chat exchange for lifecycle subscribers."""
     if bus is None or not user_text or not user_text.strip():
@@ -375,6 +414,7 @@ def publish_completed_exchange(
             "assistant_text": assistant_text or "",
             "source": source,
             "model": model or "",
+            "turn": turn or "",
         },
     )
     return True

@@ -218,3 +218,22 @@ class TestFold:
             tmp_path / "MEMORY.md"
         ).exists()
         assert all(f.pinned for f in store.list() if f.source == "curated")
+
+
+def test_forget_turns_removes_what_a_rewound_message_taught(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from openjarvis.memory.service import MemoryService
+    from openjarvis.server.app import create_app
+    from tests.server.test_routes import _make_engine
+
+    store = LocalFactStore(tmp_path / "facts.jsonl")
+    store.add("User likes jazz", source="auto", turn="m-1")
+    store.add("User has a cat", source="auto", turn="m-2")
+    app = create_app(_make_engine(), "test-model")
+    app.state.memory_service = MemoryService(store, extractor=None)
+    client = TestClient(app)
+    result = client.post("/v1/memory/facts/forget-turns", json={"turns": ["m-1"]})
+    assert result.status_code == 200
+    assert len(result.json()["removed"]) == 1
+    assert [f.text for f in store.list()] == ["User has a cat"]

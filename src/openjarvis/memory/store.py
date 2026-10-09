@@ -227,6 +227,9 @@ class Fact:
     # One of memory.topics.TOPICS, set by the model after the fact is
     # saved; "" until then. Names what is on file but not sent each turn.
     topic: str = ""
+    # The app's id of the chat message this fact was learned from ("" if
+    # none): rewinding the chat past that message forgets the fact.
+    turn: str = ""
 
     @property
     def live(self) -> bool:
@@ -263,7 +266,9 @@ class FactStore(ABC):
                 added += 1
         return added
 
-    def add_with_trust(self, text: str, source: str = "", trust: str = "") -> bool:
+    def add_with_trust(
+        self, text: str, source: str = "", trust: str = "", *, turn: str = ""
+    ) -> bool:
         """Store a provenance-aware fact without breaking legacy backends.
 
         Third-party stores implementing the original ``add(text, source)``
@@ -281,10 +286,12 @@ class FactStore(ABC):
         texts: Iterable[str],
         source: str = "",
         trust: str = "",
+        *,
+        turn: str = "",
     ) -> int:
         """Store several provenance-aware facts."""
         return sum(
-            bool(self.add_with_trust(text, source=source, trust=trust))
+            bool(self.add_with_trust(text, source=source, trust=trust, turn=turn))
             for text in texts
         )
 
@@ -375,6 +382,7 @@ class LocalFactStore(FactStore):
                     else None,
                     removed_reason=str(obj.get("removed_reason", "") or ""),
                     topic=str(obj.get("topic", "") or ""),
+                    turn=str(obj.get("turn", "") or ""),
                 )
             )
         return facts
@@ -421,6 +429,7 @@ class LocalFactStore(FactStore):
         *,
         pinned: bool = False,
         private: bool = False,
+        turn: str = "",
     ) -> bool:
         text = (text or "").strip()
         if not text:
@@ -459,6 +468,7 @@ class LocalFactStore(FactStore):
                     pinned=pinned,
                     private=private,
                     day=time.strftime("%Y-%m-%d", time.localtime(now)),
+                    turn=turn,
                 )
             )
             # Enforce the cap by evicting the oldest unpinned entries. Pinned
@@ -563,8 +573,10 @@ class LocalFactStore(FactStore):
                 self._flush()
             return before - len(self._facts)
 
-    def add_with_trust(self, text: str, source: str = "", trust: str = "") -> bool:
-        return self.add(text, source=source, trust=trust)
+    def add_with_trust(
+        self, text: str, source: str = "", trust: str = "", *, turn: str = ""
+    ) -> bool:
+        return self.add(text, source=source, trust=trust, turn=turn)
 
     def set_trust(self, index: int, trust: str) -> bool:
         trust = (trust or "").strip().lower()

@@ -13,7 +13,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { normaliseMathDelimiters } from '../../lib/math-delimiters';
 import 'katex/dist/katex.min.css';
-import { Copy, Check, Paperclip } from 'lucide-react';
+import { Copy, Check, Paperclip, Undo2 } from 'lucide-react';
 import { imagesFor, documentsFor } from '../../lib/store';
 import { AudioPlayer } from './AudioPlayer';
 import { ResearchTimeline } from './ResearchTimeline';
@@ -43,6 +43,8 @@ function stripThinkTags(text: string): string {
 interface Props {
   message: ChatMessage;
   isLive?: boolean;
+  /** Rewind the chat to before this (user) message; absent = no button. */
+  onRewind?: () => void;
 }
 
 function getTextContent(node: any): string {
@@ -130,7 +132,7 @@ function CopyMessageButton({ content }: { content: string }) {
 
 const GALLERY_IMAGE_LIMIT = 6;
 
-function MessageBubbleComponent({ message, isLive = false }: Props) {
+function MessageBubbleComponent({ message, isLive = false, onRewind }: Props) {
   const isUser = message.role === 'user';
   // Session-only, keyed by message id — see the registry in store.ts.
   const sessionImages = imagesFor(message.id);
@@ -220,7 +222,19 @@ function MessageBubbleComponent({ message, isLive = false }: Props) {
 
   if (isUser) {
     return (
-      <div className="flex justify-end mb-4">
+      <div className="group flex justify-end items-center gap-1 mb-4">
+        {onRewind && (
+          <button
+            type="button"
+            onClick={onRewind}
+            className="p-1.5 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity cursor-pointer"
+            style={{ color: 'var(--color-text-tertiary)' }}
+            title="Rewind to here: remove this message and everything after it, then edit and resend"
+            aria-label="Rewind to this message"
+          >
+            <Undo2 size={14} />
+          </button>
+        )}
         <div
           className="max-w-[85%] px-4 py-2.5 text-sm leading-relaxed"
           style={{

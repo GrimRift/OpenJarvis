@@ -1616,6 +1616,10 @@ export const deleteMemoryFact = (id: string) =>
   memoryJson<{ removed: string }>(`/v1/memory/facts/${id}`, { method: 'DELETE' });
 export const restoreMemoryFact = (id: string) =>
   memoryJson<{ restored: string }>(`/v1/memory/facts/${id}/restore`, { method: 'POST' });
+/** The chat was rewound past these user messages: forget what Sage learned
+ *  from them (soft delete, restorable from Removed). */
+export const forgetMemoryTurns = (turns: string[]) =>
+  memoryJson<{ removed: string[] }>('/v1/memory/facts/forget-turns', json({ turns }));
 
 export const listMemoryEpisodes = () =>
   memoryJson<{ episodes: MemoryEpisode[] }>('/v1/memory/episodes').then((r) => r.episodes);

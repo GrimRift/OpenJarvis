@@ -12,6 +12,7 @@ import {
 } from '../../lib/image-attach';
 import { apiFetch } from '../../lib/api';
 import { streamChat, streamResearch } from '../../lib/sse';
+import { finalizePendingRewind } from '../../lib/rewind';
 import { researchHistory } from '../../lib/research-history';
 import type { FluxWord } from '../../lib/barge-in';
 import { imageFromToolCall, imageToolPhase } from '../../lib/generated-image';
@@ -565,6 +566,24 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, [input]);
 
+  // A rewound message comes back here to be edited and sent again (and
+  // leaves again on Undo, unless it was edited meanwhile).
+  const composerDraft = useAppStore((s) => s.composerDraft);
+  useEffect(() => {
+    if (!composerDraft) return;
+    const { text, unless } = composerDraft;
+    useAppStore.getState().setComposerDraft(null);
+    setInput((prev) => (unless !== undefined && prev !== unless ? prev : text));
+    if (text) {
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(text.length, text.length);
+      });
+    }
+  }, [composerDraft]);
+
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
     if (timerRef.current) {
@@ -721,6 +740,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }
 
     setInput('');
+    // Sending settles a rewind: its Undo would no longer fit.
+    finalizePendingRewind();
     const wasVoice = voiceOriginatedRef.current;
     voiceOriginatedRef.current = false;
     lastReplyWasVoiceRef.current = wasVoice;
@@ -1211,6 +1232,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           voice: wasVoice,
           voice_followup: wasFollowUp || undefined,
           voice_amend: wasAmend || undefined,
+          turn_id: userMsg.id,
           diagrams: diagramMode(diagramsEnabled, diagramsAutomatic),
         },
         controller.signal,

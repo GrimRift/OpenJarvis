@@ -415,3 +415,61 @@ def test_build_memory_service_falls_back_to_default_model(tmp_path):
     )
     svc = build_memory_service(cfg, object(), "active-model")
     assert isinstance(svc, MemoryService)
+
+
+class TestRewoundTurns:
+    """A chat rewound past a message forgets what was learned from it."""
+
+    def test_facts_carry_their_turn_and_are_forgotten_with_it(self, tmp_path):
+        bus = EventBus(record_history=True)
+        extractor = FakeExtractor(["User likes jazz"])
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        store.add("User lives in Calamba", source="auto")
+        svc = MemoryService(store, extractor, event_bus=bus)
+        svc.start()
+        try:
+            publish_completed_exchange(bus, "I like jazz", "Noted.", turn="m-1")
+            assert _wait_until(lambda: svc.fact_count() == 2)
+            jazz = next(f for f in svc.list_facts() if "jazz" in f.text)
+            assert jazz.turn == "m-1"
+            # Survives a reload from disk.
+            assert LocalFactStore(tmp_path / "facts.jsonl").get(jazz.id).turn == "m-1"
+
+            assert svc.forget_turns(["m-1"]) == [jazz.id]
+            assert [f.text for f in svc.list_facts()] == ["User lives in Calamba"]
+            removed = store.list_removed()
+            assert removed[0].removed_reason == "chat rewound"
+            assert store.restore(jazz.id)  # still restorable
+        finally:
+            svc.stop()
+
+    def test_a_late_extraction_of_a_rewound_turn_is_dropped(self, tmp_path):
+        gate = threading.Event()
+        extractor = FakeExtractor(["User likes jazz"], gate=gate)
+        svc = _service(tmp_path, extractor)
+        svc.start()
+        try:
+            assert svc.submit("I like jazz", "Noted.", turn="m-2")
+            assert _wait_until(lambda: extractor.calls)
+            svc.forget_turns(["m-2"])
+            gate.set()
+            svc._queue.join()
+            assert svc.fact_count() == 0
+            # A queued job for a rewound turn never reaches the extractor.
+            assert svc.submit("I like rock", "Noted.", turn="m-2")
+            svc._queue.join()
+            assert len(extractor.calls) == 1
+        finally:
+            svc.stop()
+
+    def test_pinned_and_other_turns_stay(self, tmp_path):
+        store = LocalFactStore(tmp_path / "facts.jsonl")
+        store.add("User likes jazz", source="auto", turn="m-3")
+        store.add("User studies engineering", source="auto", turn="m-3", pinned=True)
+        store.add("User has a cat", source="auto", turn="m-4")
+        svc = MemoryService(store, FakeExtractor())
+        assert len(svc.forget_turns(["m-3", ""])) == 1
+        assert sorted(f.text for f in store.list()) == [
+            "User has a cat",
+            "User studies engineering",
+        ]

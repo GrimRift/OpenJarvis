@@ -31,6 +31,9 @@ export interface ChatRequest {
   voice_followup?: boolean;
   /** Words added while Sage prepared the answer ride with the question. */
   voice_amend?: boolean;
+  /** The user message's id: facts learned from it carry it, so a rewind
+   *  past it can forget them (server/memory_routes.py forget-turns). */
+  turn_id?: string;
   /** Whether Sage may draw a diagram this turn, and unasked: "auto",
    * "on-request" or "off" (openjarvis/prompt/diagrams.py). */
   diagrams?: 'auto' | 'on-request' | 'off';

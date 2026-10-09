@@ -139,6 +139,18 @@ async def delete_fact(fact_id: str, request: Request):
     return {"removed": fact_id}
 
 
+@router.post("/facts/forget-turns")
+async def forget_turns(request: Request):
+    """The chat was rewound to before these messages: forget what was learned
+    from them (restorable from Removed). Body: {"turns": [message ids]}."""
+    body = await request.json()
+    turns = [str(t) for t in (body or {}).get("turns") or [] if t][:200]
+    service = getattr(request.app.state, "memory_service", None)
+    if service is None:
+        return {"removed": []}
+    return {"removed": service.forget_turns(turns)}
+
+
 @router.post("/facts/{fact_id}/restore")
 async def restore_fact(fact_id: str, request: Request):
     if not _facts(request).restore(fact_id):

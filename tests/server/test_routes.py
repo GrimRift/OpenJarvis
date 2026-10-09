@@ -90,11 +90,18 @@ class _SpyMemoryService:
 
     def __init__(self) -> None:
         self.submissions: list[tuple[str, str, str]] = []
+        self.turns: list[str] = []
 
     def submit(
-        self, user_text: str, assistant_text: str = "", answered_by: str = ""
+        self,
+        user_text: str,
+        assistant_text: str = "",
+        answered_by: str = "",
+        *,
+        turn: str = "",
     ) -> bool:
         self.submissions.append((user_text, assistant_text, answered_by))
+        self.turns.append(turn)
         return True
 
     def stop(self, timeout: float = 2.0) -> None:
@@ -118,10 +125,13 @@ class TestMemoryServiceWiring:
             json={
                 "model": "test-model",
                 "messages": [{"role": "user", "content": "I like jazz"}],
+                "turn_id": "m-1",
             },
         )
         assert resp.status_code == 200
         assert spy.submissions == [("I like jazz", "remembered reply", "test-model")]
+        # The app's message id rides along, so a rewind can forget the facts.
+        assert spy.turns == ["m-1"]
 
     def test_agent_completion_feeds_memory(self):
         engine = _make_engine()

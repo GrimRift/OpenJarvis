@@ -48,6 +48,9 @@ class ChatCompletionRequest(BaseModel):
     # together with the question they followed: the model decides whether
     # they add to it or are a new request (addressee.AMEND_NOTE).
     voice_amend: bool = False
+    # The app's id for this turn's user message. Facts learned from it carry
+    # the id, so rewinding the chat to before it can forget them.
+    turn_id: str = ""
     tools: Optional[List[Dict[str, Any]]] = None
 
 

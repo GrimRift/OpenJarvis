@@ -948,6 +948,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         bus=getattr(request.app.state, "bus", None),
         source="server.chat",
         model=_answering_model(model, agent),
+        turn=request_body.turn_id,
     )
     return response
 
@@ -983,8 +984,13 @@ def _record_completed_exchange(
     bus=None,
     source: str = "server.chat",
     model: str = "",
+    turn: str = "",
 ) -> None:
-    """Publish or submit a completed exchange without blocking a reply."""
+    """Publish or submit a completed exchange without blocking a reply.
+
+    *turn* is the app's id for the user's message: facts learned from it
+    carry it, so rewinding the chat past it can forget them.
+    """
     if not user_text:
         return
     try:
@@ -997,9 +1003,10 @@ def _record_completed_exchange(
                 assistant_text,
                 source=source,
                 model=model,
+                turn=turn,
             )
         elif memory_service is not None:
-            memory_service.submit(user_text, assistant_text, model)
+            memory_service.submit(user_text, assistant_text, model, turn=turn)
     except Exception:  # noqa: BLE001 — memory is best-effort, never fail a reply
         logging.getLogger("openjarvis.server").debug(
             "Memory submit failed",
@@ -1015,6 +1022,7 @@ def _remember_exchange(
     bus=None,
     source: str = "server.chat",
     model: str = "",
+    turn: str = "",
 ) -> None:
     """Record a completed non-streaming exchange."""
     _record_completed_exchange(
@@ -1024,6 +1032,7 @@ def _remember_exchange(
         bus=bus,
         source=source,
         model=model,
+        turn=turn,
     )
 
 
@@ -2156,6 +2165,7 @@ async def _handle_streaming_orchestrator(
                 bus=bus,
                 source="server.chat.stream",
                 model=_answering_model(model, agent),
+                turn=req.turn_id,
             )
 
         # Some streaming providers (including the currently configured OpenAI
@@ -2408,6 +2418,7 @@ async def _handle_agent_stream(
             bus=bus,
             source="server.chat.stream",
             model=_answering_model(model, agent),
+            turn=req.turn_id,
         )
         yield "data: [DONE]\n\n"
 
@@ -2541,6 +2552,7 @@ async def _handle_stream_tools(
                 bus=bus,
                 source="server.chat.stream",
                 model=model,
+                turn=req.turn_id,
             )
         yield "data: [DONE]\n\n"
 
@@ -2709,6 +2721,7 @@ async def _handle_stream(
                 bus=bus,
                 source="server.chat.stream",
                 model=model,
+                turn=req.turn_id,
             )
 
         # Send finish chunk with usage data if available

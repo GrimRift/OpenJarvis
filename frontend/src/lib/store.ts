@@ -755,6 +755,17 @@ interface AppState {
    * so the merged question can be sent as one turn.
    */
   retractLastExchange: (conversationId: string) => string | null;
+  /**
+   * Rewind the chat to before one of the user's messages: it and everything
+   * after it leave the chat. Returns what was cut (for Undo), or null.
+   */
+  rewindTo: (conversationId: string, messageId: string) => ChatMessage[] | null;
+  /** Undo a rewind: put the cut messages back, if nothing was added since. */
+  restoreRewound: (conversationId: string, removed: ChatMessage[]) => boolean;
+  /** Text handed to the message box (a rewound message to edit and resend).
+   *  `unless` = only replace the box if it still holds this text. */
+  composerDraft: { text: string; unless?: string; at: number } | null;
+  setComposerDraft: (draft: { text: string; unless?: string } | null) => void;
   updateLastAssistant: (
     conversationId: string,
     content: string,
@@ -858,6 +869,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // changes.
     activeId: null,
     messages: [],
+    composerDraft: null,
     streamState: INITIAL_STREAM,
 
     models: [],
@@ -1079,6 +1091,50 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       return userText;
     },
+
+    rewindTo: (conversationId: string, messageId: string) => {
+      const store = loadConversations();
+      const conv = store.conversations[conversationId];
+      if (!conv) return null;
+      const idx = conv.messages.findIndex((m) => m.id === messageId);
+      if (idx < 0 || conv.messages[idx].role !== 'user') return null;
+      const removed = conv.messages.splice(idx);
+      conv.updatedAt = Date.now();
+      saveConversations(store);
+      const conversations = Object.values(store.conversations).sort(
+        (a, b) => b.updatedAt - a.updatedAt,
+      );
+      if (get().activeId === conversationId) {
+        set({ messages: withoutAutoPlay(conv.messages), conversations });
+      } else {
+        set({ conversations });
+      }
+      return removed;
+    },
+
+    restoreRewound: (conversationId: string, removed: ChatMessage[]) => {
+      const store = loadConversations();
+      const conv = store.conversations[conversationId];
+      if (!conv || !removed.length) return false;
+      // A message sent since the rewind would land in the middle.
+      const last = conv.messages[conv.messages.length - 1];
+      if (last && last.timestamp > removed[0].timestamp) return false;
+      conv.messages.push(...removed);
+      conv.updatedAt = Date.now();
+      saveConversations(store);
+      const conversations = Object.values(store.conversations).sort(
+        (a, b) => b.updatedAt - a.updatedAt,
+      );
+      if (get().activeId === conversationId) {
+        set({ messages: withoutAutoPlay(conv.messages), conversations });
+      } else {
+        set({ conversations });
+      }
+      return true;
+    },
+
+    setComposerDraft: (draft) =>
+      set({ composerDraft: draft ? { ...draft, at: Date.now() } : null }),
 
     updateLastAssistant: (
       conversationId: string,
