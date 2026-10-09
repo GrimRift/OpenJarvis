@@ -331,3 +331,31 @@ class TestASlashIsNotAFile:
     )
     def test_a_real_path_still_gets_them(self, text):
         assert "file_read" in _routed(text)
+
+
+class TestHealthToolsOnlyWhenAsked:
+    """9 October: system_health ran in the middle of an F1 standings answer."""
+
+    def _kept(self, text):
+        schemas = ALL_SCHEMAS + [_schema("system_health"), _schema("apply_health_fix")]
+        return {s["function"]["name"] for s in route_tools(schemas, routing_text(text))}
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "run a health check",
+            "why is Sage so slow?",
+            "the wake word isn't working",
+            "check for errors",
+            "how's my GPU temperature?",
+        ],
+    )
+    def test_offered_when_asked(self, text):
+        assert "system_health" in self._kept(text)
+
+    def test_not_for_other_questions(self):
+        kept = self._kept(
+            "what is the current championship position of f1 and their scores"
+        )
+        assert "system_health" not in kept
+        assert "apply_health_fix" not in kept

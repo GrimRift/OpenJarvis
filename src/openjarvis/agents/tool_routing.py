@@ -117,6 +117,20 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             re.IGNORECASE,
         ),
     },
+    # Sage's own health. Offered on every message, the model called it in the
+    # middle of an F1 standings answer (9 October trace: "All 65 checks
+    # passed."), a round for nothing.
+    "health": {
+        "tools": {"system_health", "system_status", "apply_health_fix"},
+        "pattern": re.compile(
+            r"\b(health|healthy|diagnos\w*|self[- ]?check|status|broken|"
+            r"not\s+working|isn'?t\s+working|stopped\s+working|working|error|"
+            r"errors|fix|repair|slow|lag|lagging|crash\w*|freez\w*|stuck|"
+            r"problem|problems|issue|issues|cpu|ram|memory\s+usage|disk|gpu|"
+            r"overheat\w*|temperature)\b",
+            re.IGNORECASE,
+        ),
+    },
     "games": {
         "tools": {"play_game"},
         "pattern": re.compile(
