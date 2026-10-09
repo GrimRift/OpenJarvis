@@ -107,6 +107,45 @@ def test_filters_non_fact_tokens():
     assert extractor.extract("x", "y") == ["Real fact"]
 
 
+class TestNoJsonTextSavedAsAFact:
+    """9 Oct: a fact was saved as the literal text ``["Prefers open-fit earbuds."]``.
+
+    The array regex was greedy, so an answer holding a second bracket (a
+    stray ``[]``, a second array) failed to parse as one array and fell
+    through to the line parser, which kept the JSON line verbatim.
+    """
+
+    @pytest.mark.parametrize(
+        "content, expected",
+        [
+            ('["Prefers open-fit earbuds."]\n[]', ["Prefers open-fit earbuds."]),
+            ('["Fact A"]\n["Fact B"]', ["Fact A", "Fact B"]),
+            ('["Fact A"]\nNothing else [none].', ["Fact A"]),
+            ('```json\n["Fact A", "Fact B"]\n```', ["Fact A", "Fact B"]),
+            ('[["Fact A", "Fact B"]]', ["Fact A", "Fact B"]),
+            ('[{"fact": "Fact A"}, {"text": "Fact B"}]', ["Fact A", "Fact B"]),
+            ('- ["Fact A"]\n- Fact B', ["Fact A", "Fact B"]),
+        ],
+    )
+    def test_facts_come_out_as_plain_sentences(self, content, expected):
+        extractor = FactExtractor(FakeEngine(content), "m")
+        assert extractor.extract("x", "y") == expected
+
+    def test_bracketed_numbers_in_prose_do_not_hide_bullet_facts(self):
+        engine = FakeEngine("Facts [1]:\n- User is a teacher\n- User has two kids")
+        extractor = FactExtractor(engine, "m")
+        assert extractor.extract("x", "y") == [
+            "Facts [1]:",
+            "User is a teacher",
+            "User has two kids",
+        ]
+
+    def test_unparseable_json_looking_text_is_dropped(self):
+        engine = FakeEngine('- ["broken, never closed\n- Real fact')
+        extractor = FactExtractor(engine, "m")
+        assert extractor.extract("x", "y") == ["Real fact"]
+
+
 class TestExtractionFollowsTheAnsweringModel:
     """The configured extraction_model is the local choice, not an absolute one.
 

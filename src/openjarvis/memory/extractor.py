@@ -189,16 +189,17 @@ class FactExtractor:
 
     def _coerce_to_list(self, content: str) -> List[str]:
         """Best-effort conversion of model output to a list of strings."""
-        # 1. Try to locate and parse a JSON array anywhere in the output
-        #    (models often wrap it in prose or code fences).
-        match = re.search(r"\[.*\]", content, re.DOTALL)
-        if match:
-            try:
-                parsed = json.loads(match.group(0))
-                if isinstance(parsed, list):
-                    return [str(x) for x in parsed]
-            except (json.JSONDecodeError, ValueError):
-                pass
+        # 1. Every JSON array anywhere in the output (models wrap them in
+        #    prose or code fences, or answer with more than one). Decoding
+        #    each one in place, rather than one greedy "[ ... ]" match, keeps
+        #    a stray "[]" after the array from failing the whole parse -- that
+        #    sent the JSON line to the line parser verbatim (9 Oct:
+        #    '["Prefers open-fit earbuds."]' was saved as a fact).
+        # A bulleted answer goes to the line parser even if a bullet holds
+        # an array; that parser decodes JSON per line.
+        found = None if _BULLET.search(content) else _json_lists(content)
+        if found is not None:
+            return found
 
         # 2. Fall back to line-based parsing (markdown bullets / numbered).
         #    Deliberately permissive: small local models routinely answer with
@@ -211,7 +212,13 @@ class FactExtractor:
             line = line.strip()
             if not line:
                 continue
-            line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line)
+            line = _BULLET.sub("", line)
+            if line[:1] in ('[', '"'):
+                try:
+                    items.extend(_strings_in(json.loads(line)))
+                    continue
+                except (json.JSONDecodeError, ValueError):
+                    pass
             items.append(line)
         return items
 
@@ -220,9 +227,55 @@ class FactExtractor:
         # Drop obvious non-facts the model sometimes emits.
         if not fact or fact.lower() in ("[]", "none", "n/a", "null"):
             return ""
+        # JSON that could not be decoded is never a fact.
+        if fact[:1] in ("[", "{"):
+            return ""
         if len(fact) > self._max_fact_chars:
             fact = fact[: self._max_fact_chars].rstrip()
         return fact
+
+
+_BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*", re.MULTILINE)
+_FACT_KEYS = ("fact", "text", "content")
+
+
+def _strings_in(value: Any) -> List[str]:
+    """The fact strings in a decoded JSON value: nested lists flattened,
+    ``{"fact": ...}`` objects unwrapped, anything else dropped."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [s for item in value for s in _strings_in(item)]
+    if isinstance(value, dict):
+        for key in _FACT_KEYS:
+            if isinstance(value.get(key), str):
+                return [value[key]]
+    return []
+
+
+def _json_lists(content: str) -> Optional[List[str]]:
+    """Strings from every JSON array in *content*, or None if there is none.
+
+    An array of only numbers (e.g. "[1]" in prose) does not count, so a
+    bulleted answer that mentions one still reaches the line parser.
+    """
+    decoder = json.JSONDecoder()
+    items: List[str] = []
+    found = False
+    pos = content.find("[")
+    while pos != -1:
+        try:
+            value, end = decoder.raw_decode(content, pos)
+        except (json.JSONDecodeError, ValueError):
+            pos = content.find("[", pos + 1)
+            continue
+        if isinstance(value, list):
+            strings = _strings_in(value)
+            if strings or not value:
+                found = True
+                items.extend(strings)
+        pos = content.find("[", end)
+    return items if found else None
 
 
 __all__ = ["FactExtractor"]
