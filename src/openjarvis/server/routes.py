@@ -1816,7 +1816,17 @@ async def _handle_streaming_orchestrator(
                             not in _BROWSER_OPEN_TOOL_NAMES
                         ]
                     active_tools = _memory_budget.available_tools(active_tools)
-                    if _page_reads_spent():
+                    read_this_round = any(
+                        getattr(result, "tool_name", "") == "web_read"
+                        and result.success
+                        for result in results_by_index.values()
+                    )
+                    if _page_reads_spent() or read_this_round:
+                        # One round of page reads per turn: every page worth
+                        # opening goes in that one call (`urls`). Read one per
+                        # round, the AirPods answer took three rounds of reads
+                        # (9 October). A round where every read was refused
+                        # keeps it, so a wrong link can be corrected.
                         # Offered once the budget is spent, the model kept
                         # calling it, a refusal and a model round each time.
                         active_tools = [

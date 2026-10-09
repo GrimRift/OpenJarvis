@@ -340,3 +340,95 @@ def test_overlapping_streams_keep_independent_research_state():
         "Research an AI model": (True, False, 1, True),
         "Search TikTok memes": (True, True, 1, True),
     }
+
+
+def test_one_round_of_page_reads_per_turn():
+    """9 October: the AirPods answer read pages in three separate rounds.
+
+    After a round with a successful read, web_read is withdrawn and the
+    model answers; a round where every read was refused keeps it."""
+    from fastapi.testclient import TestClient
+
+    from openjarvis.agents.orchestrator import OrchestratorAgent
+    from openjarvis.core.types import ToolResult
+    from openjarvis.engine._stubs import StreamChunk
+    from openjarvis.server.app import create_app
+    from openjarvis.tools._stubs import BaseTool, ToolSpec
+    from tests.server.test_routes import _make_engine
+
+    offered: list[set] = []
+    reads = {"n": 0}
+
+    class Probe(BaseTool):
+        def __init__(self, name):
+            self.name = name
+
+        @property
+        def spec(self):
+            return ToolSpec(
+                name=self.name,
+                description=self.name,
+                parameters={"type": "object", "properties": {}},
+            )
+
+        def execute(self, **params):
+            if self.name == "web_read":
+                reads["n"] += 1
+                # The first read is refused (a guessed link), the second works.
+                ok = reads["n"] > 1
+                return ToolResult(tool_name="web_read", content="page", success=ok)
+            return ToolResult(tool_name=self.name, content="results", success=True)
+
+    script = [
+        ("web_search", "s1"),
+        ("web_read", "r1"),
+        ("web_read", "r2"),
+        ("web_read", "r3"),
+    ]
+
+    async def stream_response(messages, **kwargs):
+        offered.append({t["function"]["name"] for t in kwargs.get("tools") or []})
+        step = len(offered) - 1
+        if step < len(script) and script[step][0] in offered[-1]:
+            name, call_id = script[step]
+            yield StreamChunk(
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": call_id,
+                        "function": {
+                            "name": name,
+                            "arguments": f'{{"url": "https://example.com/{call_id}"}}',
+                        },
+                    }
+                ],
+                finish_reason="tool_calls",
+            )
+        else:
+            yield StreamChunk(content="Answer.", finish_reason="stop")
+
+    engine = _make_engine()
+    engine.stream_full = stream_response
+    agent = OrchestratorAgent(
+        engine,
+        "test-model",
+        max_turns=6,
+        tools=[Probe(n) for n in ("web_search", "web_read")],
+    )
+    client = TestClient(
+        create_app(engine, "test-model", agent=agent, config=_test_config())
+    )
+    result = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "Research the AirPods 5"}],
+            "stream": True,
+        },
+    )
+    assert result.status_code == 200
+    assert "Answer." in result.text
+    # Refused read: still offered. Successful read: gone, so it answers.
+    assert "web_read" in offered[2]
+    assert "web_read" not in offered[3]
+    assert reads["n"] == 2

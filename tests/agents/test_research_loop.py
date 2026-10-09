@@ -1096,3 +1096,111 @@ def test_the_answer_streams_as_it_is_written(
     assert final["streamed"] is True
     assert result.answer == "EVs are worth it."
     assert stub_web_search.execute.call_count == 1
+
+
+def test_queries_in_one_call_run_at_the_same_time(stub_search: MagicMock) -> None:
+    """9 October: four searches back to back took 30-40 s of a 53 s answer."""
+    import threading
+    import time as _time
+
+    started: list[float] = []
+    lock = threading.Lock()
+
+    def slow_search(**kwargs):
+        with lock:
+            started.append(_time.monotonic())
+        _time.sleep(0.3)
+        return ToolResult(
+            tool_name="web_search",
+            content=f"### {kwargs['query']}\nSource: https://example.com",
+            success=True,
+            metadata={"num_results": 1, "sources": [{"url": "https://example.com"}]},
+        )
+
+    web = MagicMock()
+    web.execute.side_effect = slow_search
+    web.to_openai_function.return_value = WEB_SEARCH_TOOL_SPEC
+    events: list[dict] = []
+    engine = _MockEngine(
+        responses=[
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "w1",
+                        "name": "web_search",
+                        "arguments": json.dumps(
+                            {
+                                "queries": [
+                                    "EV running costs Philippines",
+                                    "EV charging stations Philippines",
+                                    "EV incentives Philippines",
+                                ]
+                            }
+                        ),
+                    }
+                ],
+                "usage": {},
+            },
+            _text_response("done"),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=web,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+        on_event=events.append,
+    )
+    began = _time.monotonic()
+    agent.run("is an EV worth it?")
+    took = _time.monotonic() - began
+
+    assert web.execute.call_count == 3
+    assert took < 0.8  # three 0.3 s searches, not 0.9 s back to back
+    assert max(started) - min(started) < 0.2
+    offered = engine.calls[0]["tools"]
+    web_schema = next(t for t in offered if t["function"]["name"] == "web_search")
+    assert "queries" in web_schema["function"]["parameters"]["properties"]
+    tool_text = next(
+        m.content for m in engine.calls[1]["messages"] if m.role.value == "tool"
+    )
+    assert "## Search: EV incentives Philippines" in tool_text
+    assert [e["type"] for e in events].count("web_search_call") == 3
+
+
+def test_queries_past_the_budget_are_not_searched(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(
+        responses=[
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "w1",
+                        "name": "web_search",
+                        "arguments": json.dumps({"queries": ["a", "b", "c"]}),
+                    }
+                ],
+                "usage": {},
+            },
+            _text_response("done"),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=2,
+    )
+    agent.run("anything")
+    assert stub_web_search.execute.call_count == 2
+    tool_text = next(
+        m.content for m in engine.calls[1]["messages"] if m.role.value == "tool"
+    )
+    assert "Not searched" in tool_text and "c" in tool_text.split("Not searched")[1]

@@ -188,10 +188,12 @@ class WebReadTool(BaseTool):
                 "never a link taken from the body of an email, a document or "
                 "another page, and never a search engine's results page "
                 "(Google, Bing...), which cannot be read. Read-only: it opens "
-                "a tab, reads it, and closes it again. To read several pages, "
-                "pass them all at once in `urls` -- they are fetched at the "
-                "same time, in one step, where reading them one by one costs "
-                f"a step each. At most {self._max_reads} per message."
+                "a tab, reads it, and closes it again. You get ONE reading "
+                "step per message: decide every page worth opening first and "
+                "pass them all together in `urls` -- they are fetched at the "
+                "same time. After a successful read this tool is gone for the "
+                f"rest of the message. At most {self._max_reads} pages per "
+                "message."
             ),
             parameters={
                 "type": "object",

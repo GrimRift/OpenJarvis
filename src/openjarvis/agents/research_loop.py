@@ -152,8 +152,9 @@ _WEB_TOOLS_STRATEGY = (
     " on a DIFFERENT angle of the question (for an EV purchase: running"
     " costs, charging access, incentives, local prices). Put the exact entity,"
     " locale (the user is in the Philippines unless they say otherwise), date"
-    " window and the value wanted into each query. Several web_search calls"
-    " may go in one response; they run at the same time."
+    " window and the value wanted into each query. Plan the angles first and"
+    " send them together in ONE web_search call with `queries` -- they run at"
+    " the same time; searching them one by one costs a round each."
     "{web_read_strategy}"
     "\n  12. Never answer a public question without at least one web_search."
     " If the user corrects an entity name, use the corrected name. Distinguish"
@@ -496,6 +497,45 @@ def _default_clarify_handler(question: str) -> str:
     return answer or "(user did not provide a clarification)"
 
 
+def _arguments_of(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    raw = tool_call.get("arguments", "{}") or "{}"
+    try:
+        return json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _queries_of(args: Dict[str, Any]) -> List[str]:
+    """The queries one web_search call asks for: `queries`, then `query`."""
+    queries = args.get("queries") or []
+    if isinstance(queries, str):
+        queries = [queries]
+    out = [str(q).strip() for q in queries if str(q).strip()]
+    single = str(args.get("query", "") or "").strip()
+    if single and single not in out:
+        out.insert(0, single)
+    return out
+
+
+def _with_queries(spec: Dict[str, Any], remaining: int) -> Dict[str, Any]:
+    """The web_search schema with a `queries` list, for searching in parallel."""
+    import copy
+
+    spec = copy.deepcopy(spec)
+    params = spec.setdefault("function", {}).setdefault("parameters", {})
+    params.setdefault("properties", {})["queries"] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "maxItems": max(1, remaining),
+        "description": (
+            "Several searches, one per angle of the question, run at the same"
+            " time. Prefer this to separate calls."
+        ),
+    }
+    params["required"] = []
+    return spec
+
+
 def _reads_spent(web_read: Any) -> bool:
     from openjarvis.security import page_access
 
@@ -680,6 +720,56 @@ class ResearchAgent:
             response=result.content,
             success=result.success,
         )
+
+    def _run_web_searches(
+        self, jobs: List[Tuple[str, int]]
+    ) -> Dict[str, ToolInvocation]:
+        """Every search of one response, at the same time.
+
+        Searched one per round, Deep Research spent 30-40 s of a 53 s answer
+        on four searches back to back (9 October).
+        """
+        if not jobs:
+            return {}
+        import contextvars
+        from concurrent.futures import ThreadPoolExecutor
+
+        for query, max_results in jobs:
+            self._emit(
+                {
+                    "type": "web_search_call",
+                    "arguments": {"query": query, "max_results": max_results},
+                }
+            )
+
+        def one(job: Tuple[str, int]) -> ToolInvocation:
+            query, max_results = job
+            # Each search runs in this question's context: page_access keeps
+            # what it returned readable for web_read.
+            return contextvars.copy_context().run(
+                self._execute_web_search,
+                {"query": query, "max_results": max_results},
+            )
+
+        if len(jobs) == 1:
+            results = [one(jobs[0])]
+        else:
+            with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+                results = list(pool.map(one, jobs))
+        out: Dict[str, ToolInvocation] = {}
+        for (query, _), inv in zip(jobs, results):
+            self._emit(
+                {
+                    "type": "web_search_result",
+                    "num_results": inv.num_results,
+                    "sources": inv.sources,
+                    "images": inv.images,
+                    "explicit_image_search": inv.explicit_image_search,
+                    "success": inv.success,
+                }
+            )
+            out[query] = inv
+        return out
 
     def _execute_web_read(self, args: Dict[str, Any]) -> ToolInvocation:
         urls = args.get("urls") or []
@@ -905,9 +995,14 @@ class ResearchAgent:
                     and web_searches < self._max_web_searches
                 ):
                     web_spec = self._web_search.to_openai_function()
-                    tools_arg.append(
+                    web_spec = (
                         web_spec if isinstance(web_spec, dict) else WEB_SEARCH_TOOL_SPEC
                     )
+                    if self._max_web_searches > 1:
+                        web_spec = _with_queries(
+                            web_spec, self._max_web_searches - web_searches
+                        )
+                    tools_arg.append(web_spec)
                 if (
                     self._web_read is not None
                     and web_searches
@@ -1013,7 +1108,36 @@ class ResearchAgent:
             )
             messages.append(assistant_msg)
 
-            for tc in tool_calls_raw:
+            call_ids = [
+                tc.get("id", f"call_{i}") for i, tc in enumerate(tool_calls_raw)
+            ]
+            planned: Dict[str, Tuple[List[str], List[Tuple[str, str]]]] = {}
+            searched: Dict[str, ToolInvocation] = {}
+            if self._web_search is not None:
+                jobs: List[Tuple[str, int]] = []
+                for i, tc in enumerate(tool_calls_raw):
+                    if tc.get("name") != "web_search":
+                        continue
+                    call_args = _arguments_of(tc)
+                    accepted: List[str] = []
+                    rejected: List[Tuple[str, str]] = []
+                    for q in _queries_of(call_args):
+                        key = " ".join(q.lower().split())
+                        if web_searches >= self._max_web_searches:
+                            rejected.append((q, "budget"))
+                        elif not key or key in web_queries:
+                            rejected.append((q, "repeat"))
+                        else:
+                            web_searches += 1
+                            web_queries.add(key)
+                            accepted.append(q)
+                            jobs.append(
+                                (q, int(call_args.get("max_results", 5) or 5))
+                            )
+                    planned[call_ids[i]] = (accepted, rejected)
+                searched = self._run_web_searches(jobs)
+
+            for position, tc in enumerate(tool_calls_raw):
                 name = tc.get("name", "")
                 raw_args = tc.get("arguments", "{}") or "{}"
                 try:
@@ -1086,43 +1210,37 @@ class ResearchAgent:
                             }
                         )
                 elif name == "web_search" and self._web_search is not None:
-                    query_key = " ".join(str(args.get("query", "")).lower().split())
-                    if web_searches >= self._max_web_searches:
+                    accepted, rejected = planned.get(call_ids[position], ([], []))
+                    found = [searched[q] for q in accepted if q in searched]
+                    invocations.extend(found)
+                    if not found:
+                        spent = any(why == "budget" for _, why in rejected)
                         tool_output = json.dumps(
                             {
                                 "error": (
                                     "the web_search budget for this request is"
                                     " spent; synthesize from the results above"
-                                )
-                            }
-                        )
-                    elif query_key in web_queries:
-                        tool_output = json.dumps(
-                            {
-                                "error": (
-                                    "that exact query was already searched; its"
-                                    " results are above. Search a different angle"
-                                    " or answer."
+                                    if spent
+                                    else "that exact query was already searched;"
+                                    " its results are above. Search a different"
+                                    " angle or answer."
                                 )
                             }
                         )
                     else:
-                        web_searches += 1
-                        web_queries.add(query_key)
-                        self._emit({"type": "web_search_call", "arguments": args})
-                        inv = self._execute_web_search(args)
-                        invocations.append(inv)
-                        self._emit(
-                            {
-                                "type": "web_search_result",
-                                "num_results": inv.num_results,
-                                "sources": inv.sources,
-                                "images": inv.images,
-                                "explicit_image_search": inv.explicit_image_search,
-                                "success": inv.success,
-                            }
-                        )
-                        tool_output = inv.response
+                        parts = [
+                            inv.response
+                            if len(found) == 1
+                            else f"## Search: {inv.arguments.get('query', '')}\n"
+                            f"{inv.response}"
+                            for inv in found
+                        ]
+                        if rejected:
+                            parts.append(
+                                "Not searched (already searched or over budget): "
+                                + "; ".join(q for q, _ in rejected)
+                            )
+                        tool_output = "\n\n---\n\n".join(parts)
                 elif name == "web_read" and self._web_read is not None:
                     self._emit({"type": "web_read_call", "arguments": args})
                     inv = self._execute_web_read(args)
