@@ -97,16 +97,18 @@ const FRAGMENT = /* glsl */ `
     #endif
     if (vFlags.x > 0.5) {
       // Pinned: drawn ~2.2x. A hot core, soft rays turning slowly, ripples
-      // running outward and a soft glow that beats (rings removed, user 10 Oct).
+      // running outward, a soft glow that beats, and a dashed halo turning the
+      // other way (the solid ring was removed, user 10 Oct).
       float ang = atan(q.y, q.x);
       float hot = smoothstep(0.13, 0.0, d);
       float rays = pow(abs(sin(ang * 4.0 + uTime * 0.35)), 10.0) * smoothstep(0.42, 0.1, d) * 0.4;
       float ripple = (0.5 + 0.5 * sin(d * 60.0 - uTime * 3.2)) * smoothstep(0.08, 0.14, d) * smoothstep(0.36, 0.22, d) * 0.35;
+      float dash = step(0.5, fract(ang / 6.2832 * 14.0 - uTime * 0.12)) * smoothstep(0.012, 0.0, abs(d - 0.43)) * 0.7;
       float halo = smoothstep(0.5, 0.0, d); halo = halo * halo * (0.18 + 0.18 * vBeat);
       vec3 warm = vec3(1.0, 0.92, 0.72);
       c = mix(c, warm, 0.6);
-      a = hot * 1.05 + rays + ripple + halo;
-      // the outer glow leans cyan, like Sage's orb
+      a = hot * 1.05 + rays + ripple + dash + halo;
+      // the outer glow and dashes lean cyan, like Sage's orb
       c = mix(c, vec3(0.55, 0.95, 1.0), smoothstep(0.25, 0.45, d) * 0.6);
     }
     if (vFlags.y > 0.5) {
@@ -187,6 +189,7 @@ export class OrbScene {
   private waveB = -1;
   private pulseFact = -1;
   private nextPulse = 0;
+  private pulseCount = 0; // pulses sent for the open fact: the first is strong
   private opened = false;
   private openIn = 0; // frames until the opening wave starts
   private pointMat: THREE.ShaderMaterial;
@@ -337,9 +340,10 @@ export class OrbScene {
 
   select(id: string | null, fly: boolean): void {
     this.selected = id ? this.facts.findIndex((f) => f.id === id) : -1;
-    // A clicked fact pulses at once, then every 3 s while it stays open.
+    // A clicked fact pulses at once (strong), then softly every 5 s while it stays open.
     this.pulseFact = this.calm ? -1 : this.selected;
     this.nextPulse = performance.now();
+    this.pulseCount = 0;
     if (this.selected >= 0) {
       this.controls.autoRotate = false;
       if (fly) {
@@ -577,8 +581,11 @@ export class OrbScene {
     if (this.pulseFact >= 0 && now >= this.nextPulse) {
       const o = this.pos[this.pulseFact];
       u.uWaveB.value.set(o.x, o.y, o.z, 0);
+      // radius, width, push, strength: the click itself vs. the soft repeats
+      if (this.pulseCount++ === 0) u.uWaveBK.value.set(2.4, 0.14, 0.07, 1.1);
+      else u.uWaveBK.value.set(2.4, 0.14, 0.012, 0.37);
       this.waveB = now;
-      this.nextPulse = now + 3000;
+      this.nextPulse = now + 5000;
     }
     if (this.waveB >= 0) {
       const p = (now - this.waveB) / 1800;
@@ -594,7 +601,7 @@ export class OrbScene {
         const front = k.x * (1 - (1 - p) ** 2);
         for (const [j] of linked) {
           const d = this.pos[j].distanceTo(new THREE.Vector3(o.x, o.y, o.z));
-          sizes.setX(j, 9 * (1 + 2.5 * Math.exp(-(((d - front) / 0.2) ** 2))));
+          sizes.setX(j, 9 * (1 + (this.pulseCount > 1 ? 0.9 : 2.5) * Math.exp(-(((d - front) / 0.2) ** 2))));
         }
       }
       sizes.needsUpdate = true;
