@@ -722,8 +722,8 @@ def test_web_search_prompt_describes_one_tool_owned_search(
     prompt = engine.calls[0]["messages"][0].content
 
     assert "web_search(query, max_results=5)" in prompt
-    assert "tool chooses provider controls" in prompt
-    assert "exactly one web_search call" in prompt
+    assert "up to 1 web_search calls" in prompt
+    assert "Never answer a public question without at least one web_search" in prompt
     assert "include_domains" not in prompt
     assert "search_depth='advanced'" not in prompt
 
@@ -746,9 +746,7 @@ def test_web_search_dispatch_calls_tool_and_feeds_content_back(
     stub_web_search.execute.assert_called_once_with(
         query="current rust version", max_results=5
     )
-    second_turn_tools = {
-        tool["function"]["name"] for tool in engine.calls[1]["tools"]
-    }
+    second_turn_tools = {tool["function"]["name"] for tool in engine.calls[1]["tools"]}
     assert "web_search" not in second_turn_tools
     assert result.tool_calls[0].tool_name == "web_search"
     assert result.tool_calls[0].num_results == 1
@@ -786,7 +784,7 @@ def test_duplicate_web_search_call_never_reaches_provider(
         for message in engine.calls[-1]["messages"]
         if message.role.value == "tool" and message.tool_call_id == "w2"
     ]
-    assert "already completed" in duplicate_output[0]
+    assert "budget for this request is spent" in duplicate_output[0]
 
 
 def test_web_search_events_emitted(
@@ -814,12 +812,14 @@ def test_web_search_events_emitted(
     assert "web_search_result" in types
     result_event = next(ev for ev in captured if ev["type"] == "web_search_result")
     assert result_event["success"] is True
-    assert result_event["sources"] == stub_web_search.execute.return_value.metadata[
-        "sources"
-    ]
-    assert result_event["images"] == stub_web_search.execute.return_value.metadata[
-        "images"
-    ]
+    assert (
+        result_event["sources"]
+        == stub_web_search.execute.return_value.metadata["sources"]
+    )
+    assert (
+        result_event["images"]
+        == stub_web_search.execute.return_value.metadata["images"]
+    )
     assert result_event["explicit_image_search"] is True
 
 
@@ -868,3 +868,231 @@ def test_search_and_web_search_share_the_same_budget(
     # Budget of 2 exhausted after both calls — third engine call gets tools=None.
     assert engine.calls[-1]["tools"] is None
     assert "Combined answer." in result.answer
+
+
+# ---------------------------------------------------------------------------
+# Deep Research as research (9 October): several searches, page reads,
+# search before answering, a time limit, and the answer streamed.
+# ---------------------------------------------------------------------------
+
+
+def _two_web_searches(first: str, second: str) -> Dict[str, Any]:
+    return {
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "w1",
+                "name": "web_search",
+                "arguments": json.dumps({"query": first}),
+            },
+            {
+                "id": "w2",
+                "name": "web_search",
+                "arguments": json.dumps({"query": second}),
+            },
+        ],
+        "usage": {},
+    }
+
+
+def test_several_web_searches_on_different_angles(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(
+        responses=[
+            _two_web_searches(
+                "EV running costs Philippines", "EV incentives Philippines"
+            ),
+            _web_search_call("w3", query="EV charging stations Philippines"),
+            _text_response("EVs save on fuel, per https://example.com."),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+    )
+    agent.run("is an EV worth it in the Philippines?")
+    assert stub_web_search.execute.call_count == 3
+    prompt = engine.calls[0]["messages"][0].content
+    assert "up to 4 web_search calls" in prompt
+
+
+def test_the_same_query_twice_is_not_searched_again(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(
+        responses=[
+            _web_search_call("w1", query="EV prices"),
+            _web_search_call("w2", query="  ev   PRICES "),
+            _text_response("done"),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+    )
+    agent.run("ev prices")
+    assert stub_web_search.execute.call_count == 1
+    repeated = [
+        m.content
+        for m in engine.calls[-1]["messages"]
+        if m.role.value == "tool" and m.tool_call_id == "w2"
+    ]
+    assert "already searched" in repeated[0]
+
+
+def test_pages_are_read_after_a_search(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    reader = MagicMock()
+    reader._max_reads = 6
+    reader.to_openai_function.return_value = {
+        "type": "function",
+        "function": {"name": "web_read", "parameters": {}},
+    }
+    reader.execute.return_value = ToolResult(
+        tool_name="web_read",
+        content="## https://example.com\nLOQ 15: 58,995 pesos",
+        success=True,
+        metadata={"pages_read": 2, "sources": [{"url": "https://example.com"}]},
+    )
+    events: list[dict] = []
+    engine = _MockEngine(
+        responses=[
+            _web_search_call("w1", query="gaming laptops under 60000 pesos"),
+            {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "r1",
+                        "name": "web_read",
+                        "arguments": json.dumps(
+                            {"urls": ["https://a.ph", "https://b.ph"]}
+                        ),
+                    }
+                ],
+                "usage": {},
+            },
+            _text_response("Get the LOQ 15 (https://example.com)."),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        web_read=reader,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+        on_event=events.append,
+    )
+    agent.run("best gaming laptop under 60k pesos")
+    first_tools = {t["function"]["name"] for t in engine.calls[0]["tools"]}
+    assert "web_read" not in first_tools  # nothing to read before a search
+    second_tools = {t["function"]["name"] for t in engine.calls[1]["tools"]}
+    assert "web_read" in second_tools
+    reader.execute.assert_called_once_with(urls=["https://a.ph", "https://b.ph"])
+    assert {"web_read_call", "web_read_result"} <= {e["type"] for e in events}
+
+
+def test_an_answer_from_nothing_is_sent_back_to_search(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(
+        responses=[
+            _text_response("I can't tell from the results available."),
+            _web_search_call("w1", query="gaming laptops under 60000 pesos"),
+            _text_response("Get the LOQ 15."),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+    )
+    result = agent.run("best gaming laptop under 60k pesos")
+    assert stub_web_search.execute.call_count == 1
+    assert result.answer == "Get the LOQ 15."
+
+
+def test_past_the_time_limit_it_answers_without_tools(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    engine = _MockEngine(
+        responses=[_web_search_call("w1"), _text_response("Answer now.")]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+        time_budget_seconds=0.0,
+    )
+    result = agent.run("anything")
+    assert engine.calls[0]["tools"] is None
+    assert result.answer == "Answer now."
+
+
+class _StreamingEngine(_MockEngine):
+    async def stream_full(self, messages, *, model, tools=None, **kwargs):
+        from types import SimpleNamespace
+
+        response = self.generate(messages, model=model, tools=tools)
+        for i, call in enumerate(response.get("tool_calls") or []):
+            yield SimpleNamespace(
+                content="",
+                usage=None,
+                tool_calls=[
+                    {
+                        "index": i,
+                        "id": call["id"],
+                        "function": {
+                            "name": call["name"],
+                            "arguments": call["arguments"],
+                        },
+                    }
+                ],
+            )
+        text = response.get("content") or ""
+        for piece in [text[: len(text) // 2], text[len(text) // 2 :]]:
+            if piece:
+                yield SimpleNamespace(content=piece, tool_calls=None, usage=None)
+
+
+def test_the_answer_streams_as_it_is_written(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    events: list[dict] = []
+    engine = _StreamingEngine(
+        responses=[_web_search_call("w1"), _text_response("EVs are worth it.")]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+        stream=True,
+        on_event=events.append,
+    )
+    result = agent.run("is an EV worth it?")
+    pieces = [e["text"] for e in events if e["type"] == "synthesis"]
+    assert len(pieces) == 2 and "".join(pieces) == "EVs are worth it."
+    final = next(e for e in events if e["type"] == "final_answer")
+    assert final["streamed"] is True
+    assert result.answer == "EVs are worth it."
+    assert stub_web_search.execute.call_count == 1

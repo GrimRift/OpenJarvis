@@ -1079,6 +1079,52 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               [...researchTraces],
               flushSources(),
             );
+          } else if (ev.type === 'web_read_call') {
+            const pages = ev.arguments?.urls?.length || (ev.arguments?.url ? 1 : 0);
+            toolCalls.push({
+              id: generateId(),
+              tool: 'web_read',
+              arguments: serializeToolCallArguments(ev.arguments),
+              status: 'running',
+            });
+            setStreamState({
+              phase: `Reading ${pages || 'a'} page${pages === 1 || !pages ? '' : 's'}...`,
+              activeToolCalls: [...toolCalls],
+            });
+          } else if (ev.type === 'web_read_result') {
+            const pending = [...toolCalls]
+              .reverse()
+              .find((call) => call.tool === 'web_read' && call.status === 'running');
+            if (pending) {
+              pending.status = ev.success === false ? 'error' : 'success';
+              pending.metadata = { sources: ev.sources ?? [] };
+            }
+            updateLastAssistant(
+              convId,
+              accumulatedContent,
+              [...toolCalls],
+              undefined,
+              undefined,
+              undefined,
+              [...researchTraces],
+              flushSources(),
+            );
+          } else if (ev.type === 'synthesis_replace') {
+            // Deep Research streams its rounds: a preamble before more
+            // searching is taken back (""), and the finished answer settles
+            // what streamed. Speech already had the streamed words.
+            accumulatedContent = ev.text;
+            setStreamState({ content: accumulatedContent, phase: '' });
+            updateLastAssistant(
+              convId,
+              accumulatedContent,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              [...researchTraces],
+              flushSources(),
+            );
           } else if (ev.type === 'synthesis') {
             if (!ttftMs) ttftMs = Date.now() - startTime;
             accumulatedContent += ev.text;

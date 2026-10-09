@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -137,16 +138,34 @@ WEB_SEARCH_TOOL_SPEC: Dict[str, Any] = WebSearchTool(
 # Appended into SYSTEM_PROMPT only when a WebSearchTool was actually passed to
 # ResearchAgent — otherwise the model isn't told about a tool it can't call.
 _WEB_TOOLS_SECTION = "\n    web_search(query, max_results=5)"
+_WEB_READ_SECTION = "\n    web_read(urls=[...])"
+# Deep Research used to get exactly one web_search and no way to open a page
+# (9 October: "best gaming laptops under 60,000 pesos" ended with "share a
+# few listings and I'll compare them"). It now researches the way the name
+# says: several searches on different angles, then the best pages read.
 _WEB_TOOLS_STRATEGY = (
-    "\n  10. For current events, external/public information, or anything not"
-    " likely to be in the personal corpus, use web_search instead of (or in"
-    " addition to) search. Put the exact entity, locale, date window, and requested"
-    " value in one complete query. You get exactly one web_search call; the tool"
-    " chooses provider controls and performs any single bounded retry internally."
+    "\n  10. Anything public -- products, prices, news, how-to, comparisons,"
+    " laws, places, current events -- is NOT in the personal corpus: start"
+    " with web_search and do not spend calls on `search` for it. Use `search`"
+    " only for the user's own emails, notes, calendar and documents."
+    "\n  11. Research properly: up to {max_web_searches} web_search calls, each"
+    " on a DIFFERENT angle of the question (for an EV purchase: running"
+    " costs, charging access, incentives, local prices). Put the exact entity,"
+    " locale (the user is in the Philippines unless they say otherwise), date"
+    " window and the value wanted into each query. Several web_search calls"
+    " may go in one response; they run at the same time."
+    "{web_read_strategy}"
+    "\n  12. Never answer a public question without at least one web_search."
     " If the user corrects an entity name, use the corrected name. Distinguish"
     " projections from confirmed outcomes and state exact dates when freshness"
     " matters. web_search results are not part of the personal corpus"
     " — cite their URLs directly in your answer text, not as [N] brackets."
+)
+_WEB_READ_STRATEGY = (
+    " When a summary does not hold the detail (a price list, specs, a"
+    " table), open the most useful pages with web_read -- pass up to 3 in"
+    " `urls` in ONE call; {max_reads} pages in all. Only pages a search"
+    " returned can be read."
 )
 _WEB_TOOLS_SYNTHESIS = (
     "\n  - For web_search results, cite the source URL directly in the"
@@ -162,7 +181,7 @@ The user's corpus contains data from these sources only:
 You answer questions by calling these tools:
 
     search(query, person=None, time_range=None, sources=None, limit=20)
-    clarify(question){web_tools_section}
+    clarify(question){web_tools_section}{web_read_section}
 
 Strategy:
   1. If the user names a specific OTHER person (a real name, or "from Kelly", "with @company.com"), ALWAYS pass `person=` rather than relying on lexical match — hybrid search will fuzzy-match name or address fragments. Do NOT pass `person=` for generic first-person references like "my", "I", or "me" (e.g. "my class schedule", "what do I have today") — plenty of records (notes, reference documents, schedules) have no author/participant metadata at all, so filtering by the user's own identity on those returns zero results even when the content exists. For anything about the user's own notes/documents/schedule, search by content/topic only, with no `person` filter.
@@ -174,7 +193,7 @@ Strategy:
   6. If the first structured search returns nothing useful, broaden with a semantic query and drop filters one at a time.
   7. You have a clarify tool. Only use it AFTER at least one search attempt. Use it when: you found multiple ambiguous matches (e.g. 3 different people named John), search returned zero results and the query might need reframing, or the scope is too broad to synthesize meaningfully. Never use clarify before searching — always try first.
   8. After receiving a clarify response, use the information to construct a precise search with the correct person, time_range, sources, and query parameters. Only use an empty query when structured filters carry the request; never send a search with no concrete parameters. Extract every concrete signal from the user's reply (names, dates, topics, sources) and put it on the call.
-  9. Tool calls — across all available tools — share a budget of 5 total. Spend wisely.{web_tools_strategy}
+  9. Tool calls — across all available tools — share a budget of {tool_budget} total. Spend wisely.{web_tools_strategy}
 
 Synthesis rules:
   - For personal-corpus `search` hits, cite sources as individual numbers in square brackets. Always separate — write [4] [7] [20], never [4, 7, 20]. Never format citations as markdown links. Just the number in brackets: [1]. The `ref` field on each hit is the citation number.{web_tools_synthesis}
@@ -477,6 +496,16 @@ def _default_clarify_handler(question: str) -> str:
     return answer or "(user did not provide a clarification)"
 
 
+def _reads_spent(web_read: Any) -> bool:
+    from openjarvis.security import page_access
+
+    return page_access.reads_used() >= int(getattr(web_read, "_max_reads", 3))
+
+
+class _StreamFellBack(Exception):
+    """Streaming failed before any output; use the plain call instead."""
+
+
 @dataclass
 class ResearchResult:
     answer: str
@@ -532,10 +561,22 @@ class ResearchAgent:
         clarify_handler: Optional[Callable[[str], str]] = None,
         on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
         available_sources: Optional[List[str]] = None,
+        web_read: Optional[Any] = None,
+        max_web_searches: int = 1,
+        time_budget_seconds: Optional[float] = None,
+        stream: bool = False,
     ) -> None:
         self._engine = engine
         self._search = search
         self._web_search = web_search
+        #: A WebReadTool, when pages may be opened.
+        self._web_read = web_read
+        self._max_web_searches = max(1, int(max_web_searches))
+        #: Past this, the next round gets no tools and writes the answer.
+        self._time_budget = time_budget_seconds
+        #: Stream each round through ``engine.stream_full`` and emit the text
+        #: as ``synthesis`` events while it is written.
+        self._stream = bool(stream)
         self._model = model
         self._max_iterations = int(max_iterations)
         self._temperature = float(temperature)
@@ -640,6 +681,110 @@ class ResearchAgent:
             success=result.success,
         )
 
+    def _execute_web_read(self, args: Dict[str, Any]) -> ToolInvocation:
+        urls = args.get("urls") or []
+        if isinstance(urls, str):
+            urls = [urls]
+        read_args: Dict[str, Any] = {"urls": [str(u) for u in urls][:3]}
+        if args.get("url"):
+            read_args["url"] = str(args["url"])
+        result = self._web_read.execute(**read_args)
+        metadata = result.metadata or {}
+        return ToolInvocation(
+            tool_name="web_read",
+            arguments=read_args,
+            num_results=int(metadata.get("pages_read", 1 if result.success else 0)),
+            sources=list(metadata.get("sources") or []),
+            response=result.content,
+            success=result.success,
+        )
+
+    # ------------------------------------------------------------------
+    # Model calls
+    # ------------------------------------------------------------------
+
+    def _generate(
+        self, messages: List[Message], tools: Optional[List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        """One model round: streamed when asked and possible, else plain."""
+        if self._stream and hasattr(self._engine, "stream_full"):
+            try:
+                return self._generate_streamed(messages, tools)
+            except _StreamFellBack:
+                pass
+        return self._engine.generate(
+            messages,
+            model=self._model,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            num_ctx=self._num_ctx,
+            tools=tools,
+        )
+
+    def _generate_streamed(
+        self, messages: List[Message], tools: Optional[List[Dict[str, Any]]]
+    ) -> Dict[str, Any]:
+        """Like ``engine.generate`` but the text goes out as it is written.
+
+        The answer was written in full and only then sent, so a Deep
+        Research turn showed nothing for its whole length (63 s on 9
+        October). Text written in a round that then calls tools was a
+        preamble, not the answer: it is taken back with ``synthesis_replace``.
+        """
+        import asyncio
+
+        content: List[str] = []
+        fragments: Dict[int, Dict[str, Any]] = {}
+        usage: Dict[str, Any] = {}
+
+        async def pump() -> None:
+            kwargs: Dict[str, Any] = {}
+            if tools:
+                kwargs["tools"] = tools
+            async for chunk in self._engine.stream_full(
+                messages,
+                model=self._model,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                **kwargs,
+            ):
+                if chunk.content:
+                    content.append(chunk.content)
+                    self._emit({"type": "synthesis", "text": chunk.content})
+                for fragment in chunk.tool_calls or []:
+                    index = int(fragment.get("index", 0))
+                    entry = fragments.setdefault(
+                        index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    if fragment.get("id"):
+                        entry["id"] = fragment["id"]
+                    function = fragment.get("function") or {}
+                    if function.get("name"):
+                        entry["name"] += str(function["name"])
+                    if function.get("arguments"):
+                        entry["arguments"] += str(function["arguments"])
+                if chunk.usage:
+                    usage.update(chunk.usage)
+
+        try:
+            asyncio.run(pump())
+        except Exception as exc:  # noqa: BLE001
+            if content or fragments:
+                raise
+            logger.info("research: streaming unavailable (%s); plain call", exc)
+            raise _StreamFellBack() from exc
+        tool_calls = [
+            {
+                "id": fragments[i]["id"] or f"call_{i}",
+                "name": fragments[i]["name"],
+                "arguments": fragments[i]["arguments"] or "{}",
+            }
+            for i in sorted(fragments)
+        ]
+        if tool_calls and content:
+            self._emit({"type": "synthesis_replace", "text": ""})
+        return {"content": "".join(content), "tool_calls": tool_calls, "usage": usage}
+
     def _execute_clarify(self, args: Dict[str, Any]) -> ToolInvocation:
         question = str(args.get("question", "") or "").strip()
         if not question:
@@ -679,6 +824,15 @@ class ResearchAgent:
 
     def run(self, query: str) -> ResearchResult:
         """Run the loop end-to-end and return the synthesis plus a trace."""
+        # The pages a search returns become readable for this question, and
+        # the read budget counts from it (security/page_access.py).
+        from openjarvis.security import page_access
+
+        with page_access.scope(query):
+            return self._run(query)
+
+    def _run(self, query: str) -> ResearchResult:
+        started = time.monotonic()
         sources_list = self._resolve_available_sources()
         if sources_list:
             sources_blurb = ", ".join(sources_list)
@@ -695,7 +849,24 @@ class ResearchAgent:
                 today_weekday=now.strftime("%A"),
                 available_sources=sources_blurb,
                 web_tools_section=_WEB_TOOLS_SECTION if self._web_search else "",
-                web_tools_strategy=_WEB_TOOLS_STRATEGY if self._web_search else "",
+                web_read_section=(
+                    _WEB_READ_SECTION if self._web_search and self._web_read else ""
+                ),
+                tool_budget=self._max_iterations,
+                web_tools_strategy=(
+                    _WEB_TOOLS_STRATEGY.format(
+                        max_web_searches=self._max_web_searches,
+                        web_read_strategy=(
+                            _WEB_READ_STRATEGY.format(
+                                max_reads=getattr(self._web_read, "_max_reads", 3)
+                            )
+                            if self._web_read
+                            else ""
+                        ),
+                    )
+                    if self._web_search
+                    else ""
+                ),
                 web_tools_synthesis=(
                     _WEB_TOOLS_SYNTHESIS if self._web_search else ""
                 ),
@@ -704,7 +875,10 @@ class ResearchAgent:
         messages: List[Message] = [sys_msg, Message(role=Role.USER, content=query)]
 
         invocations: List[ToolInvocation] = []
-        web_search_complete = False
+        web_searches = 0
+        web_queries: set = set()
+        told_time_up = False
+        nudged_to_search = False
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         # Global ref counter: each search increments by the number of hits
@@ -720,23 +894,41 @@ class ResearchAgent:
         iterations = 0
         for _ in range(self._max_iterations + 1):
             iterations += 1
-            if len(invocations) < self._max_iterations:
+            in_time = (
+                self._time_budget is None
+                or time.monotonic() - started < self._time_budget
+            )
+            if len(invocations) < self._max_iterations and in_time:
                 tools_arg = [SEARCH_TOOL_SPEC, CLARIFY_TOOL_SPEC]
-                if self._web_search is not None and not web_search_complete:
+                if (
+                    self._web_search is not None
+                    and web_searches < self._max_web_searches
+                ):
                     web_spec = self._web_search.to_openai_function()
                     tools_arg.append(
                         web_spec if isinstance(web_spec, dict) else WEB_SEARCH_TOOL_SPEC
                     )
+                if (
+                    self._web_read is not None
+                    and web_searches
+                    and not _reads_spent(self._web_read)
+                ):
+                    tools_arg.append(self._web_read.to_openai_function())
             else:
                 tools_arg = None
-            result = self._engine.generate(
-                messages,
-                model=self._model,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                num_ctx=self._num_ctx,
-                tools=tools_arg,
-            )
+                if not in_time and not told_time_up:
+                    told_time_up = True
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                "Research time is up. Write the final answer now"
+                                " from what you found above; say what is still"
+                                " uncertain."
+                            ),
+                        )
+                    )
+            result = self._generate(messages, tools_arg)
             for k in total_usage:
                 total_usage[k] += int(result.get("usage", {}).get(k, 0))
 
@@ -744,6 +936,31 @@ class ResearchAgent:
             tool_calls_raw = result.get("tool_calls", []) or []
 
             if not tool_calls_raw:
+                if (
+                    content.strip()
+                    and tools_arg
+                    and self._web_search is not None
+                    and not web_searches
+                    and not nudged_to_search
+                    and not any(i.num_results for i in invocations)
+                ):
+                    # Answered from nothing: the corpus had nothing and the
+                    # web was never searched. Once, ask for the search.
+                    nudged_to_search = True
+                    if self._stream:
+                        self._emit({"type": "synthesis_replace", "text": ""})
+                    messages.append(Message(role=Role.ASSISTANT, content=content))
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                "You have not searched the web, and the personal"
+                                " corpus does not hold this. Call web_search now"
+                                " (several angles if useful), then answer."
+                            ),
+                        )
+                    )
+                    continue
                 if content.strip():
                     answer, final_sources = _finalize(content.strip())
                     self._emit(
@@ -751,6 +968,7 @@ class ResearchAgent:
                             "type": "final_answer",
                             "text": answer,
                             "sources": final_sources,
+                            "streamed": self._stream,
                         }
                     )
                     return ResearchResult(
@@ -868,17 +1086,29 @@ class ResearchAgent:
                             }
                         )
                 elif name == "web_search" and self._web_search is not None:
-                    if web_search_complete:
+                    query_key = " ".join(str(args.get("query", "")).lower().split())
+                    if web_searches >= self._max_web_searches:
                         tool_output = json.dumps(
                             {
                                 "error": (
-                                    "web_search already completed for this request; "
-                                    "synthesize from its results"
+                                    "the web_search budget for this request is"
+                                    " spent; synthesize from the results above"
+                                )
+                            }
+                        )
+                    elif query_key in web_queries:
+                        tool_output = json.dumps(
+                            {
+                                "error": (
+                                    "that exact query was already searched; its"
+                                    " results are above. Search a different angle"
+                                    " or answer."
                                 )
                             }
                         )
                     else:
-                        web_search_complete = True
+                        web_searches += 1
+                        web_queries.add(query_key)
                         self._emit({"type": "web_search_call", "arguments": args})
                         inv = self._execute_web_search(args)
                         invocations.append(inv)
@@ -893,6 +1123,19 @@ class ResearchAgent:
                             }
                         )
                         tool_output = inv.response
+                elif name == "web_read" and self._web_read is not None:
+                    self._emit({"type": "web_read_call", "arguments": args})
+                    inv = self._execute_web_read(args)
+                    invocations.append(inv)
+                    self._emit(
+                        {
+                            "type": "web_read_result",
+                            "pages_read": inv.num_results,
+                            "sources": inv.sources,
+                            "success": inv.success,
+                        }
+                    )
+                    tool_output = inv.response
                 else:
                     tool_output = json.dumps(
                         {
@@ -945,14 +1188,7 @@ class ResearchAgent:
             )
         )
         iterations += 1
-        final = self._engine.generate(
-            messages,
-            model=self._model,
-            temperature=self._temperature,
-            max_tokens=self._max_tokens,
-            num_ctx=self._num_ctx,
-            tools=None,
-        )
+        final = self._generate(messages, None)
         for k in total_usage:
             total_usage[k] += int(final.get("usage", {}).get(k, 0))
         answer = (final.get("content", "") or "").strip()
@@ -962,7 +1198,14 @@ class ResearchAgent:
                 "and the model returned no text response)"
             )
         answer, final_sources = _finalize(answer)
-        self._emit({"type": "final_answer", "text": answer, "sources": final_sources})
+        self._emit(
+            {
+                "type": "final_answer",
+                "text": answer,
+                "sources": final_sources,
+                "streamed": self._stream,
+            }
+        )
         return ResearchResult(
             answer=answer,
             iterations=iterations,

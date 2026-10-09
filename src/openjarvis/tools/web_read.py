@@ -164,8 +164,15 @@ class WebReadTool(BaseTool):
     tool_id = "web_read"
     is_local = False
 
-    def __init__(self, allowed_dirs: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        allowed_dirs: Optional[List[str]] = None,
+        *,
+        max_reads: int = MAX_READS_PER_TURN,
+    ) -> None:
         self._allowed_dirs = allowed_dirs
+        # Deep Research reads more pages for one question than a chat turn.
+        self._max_reads = int(max_reads)
 
     @property
     def spec(self) -> ToolSpec:
@@ -184,7 +191,7 @@ class WebReadTool(BaseTool):
                 "a tab, reads it, and closes it again. To read several pages, "
                 "pass them all at once in `urls` -- they are fetched at the "
                 "same time, in one step, where reading them one by one costs "
-                f"a step each. At most {MAX_READS_PER_TURN} per message."
+                f"a step each. At most {self._max_reads} per message."
             ),
             parameters={
                 "type": "object",
@@ -235,7 +242,7 @@ class WebReadTool(BaseTool):
 
         def one(url: str) -> ToolResult:
             return context.copy().run(
-                type(self)(self._allowed_dirs)._read_one,
+                type(self)(self._allowed_dirs, max_reads=self._max_reads)._read_one,
                 url,
                 {"url": url, "wait_for": wait_for},
             )
@@ -290,7 +297,7 @@ class WebReadTool(BaseTool):
                 "opened unless the user asks about social media. Use the "
                 "article sources instead."
             )
-        reserved = page_access.reserve_read(url, MAX_READS_PER_TURN)
+        reserved = page_access.reserve_read(url, self._max_reads)
         if reserved == "duplicate":
             # The same page again cost a whole model round and resent its
             # text: one answer read one page three times (29 September).
@@ -305,7 +312,7 @@ class WebReadTool(BaseTool):
             )
         if reserved == "limit":
             return self._fail(
-                f"I have read {MAX_READS_PER_TURN} pages for this message, "
+                f"I have read {self._max_reads} pages for this message, "
                 "which is the limit. Ask me to read it in your next message."
             )
         wait_for = str(params.get("wait_for") or "").strip()

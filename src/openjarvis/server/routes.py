@@ -481,6 +481,8 @@ def _log_tool_timing(call: Any, result: Any, seconds: float) -> None:
             host = None
         if host:
             parts.append(f"host={host}")
+        if metadata.get("early_search") is True:
+            parts.append("early=yes")
         if type(metadata.get("pages_read")) is int:
             pages = len(metadata.get("urls") or [])
             parts.append(f"pages={metadata['pages_read']}/{pages}")
@@ -1499,6 +1501,33 @@ async def _handle_streaming_orchestrator(
         total_completion_tokens = 0
         turns = 0
 
+        # A plain public lookup: search while the first round decides to
+        # (agents/early_search.py). Used if that round calls web_search.
+        early_search: asyncio.Task | None = None
+        early_began = 0.0
+        if watch is None and any(
+            (tool.get("function") or {}).get("name") == "web_search"
+            for tool in active_tools
+        ):
+            from openjarvis.agents.early_search import early_search_query
+
+            early_query = early_search_query(
+                query_text if isinstance(query_text, str) else "",
+                has_history=len(req.messages) > 1,
+            )
+            if early_query:
+                early_began = time.perf_counter()
+                early_search = asyncio.create_task(
+                    asyncio.to_thread(
+                        agent._executor.execute,
+                        ToolCall(
+                            id="early_search",
+                            name="web_search",
+                            arguments=_json.dumps({"query": early_query}),
+                        ),
+                    )
+                )
+
         agent._emit_turn_start(input_text)
         first_chunk = ChatCompletionChunk(
             id=chunk_id,
@@ -1510,6 +1539,8 @@ async def _handle_streaming_orchestrator(
         try:
             while turns < agent._max_turns:
                 turns += 1
+                if turns > 1:
+                    early_search = None
                 if agent._loop_guard:
                     messages[:] = agent._loop_guard.compress_context(
                         messages,
@@ -1649,6 +1680,31 @@ async def _handle_streaming_orchestrator(
                                 )
                                 continue
                         pending.append((index, tool_call))
+
+                    if early_search is not None:
+                        searches = [
+                            (index, call)
+                            for index, call in pending
+                            if call.name == "web_search"
+                        ]
+                        if searches:
+                            index, call = searches[0]
+                            try:
+                                early_result = await early_search
+                            except Exception:  # noqa: BLE001
+                                early_result = None
+                            if early_result is not None:
+                                if isinstance(early_result.metadata, dict):
+                                    early_result.metadata["early_search"] = True
+                                _log_tool_timing(
+                                    call,
+                                    early_result,
+                                    time.perf_counter() - early_began,
+                                )
+                                results_by_index[index] = early_result
+                                pending = [p for p in pending if p[0] != index]
+                    # Only the first round's search can use it.
+                    early_search = None
 
                     def _run_timed(call: ToolCall) -> ToolResult:
                         began = time.perf_counter()

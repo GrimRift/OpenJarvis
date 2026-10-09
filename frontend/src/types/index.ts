@@ -118,6 +118,16 @@ export type ResearchEvent =
       explicit_image_search?: boolean;
     }
   | { type: 'synthesis'; text: string }
+  /** The answer so far, settled: "" takes back a preamble, the final text
+   *  replaces what streamed (citations renumbered). */
+  | { type: 'synthesis_replace'; text: string }
+  | { type: 'web_read_call'; arguments: { urls?: string[]; url?: string } }
+  | {
+      type: 'web_read_result';
+      pages_read: number;
+      success?: boolean;
+      sources?: Array<Record<string, unknown>>;
+    }
   | {
       type: 'system_metrics';
       power_w: number;

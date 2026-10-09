@@ -44,6 +44,7 @@ from openjarvis.core.types import TelemetryRecord
 from openjarvis.engine._base import InferenceEngine
 from openjarvis.engine._discovery import get_engine
 from openjarvis.telemetry.store import TelemetryStore
+from openjarvis.tools.web_read import WebReadTool
 from openjarvis.tools.web_search import WebSearchTool
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["research"])
 
 _WEB_CLARIFY_RESPONSE = "no clarification available in web session"
+
+#: Deep Research's budget (9 October): several searches on different angles,
+#: the best pages read, an answer within about a minute and a half.
+DEEP_RESEARCH_WEB_SEARCHES = 4
+DEEP_RESEARCH_PAGE_READS = 6
+DEEP_RESEARCH_TOOL_CALLS = 8
+#: After this the next round gets no tools and writes the answer.
+DEEP_RESEARCH_SECONDS = 75.0
+#: The answer is a report, not a chat line; 1,500 cut longer ones short.
+DEEP_RESEARCH_ANSWER_TOKENS = 3000
 _LEGACY_PLANNER_ENGINE = "ollama"
 _CLOUD_ENGINE_KEY = "cloud"
 
@@ -454,14 +465,21 @@ async def _stream_research(
             )
             embedder = None
 
+        has_web = bool(os.environ.get("TAVILY_API_KEY"))
         agent = ResearchAgent(
             engine=engine,
             search=HybridSearch(store, embedder),
-            web_search=(
-                WebSearchTool(force_advanced=True)
-                if os.environ.get("TAVILY_API_KEY")
-                else None
+            web_search=WebSearchTool(force_advanced=True) if has_web else None,
+            # 9 October: one web search and no page reads made "deep"
+            # research thinner than an ordinary chat answer.
+            web_read=(
+                WebReadTool(max_reads=DEEP_RESEARCH_PAGE_READS) if has_web else None
             ),
+            max_web_searches=DEEP_RESEARCH_WEB_SEARCHES,
+            max_iterations=DEEP_RESEARCH_TOOL_CALLS,
+            time_budget_seconds=DEEP_RESEARCH_SECONDS,
+            max_tokens=DEEP_RESEARCH_ANSWER_TOKENS,
+            stream=_is_cloud_model(model),
             model=model,
             clarify_handler=lambda question: _WEB_CLARIFY_RESPONSE,
             on_event=on_event,
@@ -562,8 +580,13 @@ async def _stream_research(
             if etype == "final_answer":
                 final_answer = event.get("text", "")
                 final_sources = list(event.get("sources") or [])
-                for piece in _chunk_synthesis(final_answer or ""):
-                    yield _sse({"type": "synthesis", "text": piece})
+                if event.get("streamed"):
+                    # Already sent as it was written; this settles the text
+                    # (citations renumbered) without sending it twice.
+                    yield _sse({"type": "synthesis_replace", "text": final_answer})
+                else:
+                    for piece in _chunk_synthesis(final_answer or ""):
+                        yield _sse({"type": "synthesis", "text": piece})
                 if final_sources:
                     yield _sse({"type": "final_sources", "sources": final_sources})
                 continue
