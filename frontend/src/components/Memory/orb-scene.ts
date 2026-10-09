@@ -188,6 +188,7 @@ export class OrbScene {
   private pulseFact = -1;
   private nextPulse = 0;
   private opened = false;
+  private openIn = 0; // frames until the opening wave starts
   private pointMat: THREE.ShaderMaterial;
   private rimMat: THREE.ShaderMaterial;
   private softMat: THREE.ShaderMaterial;
@@ -325,7 +326,10 @@ export class OrbScene {
     this.refresh();
     // The Brain opens with a shockwave from the core (each time it is shown:
     // the view remounts when the tab comes back).
-    if (!this.opened && facts.length) { this.opened = true; if (!this.calm) this.waveA = performance.now(); }
+    // Started from the frame loop once frames are on screen: the first one
+    // (shader compile, building links) can take over a second, and a clock
+    // started here would run the wave out before anything is seen.
+    if (!this.opened && facts.length) { this.opened = true; if (!this.calm) this.openIn = 3; }
   }
 
   setQuery(q: string): void { this.query = q.trim().toLowerCase(); this.refresh(); }
@@ -560,6 +564,7 @@ export class OrbScene {
 
   private moveWaves(now: number): void {
     const u = this.uniforms;
+    if (this.openIn > 0 && --this.openIn === 0) this.waveA = now;
     if (this.waveA >= 0) {
       const p = (now - this.waveA) / 1300;
       if (p >= 1) { this.waveA = -1; u.uWaveA.value.w = -1; u.uKick.value = 1; }
