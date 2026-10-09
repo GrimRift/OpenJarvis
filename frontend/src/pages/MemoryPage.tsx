@@ -9,7 +9,7 @@
  */
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Brain, Pin, PinOff, EyeOff, Eye, Trash2, RotateCcw, Upload, RefreshCw, Search, Plus } from 'lucide-react';
+import { Brain, Orbit, Pin, PinOff, EyeOff, Eye, Trash2, RotateCcw, Upload, RefreshCw, Search, Plus } from 'lucide-react';
 import {
   addMemoryFact,
   deleteMemoryDocument,
@@ -76,6 +76,9 @@ export function MemoryPage() {
   const [error, setError] = useState<string | null>(null);
   const fail = useCallback((err: unknown) => setError(err instanceof Error ? err.message : String(err)), []);
   const brain = tab === 'brain';
+  // A fact the Facts list asked to show in the orb ("View").
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const viewInBrain = useCallback((id: string) => { setFocusId(id); setTab('brain'); }, []);
 
   return (
     <div className={brain ? 'flex-1 flex flex-col overflow-hidden px-6 pt-10 pb-6' : 'flex-1 overflow-y-auto px-6 py-10'}>
@@ -113,11 +116,11 @@ export function MemoryPage() {
         {brain && (
           <div className="flex-1 min-h-[480px]">
             <Suspense fallback={<div className="h-full rounded-xl grid place-items-center text-sm" style={{ background: '#0a0a0b', color: '#8b8b94' }}>Loading the memory orb…</div>}>
-              <MemoryOrb fail={fail} />
+              <MemoryOrb fail={fail} focusId={focusId} onFocused={() => setFocusId(null)} />
             </Suspense>
           </div>
         )}
-        {tab === 'facts' && <FactsTab fail={fail} />}
+        {tab === 'facts' && <FactsTab fail={fail} onView={viewInBrain} />}
         {tab === 'episodes' && <EpisodesTab fail={fail} />}
         {tab === 'documents' && <DocumentsTab fail={fail} />}
         {tab === 'profile' && <ProfileTab fail={fail} />}
@@ -128,7 +131,7 @@ export function MemoryPage() {
 
 // ---------------------------------------------------------------------------
 
-function FactsTab({ fail }: { fail: (e: unknown) => void }) {
+function FactsTab({ fail, onView }: { fail: (e: unknown) => void; onView: (id: string) => void }) {
   const [facts, setFacts] = useState<MemoryFact[]>([]);
   const [removed, setRemoved] = useState<MemoryFact[]>([]);
   const [query, setQuery] = useState('');
@@ -263,6 +266,9 @@ function FactsTab({ fail }: { fail: (e: unknown) => void }) {
               </div>
             </div>
             <div className="flex gap-1 shrink-0">
+              <Button title="View in the Brain: where it sits and what it links to" onClick={() => onView(f.id)}>
+                <Orbit size={12} /> View
+              </Button>
               <Button title={f.pinned ? 'Unpin' : 'Pin: always in context'} onClick={() => void act(() => updateMemoryFact(f.id, { pinned: !f.pinned }))}>
                 {f.pinned ? <PinOff size={12} /> : <Pin size={12} />}
               </Button>

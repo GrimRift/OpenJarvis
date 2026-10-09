@@ -46,7 +46,12 @@ function OrbButton({ onClick, children, title, active, danger, disabled }: {
 const sourceLabel = (s: string) => (s === 'you' ? 'you' : s === 'curated' ? 'curated' : 'from a conversation');
 const day = (at: number) => (at ? new Date(at * 1000).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }) : '');
 
-export default function MemoryOrb({ fail }: { fail: (e: unknown) => void }) {
+export default function MemoryOrb({ fail, focusId, onFocused }: {
+  fail: (e: unknown) => void;
+  /** Open on this fact (the Facts list's "View"), then report it done. */
+  focusId?: string | null;
+  onFocused?: () => void;
+}) {
   const stageRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<OrbScene | null>(null);
@@ -89,6 +94,12 @@ export default function MemoryOrb({ fail }: { fail: (e: unknown) => void }) {
   }, [fail]);
 
   useEffect(() => { if (facts) sceneRef.current?.setFacts(facts); }, [facts]);
+  useEffect(() => {
+    if (!focusId || !facts || !sceneRef.current) return;
+    const fact = facts.find((f) => f.id === focusId);
+    if (fact) selectRef.current(fact);
+    onFocused?.();
+  }, [focusId, facts, onFocused]);
   useEffect(() => { sceneRef.current?.setQuery(query); }, [query]);
   useEffect(() => { sceneRef.current?.setHidden(hidden); }, [hidden]);
   useEffect(() => {

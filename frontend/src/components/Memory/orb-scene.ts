@@ -16,31 +16,48 @@ import {
 
 const v3 = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 
+// A per-point random number from its position (no extra attribute).
+const HASH = /* glsl */ `
+  float hash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }`;
+
 const VERTEX = /* glsl */ `
   attribute vec3 color; attribute float size; attribute vec4 flags; // pinned, new, dim, selected
   uniform float uTime, uPR;
   varying vec3 vColor; varying vec4 vFlags; varying float vRim; varying float vPhase; varying float vBeat;
+  varying float vTwinkle; varying float vStar;
+  ${HASH}
   void main() {
     vRim = 1.0;
     vPhase = fract(uTime * 0.55 + position.x * 1.7 + position.z);
     vBeat = 0.5 + 0.5 * sin(uTime * 2.2 + position.z * 4.0);
+    // Dust twinkles like the voice orb's particles: each on its own seed and
+    // pace (0.4 + 0.6 sin), a few of them sharper, like stars.
+    float h = hash(position);
+    vTwinkle = 0.4 + 0.6 * sin(h * 6.2832 + uTime * (0.6 + 1.6 * fract(h * 7.31)));
+    vStar = step(0.92, fract(h * 13.7));
     #ifdef RIM
     vRim = 1.0 - abs(normalize(normalMatrix * position).z);
     #endif
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     float s = size;
-    if (flags.x > 0.5) s *= 1.6 + 0.4 * sin(uTime * 2.2 + position.z * 4.0);
+    if (flags.x > 0.5) s *= 2.6 + 0.3 * sin(uTime * 2.2 + position.z * 4.0);
     if (flags.y > 0.5) s *= 2.4;
-    if (flags.w > 0.5) s *= 2.2;
+    if (flags.w > 0.5) s *= flags.x > 0.5 ? 1.35 : 2.2; // a pinned one is already large
+    #ifdef SOFT
+    s *= 1.0 + 0.6 * vStar;
+    #endif
     gl_PointSize = s * uPR * (4.0 / -mv.z);
     gl_Position = projectionMatrix * mv;
     vColor = color; vFlags = flags;
   }`;
 
 const FRAGMENT = /* glsl */ `
+  uniform float uTime;
   varying vec3 vColor; varying vec4 vFlags; varying float vRim; varying float vPhase; varying float vBeat;
+  varying float vTwinkle; varying float vStar;
   void main() {
-    float d = length(gl_PointCoord - 0.5);
+    vec2 q = gl_PointCoord - 0.5;
+    float d = length(q);
     if (d > 0.5) discard;
     float core = smoothstep(0.2, 0.0, d);
     float glow = smoothstep(0.5, 0.0, d); glow *= glow;
@@ -49,11 +66,26 @@ const FRAGMENT = /* glsl */ `
     #ifdef SOFT
     float soft = smoothstep(0.5, 0.0, d);
     a = soft * soft * 0.8;
+    // a star: a small bright centre and a faint four-point glint
+    float glint = vStar * (smoothstep(0.1, 0.0, d) * 1.6
+      + (smoothstep(0.05, 0.0, abs(q.x)) + smoothstep(0.05, 0.0, abs(q.y))) * smoothstep(0.5, 0.0, d) * 0.5);
+    a = (a + glint) * vTwinkle;
     #endif
     if (vFlags.x > 0.5) {
-      float ring = smoothstep(0.05, 0.0, abs(d - 0.34));
-      c = mix(c, vec3(1.0, 0.92, 0.72), 0.55);
-      a += ring * (0.6 + 0.9 * vBeat) + glow * (0.5 + 0.6 * vBeat);
+      // Pinned: drawn ~2.6x. A hot core, soft rays turning slowly, ripples
+      // running out to the beating ring, and a dashed halo turning the other way.
+      float ang = atan(q.y, q.x);
+      float hot = smoothstep(0.13, 0.0, d);
+      float rays = pow(abs(sin(ang * 4.0 + uTime * 0.35)), 10.0) * smoothstep(0.42, 0.1, d) * 0.4;
+      float ripple = (0.5 + 0.5 * sin(d * 60.0 - uTime * 3.2)) * smoothstep(0.08, 0.14, d) * smoothstep(0.3, 0.2, d) * 0.35;
+      float ring = smoothstep(0.022, 0.0, abs(d - 0.33)) * (0.6 + 0.9 * vBeat);
+      float dash = step(0.5, fract(ang / 6.2832 * 14.0 - uTime * 0.12)) * smoothstep(0.012, 0.0, abs(d - 0.43)) * 0.7;
+      float halo = smoothstep(0.5, 0.0, d); halo = halo * halo * (0.18 + 0.18 * vBeat);
+      vec3 warm = vec3(1.0, 0.92, 0.72);
+      c = mix(c, warm, 0.6);
+      a = hot * 1.05 + rays + ripple + ring + dash + halo;
+      // the outer halo and dashes lean cyan, like Sage's orb
+      c = mix(c, vec3(0.55, 0.95, 1.0), smoothstep(0.3, 0.45, d) * 0.6);
     }
     if (vFlags.y > 0.5) {
       // drawn 2.4x larger: a small core plus a ring that expands and fades
@@ -68,6 +100,27 @@ const FRAGMENT = /* glsl */ `
     a *= mix(0.45, 1.5, pow(vRim, 1.5));
     #endif
     gl_FragColor = vec4(c * a, a);
+  }`;
+
+// Links breathe with the voice orb's rhythm (0.75 + 0.25 sin, ~5 s) and
+// carry pulses: a glow that runs along each link at its own phase.
+const LINE_VERTEX = /* glsl */ `
+  attribute vec3 color; attribute vec2 along; // x: 0..1 along the link, y: the link's phase
+  uniform float uTime;
+  varying vec3 vColor; varying float vPulse;
+  void main() {
+    float w = fract(uTime * 0.28 + along.y);
+    float pulse = exp(-pow((along.x - w) * 9.0, 2.0)) * smoothstep(0.0, 0.1, w) * smoothstep(1.0, 0.9, w);
+    vPulse = pulse;
+    vColor = color * (0.75 + 0.25 * sin(uTime * 1.2)) * (1.0 + 3.2 * pulse);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }`;
+
+const LINE_FRAGMENT = /* glsl */ `
+  varying vec3 vColor; varying float vPulse;
+  void main() {
+    vec3 c = mix(vColor, vec3(0.75, 1.0, 1.0) * length(vColor), vPulse * 0.4);
+    gl_FragColor = vec4(c, 1.0);
   }`;
 
 function makePoints(count: number): THREE.BufferGeometry {
@@ -100,7 +153,10 @@ export class OrbScene {
   private pointMat: THREE.ShaderMaterial;
   private rimMat: THREE.ShaderMaterial;
   private softMat: THREE.ShaderMaterial;
-  private lineMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  private lineMat = new THREE.ShaderMaterial({
+    uniforms: this.uniforms, vertexShader: LINE_VERTEX, fragmentShader: LINE_FRAGMENT,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
   private factGeo = makePoints(1);
   private factPts: THREE.Points;
   private hubGeo = makePoints(1);
@@ -381,15 +437,20 @@ export class OrbScene {
   }
 
   private buildLines(): void {
-    const pos: number[] = [], col: number[] = [], hiPos: number[] = [], hiCol: number[] = [];
-    const pushTo = (P: number[], C: number[], pts: THREE.Vector3[], c: THREE.Color, k: number) => {
-      for (let n = 0; n < pts.length - 1; n++) {
+    type Buf = { P: number[]; C: number[]; A: number[] };
+    const main: Buf = { P: [], C: [], A: [] }, hi: Buf = { P: [], C: [], A: [] };
+    let linkNo = 0;
+    const pushTo = (B: Buf, pts: THREE.Vector3[], c: THREE.Color, k: number) => {
+      // each link pulses at its own phase (golden-ratio spread: no two in step)
+      const phase = (linkNo++ * 0.618034) % 1, last = pts.length - 1;
+      for (let n = 0; n < last; n++) {
         const a = pts[n], b = pts[n + 1];
-        P.push(a.x, a.y, a.z, b.x, b.y, b.z);
-        C.push(c.r * k, c.g * k, c.b * k, c.r * k, c.g * k, c.b * k);
+        B.P.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        B.C.push(c.r * k, c.g * k, c.b * k, c.r * k, c.g * k, c.b * k);
+        B.A.push(n / last, phase, (n + 1) / last, phase);
       }
     };
-    const push = (pts: THREE.Vector3[], c: THREE.Color, k: number) => pushTo(pos, col, pts, c, k);
+    const push = (pts: THREE.Vector3[], c: THREE.Color, k: number) => pushTo(main, pts, c, k);
     const thin = Math.max(0.4, Math.min(1, Math.sqrt(450 / Math.max(1, this.facts.length))));
     const curveOf = (i: number, j: number) => curve(this.pos[i].toArray() as Vec3, this.pos[j].toArray() as Vec3).map(v3);
     this.curves = [];
@@ -407,23 +468,24 @@ export class OrbScene {
       push(pts, this.color(a).lerp(this.color(b), 0.5), (this.query && !(this.matches(a) && this.matches(b)) ? 0.02 : 0.065) * thin);
       this.curves.push(pts);
     }
-    this.lines = this.replaceLines(this.lines, pos, col);
+    this.lines = this.replaceLines(this.lines, main);
 
     const sel = this.selected;
     if (sel >= 0) {
       const glow = new THREE.Color(0.6, 0.95, 1);
-      for (const [j] of this.neighbours[sel]) pushTo(hiPos, hiCol, curveOf(sel, j), glow, 1);
-      for (const [i, j] of this.web) if (i === sel || j === sel) pushTo(hiPos, hiCol, curveOf(i, j), glow, 0.7);
+      for (const [j] of this.neighbours[sel]) pushTo(hi, curveOf(sel, j), glow, 1);
+      for (const [i, j] of this.web) if (i === sel || j === sel) pushTo(hi, curveOf(i, j), glow, 0.7);
     }
-    this.hiLines = this.replaceLines(this.hiLines, hiPos, hiCol);
+    this.hiLines = this.replaceLines(this.hiLines, hi);
   }
 
-  private replaceLines(old: THREE.LineSegments | null, pos: number[], col: number[]): THREE.LineSegments | null {
+  private replaceLines(old: THREE.LineSegments | null, b: { P: number[]; C: number[]; A: number[] }): THREE.LineSegments | null {
     if (old) { this.scene.remove(old); old.geometry.dispose(); }
-    if (!pos.length) return null;
+    if (!b.P.length) return null;
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('position', new THREE.Float32BufferAttribute(b.P, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(b.C, 3));
+    g.setAttribute('along', new THREE.Float32BufferAttribute(b.A, 2));
     const lines = new THREE.LineSegments(g, this.lineMat);
     this.scene.add(lines);
     return lines;
