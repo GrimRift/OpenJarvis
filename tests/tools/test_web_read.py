@@ -468,3 +468,45 @@ class TestReadAhead:
             for url in urls:
                 web_read._take_prefetched(url)
         assert fetch.call_count == 2
+
+
+class TestSeveralAtOnce:
+    """9 October: read one per call, two pages took two model rounds."""
+
+    ARTICLE = ("Up to 5 hours with ANC on a single charge. " * 60, "AirPods")
+    OTHER = "https://www.apple.com/airpods-5/"
+
+    def test_several_pages_are_read_in_one_call(self):
+        page_access.set_turn("airpods 5 vs airpods 4")
+        page_access.allow_search_results([PAGE, self.OTHER])
+        with patch.object(WebReadTool, "_fetch_static", return_value=self.ARTICLE):
+            result = _tool().execute(urls=[PAGE, self.OTHER])
+        assert result.success is True
+        assert result.metadata["pages_read"] == 2
+        assert f"## {PAGE}" in result.content and f"## {self.OTHER}" in result.content
+        assert [s["url"] for s in result.metadata["sources"]] == [PAGE, self.OTHER]
+
+    def test_each_page_still_needs_its_own_permission(self):
+        page_access.set_turn("airpods")
+        page_access.allow_search_results([PAGE])
+        with patch.object(WebReadTool, "_fetch_static", return_value=self.ARTICLE):
+            result = _tool().execute(urls=[PAGE, "https://elsewhere.example/x"])
+        assert result.success is True
+        assert result.metadata["pages_read"] == 1
+        assert "Not read: I can only open a page you named yourself" in result.content
+
+    def test_the_budget_counts_every_page(self):
+        page_access.set_turn("airpods")
+        pages = [f"https://example.org/{i}" for i in range(MAX_READS_PER_TURN + 1)]
+        page_access.allow_search_results(pages)
+        with patch.object(WebReadTool, "_fetch_static", return_value=self.ARTICLE):
+            result = _tool().execute(urls=pages)
+        assert result.metadata["pages_read"] == MAX_READS_PER_TURN
+        assert result.content.count("Not read:") == 1
+
+    def test_a_single_url_reads_as_before(self):
+        page_access.set_turn("airpods")
+        page_access.allow_search_results([PAGE])
+        with patch.object(WebReadTool, "_fetch_static", return_value=self.ARTICLE):
+            result = _tool().execute(url=PAGE)
+        assert result.metadata["mode"] == "direct"

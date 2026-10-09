@@ -182,9 +182,9 @@ class WebReadTool(BaseTool):
                 "another page, and never a search engine's results page "
                 "(Google, Bing...), which cannot be read. Read-only: it opens "
                 "a tab, reads it, and closes it again. To read several pages, "
-                "request them all in the same response -- they are fetched "
-                "at the same time -- "
-                f"and at most {MAX_READS_PER_TURN} per message."
+                "pass them all at once in `urls` -- they are fetched at the "
+                "same time, in one step, where reading them one by one costs "
+                f"a step each. At most {MAX_READS_PER_TURN} per message."
             ),
             parameters={
                 "type": "object",
@@ -192,6 +192,16 @@ class WebReadTool(BaseTool):
                     "url": {
                         "type": "string",
                         "description": "The page to read.",
+                    },
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": MAX_READS_PER_TURN,
+                        "description": (
+                            "Several pages to read at the same time, instead "
+                            "of `url`. Prefer this whenever more than one "
+                            "page is worth reading."
+                        ),
                     },
                     "wait_for": {
                         "type": "string",
@@ -201,13 +211,59 @@ class WebReadTool(BaseTool):
                         ),
                     },
                 },
-                "required": ["url"],
             },
             category="search",
         )
 
     def execute(self, **params: Any) -> ToolResult:
-        url = str(params.get("url") or "").strip()
+        urls = [str(u).strip() for u in params.get("urls") or [] if str(u).strip()]
+        if params.get("url"):
+            urls.insert(0, str(params["url"]).strip())
+        urls = list(dict.fromkeys(urls))
+        if len(urls) > 1:
+            return self._read_many(urls, str(params.get("wait_for") or ""))
+        return self._read_one(urls[0] if urls else "", params)
+
+    def _read_many(self, urls: List[str], wait_for: str) -> ToolResult:
+        """Several pages in one step, read at the same time.
+
+        Read one per call, the model took a whole round per page: 2-3 s each
+        on top of the read (9 October bench: four rounds for two pages).
+        Each page still goes through every check in :meth:`_read_one`.
+        """
+        context = contextvars.copy_context()
+
+        def one(url: str) -> ToolResult:
+            return context.copy().run(
+                WebReadTool(self._allowed_dirs)._read_one,
+                url,
+                {"url": url, "wait_for": wait_for},
+            )
+
+        with ThreadPoolExecutor(max_workers=len(urls)) as pool:
+            results = list(pool.map(one, urls))
+        parts = []
+        sources: list[Any] = []
+        for url, result in zip(urls, results):
+            status = "" if result.success else "Not read: "
+            parts.append(f"## {url}\n{status}{result.content}")
+            if result.success and isinstance(result.metadata, dict):
+                sources.extend(result.metadata.get("sources") or [])
+        read = sum(1 for r in results if r.success)
+        return ToolResult(
+            tool_name=self.tool_id,
+            content="\n\n---\n\n".join(parts),
+            success=read > 0,
+            metadata={
+                "urls": urls,
+                "pages_read": read,
+                "mode": "several",
+                "sources": sources,
+            },
+        )
+
+    def _read_one(self, url: str, params: dict[str, Any]) -> ToolResult:
+        url = str(url or "").strip()
         if not url:
             return self._fail("A URL is required.")
         if not url.lower().startswith(("http://", "https://")):

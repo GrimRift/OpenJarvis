@@ -481,6 +481,9 @@ def _log_tool_timing(call: Any, result: Any, seconds: float) -> None:
             host = None
         if host:
             parts.append(f"host={host}")
+        if type(metadata.get("pages_read")) is int:
+            pages = len(metadata.get("urls") or [])
+            parts.append(f"pages={metadata['pages_read']}/{pages}")
         detail = (" " + " ".join(parts)) if parts else ""
     # What it was asked: on 2 October an unrelated weather call landed in a
     # research answer and nothing showed what the model had passed it.

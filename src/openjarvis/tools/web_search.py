@@ -558,7 +558,8 @@ def _read_hint(
             "disagree, trust the official site and the newest published date. "
             "If none states it clearly, use web_read on the most official "
             f"page (likely {best['url']}) before answering, rather than "
-            "replying that it could not be confirmed."
+            "replying that it could not be confirmed. To check more than one "
+            "page, pass them together in web_read's `urls`, in one step."
         )
     thin = not quality_passed or all(
         len((source.get("summary") or "").strip()) < 200 for source in sources
@@ -569,7 +570,8 @@ def _read_hint(
         "If the detail asked for is not in these summaries, it may exist only "
         "on the page itself -- pages often draw schedules, prices and tables "
         "after loading, and no summary will contain those. Use web_read on "
-        f"{sources[0]['url']} to read it."
+        f"{sources[0]['url']} to read it -- with any other page worth "
+        "reading, together in `urls`, in one step."
     )
 
 
