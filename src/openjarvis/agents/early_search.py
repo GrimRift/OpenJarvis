@@ -64,7 +64,46 @@ def early_search_query(text: str, *, has_history: bool) -> str:
         return ""
     if has_history and _FOLLOW_UP.search(text):
         return ""
-    return text
+    return _localised(text)
+
+
+_OTHER_PESO = re.compile(
+    r"\b(mexic\w*|chile\w*|argentin\w*|colombi\w*|cuba\w*|dominican|uruguay\w*|"
+    r"mxn|clp|ars|cop)\b",
+    re.IGNORECASE,
+)
+_PRICE_WORDS = re.compile(
+    r"\b(price|prices|cost|costs|how\s+much|rate|exchange|peso|pesos|₱|php)\b",
+    re.IGNORECASE,
+)
+_PLACE_NAMED = re.compile(
+    r"\b(philippines?|ph|pinas|manila|cebu|davao|japan|usa|us|america|uk|"
+    r"singapore|china|korea|australia|canada|europe|mexico|india)\b",
+    re.IGNORECASE,
+)
+
+
+def _localised(text: str) -> str:
+    """The query as the model would write it for a user in the Philippines.
+
+    The early search goes out with the user's own words, and its result is
+    used in place of the model's query: "US dollar to peso exchange rate"
+    came back as the Mexican peso (9 October), where the model had written
+    "Philippine peso". A peso is the Philippine peso, and a price question
+    naming no country is about the Philippines, unless the user says else.
+    """
+    if _OTHER_PESO.search(text):
+        return text
+    out = re.sub(
+        r"\bpesos?\b", lambda m: f"Philippine {m.group(0)}", text, flags=re.IGNORECASE
+    )
+    if (
+        _PRICE_WORDS.search(out)
+        and not _PLACE_NAMED.search(out)
+        and "Philippine" not in out
+    ):
+        out = f"{out.rstrip('?. ')} in the Philippines?"
+    return out
 
 
 __all__ = ["early_search_query"]

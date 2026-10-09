@@ -18,7 +18,11 @@ from openjarvis.agents.early_search import early_search_query
     ],
 )
 def test_a_public_lookup_is_searched_at_once(text):
-    assert early_search_query(text, has_history=False) == text
+    query = early_search_query(text, has_history=False)
+    # The user's words, at most placed in the Philippines (see below).
+    assert query.split(" in the Philippines")[0].rstrip("?") in text.replace(
+        "peso", "Philippine peso"
+    )
 
 
 @pytest.mark.parametrize(
@@ -40,9 +44,34 @@ def test_the_users_own_things_and_actions_are_not(text):
 def test_a_follow_up_needs_the_chat_so_it_waits_for_the_model():
     text = "How much is that one now?"
     assert early_search_query(text, has_history=True) == ""
-    assert early_search_query(text, has_history=False) == text
+    assert early_search_query(text, has_history=False).startswith(
+        "How much is that one now"
+    )
 
 
 def test_a_long_message_is_left_to_the_model():
     text = "What is the price " + "and also the details " * 10 + "today?"
     assert early_search_query(text, has_history=False) == ""
+
+
+@pytest.mark.parametrize(
+    "text,query",
+    [
+        (
+            "What's the US dollar to peso exchange rate today?",
+            "What's the US dollar to Philippine peso exchange rate today?",
+        ),
+        ("How much is the iPhone 17?", "How much is the iPhone 17 in the Philippines?"),
+        (
+            "How much is the iPhone 17 in Japan?",
+            "How much is the iPhone 17 in Japan?",
+        ),
+        (
+            "What's the dollar to Mexican peso rate today?",
+            "What's the dollar to Mexican peso rate today?",
+        ),
+    ],
+)
+def test_a_price_or_peso_is_the_philippines_unless_said(text, query):
+    """9 October: "dollar to peso" searched as-is came back as the Mexican peso."""
+    assert early_search_query(text, has_history=False) == query
