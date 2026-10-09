@@ -63,7 +63,10 @@ EVENTS_RULE = (
     "Events: take the event's name, date and place TOGETHER from one source"
     " and name that source; never combine a name from one result with a"
     " date or place from another. If sources disagree, say so plainly"
-    ' ("BBC says X, ESPN says Y") instead of blending them. An unusual'
+    ' ("BBC says X, ESPN says Y") instead of blending them -- but only'
+    " figures for the SAME thing can disagree (drivers' and teams' tables do"
+    " not), and still give the answer from the newest official source"
+    " rather than declining to give one. An unusual"
     ' name can be real (2026\'s "Bahrain Grand Prix in Malaysia" was held'
     " at Sepang): report what the source says."
 )
