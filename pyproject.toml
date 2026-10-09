@@ -39,6 +39,7 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
     "tomlkit>=0.12",
     "websockets>=15.0.1",
+    "chess>=1.11",
 ]
 
 [project.optional-dependencies]

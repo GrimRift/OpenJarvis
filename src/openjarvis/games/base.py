@@ -41,6 +41,8 @@ class Game:
     aliases: tuple = ()
     #: How a move is written, for the tool description and error messages.
     move_help = ""
+    #: "You take the center" / "You play knight to f3".
+    verb = "take"
 
     def new_state(self, user_first: bool) -> Dict[str, Any]:
         raise NotImplementedError
@@ -55,9 +57,14 @@ class Game:
     def choose_move(self, state: Dict[str, Any], difficulty: str) -> Any:
         raise NotImplementedError
 
-    def describe_move(self, move: Any) -> str:
-        """The move in words, as Sage says it ("the top-left corner (1)")."""
+    def describe_move(self, move: Any, state: Optional[Dict[str, Any]] = None) -> str:
+        """The move in words, as Sage says it ("the top-left corner (1)").
+        *state* is the game just after the move (chess names it from there)."""
         raise NotImplementedError
+
+    def status_note(self, state: Dict[str, Any]) -> str:
+        """Anything to add after the moves ("Check!"), or ""."""
+        return ""
 
     def render(self, state: Dict[str, Any]) -> str:
         raise NotImplementedError

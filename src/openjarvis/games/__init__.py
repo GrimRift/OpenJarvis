@@ -16,7 +16,15 @@ from typing import Dict, Optional
 from openjarvis.games.base import DIFFICULTIES, Game, MoveError, Outcome, Session
 from openjarvis.games.tictactoe import TicTacToe
 
-GAMES: Dict[str, Game] = {game.name: game for game in (TicTacToe(),)}
+_ALL: list = [TicTacToe()]
+try:
+    from openjarvis.games.chess_game import ChessGame
+
+    _ALL.append(ChessGame())
+except ImportError:  # python-chess not installed: chess is simply not offered
+    pass
+
+GAMES: Dict[str, Game] = {game.name: game for game in _ALL}
 
 _lock = threading.Lock()
 _path_override: Optional[Path] = None

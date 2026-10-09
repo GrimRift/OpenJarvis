@@ -999,14 +999,22 @@ class ResearchAgent:
                 )
             )
             earlier.append(Message(role=Role.ASSISTANT, content="Understood."))
-        from openjarvis.prompt.answer_hints import NUMBERS_RULE, budget_hint
+        from openjarvis.prompt.answer_hints import (
+            NUMBERS_RULE,
+            budget_hint,
+            events_hint,
+        )
 
         last_question = next(
             (str(t.get("content", "")) for t in reversed(history)
              if t.get("role") == "user"),
             "",
         )
-        notes = [budget_hint(f"{query}\n{last_question}"), NUMBERS_RULE]
+        notes = [
+            budget_hint(f"{query}\n{last_question}"),
+            NUMBERS_RULE,
+            events_hint(query),
+        ]
         asked = query + "".join(f"\n\n({note})" for note in notes if note)
         messages: List[Message] = [
             sys_msg,

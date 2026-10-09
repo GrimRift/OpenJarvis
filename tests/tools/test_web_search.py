@@ -1398,3 +1398,64 @@ def test_recent_query_is_the_subject_words():
     )
     # No names: the content words, filler dropped.
     assert _recent_query("what is going on") == "what going"
+
+
+class TestTheShortCache:
+    """The user's choice (9 October): the same search again answers at once,
+    for a time that depends on how fast its subject changes."""
+
+    RESULT = {
+        "results": [
+            _result(
+                f"RTX 5060 Ti 16GB price Philippines ({shop})",
+                f"https://{shop}.example/rtx-5060-ti-price",
+                f"The RTX 5060 Ti 16GB price in the Philippines at {shop}: "
+                "37,995 pesos. " * 6,
+            )
+            for shop in ("gameone", "datablitz", "pcx")
+        ]
+    }
+
+    def _search(self, fake_module, query):
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            return WebSearchTool(api_key="key").execute(query=query)
+
+    def test_the_same_search_is_answered_from_the_cache(self):
+        from openjarvis.security import page_access
+
+        fake_module, mock_client_cls = _fake_tavily_module(search_return=self.RESULT)
+        first = self._search(fake_module, "RTX 5060 Ti 16GB price Philippines")
+        calls = mock_client_cls.return_value.search.call_count
+        page_access.clear()
+        again = self._search(fake_module, "  rtx 5060 ti 16gb price PHILIPPINES ")
+        assert mock_client_cls.return_value.search.call_count == calls
+        assert again.metadata["cached"] is True
+        assert again.content == first.content
+        # Its pages are readable again, as after a fresh search.
+        assert page_access.is_allowed("https://pcx.example/rtx-5060-ti-price")
+
+    def test_an_expired_entry_searches_again(self, monkeypatch):
+        from openjarvis.tools import web_search
+
+        fake_module, mock_client_cls = _fake_tavily_module(search_return=self.RESULT)
+        self._search(fake_module, "RTX 5060 Ti 16GB price Philippines")
+        calls = mock_client_cls.return_value.search.call_count
+        later = web_search.time.monotonic() + 3601
+        monkeypatch.setattr(web_search.time, "monotonic", lambda: later)
+        self._search(fake_module, "RTX 5060 Ti 16GB price Philippines")
+        assert mock_client_cls.return_value.search.call_count > calls
+
+    @pytest.mark.parametrize(
+        "query,seconds",
+        [
+            ("latest news West Philippine Sea", 600),
+            ("who won the F1 race", 600),
+            ("RTX 5060 Ti price Philippines", 3600),
+            ("USD to PHP exchange rate", 3600),
+            ("Philippine holidays 2026 dates", 86400),
+        ],
+    )
+    def test_how_long_a_search_is_kept(self, query, seconds):
+        from openjarvis.tools.web_search import cache_seconds
+
+        assert cache_seconds(query) == seconds

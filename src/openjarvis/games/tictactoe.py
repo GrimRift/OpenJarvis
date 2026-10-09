@@ -177,7 +177,7 @@ class TicTacToe(Game):
             return random.choice(empty)
         return _best_move(board, me, you)
 
-    def describe_move(self, move: int) -> str:
+    def describe_move(self, move: int, state: Optional[Dict[str, Any]] = None) -> str:
         return f"{SQUARE_NAMES[move]} ({move + 1})"
 
     # -- state --------------------------------------------------------------

@@ -46,3 +46,25 @@ def test_the_rule_still_allows_comparing_estimates():
     """The user: with no measured data, still compare -- say they are estimates."""
     assert "compare them anyway" in NUMBERS_RULE
     assert "estimates, not measured data" in NUMBERS_RULE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Who won the most recent Formula 1 race?",
+        "what was the score of the Gilas game",
+        "who won the election in Japan",
+    ],
+)
+def test_an_event_question_gets_the_one_source_rule(text):
+    """9 October: "the Bahrain Grand Prix in Malaysia"."""
+    from openjarvis.prompt.answer_hints import EVENTS_RULE, events_hint
+
+    assert events_hint(text) == EVENTS_RULE
+    assert "from one source" in EVENTS_RULE
+
+
+def test_no_event_no_rule():
+    from openjarvis.prompt.answer_hints import events_hint
+
+    assert events_hint("how much is the iPhone 17 in the Philippines?") == ""

@@ -293,6 +293,8 @@ def _named_by_user(location: str) -> bool:
     text = page_access.turn_text().lower()
     if not text.strip():
         return True
+    # A follow-up keeps the place: "weather in Manila?" then "and tomorrow?".
+    text = f"{text}\n{page_access.previous_turn_text().lower()}"
     words = [
         word
         for word in re.split(r"[^\w]+", location.lower())

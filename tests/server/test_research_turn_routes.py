@@ -432,3 +432,114 @@ def test_one_round_of_page_reads_per_turn():
     assert "web_read" in offered[2]
     assert "web_read" not in offered[3]
     assert reads["n"] == 2
+
+
+def _stream_app(tools, script):
+    """A chat app whose model streams *script* (one entry per round)."""
+    from fastapi.testclient import TestClient
+
+    from openjarvis.agents.orchestrator import OrchestratorAgent
+    from openjarvis.engine._stubs import StreamChunk
+    from openjarvis.server.app import create_app
+    from tests.server.test_routes import _make_engine
+
+    calls = []
+
+    async def stream_response(messages, **kwargs):
+        calls.append(messages)
+        step = script[min(len(calls) - 1, len(script) - 1)]
+        if isinstance(step, tuple):
+            name, args = step
+            yield StreamChunk(
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": f"c{len(calls)}",
+                        "function": {"name": name, "arguments": args},
+                    }
+                ],
+                finish_reason="tool_calls",
+            )
+        else:
+            yield StreamChunk(content=step, finish_reason="stop")
+
+    engine = _make_engine()
+    engine.stream_full = stream_response
+    agent = OrchestratorAgent(engine, "test-model", max_turns=4, tools=tools)
+    client = TestClient(
+        create_app(engine, "test-model", agent=agent, config=_test_config())
+    )
+    return client, calls
+
+
+def test_a_game_reply_is_sent_as_the_game_wrote_it():
+    """9 October: the model misstated the game's move. No second round now."""
+    from openjarvis.core.types import ToolResult
+    from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+    say = "You take the center (5). I take the top-right corner (3). Your move."
+
+    class Game(BaseTool):
+        @property
+        def spec(self):
+            return ToolSpec(
+                name="play_game",
+                description="game",
+                parameters={"type": "object", "properties": {}},
+            )
+
+        def execute(self, **params):
+            return ToolResult(
+                tool_name="play_game",
+                content="board",
+                success=True,
+                metadata={"say": say},
+            )
+
+    client, calls = _stream_app(
+        [Game()], [("play_game", '{"action": "move", "move": "5"}'), "WRONG"]
+    )
+    result = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "stream": True,
+            "messages": [{"role": "user", "content": "5"}],
+        },
+    )
+    assert result.status_code == 200
+    assert "top-right corner (3)" in result.text
+    assert "WRONG" not in result.text
+    assert len(calls) == 1
+
+
+def test_leaked_tool_text_is_taken_back_and_answered_again():
+    leak = 'assistant to=functions.play_game {"action":"move"} We accidentally output'
+    from openjarvis.core.types import ToolResult
+    from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+    class Unused(BaseTool):  # the app always has tools: the agent path
+        @property
+        def spec(self):
+            return ToolSpec(
+                name="calculator",
+                description="calc",
+                parameters={"type": "object", "properties": {}},
+            )
+
+        def execute(self, **params):
+            return ToolResult(tool_name="calculator", content="0", success=True)
+
+    client, calls = _stream_app([Unused()], [leak, "Your move, Sir."])
+    result = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "stream": True,
+            "messages": [{"role": "user", "content": "7"}],
+        },
+    )
+    assert result.status_code == 200
+    assert "event: text_retract" in result.text
+    assert "Your move, Sir." in result.text
+    assert len(calls) == 2

@@ -222,10 +222,19 @@ def _ensure_identity_prompt(
         question = next(
             (m.text for m in reversed(messages) if m.role == Role.USER), ""
         )
-        from openjarvis.prompt.answer_hints import budget_hint, numbers_hint
+        from openjarvis.prompt.answer_hints import (
+            budget_hint,
+            events_hint,
+            numbers_hint,
+        )
 
         asked = question if isinstance(question, str) else ""
-        hints = (turn_hint(diagrams, asked), budget_hint(asked), numbers_hint(asked))
+        hints = (
+            turn_hint(diagrams, asked),
+            budget_hint(asked),
+            numbers_hint(asked),
+            events_hint(asked),
+        )
         for hint in hints:
             if hint:
                 volatile = (volatile + "\n\n" + hint).strip()
@@ -580,7 +589,10 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     # `web_search` adds what it returned. A URL from anywhere else -- the body
     # of an email, or of a page just read -- is refused, so a page cannot
     # choose what Sage fetches next.
-    page_access.set_turn(confirmations.last_user_text(request_body.messages))
+    page_access.set_turn(
+        confirmations.last_user_text(request_body.messages),
+        page_access.previous_user_text(request_body.messages),
+    )
     _memory_budget.start_message()
 
     # The image pasted this turn, for `image_edit(image="attached")`; a turn
@@ -1408,6 +1420,30 @@ def _asks_about_weather(text: str) -> bool:
 #: one turn, which now needs a follow-up turn to do the opening.
 _BROWSER_OPEN_TOOL_NAMES = frozenset({"web_open"})
 
+#: The model's own tool-call format written into a reply as text.
+_LEAKED_TOOL_TEXT = re.compile(
+    r"\bto=functions\.|<\|(?:start|end|channel|message|call|constrain)\|>"
+    r"|^\s*assistant\s+to=",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _direct_reply(results: list) -> str:
+    """The reply a round's tools wrote themselves, when every tool did.
+
+    Only the game tool writes one (``metadata["say"]``): its move and board
+    are the answer, and a model round only risked misstating them.
+    """
+    if not results:
+        return ""
+    says = []
+    for result in results:
+        metadata = getattr(result, "metadata", None)
+        if not isinstance(metadata, dict) or not metadata.get("say"):
+            return ""
+        says.append(str(metadata["say"]))
+    return "\n\n".join(says)
+
 
 async def _handle_streaming_orchestrator(
     agent,
@@ -1487,6 +1523,7 @@ async def _handle_streaming_orchestrator(
         #: an empty answer after the tools has been asked for again.
         preamble = ""
         asked_again = False
+        leak_retried = False
         # A follow-up voice turn may be declined with the marker; its first
         # words are held until they show whether they are it.
         watch = IgnoreWatch() if getattr(req, "voice_followup", False) else None
@@ -1838,6 +1875,18 @@ async def _handle_streaming_orchestrator(
                             for tool in active_tools
                             if (tool.get("function") or {}).get("name") != "web_read"
                         ]
+                    direct = _direct_reply(list(results_by_index.values()))
+                    if direct:
+                        # The game wrote the reply (tools/play_game.py): sent
+                        # as it is, with no model round to misstate the move.
+                        direct_chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            model=model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=direct))],
+                        )
+                        yield f"data: {direct_chunk.model_dump_json()}\n\n"
+                        full_content += direct
+                        break
                     if (
                         any(
                             getattr(result, "tool_name", "") in _RESEARCH_TOOL_NAMES
@@ -1879,6 +1928,27 @@ async def _handle_streaming_orchestrator(
                             )
                         )
                         continue
+
+                if _LEAKED_TOOL_TEXT.search(turn_content) and not leak_retried:
+                    # The model wrote its own tool-call syntax and notes into
+                    # the reply (9 October: "assistant to=functions.play_game
+                    # ... We accidentally output before tool?"). Take it back
+                    # and ask once for a plain answer.
+                    leak_retried = True
+                    retract_payload = _json.dumps(
+                        {"chars": len(turn_content), "text": turn_content}
+                    )
+                    yield f"event: text_retract\ndata: {retract_payload}\n\n"
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=(
+                                "(Your last reply showed internal tool text. "
+                                "Answer the user again, plainly, as Sage.)"
+                            ),
+                        )
+                    )
+                    continue
 
                 full_content += turn_content
 
@@ -2090,7 +2160,12 @@ async def _handle_streaming_orchestrator(
 
         # This body runs in Starlette's streaming task. Binding only in the
         # endpoint/response factory loses context across BaseHTTPMiddleware.
-        with page_access.scope(query_text), _memory_budget.scope():
+        with (
+            page_access.scope(
+                query_text, page_access.previous_user_text(req.messages)
+            ),
+            _memory_budget.scope(),
+        ):
             async with aclosing(generate()) as stream:
                 async for event in stream:
                     yield event
@@ -2153,7 +2228,10 @@ async def _handle_agent_stream(
         from openjarvis.security import confirmations as _confirmations
         from openjarvis.security import page_access as _page_access
 
-        _page_access.set_turn(_confirmations.last_user_text(req.messages))
+        _page_access.set_turn(
+            _confirmations.last_user_text(req.messages),
+            _page_access.previous_user_text(req.messages),
+        )
         _memory_budget.start_message()
 
         first_chunk = ChatCompletionChunk(

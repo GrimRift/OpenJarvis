@@ -60,6 +60,9 @@ _searched: Dict[str, float] = {}
 @dataclass
 class _ReadState:
     text: str = ""
+    #: The user's message before this one: what a follow-up ("and
+    #: tomorrow?") is about.
+    previous: str = ""
     reads: List[float] = field(default_factory=list)
     urls: Set[str] = field(default_factory=set)
 
@@ -153,7 +156,7 @@ def from_search(url: str) -> bool:
         return normalised in _searched
 
 
-def set_turn(user_text: Any) -> Token:
+def set_turn(user_text: Any, previous: Any = "") -> Token:
     """Register the URLs the user just wrote, and start a fresh read budget.
 
     Safe to call repeatedly: every call site runs as a request starts, before
@@ -162,13 +165,15 @@ def set_turn(user_text: Any) -> Token:
     reddit post more thoroughly" -- refused at the reading limit (29 September).
     """
     allow(urls_in(user_text))
-    return _current.set(_ReadState(text=str(user_text or "")))
+    return _current.set(
+        _ReadState(text=str(user_text or ""), previous=str(previous or ""))
+    )
 
 
 @contextmanager
-def scope(user_text: Any) -> Iterator[None]:
+def scope(user_text: Any, previous: Any = "") -> Iterator[None]:
     """Bind in the task/thread that actually runs this turn's tools."""
-    token = set_turn(user_text)
+    token = set_turn(user_text, previous)
     try:
         yield
     finally:
@@ -179,6 +184,28 @@ def turn_text() -> str:
     """The user's latest message, as given to :func:`set_turn`."""
     with _lock:
         return _state().text
+
+
+def previous_turn_text() -> str:
+    """The user's message before the latest one, if the turn was given it."""
+    with _lock:
+        return _state().previous
+
+
+def previous_user_text(messages: Any) -> str:
+    """The user's second-to-last message in *messages* (dicts or objects)."""
+    seen = 0
+    for message in reversed(list(messages or [])):
+        role = getattr(message, "role", None)
+        content = getattr(message, "content", None)
+        if role is None and isinstance(message, dict):
+            role = message.get("role")
+            content = message.get("content")
+        if str(getattr(role, "value", role)) == "user":
+            seen += 1
+            if seen == 2:
+                return content if isinstance(content, str) else ""
+    return ""
 
 
 #: Social and meme sites (2 October: 7 s spent reading an x.com photo page

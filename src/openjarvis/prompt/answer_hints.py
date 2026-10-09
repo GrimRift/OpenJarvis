@@ -52,6 +52,27 @@ NUMBERS_RULE = (
 )
 
 
+_EVENT_RE = re.compile(
+    r"\b(?:who\s+won|winner|won|win|wins|result|results|score|scores|final|"
+    r"race|grand\s+prix|gp|match|game|fight|bout|election|elected|tournament|"
+    r"championship|cup|league|launch|launched|announced|happened|award|awards)\b",
+    re.IGNORECASE,
+)
+
+EVENTS_RULE = (
+    "Events: take the event's name, date and place TOGETHER from one source"
+    " and name that source; never combine a name from one result with a"
+    " date or place from another. If sources disagree, say so plainly"
+    " (\"BBC says X, ESPN says Y\") instead of blending them. (9 October: a"
+    " reply named the \"Bahrain Grand Prix in Malaysia\".)"
+)
+
+
+def events_hint(text: str) -> str:
+    """The one-source rule when *text* asks about an event or a result."""
+    return EVENTS_RULE if _EVENT_RE.search(text or "") else ""
+
+
 def budget_hint(text: str) -> str:
     """The budget nudge when *text* names a budget or a peso amount."""
     return BUDGET_HINT if _BUDGET_RE.search(text or "") else ""
@@ -62,4 +83,11 @@ def numbers_hint(text: str) -> str:
     return NUMBERS_RULE if _NUMBERS_RE.search(text or "") else ""
 
 
-__all__ = ["BUDGET_HINT", "NUMBERS_RULE", "budget_hint", "numbers_hint"]
+__all__ = [
+    "BUDGET_HINT",
+    "EVENTS_RULE",
+    "NUMBERS_RULE",
+    "budget_hint",
+    "events_hint",
+    "numbers_hint",
+]

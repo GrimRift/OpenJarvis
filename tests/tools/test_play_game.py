@@ -143,9 +143,9 @@ class TestTheTool:
         assert result.metadata["winner"] != "user"
 
     def test_an_unknown_game_says_what_it_can_play(self):
-        result = _play(action="start", game="chess")
+        result = _play(action="start", game="checkers")
         assert result.success is False
-        assert "Games I can play: tic-tac-toe" in result.content
+        assert "Games I can play: tic-tac-toe, chess" in result.content
 
     def test_no_game_no_move(self):
         result = _play(action="move", move="5")
@@ -189,3 +189,33 @@ def test_a_game_left_for_half_an_hour_stops_steering_routing(tmp_path):
     assert not games.in_progress()
     # Still saved: the game carries on when the user comes back to it.
     assert "1 | 2 | 3" in _play(action="show").content
+
+
+class TestTheReplyIsWrittenByTheGame:
+    """9 October: the model said "I take the bottom-right corner" over a board
+    showing its O top-right. The game writes the reply; the server sends it."""
+
+    def test_the_reply_names_both_moves_and_carries_the_board(self):
+        random.seed(2)
+        _play(action="start", game="tic tac toe")
+        result = _play(action="move", move="center")
+        say = result.metadata["say"]
+        assert say.startswith("You take the center (5). I take ")
+        assert say.endswith(f"```text\n{result.metadata['board']}\n```")
+        assert "Your move." in say
+
+    def test_a_win_is_announced_in_the_reply(self):
+        _play(action="start", game="tic tac toe", difficulty="hard")
+        result = None
+        for square in "123456789":
+            result = _play(action="move", move=square)
+            if result.metadata.get("over"):
+                break
+        assert result is not None
+        assert 'Say "play again"' in result.metadata["say"]
+
+    def test_a_refused_move_explains_itself(self):
+        _play(action="start", game="tic tac toe")
+        _play(action="move", move="5")
+        refused = _play(action="move", move="5")
+        assert refused.metadata["say"].startswith("Square 5 (the center) is already")

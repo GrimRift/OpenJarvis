@@ -51,6 +51,12 @@ def _no_search_read_ahead(monkeypatch: pytest.MonkeyPatch) -> None:
     except Exception:  # noqa: BLE001
         return
     monkeypatch.setattr(web_read, "PREFETCH_TOP", 0)
+    # Nor answer from another test's search.
+    try:
+        from openjarvis.tools.web_search import clear_cache
+    except Exception:  # noqa: BLE001
+        return
+    clear_cache()
 
 
 @pytest.fixture(autouse=True)

@@ -215,6 +215,28 @@ class TestTheTool:
         assert fetch.call_args.args[:2] == (14.1177, 121.5494)
         assert result.content.startswith("Lucban, Quezon:")
 
+    def test_a_follow_up_keeps_the_place_from_the_message_before(self, tmp_path):
+        """"weather in Tokyo?" then "and tomorrow?" stays in Tokyo."""
+        from openjarvis.security import page_access
+
+        tool = self._tool(tmp_path, use_device_location=True)
+        tokyo = {
+            **CALAMBA,
+            "name": "Tokyo",
+            "admin2": "",
+            "admin1": "Tokyo",
+            "latitude": 35.68,
+            "longitude": 139.69,
+        }
+        with (
+            page_access.scope("and tomorrow?", "what's the weather in Tokyo?"),
+            patch("openjarvis.core.device_location.current_coordinates") as fix,
+            patch.object(connector, "geocode", return_value=tokyo),
+        ):
+            _, fetch = self._run(tool, location="Tokyo, Japan", day="tomorrow")
+        assert fetch.call_args.args[:2] == (35.68, 139.69)
+        assert not fix.called
+
     def test_a_place_the_user_names_still_wins(self, tmp_path):
         from openjarvis.security import page_access
 

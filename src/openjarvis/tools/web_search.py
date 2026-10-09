@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import html as _html
+import json
 import logging
 import os
 import re
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Dict, Tuple
 from urllib.parse import urlparse
 
 from openjarvis.core.registry import ToolRegistry
@@ -778,6 +780,52 @@ def _card_text(text: str) -> str:
     return " ".join(text.split())
 
 
+#: Recent searches (the user's choice, 9 October). In memory only: a restart
+#: starts empty, which is the safe direction for anything time-sensitive.
+CACHE_MAX_ENTRIES = 200
+_cache: Dict[str, Tuple[float, ToolResult]] = {}
+_cache_lock = threading.Lock()
+
+_FAST_CHANGING_RE = re.compile(
+    r"\b(news|latest|today|tonight|now|right\s+now|live|breaking|score|scores|"
+    r"result|results|won|winner|race|match|game|standings|this\s+week|"
+    r"weather|traffic|typhoon|storm)\b",
+    re.IGNORECASE,
+)
+_HOURLY_RE = re.compile(
+    r"\b(price|prices|cost|costs|how\s+much|rate|rates|exchange|stock|stocks|"
+    r"available|availability|in\s+stock|sale|promo|deal|deals)\b",
+    re.IGNORECASE,
+)
+
+
+def cache_seconds(query: str) -> float:
+    """How long a search for *query* may be answered from the cache: news and
+    scores 10 minutes, prices and rates an hour, anything else (dates, specs)
+    a day -- the user's choices."""
+    if _FAST_CHANGING_RE.search(query or ""):
+        return 600.0
+    if _HOURLY_RE.search(query or ""):
+        return 3600.0
+    return 86400.0
+
+
+def _cache_key(params: Dict[str, Any], force_advanced: bool, user_text: str) -> str:
+    query = " ".join(str(params.get("query") or "").lower().split())
+    if not query:
+        return ""
+    pictures = bool(_EXPLICIT_IMAGE_RE.search(user_text or ""))
+    return json.dumps(
+        [query, params.get("max_results"), bool(force_advanced), pictures],
+        default=str,
+    )
+
+
+def clear_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
+
+
 @ToolRegistry.register("web_search")
 class WebSearchTool(BaseTool):
     """Search the web via Tavily with at most one internal escalation."""
@@ -946,6 +994,57 @@ class WebSearchTool(BaseTool):
         return _filter_relevant_results(raw, query, news=True), _credits(response)
 
     def execute(self, **params: Any) -> ToolResult:
+        """A search, from the short cache when the same one ran recently.
+
+        The user's choice (9 October): the same question again within
+        minutes or hours answers at once instead of another 2-5 s search.
+        How long a result stays depends on how fast its subject changes
+        (``cache_seconds``). A cached result still makes its pages readable
+        and starts their read-ahead, exactly as a fresh one does.
+        """
+        key = _cache_key(params, self._force_advanced, page_access.turn_text())
+        with _cache_lock:
+            entry = _cache.get(key) if key else None
+            # The clock is read only when there is an entry to judge: the
+            # search's own time budget is measured from its first reading.
+            if entry is not None and entry[0] <= time.monotonic():
+                _cache.pop(key, None)
+                entry = None
+        if entry is not None:
+            cached: ToolResult = entry[1]
+            from openjarvis.tools import memory_budget
+
+            memory_budget.note_web_search()
+            sources = list((cached.metadata or {}).get("sources") or [])
+            page_access.allow_search_results(s["url"] for s in sources)
+            try:
+                from openjarvis.tools.web_read import prefetch
+
+                prefetch([s["url"] for s in sources])
+            except Exception:  # noqa: BLE001
+                logger.debug("web_search: cached read-ahead did not start")
+            return replace(
+                cached,
+                metadata={**(cached.metadata or {}), "cached": True},
+            )
+        result = self._execute_fresh(**params)
+        metadata = result.metadata or {}
+        if (
+            key
+            and result.success
+            and metadata.get("quality_passed")
+            and metadata.get("mode") != "fetch"
+        ):
+            with _cache_lock:
+                if len(_cache) >= CACHE_MAX_ENTRIES:
+                    _cache.pop(next(iter(_cache)))
+                _cache[key] = (
+                    time.monotonic() + cache_seconds(str(params.get("query") or "")),
+                    result,
+                )
+        return result
+
+    def _execute_fresh(self, **params: Any) -> ToolResult:
         query = str(params.get("query", "") or "").strip()
         if not query:
             return self._error("No query provided.")

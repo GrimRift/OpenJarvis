@@ -79,7 +79,9 @@ class PlayGameTool(BaseTool):
                 " never keep a game in your head or search memory for it."
                 " 'let's play tic tac toe' -> action='start'. While a game is"
                 " on, EVERY square or move the user says ('5', 'center', 'top"
-                " left') -> action='move' with their words in `move`."
+                " left', 'e4', 'knight to f3', 'castle') -> action='move'"
+                " with their words in `move`. The tool writes the reply; do"
+                " not restate or change the moves it reports."
                 " 'show the board' -> 'show'; 'play hard' / 'go easy' ->"
                 " 'difficulty'; 'stop' / 'I quit' -> 'end'. Difficulty is"
                 " normal unless the user asks for easy or hard."
@@ -117,6 +119,8 @@ class PlayGameTool(BaseTool):
             if session is None or session.game not in GAMES:
                 return self._say(
                     "No game is in progress. Start one with action='start'.",
+                    "There's no game going, Sir. Say \"let's play tic-tac-toe\""
+                    " to start one.",
                     ok=False,
                 )
             if action == "move":
@@ -124,20 +128,34 @@ class PlayGameTool(BaseTool):
             if action == "difficulty":
                 wanted = str(params.get("difficulty") or _asked_difficulty() or "")
                 if wanted not in DIFFICULTIES:
-                    return self._say("Say easy, normal or hard.", ok=False)
+                    return self._board(
+                        session,
+                        "Say easy, normal or hard.",
+                        "Easy, normal or hard, Sir?",
+                        ok=False,
+                    )
                 session.difficulty = wanted
                 save(session)
-                return self._board(session, f"Difficulty is now {wanted}.")
+                return self._board(
+                    session,
+                    f"Difficulty is now {wanted}.",
+                    f"Playing {wanted} from now on, Sir.",
+                )
             if action == "end":
                 save(None)
-                return self._say("The game is over; the board is cleared.")
-            return self._board(session, "")
+                return self._say(
+                    "The game is over; the board is cleared.",
+                    "Game over, Sir. I've cleared the board.",
+                )
+            return self._board(session, "", "Here's the board, Sir.")
         except MoveError as error:
             # Raised before anything is saved: the board on disk is unchanged.
             session = load()
             if session is None:
-                return self._say(str(error), ok=False)
-            return self._board(session, f"Not a legal move: {error}", ok=False)
+                return self._say(str(error), f"{error}", ok=False)
+            return self._board(
+                session, f"Not a legal move: {error}", f"{error}", ok=False
+            )
 
     # -- actions ------------------------------------------------------------
 
@@ -145,8 +163,10 @@ class PlayGameTool(BaseTool):
         name = str(params.get("game") or "tic-tac-toe")
         game = find_game(name)
         if game is None:
+            known = ", ".join(GAMES)
             return self._say(
-                f"I can't play {name} yet. Games I can play: {', '.join(GAMES)}.",
+                f"I can't play {name} yet. Games I can play: {known}.",
+                f"I can't play {name} yet, Sir. I can play {known}.",
                 ok=False,
             )
         difficulty = str(params.get("difficulty") or _asked_difficulty() or "normal")
@@ -157,49 +177,83 @@ class PlayGameTool(BaseTool):
         state = game.new_state(user_first)
         session = Session(game=game.name, state=state, difficulty=difficulty, moves=[])
         lines = [f"New game of {game.name} ({difficulty})."]
-        if not user_first:
+        spoken = f"New game of {game.name}, Sir, on {difficulty}."
+        if user_first:
+            spoken += f" You're {state.get('user', '')} and go first."
+        else:
             move = game.choose_move(state, difficulty)
             game.apply(state, move, "sage")
             session.moves.append(f"sage:{move}")
-            lines.append(f"You (Sage) played: {game.describe_move(move)}.")
+            lines.append(f"You (Sage) played: {game.describe_move(move, state)}.")
+            spoken += (
+                f" I'll go first: I {game.verb} {game.describe_move(move, state)}."
+                " Your move."
+            )
         save(session)
-        return self._board(session, " ".join(lines))
+        return self._board(session, " ".join(lines), spoken)
 
     def _move(self, session: Session, text: str) -> ToolResult:
         game = GAMES[session.game]
         state = session.state
         if game.outcome(state).over:
             return self._board(
-                session, "That game is finished. Start a new one with action='start'."
+                session,
+                "That game is finished. Start a new one with action='start'.",
+                'That game\'s finished, Sir. Say "play again" for a new one.',
             )
         if state.get("turn") != "user":
-            return self._board(session, "It is not the user's turn.", ok=False)
+            return self._board(
+                session, "It is not the user's turn.", "It's my move, Sir.", ok=False
+            )
         move = game.parse_move(state, text)
         game.apply(state, move, "user")
         session.moves = [*(session.moves or []), f"user:{move}"]
-        lines = [f"The user played: {game.describe_move(move)}."]
+        lines = [f"The user played: {game.describe_move(move, state)}."]
+        spoken = f"You {game.verb} {game.describe_move(move, state)}."
         result = game.outcome(state)
         if not result.over:
             reply = game.choose_move(state, session.difficulty)
             game.apply(state, reply, "sage")
             session.moves.append(f"sage:{reply}")
-            lines.append(f"You (Sage) played: {game.describe_move(reply)}.")
+            lines.append(f"You (Sage) played: {game.describe_move(reply, state)}.")
+            spoken += f" I {game.verb} {game.describe_move(reply, state)}."
             result = game.outcome(state)
+        if result.over:
+            ending = {
+                "user": "You win, Sir! Well played.",
+                "sage": "I win this one, Sir.",
+                "": "It's a draw, Sir.",
+            }[result.winner]
+            spoken += f' {result.detail} {ending} Say "play again" for another.'
+        else:
+            check = game.status_note(state)
+            spoken += f" {check} Your move." if check else " Your move."
         save(session)
-        return self._board(session, " ".join(lines))
+        return self._board(session, " ".join(lines), spoken)
 
     # -- output -------------------------------------------------------------
 
-    def _board(self, session: Session, note: str, ok: bool = True) -> ToolResult:
+    def _board(
+        self, session: Session, note: str, spoken: str, ok: bool = True
+    ) -> ToolResult:
+        """The result for the model, and `say`: the reply itself.
+
+        The reply is written here, not by the model: on 9 October it said "I
+        take the bottom-right corner" over a board showing its O top-right,
+        and once wrote its own tool-call text into the chat. A turn whose
+        only tool is this one sends `say` as the answer (server/routes.py).
+        """
         game = GAMES[session.game]
         state = session.state
         result = game.outcome(state)
+        board = game.render(state)
         if result.over:
             who = {"user": "The user wins", "sage": "You (Sage) win", "": "Draw"}
             status = f"GAME OVER -- {who[result.winner]}. {result.detail}"
         else:
+            open_moves = game.legal_moves_text(state)
             status = (
-                f"The user's move. Open: {game.legal_moves_text(state)}."
+                "The user's move." + (f" Open: {open_moves}." if open_moves else "")
                 if state.get("turn") == "user"
                 else "Your (Sage's) move."
             )
@@ -211,7 +265,7 @@ class PlayGameTool(BaseTool):
                 note,
                 "Board:",
                 "```text",
-                game.render(state),
+                board,
                 "```",
                 status,
                 _HOW_TO_REPLY,
@@ -224,14 +278,20 @@ class PlayGameTool(BaseTool):
             success=ok,
             metadata={
                 "game": game.name,
-                "board": game.render(state),
+                "board": board,
                 "over": result.over,
                 "winner": result.winner,
+                "say": f"{spoken}\n\n```text\n{board}\n```",
             },
         )
 
-    def _say(self, text: str, ok: bool = True) -> ToolResult:
-        return ToolResult(tool_name="play_game", content=text, success=ok)
+    def _say(self, text: str, spoken: str, ok: bool = True) -> ToolResult:
+        return ToolResult(
+            tool_name="play_game",
+            content=text,
+            success=ok,
+            metadata={"say": spoken},
+        )
 
 
 __all__ = ["PlayGameTool"]
