@@ -497,6 +497,11 @@ def _default_clarify_handler(question: str) -> str:
     return answer or "(user did not provide a clarification)"
 
 
+#: How much of the earlier chat a follow-up gets: three questions and answers.
+_HISTORY_TURNS = 6
+_HISTORY_CHARS = 1500
+
+
 def _arguments_of(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     raw = tool_call.get("arguments", "{}") or "{}"
     try:
@@ -912,16 +917,24 @@ class ResearchAgent:
             logger.debug("distinct_sources() failed: %s", exc)
             return []
 
-    def run(self, query: str) -> ResearchResult:
-        """Run the loop end-to-end and return the synthesis plus a trace."""
+    def run(
+        self, query: str, history: Optional[List[Dict[str, str]]] = None
+    ) -> ResearchResult:
+        """Run the loop end-to-end and return the synthesis plus a trace.
+
+        *history* is the chat before this question ({role, content}, oldest
+        first), so a follow-up is understood: without it "so the 4060 Ti is
+        twice slower?" was answered with a gaming benchmark, after two
+        answers about running local AI models (9 October).
+        """
         # The pages a search returns become readable for this question, and
         # the read budget counts from it (security/page_access.py).
         from openjarvis.security import page_access
 
         with page_access.scope(query):
-            return self._run(query)
+            return self._run(query, history or [])
 
-    def _run(self, query: str) -> ResearchResult:
+    def _run(self, query: str, history: List[Dict[str, str]]) -> ResearchResult:
         started = time.monotonic()
         sources_list = self._resolve_available_sources()
         if sources_list:
@@ -962,7 +975,44 @@ class ResearchAgent:
                 ),
             ),
         )
-        messages: List[Message] = [sys_msg, Message(role=Role.USER, content=query)]
+        earlier: List[Message] = []
+        for turn in history[-_HISTORY_TURNS:]:
+            role = str(turn.get("role", ""))
+            text = str(turn.get("content", "") or "")[:_HISTORY_CHARS].strip()
+            if role in ("user", "assistant") and text:
+                earlier.append(
+                    Message(
+                        role=Role.USER if role == "user" else Role.ASSISTANT,
+                        content=text,
+                    )
+                )
+        if earlier:
+            earlier.append(
+                Message(
+                    role=Role.USER,
+                    content=(
+                        "(The messages above are the earlier conversation. The"
+                        " next question may follow up on it: work out what it"
+                        " refers to, research that, and put the full subject"
+                        " in every search query.)"
+                    ),
+                )
+            )
+            earlier.append(Message(role=Role.ASSISTANT, content="Understood."))
+        from openjarvis.prompt.answer_hints import NUMBERS_RULE, budget_hint
+
+        last_question = next(
+            (str(t.get("content", "")) for t in reversed(history)
+             if t.get("role") == "user"),
+            "",
+        )
+        notes = [budget_hint(f"{query}\n{last_question}"), NUMBERS_RULE]
+        asked = query + "".join(f"\n\n({note})" for note in notes if note)
+        messages: List[Message] = [
+            sys_msg,
+            *earlier,
+            Message(role=Role.USER, content=asked),
+        ]
 
         invocations: List[ToolInvocation] = []
         web_searches = 0

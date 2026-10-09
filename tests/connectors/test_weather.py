@@ -70,3 +70,33 @@ def test_sync_yields_one_decision_shaped_document(connector):
 def test_disconnect(connector):
     connector.disconnect()
     assert connector.is_connected() is False
+
+
+def test_a_town_province_country_name_is_found():
+    """9 October: "Calamba, Laguna, Philippines" -> "couldn't find Calamba";
+    "Calamba, PH" worked. The geocoder only matches a place's own name."""
+    from openjarvis.connectors import weather
+
+    calls = []
+
+    def fake_get(url, params):
+        calls.append(dict(params))
+        if params["name"] != "Calamba":
+            return {"results": []}
+        return {
+            "results": [
+                {"name": "Calamba", "admin1": "Northern Mindanao",
+                 "admin2": "Misamis Occidental", "latitude": 8.5, "longitude": 123.6},
+                {"name": "Calamba", "admin1": "Calabarzon",
+                 "admin2": "Province of Laguna", "latitude": 14.2, "longitude": 121.2},
+            ]
+        }
+
+    weather._geocode_cache.clear()
+    with patch.object(weather, "_weather_api_get", side_effect=fake_get):
+        place = weather.geocode("Calamba, Laguna, Philippines")
+    assert place is not None and place["latitude"] == 14.2
+    assert calls[-1] == {
+        "name": "Calamba", "count": "10", "language": "en", "countryCode": "PH",
+    }
+    weather._geocode_cache.clear()

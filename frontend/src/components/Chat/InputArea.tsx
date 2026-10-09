@@ -12,6 +12,7 @@ import {
 } from '../../lib/image-attach';
 import { apiFetch } from '../../lib/api';
 import { streamChat, streamResearch } from '../../lib/sse';
+import { researchHistory } from '../../lib/research-history';
 import type { FluxWord } from '../../lib/barge-in';
 import { imageFromToolCall, imageToolPhase } from '../../lib/generated-image';
 import { useImagePresenter } from '../../lib/image-presenter';
@@ -994,6 +995,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           content,
           selectedModel,
           controller.signal,
+          // Everything before this question (the last entry is the question).
+          researchHistory(currentMessages.slice(0, -1)),
         )) {
           if (ev.type === 'search_call') {
             const trace: ResearchSearchTrace = {

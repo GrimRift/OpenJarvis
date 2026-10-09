@@ -1204,3 +1204,33 @@ def test_queries_past_the_budget_are_not_searched(
         m.content for m in engine.calls[1]["messages"] if m.role.value == "tool"
     )
     assert "Not searched" in tool_text and "c" in tool_text.split("Not searched")[1]
+
+
+def test_a_follow_up_gets_the_earlier_conversation(stub_search: MagicMock) -> None:
+    """9 October: "so the 4060ti is twice slower?" was answered with a gaming
+    benchmark, because Deep Research saw only that one line."""
+    engine = _MockEngine(responses=[_text_response("About 50% faster, not 2x.")])
+    agent = ResearchAgent(engine, stub_search, model="mock", max_iterations=2)
+    agent.run(
+        "so the 4060ti is twice slower than 5060ti?",
+        history=[
+            {"role": "user", "content": "how fast is the rtx 5060 ti for local LLMs?"},
+            {"role": "assistant", "content": "About 41-47 tok/s on Qwen 35B-A3B."},
+            {"role": "tool", "content": "ignored"},
+        ],
+    )
+    sent = engine.calls[0]["messages"]
+    contents = [m.content for m in sent]
+    assert "how fast is the rtx 5060 ti for local LLMs?" in contents
+    assert "About 41-47 tok/s on Qwen 35B-A3B." in contents
+    assert "ignored" not in contents
+    assert sent[-1].content.startswith("so the 4060ti is twice slower")
+    assert "measured" in sent[-1].content  # the numbers rule rides along
+
+
+def test_a_budget_in_the_question_asks_for_local_prices(stub_search: MagicMock) -> None:
+    engine = _MockEngine(responses=[_text_response("done")])
+    agent = ResearchAgent(engine, stub_search, model="mock", max_iterations=2)
+    agent.run("best rtx gpu with 16gb under 50000 pesos")
+    sent = engine.calls[0]["messages"][-1].content
+    assert "current prices in the Philippines" in sent

@@ -33,10 +33,31 @@ from typing import Any, Dict, Iterable, List, Sequence, Set
 _CORE: Set[str] = {
     "retrieval",
     "web_search",
-    "world_time",
     "calculator",
     "notify_windows",
 }
+
+# Matched against the newest message and the one before it only, not the
+# whole recent chat. On 9 October "will it rain later?" opened a chat, and
+# four questions later -- about GPU speeds -- the model still called the
+# clock and the weather: an extra round and twice the prompt tokens.
+_NARROW_GROUPS: Dict[str, Dict[str, Any]] = {
+    "weather_time": {
+        "tools": {"weather", "world_time"},
+        "pattern": re.compile(
+            r"\b(weather|rain|rains|raining|rainy|umbrella|forecast|temperature|"
+            r"hot|cold|humid|humidity|storm|storms|typhoon|sunny|cloudy|windy|"
+            r"degrees|celsius|uv|sunrise|sunset|bagyo|ulan|uulan|umuulan|init|"
+            r"mainit|lamig|malamig|panahon|time|clock|timezone|o'clock|oras|"
+            r"date|day\s+is\s+it|what\s+day)\b",
+            re.IGNORECASE,
+        ),
+    },
+}
+_NARROW_MESSAGES = 2
+#: Joins the turns in ``routing_text`` so the narrow groups can tell the
+#: newest messages from the older ones.
+TURN_SEPARATOR = "\n\x1e\n"
 
 # Gated groups. Patterns are generous on purpose; a false positive costs
 # tokens, a false negative costs a capability.
@@ -110,7 +131,7 @@ _CONTEXT_MESSAGES = 6
 
 def _grouped_tools() -> Set[str]:
     names: Set[str] = set()
-    for group in _GROUPS.values():
+    for group in (*_GROUPS.values(), *_NARROW_GROUPS.values()):
         names |= group["tools"]
     return names
 
@@ -120,6 +141,10 @@ def selected_tool_names(text: str) -> Set[str]:
     chosen: Set[str] = set(_CORE)
     for group in _GROUPS.values():
         if group["pattern"].search(text):
+            chosen |= group["tools"]
+    recent = TURN_SEPARATOR.join(text.split(TURN_SEPARATOR)[-_NARROW_MESSAGES:])
+    for group in _NARROW_GROUPS.values():
+        if group["pattern"].search(recent):
             chosen |= group["tools"]
     return chosen
 
@@ -187,7 +212,7 @@ def routing_text(message: str, prior: Iterable[Any] = ()) -> str:
     ]
     parts = user_turns[-_CONTEXT_MESSAGES:]
     parts.append(message or "")
-    return "\n".join(parts)
+    return TURN_SEPARATOR.join(parts)
 
 
 __all__ = ["route_tools", "routing_text", "selected_tool_names"]

@@ -254,10 +254,50 @@ def geocode(query: str) -> Optional[Dict[str, Any]]:
         if key in _geocode_cache:
             return _geocode_cache[key]
     hits = search_places(query, count=1)
-    if not hits:
+    place = hits[0] if hits else _geocode_by_parts(query)
+    if place is None:
         return None
     with _geocode_lock:
-        _geocode_cache[key] = hits[0]
+        _geocode_cache[key] = place
+    return place
+
+
+#: Country names the model writes out in full, as the geocoder's codes.
+_COUNTRY_CODES = {
+    "philippines": "PH", "the philippines": "PH", "japan": "JP",
+    "singapore": "SG", "usa": "US", "united states": "US", "us": "US",
+    "uk": "GB", "united kingdom": "GB", "australia": "AU", "canada": "CA",
+    "south korea": "KR", "korea": "KR", "china": "CN", "hong kong": "HK",
+    "taiwan": "TW", "thailand": "TH", "vietnam": "VN", "malaysia": "MY",
+    "indonesia": "ID", "india": "IN", "germany": "DE", "france": "FR",
+}
+
+
+def _geocode_by_parts(query: str) -> Optional[Dict[str, Any]]:
+    """"Calamba, Laguna, Philippines" as a town, its province and a country.
+
+    The geocoder matches a place's own name, so the whole string found
+    nothing and the weather "couldn't find Calamba" (9 October); "Calamba, PH"
+    worked. Search the town in the country, then prefer the hit in the named
+    province -- there are four Calambas in the Philippines.
+    """
+    parts = [p.strip() for p in str(query or "").split(",") if p.strip()]
+    if len(parts) < 2:
+        return None
+    last = parts[-1]
+    country = (
+        last.upper()
+        if len(last) == 2 and last.isalpha()
+        else _COUNTRY_CODES.get(last.lower())
+    )
+    areas = [p.lower() for p in (parts[1:-1] if country else parts[1:])]
+    hits = search_places(f"{parts[0]},{country}" if country else parts[0], count=10)
+    if not hits:
+        return None
+    for hit in hits:
+        where = f"{hit.get('admin1', '')} {hit.get('admin2', '')}".lower()
+        if any(area in where for area in areas):
+            return hit
     return hits[0]
 
 

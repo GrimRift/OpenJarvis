@@ -52,9 +52,7 @@ ALL_SCHEMAS = [_schema(n) for n in ALL_NAMES]
 
 
 def _routed(text: str) -> set:
-    return {
-        s["function"]["name"] for s in route_tools(ALL_SCHEMAS, routing_text(text))
-    }
+    return {s["function"]["name"] for s in route_tools(ALL_SCHEMAS, routing_text(text))}
 
 
 class TestNothingIsHidden:
@@ -98,7 +96,6 @@ class TestNothingIsHidden:
         core = {
             "retrieval",
             "web_search",
-            "world_time",
             "calculator",
             "notify_windows",
         }
@@ -186,7 +183,6 @@ class TestItActuallyTrims:
         assert kept == {
             "retrieval",
             "web_search",
-            "world_time",
             "calculator",
             "notify_windows",
         }
@@ -266,3 +262,44 @@ def test_the_turn_context_message_does_not_route_tools() -> None:
     text = routing_text("next one", prior)
     assert "open spotify" in text
     assert "calendar" not in text
+
+
+class TestWeatherAndClockOnlyWhenAsked:
+    """9 October: a chat opened with "will it rain later?"; four questions on,
+    about GPU speeds, the model still called the clock and the weather."""
+
+    WEATHER = ["weather", "world_time"]
+
+    def _kept(self, message, prior=()):
+        schemas = ALL_SCHEMAS + [_schema("weather")]
+        return {
+            s["function"]["name"]
+            for s in route_tools(schemas, routing_text(message, prior))
+        }
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "will it rain later?",
+            "what's the weather tomorrow",
+            "what time is it in Japan?",
+            "uulan ba mamaya?",
+            "is it hot outside",
+        ],
+    )
+    def test_offered_when_asked(self, text):
+        assert set(self.WEATHER) <= self._kept(text)
+
+    def test_a_short_follow_up_keeps_them(self):
+        prior = [{"role": "user", "content": "will it rain later?"}]
+        assert set(self.WEATHER) <= self._kept("try again", prior)
+
+    def test_gone_once_the_chat_moves_on(self):
+        prior = [
+            {"role": "user", "content": "whats up, will it rain later?"},
+            {"role": "user", "content": "try again"},
+            {"role": "user", "content": "best value rtx gpu with 16gb vram?"},
+            {"role": "user", "content": "Then verify its current prices for me"},
+        ]
+        kept = self._kept("how fast is the rtx 5060 ti in tokens/s", prior)
+        assert not set(self.WEATHER) & kept

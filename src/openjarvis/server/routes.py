@@ -222,9 +222,13 @@ def _ensure_identity_prompt(
         question = next(
             (m.text for m in reversed(messages) if m.role == Role.USER), ""
         )
-        hint = turn_hint(diagrams, question if isinstance(question, str) else "")
-        if hint:
-            volatile = (volatile + "\n\n" + hint).strip()
+        from openjarvis.prompt.answer_hints import budget_hint, numbers_hint
+
+        asked = question if isinstance(question, str) else ""
+        hints = (turn_hint(diagrams, asked), budget_hint(asked), numbers_hint(asked))
+        for hint in hints:
+            if hint:
+                volatile = (volatile + "\n\n" + hint).strip()
         own = _model_line(model)
         if own and turn_context:
             volatile = (volatile + "\n" + own).strip()

@@ -380,6 +380,12 @@ class ResearchRequest(BaseModel):
     model: Optional[str] = Field(
         default=None, description="Preferred planner model for this request."
     )
+    # The last few questions and answers of the chat, so a follow-up ("so
+    # it's twice as slow?") is researched about the right thing (9 October).
+    history: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="Recent chat turns, oldest first: {role, content}.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +432,7 @@ async def _stream_research(
     active_engine_key: str = "",
     active_model: str = "",
     request_model: str = "",
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> AsyncGenerator[str, None]:
     """Drive ResearchAgent on a worker thread; yield SSE frames as they land.
 
@@ -516,7 +523,7 @@ async def _stream_research(
         t0 = time.time()
         sampler.start()
         try:
-            result = agent.run(query)
+            result = agent.run(query, history=history)
             usage_dict = dict(result.usage)
             totals = sampler.stop()
             # Persist token usage *and* GPU energy/power so /v1/telemetry/energy
@@ -648,6 +655,7 @@ async def research(req: ResearchRequest, request: Request) -> StreamingResponse:
             active_engine_key=active_engine_key,
             active_model=active_model,
             request_model=req.model or "",
+            history=req.history,
         ),
         media_type="text/event-stream",
         headers={
