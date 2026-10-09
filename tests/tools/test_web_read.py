@@ -22,11 +22,15 @@ PAGE = "https://www.clickthecity.com/movies/theaters/sm-city-calamba"
 def _turn():
     """The allowance is process-level, so it leaks between tests without this."""
     page_access.clear()
+    # Read-ahead results are kept 90 s; one left by an earlier test would be
+    # used instead of this test's own read.
+    importlib.import_module("openjarvis.tools.web_read")._prefetched.clear()
     # No test reaches the network: the plain read finds nothing unless a
     # test says otherwise, so the browser path is the one under test.
     with patch.object(WebReadTool, "_fetch_static", return_value=None):
         yield
     page_access.clear()
+    importlib.import_module("openjarvis.tools.web_read")._prefetched.clear()
 
 
 def _tool():
@@ -491,7 +495,7 @@ class TestSeveralAtOnce:
         with patch.object(WebReadTool, "_fetch_static", return_value=self.ARTICLE):
             result = _tool().execute(urls=[PAGE, self.OTHER])
         assert result.success is True
-        assert result.metadata["pages_read"] == 2
+        assert result.metadata["pages_read"] == 2, result.content[:600]
         assert f"## {PAGE}" in result.content and f"## {self.OTHER}" in result.content
         assert [s["url"] for s in result.metadata["sources"]] == [PAGE, self.OTHER]
 
