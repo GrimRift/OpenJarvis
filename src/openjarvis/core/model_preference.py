@@ -14,7 +14,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
 
@@ -30,6 +30,9 @@ DEFAULT_CLOUD_MODEL = "gpt-6-luna"
 class ModelPreference:
     prefer_cloud: bool = True
     cloud_model: str = DEFAULT_CLOUD_MODEL
+    # The browser's local default ("Local model" in Settings); empty until it
+    # has said, and then the configured default model is used.
+    local_model: str = ""
 
 
 def preference_path(config_dir: Optional[Path] = None) -> Path:
@@ -48,6 +51,9 @@ def load_preference(config_dir: Optional[Path] = None) -> ModelPreference:
         model = raw.get("cloud_model")
         if isinstance(model, str) and model.strip():
             pref.cloud_model = model.strip()
+        local = raw.get("local_model")
+        if isinstance(local, str) and local.strip():
+            pref.local_model = local.strip()
     return pref
 
 
@@ -76,6 +82,48 @@ def background_model(config_dir: Optional[Path] = None) -> Optional[str]:
     return None
 
 
+def local_model_id(config_dir: Optional[Path] = None) -> str:
+    """The local model to run on: the browser's choice, else the configured
+    default."""
+    pref = load_preference(config_dir)
+    if pref.local_model:
+        return pref.local_model
+    try:
+        from openjarvis.core.config import load_config
+
+        return load_config().intelligence.default_model or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def localize(
+    model: str, engine_key: str = "", config_dir: Optional[Path] = None
+) -> Tuple[str, str]:
+    """``(model, engine_key)`` to actually use, honouring local mode.
+
+    "Prefer cloud model" switched off means everything with a language model
+    in it runs locally: the briefing, proactive check-ins, memory passes,
+    pictures, phone replies -- not only the chat. Settings that name a cloud
+    model or the cloud engine are swapped for the local model on the default
+    engine. No cloud fallback: local mode stays local even when the local
+    model fails. With "Prefer cloud model" on, nothing changes.
+    """
+    if load_preference(config_dir).prefer_cloud:
+        return model, engine_key
+    try:
+        from openjarvis.engine.cloud import is_cloud_model
+
+        cloud = engine_key == "cloud" or bool(model and is_cloud_model(model))
+    except Exception:  # noqa: BLE001
+        cloud = engine_key == "cloud"
+    if not cloud:
+        return model, engine_key
+    local = local_model_id(config_dir)
+    if not local:
+        return model, engine_key
+    return local, ""
+
+
 def unload_local_model(model: str, host: str = "http://127.0.0.1:11434") -> None:
     """Ask Ollama to drop *model* from memory now, not five minutes from now.
 
@@ -101,6 +149,8 @@ __all__ = [
     "ModelPreference",
     "background_model",
     "load_preference",
+    "local_model_id",
+    "localize",
     "save_preference",
     "unload_local_model",
 ]

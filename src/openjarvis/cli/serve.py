@@ -222,6 +222,15 @@ def serve(
         except Exception as exc:
             logger.debug("Telemetry store init failed: %s", exc)
 
+    # The local models are served by llama.cpp, which Sage starts itself:
+    # waiting for it here keeps engine selection from falling through to
+    # cloud on a cold start.
+    if config.engine.llamacpp.models_preset:
+        from openjarvis.engine.llamacpp_server import ensure_servers
+
+        if ensure_servers(config.engine.llamacpp):
+            console.print("  Local:  [cyan]llama.cpp router[/cyan]")
+
     # Select with the model we'll actually serve so an engine that can't
     # serve it (e.g. the cloud fallback without the matching provider key) is
     # skipped rather than chosen and failing per-request later (see #532).

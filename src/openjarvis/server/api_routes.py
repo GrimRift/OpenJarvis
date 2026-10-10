@@ -977,6 +977,7 @@ async def wake_word_stream(websocket: WebSocket):
                 # handshake was most of the ~1 s of silence before Sage's
                 # voice began. Fire-and-forget -- warming never fails a turn.
                 _warm_speech_connection()
+                _warm_local_model()
                 await websocket.send_json(
                     {
                         "type": "detected",
@@ -2282,6 +2283,29 @@ __all__ = [
     "feedback_router",
     "optimize_router",
 ]
+
+
+def _warm_local_model() -> None:
+    """In local mode, start loading the local model on the wake word.
+
+    It loads while the user is still speaking, so the reply does not wait for
+    it. Fire-and-forget on a thread: warming never fails or slows a turn.
+    """
+    try:
+        from openjarvis.core.model_preference import load_preference, local_model_id
+
+        if load_preference().prefer_cloud:
+            return
+        model = local_model_id()
+        if not model:
+            return
+        from openjarvis.core.config import load_config
+        from openjarvis.engine.llamacpp_server import load_model
+
+        host = load_config().engine.llamacpp.host
+        asyncio.get_running_loop().run_in_executor(None, load_model, host, model)
+    except Exception:
+        logger.debug("Could not warm the local model", exc_info=True)
 
 
 def _warm_speech_connection() -> None:

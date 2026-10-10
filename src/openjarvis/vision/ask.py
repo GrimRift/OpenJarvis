@@ -44,6 +44,15 @@ def resolve_vision_model(config: Any) -> str:
     """
     vision = getattr(config, "vision", None)
     explicit = str(getattr(vision, "model", "") or "").strip()
+    try:
+        from openjarvis.core.model_preference import load_preference, localize
+
+        if not load_preference().prefer_cloud:
+            # Local mode: the chat's local model reads pictures (Qwen3.5 has
+            # its own vision projector), so no second model has to load.
+            return localize(explicit or "gpt-6-luna", "cloud")[0]
+    except Exception:
+        pass
     if explicit:
         return explicit
 
@@ -114,9 +123,20 @@ def ask_vision(
         except Exception:
             pass
 
-        from openjarvis.engine.cloud import CloudEngine
+        from openjarvis.server.cloud_router import is_cloud_model
 
-        engine = CloudEngine()
+        if is_cloud_model(model):
+            from openjarvis.engine.cloud import CloudEngine
+
+            engine = CloudEngine()
+        else:
+            from openjarvis.core.config import load_config
+            from openjarvis.engine._discovery import get_engine
+
+            resolved = get_engine(load_config(), model=model)
+            if resolved is None:
+                return None
+            engine = resolved[1]
 
     result = engine.generate(
         [message],

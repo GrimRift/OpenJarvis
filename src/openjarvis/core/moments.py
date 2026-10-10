@@ -1144,14 +1144,12 @@ def compose_initiative(context: Dict[str, str]) -> str:
 
     settings = load_settings()
     config = load_config()
-    resolved = get_engine(
-        config, engine_key=settings.moments_engine, model=settings.moments_model
-    )
+    from openjarvis.core.model_preference import localize
+
+    model, engine_key = localize(settings.moments_model, settings.moments_engine)
+    resolved = get_engine(config, engine_key=engine_key or None, model=model)
     if resolved is None:
-        raise RuntimeError(
-            f"engine {settings.moments_engine!r} cannot serve "
-            f"{settings.moments_model!r}"
-        )
+        raise RuntimeError(f"engine {engine_key!r} cannot serve {model!r}")
     body = "\n".join(f"{key}: {value}" for key, value in context.items())
     messages = [
         Message(role=Role.SYSTEM, content=INITIATIVE_SYSTEM_PROMPT),
@@ -1160,7 +1158,7 @@ def compose_initiative(context: Dict[str, str]) -> str:
     # A reasoning model spends tokens before the first word; 120 left it
     # with nothing to say, which read as a decline every single time.
     result = resolved[1].generate(
-        messages, model=settings.moments_model, temperature=0.8, max_tokens=600
+        messages, model=model, temperature=0.8, max_tokens=600
     )
     category, line = parse_initiative_reply(str(result.get("content") or ""))
     if not line:
@@ -1214,14 +1212,12 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
 
     settings = load_settings()
     config = load_config()
-    resolved = get_engine(
-        config, engine_key=settings.moments_engine, model=settings.moments_model
-    )
+    from openjarvis.core.model_preference import localize
+
+    model, engine_key = localize(settings.moments_model, settings.moments_engine)
+    resolved = get_engine(config, engine_key=engine_key or None, model=model)
     if resolved is None:
-        raise RuntimeError(
-            f"engine {settings.moments_engine!r} cannot serve "
-            f"{settings.moments_model!r}"
-        )
+        raise RuntimeError(f"engine {engine_key!r} cannot serve {model!r}")
     engine = resolved[1]
     labels = {
         MOMENT_GREETING: (
@@ -1263,9 +1259,7 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
             content=f"Occasion: {labels[kind]}\n\nContext:\n{body}{variety}",
         ),
     ]
-    result = engine.generate(
-        messages, model=settings.moments_model, temperature=0.7, max_tokens=600
-    )
+    result = engine.generate(messages, model=model, temperature=0.7, max_tokens=600)
     text = str(result.get("content") or "").strip()
     if not text:
         raise RuntimeError("empty reply")

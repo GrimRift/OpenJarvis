@@ -74,6 +74,14 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
             base_url=self._host, timeout=timeout, headers=headers
         )
 
+    def _request_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """The caller's extra options as they go into the request body.
+
+        `keep_alive` is Ollama's own; an OpenAI-shaped endpoint answers an
+        unknown field with a 400, and these are splatted into the body.
+        """
+        return {k: v for k, v in kwargs.items() if k != "keep_alive"}
+
     # -- InferenceEngine interface ------------------------------------------
 
     def generate(
@@ -91,9 +99,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
-            # `keep_alive` is Ollama's own; an OpenAI-shaped endpoint answers
-            # an unknown field with a 400, and this body is splatted wholesale.
-            **{k: v for k, v in kwargs.items() if k != "keep_alive"},
+            **self._request_kwargs(kwargs),
         }
         # Default to tool_choice=auto when tools are provided
         if "tools" in payload and "tool_choice" not in payload:
@@ -185,7 +191,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
-            **kwargs,
+            **self._request_kwargs(kwargs),
         }
         # Default to tool_choice=auto when tools are provided
         if "tools" in payload and "tool_choice" not in payload:
@@ -249,7 +255,7 @@ class _OpenAICompatibleEngine(AsyncHTTPEngineMixin, InferenceEngine):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
-            **kwargs,
+            **self._request_kwargs(kwargs),
         }
         if "tools" in payload and "tool_choice" not in payload:
             payload["tool_choice"] = "auto"

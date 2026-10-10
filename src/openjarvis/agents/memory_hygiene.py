@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from openjarvis.agents._model_override import apply_configured_model
 from openjarvis.agents._stubs import AgentContext, AgentResult, BaseAgent
+from openjarvis.core.model_preference import localize
 from openjarvis.core.registry import AgentRegistry
 from openjarvis.memory.settings import load_memory_settings
 
@@ -49,7 +50,7 @@ class MemoryHygieneAgent(BaseAgent):
             args, kwargs, settings.cloud_model, "cloud", label="Memory hygiene"
         )
         super().__init__(*args, **kwargs)
-        self._configured_model = settings.cloud_model
+        self._configured_model = localize(settings.cloud_model, "cloud")[0]
 
     def run(
         self,

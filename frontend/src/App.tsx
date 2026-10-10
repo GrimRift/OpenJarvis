@@ -68,9 +68,12 @@ export default function App() {
       body: JSON.stringify({
         prefer_cloud: settings.preferCloudModel,
         cloud_model: settings.cloudModel,
+        // Local mode runs everything on this one, so nothing swaps a second
+        // model onto the card.
+        local_model: settings.defaultModel,
       }),
     }).catch(() => undefined);
-  }, [settings.preferCloudModel, settings.cloudModel]);
+  }, [settings.preferCloudModel, settings.cloudModel, settings.defaultModel]);
 
   // The orb reads each local voice through that voice's own shaping (its
   // meta.json): fetched on load and whenever the voice changes. Anything

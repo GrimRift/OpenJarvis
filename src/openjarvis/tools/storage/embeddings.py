@@ -82,7 +82,7 @@ class OllamaEmbedder(Embedder):
     def __init__(
         self,
         model: str = "nomic-embed-text",
-        base_url: str = "http://localhost:11434",
+        base_url: Optional[str] = None,
         *,
         batch_size: int = 16,
         max_parallel: int = 8,
@@ -91,7 +91,16 @@ class OllamaEmbedder(Embedder):
         import httpx  # local import to keep module light if unused
 
         self._model = model
-        self._base_url = base_url.rstrip("/")
+        # See connectors.embeddings.OllamaEmbedder: llama.cpp when Sage has an
+        # embedding server configured and no URL was given.
+        self._llamacpp: Optional[str] = None
+        if base_url is None:
+            from openjarvis.engine.llamacpp_server import embedding_host
+
+            self._llamacpp = embedding_host()
+        self._base_url = (
+            self._llamacpp or base_url or "http://localhost:11434"
+        ).rstrip("/")
         self._batch_size = max(1, batch_size)
         self._max_parallel = max(1, max_parallel)
         self._timeout_s = timeout_s
@@ -100,6 +109,17 @@ class OllamaEmbedder(Embedder):
 
     def _embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Issue one HTTP request for ``texts`` and return raw vectors."""
+        if self._llamacpp:
+            resp = self._httpx.post(
+                f"{self._base_url}/v1/embeddings",
+                json={"model": self._model, "input": texts},
+                timeout=self._timeout_s,
+            )
+            resp.raise_for_status()
+            rows = sorted(resp.json().get("data") or [], key=lambda r: r["index"])
+            if not rows:
+                raise RuntimeError("llama.cpp returned no embeddings")
+            return [row["embedding"] for row in rows]
         resp = self._httpx.post(
             f"{self._base_url}/api/embed",
             json={"model": self._model, "input": texts},

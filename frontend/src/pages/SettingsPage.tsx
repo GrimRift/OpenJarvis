@@ -32,7 +32,7 @@ const VOLUME_ROWS: Array<[keyof Volumes, string, string]> = [
   ['reminders', 'Reminders', 'timed reminders and desktop alerts'],
   ['chime', 'Chime', 'the tone before Sage speaks first'],
 ];
-import { modelForToggle } from '../lib/model-preference';
+import { LOCAL_MODEL_CHOICES, modelForToggle } from '../lib/model-preference';
 import { formatShortcut, getStartupSettings, setStartupSettings, shortcutFromKey, type StartupSettings } from '../lib/desktop-app';
 import {
   checkHealth,
@@ -59,28 +59,6 @@ import {
 } from '../lib/api';
 
 const CLOUD_KEY_STATUS_CHANGED = 'openjarvis-cloud-key-status-changed';
-
-function OllamaModelList() {
-  const [models, setModels] = useState<Array<{ name: string; size: number }>>([]);
-  useEffect(() => {
-    fetch('http://localhost:11434/api/tags')
-      .then(r => r.json())
-      .then(data => setModels((data.models || []).map((m: any) => ({ name: m.name, size: m.size }))))
-      .catch(() => setModels([]));
-  }, []);
-  if (models.length === 0) return <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>No models loaded</span>;
-  return (
-    <div className="flex flex-wrap gap-1">
-      {models.map(m => (
-        <span key={m.name} className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px]"
-          style={{ background: 'var(--color-bg-tertiary)', color: 'var(--color-text)' }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-success)', display: 'inline-block' }} />
-          {m.name} ({(m.size / 1e9).toFixed(1)} GB)
-        </span>
-      ))}
-    </div>
-  );
-}
 
 function ApiKeyInput({
   keyName,
@@ -1099,7 +1077,7 @@ export function SettingsPage() {
 
           {/* Models */}
           <Section title="Models">
-            <SettingRow label="Prefer cloud model" description="Cloud answers roughly 6x faster at the prompt sizes Sage actually sends — 1.9s versus 11.7s on the same question. Falls back to your local model automatically when cloud is unavailable">
+            <SettingRow label="Prefer cloud model" description="On: chats start on the cloud model, which falls back to your local model when cloud is unavailable. Off: local mode. Everything that uses a language model (chat, voice, memory, briefings, reminders, pictures, Telegram) runs on your local model, with no cloud fallback. Speech, voices and web search keep the services chosen for them">
               <button
                 onClick={() => {
                   const next = !settings.preferCloudModel;
@@ -1134,12 +1112,25 @@ export function SettingsPage() {
                 />
               </button>
             </SettingRow>
-            <SettingRow label="Local models (Ollama)" description="Models available for local inference">
-              <OllamaModelList />
+            <SettingRow label="Local model" description="Runs on this PC with llama.cpp. Loads when needed (or on the wake word in local mode) and unloads after 3 minutes idle. When the graphics card is full the model spills into system RAM: slower, but it keeps running">
+              <select
+                value={settings.defaultModel}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  updateSettings({ defaultModel: next });
+                  if (!settings.preferCloudModel) setSelectedModel(next);
+                  showSaved();
+                }}
+                className="text-sm px-2 py-1 rounded-lg outline-none cursor-pointer"
+                style={{ background: 'var(--color-bg-tertiary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+              >
+                {LOCAL_MODEL_CHOICES.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}{m.note ? ` (${m.note})` : ''}
+                  </option>
+                ))}
+              </select>
             </SettingRow>
-            <div className="text-xs mt-2 px-1" style={{ color: 'var(--color-text-tertiary)' }}>
-              Run <code className="px-1 py-0.5 rounded text-[11px]" style={{ background: 'var(--color-bg-tertiary)' }}>ollama pull &lt;model-name&gt;</code> in your terminal to add more models
-            </div>
             <SettingRow label="Cloud providers" description="Green dot means API key is configured">
               <div className="flex flex-wrap gap-3">
                 <CloudProviderStatus label="OpenAI" keyName="OPENAI_API_KEY" />

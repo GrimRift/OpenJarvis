@@ -393,6 +393,14 @@ class LlamaCppEngineConfig:
 
     host: str = "http://localhost:8080"
     binary_path: str = ""
+    # With binary_path and models_preset set, Sage starts llama-server in
+    # router mode itself when nothing answers at ``host``.
+    models_preset: str = ""
+    # Seconds a model stays loaded after its last request.
+    idle_unload_seconds: int = 180
+    # A second llama-server for memory/retrieval embeddings (nomic-embed-text).
+    embedding_model_path: str = ""
+    embedding_host: str = "http://127.0.0.1:8082"
 
 
 @dataclass(slots=True)

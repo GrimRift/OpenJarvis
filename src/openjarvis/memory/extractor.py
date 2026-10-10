@@ -145,6 +145,19 @@ class FactExtractor:
         never drags the GPU awake for extraction.
         """
         try:
+            from openjarvis.core.model_preference import (
+                load_preference,
+                local_model_id,
+            )
+
+            # Local mode outranks the memory setting, and uses the chat's
+            # local model: the router holds one model at a time, so any other
+            # would unload the chat model after every turn.
+            if not load_preference().prefer_cloud:
+                return local_model_id() or self._model
+        except Exception:  # noqa: BLE001
+            logger.debug("Model preference unavailable", exc_info=True)
+        try:
             from openjarvis.memory.settings import load_memory_settings
 
             settings = load_memory_settings()

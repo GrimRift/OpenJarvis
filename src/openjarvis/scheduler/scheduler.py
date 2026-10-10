@@ -493,15 +493,26 @@ class TaskScheduler:
                 # Carried in metadata rather than a column: the table is
                 # created with CREATE TABLE IF NOT EXISTS and has no migration
                 # path, so a new column would silently skip existing databases.
+                from openjarvis.core.model_preference import (
+                    background_model,
+                    load_preference,
+                    local_model_id,
+                    localize,
+                )
+
                 if meta.get("model"):
-                    ask_kwargs["model"] = meta["model"]
+                    # A task pinned to a cloud model still runs locally in
+                    # local mode.
+                    ask_kwargs["model"] = localize(meta["model"])[0]
+                elif not load_preference().prefer_cloud and local_model_id():
+                    # The chat's local model, so the task does not swap a
+                    # second model onto the card.
+                    ask_kwargs["model"] = local_model_id()
                 else:
                     # A task with no model of its own ran on the configured
                     # default, the local 4b, and a reminder at 08:00 put
                     # 3.6 GB on the GPU (24 September). The user's "Prefer
                     # cloud model" decides instead.
-                    from openjarvis.core.model_preference import background_model
-
                     cloud = background_model()
                     if cloud:
                         ask_kwargs["model"] = cloud

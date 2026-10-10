@@ -48,11 +48,19 @@ class OllamaEmbedder:
         self,
         *,
         model: str = DEFAULT_EMBED_MODEL,
-        host: str = DEFAULT_OLLAMA_HOST,
+        host: Optional[str] = None,
         timeout: float = 30.0,
     ) -> None:
         self._model = model
-        self._host = host.rstrip("/")
+        # Sage serves nomic-embed-text from llama.cpp now (the same weights
+        # file, so stored vectors stay comparable); an explicit host, or no
+        # embedding server configured, keeps the Ollama API.
+        self._llamacpp: Optional[str] = None
+        if host is None:
+            from openjarvis.engine.llamacpp_server import embedding_host
+
+            self._llamacpp = embedding_host()
+        self._host = (self._llamacpp or host or DEFAULT_OLLAMA_HOST).rstrip("/")
         self._timeout = timeout
         self._dim: Optional[int] = None
 
@@ -72,6 +80,11 @@ class OllamaEmbedder:
 
     def is_available(self) -> bool:
         """Return True iff the daemon answers and the model is installed."""
+        if self._llamacpp:
+            try:
+                return requests.get(f"{self._host}/health", timeout=2.0).ok
+            except requests.RequestException:
+                return False
         try:
             resp = requests.get(f"{self._host}/api/tags", timeout=2.0)
             resp.raise_for_status()
@@ -95,13 +108,23 @@ class OllamaEmbedder:
         if not text or not text.strip():
             return None
         try:
-            resp = requests.post(
-                f"{self._host}/api/embeddings",
-                json={"model": self._model, "prompt": text},
-                timeout=self._timeout,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
+            if self._llamacpp:
+                resp = requests.post(
+                    f"{self._host}/v1/embeddings",
+                    json={"model": self._model, "input": text},
+                    timeout=self._timeout,
+                )
+                resp.raise_for_status()
+                data = resp.json().get("data") or [{}]
+                payload = {"embedding": data[0].get("embedding")}
+            else:
+                resp = requests.post(
+                    f"{self._host}/api/embeddings",
+                    json={"model": self._model, "prompt": text},
+                    timeout=self._timeout,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
         except requests.RequestException as exc:
             logger.warning("OllamaEmbedder.embed: request failed (%s)", exc)
             return None

@@ -319,9 +319,13 @@ class JarvisSystem:
                     kwargs["model"] = use_model
                 return _system.ask(cm.content, **kwargs).get("content", "")
 
+            from openjarvis.core.model_preference import localize
+
+            # Read per message: the user can switch local mode at any time.
+            channel_model = localize(model)[0] if model else model
             reply = ""
             try:
-                reply = _ask(model)
+                reply = _ask(channel_model)
             except Exception:
                 logger.exception("Channel message handler error")
                 if model:

@@ -2811,6 +2811,21 @@ async def list_models(request: Request) -> ModelListResponse:
     )
 
 
+@router.post("/v1/models/preload")
+async def preload_model(request: Request):
+    """Start loading a local model now, so its first reply does not wait."""
+    from openjarvis.core.config import load_config
+    from openjarvis.engine.llamacpp_server import load_model
+
+    body = await request.json()
+    model = str((body or {}).get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    host = load_config().engine.llamacpp.host
+    started = await asyncio.to_thread(load_model, host, model)
+    return {"model": model, "loading": started}
+
+
 @router.post("/v1/models/pull")
 async def pull_model(request: Request):
     """Pull / download a model from the Ollama registry."""

@@ -341,6 +341,11 @@ async def put_model_preference(request: Request):
         if not isinstance(model, str) or not model.strip():
             raise HTTPException(status_code=400, detail="cloud_model must be a name")
         pref.cloud_model = model.strip()
+    if "local_model" in body:
+        local = body["local_model"]
+        if not isinstance(local, str):
+            raise HTTPException(status_code=400, detail="local_model must be a name")
+        pref.local_model = local.strip()
     save_preference(pref)
     return asdict(pref)
 

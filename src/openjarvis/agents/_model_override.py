@@ -42,6 +42,10 @@ def apply_configured_model(
     if not model and not engine_key:
         return args, kwargs
 
+    from openjarvis.core.model_preference import localize
+
+    model, engine_key = localize(model, engine_key)
+
     args = list(args)
     if model:
         if len(args) > 1:

@@ -16,7 +16,27 @@ export const DEFAULT_CLOUD_MODEL = 'gpt-6-luna';
  * choice, just the default at the time, so it moves to the new default once.
  */
 export const RETIRED_DEFAULT_CLOUD_MODELS: readonly string[] = ['gpt-5.6-luna'];
-export const DEFAULT_LOCAL_MODEL = 'qwen3.5:4b';
+export const DEFAULT_LOCAL_MODEL = 'qwen3.5-9b';
+/**
+ * Former local defaults, moved to the new one once (see adoptNewLocalDefault).
+ * The Ollama-era ids had colons; llama.cpp's router reads `name:tag` as a
+ * quantisation tag and rewrites it, so its presets use dashes.
+ */
+export const RETIRED_DEFAULT_LOCAL_MODELS: readonly string[] = ['qwen3.5:4b', 'qwen3.5:9b'];
+
+/**
+ * The local models llama.cpp serves (the router's presets), in picker order.
+ * `note` is shown beside the name.
+ */
+export const LOCAL_MODEL_CHOICES: readonly { id: string; label: string; note?: string }[] = [
+  { id: 'qwen3.5-9b', label: 'Qwen3.5 9B', note: 'default' },
+  { id: 'qwen3.5-4b', label: 'Qwen3.5 4B', note: 'lighter, faster' },
+  {
+    id: 'qwen3.6-35b-a3b',
+    label: 'Qwen3.6 35B-A3B',
+    note: 'experimental, may be unstable on 16 GB RAM',
+  },
+];
 
 export interface ModelPreference {
   preferCloudModel: boolean;

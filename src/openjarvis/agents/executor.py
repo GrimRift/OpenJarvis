@@ -314,6 +314,10 @@ class AgentExecutor:
         )
         if not model:
             raise FatalError("No model configured for agent")
+        from openjarvis.core.model_preference import localize
+
+        # An agent configured for the cloud model runs locally in local mode.
+        model = localize(model)[0]
 
         logger.info(
             "Agent %s [%s]: using model=%s, engine=%s",

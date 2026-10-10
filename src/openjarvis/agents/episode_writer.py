@@ -20,6 +20,7 @@ from typing import Any, List, Optional
 
 from openjarvis.agents._model_override import apply_configured_model
 from openjarvis.agents._stubs import AgentContext, AgentResult, BaseAgent
+from openjarvis.core.model_preference import localize
 from openjarvis.core.presence import load_settings
 from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import Message, Role
@@ -66,7 +67,9 @@ class EpisodeWriterAgent(BaseAgent):
             label="Episodes",
         )
         super().__init__(*args, **kwargs)
-        self._configured_model = settings.episodes_model
+        self._configured_model = localize(
+            settings.episodes_model, settings.episodes_engine
+        )[0]
 
     def run(
         self,

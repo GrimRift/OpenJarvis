@@ -38,7 +38,9 @@ function clampSeconds(value: unknown, fallback: number): number {
 }
 import {
   DEFAULT_CLOUD_MODEL,
+  DEFAULT_LOCAL_MODEL,
   RETIRED_DEFAULT_CLOUD_MODELS,
+  RETIRED_DEFAULT_LOCAL_MODELS,
   preferredModelId,
 } from './model-preference';
 import type {
@@ -546,7 +548,7 @@ export function defaultSettings(): Settings {
     fontSize: 'default',
     orbDesign: 'constellation',
     orbSpikes: true,
-    defaultModel: 'qwen3.5:4b',
+    defaultModel: DEFAULT_LOCAL_MODEL,
     preferCloudModel: true,
     cloudModel: DEFAULT_CLOUD_MODEL,
     defaultAgent: '',
@@ -654,7 +656,7 @@ function loadSettings(): Settings {
     if (!TTS_PROVIDERS.includes(parsed.ttsProvider)) {
       merged.ttsProvider = defaults.ttsProvider;
     }
-    return adoptNewCloudDefault(normaliseSpeechProviders(merged));
+    return adoptNewLocalDefault(adoptNewCloudDefault(normaliseSpeechProviders(merged)));
   } catch {
     return defaults;
   }
@@ -675,6 +677,20 @@ function adoptNewCloudDefault(settings: Settings): Settings {
     saveSettings(settings);
   }
   localStorage.setItem(CLOUD_DEFAULT_SEEN_KEY, DEFAULT_CLOUD_MODEL);
+  return settings;
+}
+
+/** The local default this browser last moved its saved settings to. */
+const LOCAL_DEFAULT_SEEN_KEY = 'sage-local-default-seen';
+
+/** adoptNewCloudDefault, for the local model. */
+function adoptNewLocalDefault(settings: Settings): Settings {
+  if (localStorage.getItem(LOCAL_DEFAULT_SEEN_KEY) === DEFAULT_LOCAL_MODEL) return settings;
+  if (RETIRED_DEFAULT_LOCAL_MODELS.includes(settings.defaultModel)) {
+    settings = { ...settings, defaultModel: DEFAULT_LOCAL_MODEL };
+    saveSettings(settings);
+  }
+  localStorage.setItem(LOCAL_DEFAULT_SEEN_KEY, DEFAULT_LOCAL_MODEL);
   return settings;
 }
 
