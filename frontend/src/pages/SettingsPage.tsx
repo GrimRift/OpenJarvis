@@ -222,7 +222,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function SettingRow({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between py-3" style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
+    <div className="flex items-center justify-between gap-4 py-3" style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
       <div>
         <div className="text-sm" style={{ color: 'var(--color-text)' }}>{label}</div>
         {description && (
@@ -1118,7 +1118,7 @@ export function SettingsPage() {
                 />
               </button>
             </SettingRow>
-            <SettingRow label="Local model" description="Runs on this PC with llama.cpp. Loads when needed (or on the wake word in local mode) and unloads after 3 minutes idle. When the graphics card is full the model spills into system RAM: slower, but it keeps running">
+            <SettingRow label="Local model" description="Runs on this PC with llama.cpp. Loads when needed (or on the wake word in local mode) and unloads after 3 minutes idle. When the graphics card is full the model spills into system RAM: slower, but it keeps running. The 35B is experimental: it may be unstable and can take minutes to start a reply on 16 GB of RAM">
               <select
                 value={settings.defaultModel}
                 onChange={(e) => {
@@ -1127,7 +1127,7 @@ export function SettingsPage() {
                   if (!settings.preferCloudModel) setSelectedModel(next);
                   showSaved();
                 }}
-                className="text-sm px-2 py-1 rounded-lg outline-none cursor-pointer"
+                className="text-sm px-2 py-1 rounded-lg outline-none cursor-pointer w-56 shrink-0"
                 style={{ background: 'var(--color-bg-tertiary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
               >
                 {LOCAL_MODEL_CHOICES.map((m) => (

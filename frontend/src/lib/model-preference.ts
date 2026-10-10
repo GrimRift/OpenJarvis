@@ -34,7 +34,7 @@ export const LOCAL_MODEL_CHOICES: readonly { id: string; label: string; note?: s
   {
     id: 'qwen3.6-35b-a3b',
     label: 'Qwen3.6 35B-A3B',
-    note: 'experimental: may be unstable, and can take minutes to start a reply on 16 GB RAM',
+    note: 'experimental',
   },
 ];
 
