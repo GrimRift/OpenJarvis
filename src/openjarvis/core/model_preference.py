@@ -103,7 +103,9 @@ def localize(
 
     "Prefer cloud model" switched off means everything with a language model
     in it runs locally: the briefing, proactive check-ins, memory passes,
-    pictures, phone replies -- not only the chat. Settings that name a cloud
+    phone replies -- not only the chat. Pictures are the exception and stay
+    on the cloud (the user's call, 2026-10-10: the vision projector did not
+    fit beside the 9B and the voice engine in 8 GB). Settings that name a cloud
     model or the cloud engine are swapped for the local model on the default
     engine. No cloud fallback: local mode stays local even when the local
     model fails. With "Prefer cloud model" on, nothing changes.

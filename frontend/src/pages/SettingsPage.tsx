@@ -33,6 +33,12 @@ const VOLUME_ROWS: Array<[keyof Volumes, string, string]> = [
   ['chime', 'Chime', 'the tone before Sage speaks first'],
 ];
 import { LOCAL_MODEL_CHOICES, modelForToggle } from '../lib/model-preference';
+import {
+  LOCAL_SETTING_HELP,
+  fetchLocalModelSettings,
+  saveLocalModelSettings,
+  type LocalModelSettings,
+} from '../lib/local-models-api';
 import { formatShortcut, getStartupSettings, setStartupSettings, shortcutFromKey, type StartupSettings } from '../lib/desktop-app';
 import {
   checkHealth,
@@ -1077,7 +1083,7 @@ export function SettingsPage() {
 
           {/* Models */}
           <Section title="Models">
-            <SettingRow label="Prefer cloud model" description="On: chats start on the cloud model, which falls back to your local model when cloud is unavailable. Off: local mode. Everything that uses a language model (chat, voice, memory, briefings, reminders, pictures, Telegram) runs on your local model, with no cloud fallback. Speech, voices and web search keep the services chosen for them">
+            <SettingRow label="Prefer cloud model" description="On: chats start on the cloud model, which falls back to your local model when cloud is unavailable. Off: local mode. Everything that uses a language model (chat, voice, memory, briefings, reminders, Telegram) runs on your local model, with no cloud fallback. Pictures still go to the cloud model; speech, voices and web search keep the services chosen for them">
               <button
                 onClick={() => {
                   const next = !settings.preferCloudModel;
@@ -1139,6 +1145,10 @@ export function SettingsPage() {
                 <CloudProviderStatus label="OpenRouter" keyName="OPENROUTER_API_KEY" />
               </div>
             </SettingRow>
+          </Section>
+
+          <Section title="Local model tuning">
+            <LocalModelTuning showSaved={showSaved} />
           </Section>
 
           {/* API Keys */}
@@ -1823,6 +1833,135 @@ export function SettingsPage() {
  * separate gestures. What Sage already covers is listed underneath, greyed,
  * so nobody retypes "Quezon" or their own instructors.
  */
+const CACHE_TYPES = ['q4_0', 'q8_0', 'f16'];
+
+function TuningField({
+  name,
+  value,
+  onChange,
+}: {
+  name: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const help = LOCAL_SETTING_HELP[name];
+  const inputStyle = { background: 'var(--color-bg-tertiary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' };
+  return (
+    <div className="flex items-start justify-between gap-4 py-2">
+      <div className="min-w-0">
+        <div className="text-sm" style={{ color: 'var(--color-text)' }}>{help?.label ?? name}</div>
+        {help && <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>{help.help}</div>}
+      </div>
+      {name === 'cache-type' ? (
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="text-sm px-2 py-1 rounded-lg shrink-0" style={inputStyle}>
+          {value === '' && <option value="">default (f16)</option>}
+          {CACHE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      ) : (
+        <input
+          type="number"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="text-sm px-2 py-1 rounded-lg w-24 shrink-0"
+          style={inputStyle}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Edits the llama.cpp router's presets: what each setting costs is in
+ * LOCAL_SETTING_HELP. Saved together; a loaded model whose settings changed
+ * is unloaded and picks them up on its next reply.
+ */
+function LocalModelTuning({ showSaved }: { showSaved: () => void }) {
+  const [data, setData] = useState<LocalModelSettings | null>(null);
+  const [draft, setDraft] = useState<Record<string, Record<string, string>>>({});
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const toDraft = (loaded: LocalModelSettings) => {
+    const next: Record<string, Record<string, string>> = { '*': { 'sleep-idle-seconds': loaded.shared['sleep-idle-seconds'] ?? '' } };
+    for (const [id, values] of Object.entries(loaded.models)) {
+      next[id] = {
+        'ctx-size': values['ctx-size'] ?? '',
+        // '' = not set in the presets (llama.cpp's default, f16): left alone on save.
+        'cache-type': values['cache-type-k'] ?? '',
+        'n-gpu-layers': values['n-gpu-layers'] ?? '',
+        ...(values['n-cpu-moe'] != null ? { 'n-cpu-moe': values['n-cpu-moe'] } : {}),
+      };
+    }
+    return next;
+  };
+
+  useEffect(() => {
+    fetchLocalModelSettings()
+      .then((loaded) => {
+        setData(loaded);
+        setDraft(toDraft(loaded));
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  const set = (section: string, key: string, value: string) =>
+    setDraft((prev) => ({ ...prev, [section]: { ...prev[section], [key]: value } }));
+
+  const save = () => {
+    setSaving(true);
+    setError('');
+    const models: Record<string, Record<string, string>> = {};
+    for (const [id, values] of Object.entries(draft)) {
+      if (id === '*') continue;
+      const { 'cache-type': cache, ...rest } = values;
+      models[id] = Object.fromEntries(
+        Object.entries({ ...rest, 'cache-type-k': cache, 'cache-type-v': cache }).filter(([, v]) => v !== ''),
+      );
+    }
+    saveLocalModelSettings({ shared: draft['*'], models })
+      .then((saved) => {
+        setData(saved);
+        setDraft(toDraft(saved));
+        showSaved();
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setSaving(false));
+  };
+
+  if (!data && !error) return <div className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>Loading…</div>;
+  const label = (id: string) => LOCAL_MODEL_CHOICES.find((m) => m.id === id)?.label ?? id;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+        Advanced. The defaults were measured on this PC; changes apply the next time a model loads (a loaded one is unloaded on save).
+      </div>
+      {draft['*'] && (
+        <TuningField name="sleep-idle-seconds" value={draft['*']['sleep-idle-seconds']} onChange={(v) => set('*', 'sleep-idle-seconds', v)} />
+      )}
+      {Object.keys(draft).filter((id) => id !== '*').map((id) => (
+        <details key={id} className="rounded-lg px-3 py-1" style={{ border: '1px solid var(--color-border-subtle)' }}>
+          <summary className="text-sm cursor-pointer py-1" style={{ color: 'var(--color-text)' }}>{label(id)}</summary>
+          {Object.entries(draft[id]).map(([key, value]) => (
+            <TuningField key={key} name={key} value={value} onChange={(v) => set(id, key, v)} />
+          ))}
+        </details>
+      ))}
+      <div className="flex items-center gap-3 mt-1">
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !data}
+          className="text-sm px-3 py-1.5 rounded-lg cursor-pointer"
+          style={{ background: 'var(--color-accent, var(--color-bg-tertiary))', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+        >
+          {saving ? 'Saving…' : 'Save local model settings'}
+        </button>
+        {error && <span className="text-xs" style={{ color: 'var(--color-error, #e5484d)' }}>{error}</span>}
+      </div>
+    </div>
+  );
+}
+
 function KeytermEditor({ showSaved }: { showSaved: () => void }) {
   const [data, setData] = useState<Keyterms | null>(null);
   const [text, setText] = useState('');

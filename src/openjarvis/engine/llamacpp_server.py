@@ -1,8 +1,8 @@
 """Starting Sage's llama.cpp servers: the model router and the embedder.
 
 The router is one ``llama-server`` with no model of its own: it loads the model
-a request names from the presets file, and unloads it after
-``idle_unload_seconds`` without requests. The embedder is a second, small
+a request names from the presets file, and unloads it after the presets'
+``sleep-idle-seconds`` without requests. The embedder is a second, small
 ``llama-server`` holding nomic-embed-text for memory and retrieval.
 
 Both are started detached rather than tied to this server's lifetime, like the
@@ -54,8 +54,9 @@ def router_args(cfg: Any) -> List[str]:
         # so picking another one unloads the first.
         "--models-max",
         "1",
-        "--sleep-idle-seconds",
-        str(int(cfg.idle_unload_seconds)),
+        # How long an idle model stays loaded is the presets' [*]
+        # sleep-idle-seconds, not an argument here: arguments outrank the
+        # presets, and Settings edits the presets.
         "--host",
         host,
         "--port",

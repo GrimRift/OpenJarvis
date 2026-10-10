@@ -44,15 +44,6 @@ def resolve_vision_model(config: Any) -> str:
     """
     vision = getattr(config, "vision", None)
     explicit = str(getattr(vision, "model", "") or "").strip()
-    try:
-        from openjarvis.core.model_preference import load_preference, localize
-
-        if not load_preference().prefer_cloud:
-            # Local mode: the chat's local model reads pictures (Qwen3.5 has
-            # its own vision projector), so no second model has to load.
-            return localize(explicit or "gpt-6-luna", "cloud")[0]
-    except Exception:
-        pass
     if explicit:
         return explicit
 

@@ -107,15 +107,19 @@ class TestLocalModeReachesBackgroundWork:
         extractor._model = "qwen3.5-4b"
         assert extractor._resolve_model("gpt-6-luna") == "qwen3.5-9b"
 
-    def test_pictures_go_to_the_local_model(self, tmp_path, monkeypatch):
+    def test_pictures_stay_on_the_cloud_in_local_mode(self, tmp_path, monkeypatch):
         from openjarvis.vision.ask import resolve_vision_model
 
         _prefer(tmp_path, monkeypatch, False, "qwen3.5-9b")
+        monkeypatch.setattr(
+            "openjarvis.server.cloud_router._load_keys",
+            lambda: {"OPENAI_API_KEY": "x"},
+        )
         config = SimpleNamespace(
             vision=SimpleNamespace(model="", local_model="qwen3-vl:8b"),
-            intelligence=SimpleNamespace(default_model="gpt-6-luna"),
+            intelligence=SimpleNamespace(default_model="qwen3.5-9b"),
         )
-        assert resolve_vision_model(config) == "qwen3.5-9b"
+        assert resolve_vision_model(config) == "gpt-6-luna"
 
     def test_a_cloud_pinned_agent_runs_locally(self, tmp_path, monkeypatch):
         from openjarvis.agents._model_override import apply_configured_model
@@ -126,3 +130,34 @@ class TestLocalModeReachesBackgroundWork:
             (engine, "qwen3.5-4b"), {}, "gpt-6-luna", "cloud", label="digest"
         )
         assert args == (engine, "qwen3.5-9b")
+
+
+class TestWakeWordPreload:
+    """The wake word starts loading the local model, in local mode only."""
+
+    def _run(self, monkeypatch):
+        import asyncio
+
+        from openjarvis.engine import llamacpp_server
+        from openjarvis.server import api_routes
+
+        calls = []
+        monkeypatch.setattr(
+            llamacpp_server, "load_model", lambda host, model: calls.append(model)
+        )
+
+        async def go():
+            api_routes._warm_local_model()
+            await asyncio.sleep(0.2)
+
+        asyncio.run(go())
+        return calls
+
+    def test_local_mode_preloads_the_local_model(self, tmp_path, monkeypatch):
+        _prefer(tmp_path, monkeypatch, False, "qwen3.5-9b")
+        assert self._run(monkeypatch) == ["qwen3.5-9b"]
+
+    def test_cloud_mode_loads_nothing(self, tmp_path, monkeypatch):
+        """With "Prefer cloud model" on, nothing touches the GPU."""
+        _prefer(tmp_path, monkeypatch, True, "qwen3.5-9b")
+        assert self._run(monkeypatch) == []

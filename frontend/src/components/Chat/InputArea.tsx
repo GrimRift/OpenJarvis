@@ -1455,7 +1455,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       const selectedOwner = useAppStore.getState().models.find((m) => m.id === selectedModel)?.owned_by;
       const engineLabel = selectedOwner === 'litellm'
         ? 'litellm'
-        : _CLOUD_PREFIXES.some(p => selectedModel.startsWith(p)) ? 'cloud' : 'ollama';
+        : _CLOUD_PREFIXES.some(p => selectedModel.startsWith(p)) ? 'cloud' : 'local';
       const telemetry: MessageTelemetry = {
         engine: engineLabel,
         model_id: selectedModel,

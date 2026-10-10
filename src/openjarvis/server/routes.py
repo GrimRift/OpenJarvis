@@ -2826,6 +2826,66 @@ async def preload_model(request: Request):
     return {"model": model, "loading": started}
 
 
+def _presets_path():
+    from pathlib import Path
+
+    from openjarvis.core.config import load_config
+
+    cfg = load_config().engine.llamacpp
+    if not cfg.models_preset:
+        raise HTTPException(status_code=404, detail="No local model presets set up")
+    return Path(cfg.models_preset), cfg.host
+
+
+@router.get("/v1/settings/local-models")
+async def get_local_model_settings():
+    """The editable llama.cpp settings, per model and shared."""
+    from openjarvis.engine.llamacpp_presets import (
+        EDITABLE,
+        GLOBAL,
+        GLOBAL_EDITABLE,
+        read_presets,
+    )
+
+    path, _ = _presets_path()
+    presets = await asyncio.to_thread(read_presets, path)
+    shared = presets.get(GLOBAL, {})
+    models = {
+        name: {k: values.get(k, shared.get(k)) for k in EDITABLE}
+        for name, values in presets.items()
+        if name != GLOBAL
+    }
+    return {
+        "shared": {k: shared.get(k) for k in GLOBAL_EDITABLE},
+        "models": models,
+    }
+
+
+@router.put("/v1/settings/local-models")
+async def put_local_model_settings(request: Request):
+    """Change presets: ``{"shared": {...}, "models": {id: {...}}}``. A loaded
+    model whose settings changed is unloaded and reloads with them."""
+    from openjarvis.engine.llamacpp_presets import (
+        GLOBAL,
+        reload_router,
+        update_presets,
+    )
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    changes = dict(body.get("models") or {})
+    if body.get("shared"):
+        changes[GLOBAL] = body["shared"]
+    path, host = _presets_path()
+    try:
+        await asyncio.to_thread(update_presets, path, changes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    reloaded = await asyncio.to_thread(reload_router, host)
+    return {**(await get_local_model_settings()), "reloaded": reloaded}
+
+
 @router.post("/v1/models/pull")
 async def pull_model(request: Request):
     """Pull / download a model from the Ollama registry."""

@@ -584,6 +584,10 @@
   .hud-backdrop::before {
     animation: hud-grid-drift 60s linear infinite;
   }
+  /* Paused while a local model answers (App.tsx: local-model-busy). */
+  .local-model-busy .hud-backdrop::before {
+    animation-play-state: paused;
+  }
 
   /* Live heartbeat dot — use next to hud-label for alive indicator */
   .hud-heartbeat {
