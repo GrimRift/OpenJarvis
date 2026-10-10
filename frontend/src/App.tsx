@@ -14,7 +14,6 @@ import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
 import { useAppStore } from './lib/store';
-import { LOCAL_MODEL_CHOICES } from './lib/model-preference';
 import { useMomentsFeed, usePresenceState } from './hooks/useMomentsFeed';
 import { useServerVoice } from './hooks/useServerVoice';
 import { usePlaybackReport } from './hooks/usePlaybackReport';
@@ -58,17 +57,6 @@ export default function App() {
   useEffect(() => {
     void fetchVolumes().catch(() => undefined);
   }, []);
-
-  // While a local model answers, the backdrop's grid stops drifting: the
-  // drift redraws the whole window every frame, and sharing the graphics card
-  // with it cost the local 9B a quarter of its speed (55 -> 40 tokens/s,
-  // 2026-10-10). One cycle takes a minute, so the pause is not noticeable.
-  const localModelBusy = useAppStore(
-    (s) => s.streamState.isStreaming && LOCAL_MODEL_CHOICES.some((m) => m.id === s.selectedModel),
-  );
-  useEffect(() => {
-    document.documentElement.classList.toggle('local-model-busy', localModelBusy);
-  }, [localModelBusy]);
 
   // "Prefer cloud model" is a browser setting, and the server never saw it:
   // a reminder it ran on its own used the local default and put 3.6 GB on

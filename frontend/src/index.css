@@ -564,11 +564,6 @@
   }
 
   /* Additional motion */
-  @keyframes hud-grid-drift {
-    0%   { background-position: 0 0, 0 0; }
-    100% { background-position: 48px 48px, 48px 48px; }
-  }
-
   @keyframes hud-blink {
     0%, 49%   { opacity: 1; }
     50%, 100% { opacity: 0; }
@@ -580,14 +575,10 @@
   }
 
 
-  /* Activate slow grid drift on backdrop */
-  .hud-backdrop::before {
-    animation: hud-grid-drift 60s linear infinite;
-  }
-  /* Paused while a local model answers (App.tsx: local-model-busy). */
-  .local-model-busy .hud-backdrop::before {
-    animation-play-state: paused;
-  }
+  /* The backdrop grid used to drift (hud-grid-drift, one cycle a minute). It
+     redrew the whole window every frame: ~30% of the graphics card with the
+     app open, which cost the local 9B a quarter of its speed. Removed at the
+     user's request, 2026-10-10; the grid itself stays. */
 
   /* Live heartbeat dot — use next to hud-label for alive indicator */
   .hud-heartbeat {
