@@ -212,6 +212,23 @@ describe('stripGreetingEcho (24 September: a question said over the greeting was
     expect(stripGreetingEcho('Sir.')).toBe('');
   });
 
+  it('takes out the Frieren greetings, which have no "sir"', async () => {
+    const { stripGreetingEcho } = await import('./wake-follow');
+    expect(stripGreetingEcho("Yes? I'm listening. What's the weather")).toBe("What's the weather");
+    expect(stripGreetingEcho("Yes, I'm listening.")).toBe('');
+    expect(stripGreetingEcho("I'm here. Go ahead. Set a timer")).toBe('Set a timer');
+    expect(stripGreetingEcho('Mm. What is it? Play some music')).toBe('Play some music');
+    expect(stripGreetingEcho('Hmm, what is it?')).toBe('');
+  });
+
+  it('keeps questions that only share words with the Frieren greetings', async () => {
+    const { stripGreetingEcho } = await import('./wake-follow');
+    expect(stripGreetingEcho('What is it like in Tokyo')).toBe('What is it like in Tokyo');
+    expect(stripGreetingEcho('Go ahead and play the next song')).toBe(
+      'Go ahead and play the next song',
+    );
+  });
+
   it('keeps a question that merely contains the word', async () => {
     const { stripGreetingEcho } = await import('./wake-follow');
     expect(stripGreetingEcho('Tell me about sir Isaac Newton')).toBe(

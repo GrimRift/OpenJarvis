@@ -222,10 +222,16 @@ export function isOnlyWakePhrase(
  * listening while "Yes, Sir?" plays, so a question said over it is heard --
  * it was discarded, and had to be asked twice (24 September) -- and echo
  * cancellation leaves some of the greeting in the audio. Its words ("Hello,
- * Sir", "Yes, Sir", "Sir") are taken out wherever they landed.
+ * Sir", "Yes, Sir", "Sir") are taken out wherever they landed. The Frieren
+ * voices greet without "sir" (13 October): "Yes? I'm listening.", "I'm here.
+ * Go ahead.", "Mm. What is it?" -- matched only as whole phrases, so "what
+ * is it like in Tokyo" or "go ahead and..." said by the user stays.
  */
 export function stripGreetingEcho(transcript: string): string {
   return transcript
+    .replace(/(?:\byes|\byeah)?[,.!?]*\s*\bi'?m listening\b[,.!?]*/gi, ' ')
+    .replace(/\bi'?m here[,.!?]*\s+go ahead\b[,.!?]*/gi, ' ')
+    .replace(/\b(?:m+|hm+)[,.!?]+\s*what is it\s*[.!?]+/gi, ' ')
     .replace(/\b(?:hello|hi|yes|yeah)[,.!?]*\s+sir\b[,.!?]*/gi, ' ')
     .replace(/^\s*sir\b[,.!?]*/i, ' ')
     .replace(/\s+/g, ' ')
