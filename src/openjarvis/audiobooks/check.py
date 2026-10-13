@@ -9,6 +9,9 @@ show and the recogniser's do not. Measured on the 2026-10-13 benchmarks:
   "1cm" -> "1 cm", "fibre" -> "fiber". Word-exact scoring flagged 23 of 321
   lotm-narrator pieces for these; character similarity over the whole
   piece, plus a check for a phrase that repeats, does not.
+* Also a real failure: a name spelled out letter by letter. Turbo said
+  "Seo Gio" as "S-E-O Gio" in 2 of 3 takes (2026-10-14, Kurzgesagt
+  narrator); character similarity stays high, so it needs its own check.
 """
 
 from __future__ import annotations
@@ -60,6 +63,28 @@ def _repeated_phrase(said: List[str], heard: List[str]) -> Optional[str]:
     return None
 
 
+def _spelled_out(said: List[str], heard: List[str]) -> Optional[str]:
+    """A word of the text heard as single letters ("seo" -> "s e o").
+
+    Only letters that join up into (part of) a word the text has: the
+    recogniser's own slips on names ("Seo Gio" -> "C.O.G.O") spell nothing
+    the text says, and letters the text itself has ("Plan B") are skipped.
+    """
+    said_text = " ".join(said)
+    run: List[str] = []
+    for word in heard + [""]:
+        if len(word) == 1 and word.isalpha():
+            run.append(word)
+            continue
+        if len(run) >= 2 and " ".join(run) not in said_text:
+            joined = "".join(run)
+            # "s e o" is part of "seo"; "s e o g o" holds all of it
+            if any(joined in w or w in joined for w in said if len(w) > 1):
+                return joined
+        run = []
+    return None
+
+
 def similarity(said: str, heard: str) -> float:
     a, b = " ".join(_words(said)), " ".join(_words(heard))
     if not a:
@@ -85,6 +110,9 @@ def judge(said: str, heard: Optional[str], seconds: float, rate: float) -> List[
     elif len(said_words) >= 4 and len(heard_words) > 1.6 * len(said_words) + 2:
         # a longer line said twice has no short phrase repeated back to back
         reasons.append("repeated (too many words)")
+    spelled = _spelled_out(said_words, heard_words)
+    if spelled:
+        reasons.append(f"spelled out '{spelled}'")
     if len(said_words) >= 4 and similarity(said, heard) < GARBLED:
         reasons.append("garbled")
     return reasons

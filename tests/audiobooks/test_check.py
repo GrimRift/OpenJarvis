@@ -41,6 +41,31 @@ def test_a_line_said_twice_is_flagged(said, heard):
     assert any(r.startswith("repeated") for r in judge(said, heard, _secs(said), RATE))
 
 
+@pytest.mark.parametrize(
+    "said, heard",
+    [
+        # 2026-10-14: Turbo (Kurzgesagt narrator) spelled the name out
+        ("Seo Gio was an art teacher.", "S-E-O Gio was an art teacher."),
+        ("Seo Gio was an art teacher.", "S.E.O.G.O. was an art teacher."),
+    ],
+)
+def test_a_name_spelled_out_is_flagged(said, heard):
+    assert any(r.startswith("spelled out") for r in judge(said, heard, _secs(said), RATE))
+
+
+@pytest.mark.parametrize(
+    "said, heard",
+    [
+        ("He kept a plan B and a plan C.", "He kept a plan B and a plan C."),
+        ("The letters were A, B and C.", "The letters were A, B and C."),
+        ("Seo Gio was an art teacher.", "C.O.G.O was an art teacher."),
+        ("I said I would.", "I, I said I would."),
+    ],
+)
+def test_letters_that_spell_nothing_in_the_text_pass(said, heard):
+    assert not any(r.startswith("spelled out") for r in judge(said, heard, _secs(said), RATE))
+
+
 def test_near_silent_and_runaway_pieces_are_flagged_by_length():
     said = "The well-ripened apple emitted a pleasant fragrance."
     assert "too short" in judge(said, "", _secs(said, 0.2), RATE)
