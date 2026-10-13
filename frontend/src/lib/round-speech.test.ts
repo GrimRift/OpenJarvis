@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RoundSpeech, SPEAK_AHEAD_CHARS } from './round-speech';
+import { MAX_HOLD_MS, RoundSpeech, SPEAK_AHEAD_CHARS } from './round-speech';
 
 function gate() {
   const said: string[] = [];
@@ -7,6 +7,43 @@ function gate() {
 }
 
 const OPENING = 'A'.repeat(SPEAK_AHEAD_CHARS - 10);
+
+describe('RoundSpeech long answers (13 October: 14 s of silence in a story)', () => {
+  it("says a cloud model's round as it streams, never holding", () => {
+    const said: string[] = [];
+    const speech = new RoundSpeech((d) => said.push(d), { holdDrafts: false });
+    speech.push(`${OPENING} and more words. Then the story`);
+    speech.push(' goes on.');
+    expect(said.join('')).toBe(`${OPENING} and more words. Then the story goes on.`);
+  });
+
+  it('a held round still writing after MAX_HOLD_MS is released as the answer', () => {
+    const said: string[] = [];
+    let clock = 1000;
+    const speech = new RoundSpeech((d) => said.push(d), { now: () => clock });
+    speech.push(`${OPENING} and more words. First held.`);
+    expect(said.join('')).toBe(`${OPENING} and more words.`);
+    clock += MAX_HOLD_MS - 1;
+    speech.push(' Still held.');
+    expect(said.join('')).toBe(`${OPENING} and more words.`);
+    clock += 1;
+    speech.push(' Released.');
+    speech.push(' Then streamed.');
+    expect(said.join('')).toBe(
+      `${OPENING} and more words. First held. Still held. Released. Then streamed.`,
+    );
+  });
+
+  it('a retract within MAX_HOLD_MS still drops the held draft', () => {
+    const said: string[] = [];
+    let clock = 0;
+    const speech = new RoundSpeech((d) => said.push(d), { now: () => clock });
+    speech.push(`${OPENING} and more words. Draft answer.`);
+    clock += MAX_HOLD_MS / 2;
+    speech.retract();
+    expect(said.join('')).toBe(`${OPENING} and more words.`);
+  });
+});
 
 describe('RoundSpeech', () => {
   it('says a short lead-in whole, as it streams', () => {

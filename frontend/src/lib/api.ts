@@ -229,13 +229,16 @@ export async function deleteModel(modelName: string): Promise<void> {
   }
 }
 
-const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/'];
+const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/', 'MiniMax-', 'chatgpt-'];
+
+/** Whether a model answers from a cloud provider rather than this PC. */
+export function isCloudModel(modelName: string, owner?: string): boolean {
+  return owner === 'litellm' || _CLOUD_PREFIXES.some((p) => modelName.startsWith(p));
+}
 
 export async function preloadModel(modelName: string, owner?: string): Promise<void> {
   // Cloud models have nothing to load.
-  if (owner === 'litellm' || _CLOUD_PREFIXES.some(p => modelName.startsWith(p))) {
-    return;
-  }
+  if (isCloudModel(modelName, owner)) return;
   // The server asks llama.cpp to load it; this returns once loading starts.
   const res = await apiFetch(`/v1/models/preload`, {
     method: 'POST',

@@ -17,10 +17,27 @@
  * When the model then says nothing, the server gives the last preamble back
  * as the answer (`text_restore`); its opening was said already, so only the
  * part that was held is spoken (13 October).
+ *
+ * "Generation runs faster than speech" fails for a long answer: a story from
+ * gpt-6-luna kept writing for 17 s after its 3 s opening, and the user heard
+ * 14 s of silence (13 October, `tts.underrun gapMs=13900`). So only a local
+ * model's rounds are held -- a cloud model writes a line before a tool, not
+ * the answer -- and a hold ends by itself after MAX_HOLD_MS: a round still
+ * writing that long without a tool call is the answer.
  */
 
 /** About two short sentences: a lead-in is said whole, an answer is not. */
 export const SPEAK_AHEAD_CHARS = 160;
+
+/** Held this long with no tool call, a round is taken to be the answer. */
+export const MAX_HOLD_MS = 2000;
+
+export interface RoundSpeechOptions {
+  /** Hold each round past its opening (local models). Default true. */
+  holdDrafts?: boolean;
+  /** Clock, for tests. */
+  now?: () => number;
+}
 
 /** A sentence or line ends here (a delta may end right after the mark). */
 const SENTENCE_END = /[.!?](?=\s|$)|\n/;
@@ -36,8 +53,18 @@ export class RoundSpeech {
   private retractedSpoken = '';
   /** Characters of the coming text that were said already. */
   private skip = 0;
+  /** When the current hold began. */
+  private holdStartedAt = 0;
+  private readonly holdDrafts: boolean;
+  private readonly now: () => number;
 
-  constructor(private readonly speak: (delta: string) => void) {}
+  constructor(
+    private readonly speak: (delta: string) => void,
+    options: RoundSpeechOptions = {},
+  ) {
+    this.holdDrafts = options.holdDrafts ?? true;
+    this.now = options.now ?? Date.now;
+  }
 
   /** A piece of the current round's text. */
   push(delta: string): void {
@@ -51,11 +78,12 @@ export class RoundSpeech {
     if (!delta) return;
     if (this.holding) {
       this.held += delta;
+      if (this.now() - this.holdStartedAt >= MAX_HOLD_MS) this.release();
       return;
     }
     const before = this.length;
     this.length += delta.length;
-    if (this.released || this.length < SPEAK_AHEAD_CHARS) {
+    if (this.released || !this.holdDrafts || this.length < SPEAK_AHEAD_CHARS) {
       this.say(delta);
       return;
     }
@@ -70,6 +98,7 @@ export class RoundSpeech {
     if (cut > 0) this.say(delta.slice(0, cut));
     this.held = delta.slice(cut);
     this.holding = true;
+    this.holdStartedAt = this.now();
   }
 
   /** The round is the answer: say what was held, and the rest as it comes. */

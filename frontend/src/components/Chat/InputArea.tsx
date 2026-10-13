@@ -10,7 +10,7 @@ import {
   splitAttachFiles,
   type AttachedImage,
 } from '../../lib/image-attach';
-import { apiFetch } from '../../lib/api';
+import { apiFetch, isCloudModel } from '../../lib/api';
 import { streamChat, streamResearch } from '../../lib/sse';
 import { RoundSpeech } from '../../lib/round-speech';
 import { finalizePendingRewind } from '../../lib/rewind';
@@ -943,9 +943,13 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         incrementalSpeech?.flush?.();
       }
     };
-    // Each model round says its opening and holds the rest until it is
-    // known to be the answer, not a draft before a tool (lib/round-speech.ts).
-    const roundSpeech = new RoundSpeech(speakDelta);
+    // A local model's round says its opening and holds the rest until it is
+    // known to be the answer, not a draft before a tool; a cloud model's is
+    // said as it streams (lib/round-speech.ts).
+    const turnOwner = useAppStore.getState().models.find((m) => m.id === turnModel)?.owned_by;
+    const roundSpeech = new RoundSpeech(speakDelta, {
+      holdDrafts: !isCloudModel(turnModel, turnOwner),
+    });
     // A tool is about to run: say the line before it now, not after it.
     const flushSpeech = () => {
       if (fillerPlaying) flushHeld = true;
@@ -1468,11 +1472,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         accumulatedContent = 'No response was generated. Please try again.';
       }
       const totalMs = Date.now() - startTime;
-      const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/', 'MiniMax-', 'chatgpt-'];
       const selectedOwner = useAppStore.getState().models.find((m) => m.id === selectedModel)?.owned_by;
       const engineLabel = selectedOwner === 'litellm'
         ? 'litellm'
-        : _CLOUD_PREFIXES.some(p => selectedModel.startsWith(p)) ? 'cloud' : 'local';
+        : isCloudModel(selectedModel) ? 'cloud' : 'local';
       const telemetry: MessageTelemetry = {
         engine: engineLabel,
         model_id: selectedModel,
