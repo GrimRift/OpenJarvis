@@ -56,3 +56,25 @@ def test_unknown_format_is_refused(tmp_path):
     path.write_text("hello")
     with pytest.raises(ValueError):
         import_book(path, BookStore(tmp_path / "books"))
+
+
+def test_reimport_keeps_rendered_audio_and_the_narrator(tmp_path):
+    store = BookStore(tmp_path / "books")
+    path = make_epub(tmp_path / "a.epub", DOCS, TOC)
+    book = import_book(path, store)
+    store.update(book["id"], voice="jarvis")
+    audio = store.root / book["id"] / "audio" / "jarvis" / "0001.m4a"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"made")
+    again = import_book(path, store)
+    assert again["voice"] == "jarvis" and store.load(book["id"])["voice"] == "jarvis"
+    assert audio.read_bytes() == b"made"
+
+
+def test_update_changes_only_book_json(tmp_path):
+    store = BookStore(tmp_path / "books")
+    book = import_book(make_epub(tmp_path / "a.epub", DOCS, TOC), store)
+    store.update(book["id"], voice="frieren")
+    loaded = store.load(book["id"])
+    assert loaded["voice"] == "frieren" and loaded["chapters"] == book["chapters"]
+    assert store.chapter_text(book["id"], 1).startswith("Words go here")

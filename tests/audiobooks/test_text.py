@@ -139,3 +139,19 @@ def test_word_count_counts_contractions_and_compounds_once():
 
 def test_scene_break_marker_is_what_the_render_step_expects():
     assert SCENE_BREAK == "* * *"
+
+
+def test_spaces_inside_quotes_are_tightened():
+    assert clean_paragraph('" Squeak ." "Yeah."') == '"Squeak." "Yeah."'
+    assert clean_paragraph('He said "hi" and " bye ".') == 'He said "hi" and "bye".'
+
+
+def test_footnote_numbers_glued_to_words_are_dropped():
+    assert clean_paragraph("A bowl of samgyetang1 and sikhye3, Speedwagon1.") == (
+        "A bowl of samgyetang and sikhye, Speedwagon."
+    )
+    # a number with its own space, a code and a year stay
+    assert (
+        clean_paragraph("Level 10, room B12, mp3, in 2026.")
+        == "Level 10, room B12, mp3, in 2026."
+    )

@@ -199,6 +199,21 @@ def serve(
     except Exception as exc:
         logger.debug("Voice sidecar setup failed: %s", exc)
 
+    # M42 audiobooks: renders queued chapters in a separate voice process while
+    # Sage is idle. Idle and cheap when the queue is empty. (SAGE_AUDIOBOOKS=0
+    # turns it off.)
+    try:
+        import atexit
+        import os
+
+        if os.environ.get("SAGE_AUDIOBOOKS", "1") != "0":
+            from openjarvis.audiobooks.worker import start_worker, stop_worker
+
+            start_worker()
+            atexit.register(stop_worker)
+    except Exception as exc:
+        logger.warning("Audiobook render worker not started: %s", exc)
+
     # Resolve host/port from CLI args or config
     bind_host = host or config.server.host
     bind_port = port or config.server.port

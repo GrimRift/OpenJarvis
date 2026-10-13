@@ -28,6 +28,11 @@ SCENE_BREAK = "* * *"
 _SUPERSCRIPTS = "\u00b9\u00b2\u00b3\u2070\u2071\u2074\u2075\u2076\u2077\u2078\u2079"
 _SUPERSCRIPT_RUN = re.compile(f"[{_SUPERSCRIPTS}]+")
 
+#: A footnote number typed as a plain digit against its word ("sikhye3",
+#: "Speedwagon1"): all 21 such words in the reference book were markers. A
+#: number written "Level 10" (with its space) is untouched.
+_GLUED_MARKER = re.compile(r"\b(?=[A-Za-z]*[a-z])([A-Za-z]{3,})\d{1,2}\b")
+
 #: Look-alike letters used to hide a watermark from search, mapped to the Latin
 #: letter they imitate. Applied only inside a word that also has Latin letters,
 #: so text that is genuinely Cyrillic or Greek is not rewritten.
@@ -246,6 +251,7 @@ def clean_paragraph(text: str, *, latin_script: bool = True) -> str:
     """
     # Footnote markers go before NFKC, which would turn them into plain digits.
     text = _SUPERSCRIPT_RUN.sub("", text)
+    text = _GLUED_MARKER.sub(r"\1", text)
     text = re.sub(r"\s+", " ", text.replace("\u00ad", "")).strip()
     if latin_script:
         text = _drop_foreign_words(text)
@@ -264,18 +270,31 @@ def clean_paragraph(text: str, *, latin_script: bool = True) -> str:
     text = re.sub(r"([!?])\1{2,}", r"\1\1", text)
     text = re.sub(r"\(\s*\)|\[\s*\]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"\s+([,.!?;:])(?=\s|$)", r"\1", text)
-    # a closing quote left after a space by a removed word: "Yay "
-    text = re.sub(
-        r'(?<=\S) +"',
-        lambda m: '"' if text.count('"', 0, m.start()) % 2 else m.group(0),
-        text,
-    )
+    text = re.sub(r"\s+([,.!?;:])(?=\s|$|[\"')\]])", r"\1", text)
+    text = _tighten_quotes(text)
     # Nothing speakable left (a bare quote mark, a lone symbol) -- but an
     # ellipsis-only line is a beat the render step turns into a pause.
     if not re.search(r"[^\W_]", text) and "..." not in text:
         return ""
     return text
+
+
+def _tighten_quotes(text: str) -> str:
+    """No space just inside a double quote: the source's `" Squeak ."`, or
+    `"Yay "` after a removed word. Whether a quote opens or closes is told
+    by how many came before it."""
+    out: list = []
+    count = 0
+    for ch in text:
+        if ch == " " and out and out[-1] == '"' and count % 2 == 1:
+            continue  # just after an opening quote
+        if ch == '"':
+            count += 1
+            if count % 2 == 0:
+                while out and out[-1] == " ":
+                    out.pop()  # just before a closing quote
+        out.append(ch)
+    return "".join(out)
 
 
 def word_count(text: str) -> int:

@@ -5,6 +5,7 @@
     books/<id>/book.json          title, author, cover, source, chapters[]
     books/<id>/chapters/0001.txt  cleaned text, paragraphs split by blank lines
     books/<id>/cover.jpg          when the book has one
+    books/<id>/audio/<voice>/     rendered chapters (render.py), kept on re-import
 
 The id is the title's slug plus the first 8 hex digits of the source file's
 SHA-256, so re-importing the same file replaces the book, and a different
@@ -23,6 +24,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openjarvis.core.paths import get_data_dir
+
+#: book.json fields the user sets, carried over when a book is re-imported.
+KEPT_ON_REIMPORT = ("voice",)
 
 
 class BookStore:
@@ -56,6 +60,13 @@ class BookStore:
         old = self.root / f".old-{book['id']}-{os.getpid()}"
         shutil.rmtree(tmp, ignore_errors=True)
         (tmp / "chapters").mkdir(parents=True)
+        # What the user set or made survives a re-import: the narrator choice
+        # and every rendered chapter (audio/ is moved across, never copied).
+        if (final / "book.json").is_file():
+            previous = json.loads((final / "book.json").read_text(encoding="utf-8"))
+            for key in KEPT_ON_REIMPORT:
+                if key in previous and key not in book:
+                    book = {**book, key: previous[key]}
         try:
             for chapter, text in zip(book["chapters"], texts, strict=True):
                 (tmp / chapter["file"]).write_text(text, encoding="utf-8")
@@ -69,13 +80,26 @@ class BookStore:
             )
             if final.exists():
                 final.rename(old)
+                if (old / "audio").exists():
+                    (old / "audio").rename(tmp / "audio")
             tmp.rename(final)
         except BaseException:
-            shutil.rmtree(tmp, ignore_errors=True)
             if old.exists() and not final.exists():
+                if (tmp / "audio").exists():
+                    (tmp / "audio").rename(old / "audio")
                 old.rename(final)
+            shutil.rmtree(tmp, ignore_errors=True)
             raise
         shutil.rmtree(old, ignore_errors=True)
+        return book
+
+    def update(self, book_id: str, **changes: Any) -> Dict[str, Any]:
+        """Change top-level fields of book.json (e.g. ``voice``) in place."""
+        path = self._dir(book_id) / "book.json"
+        book = {**json.loads(path.read_text(encoding="utf-8")), **changes}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(book, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
         return book
 
     def load(self, book_id: str) -> Dict[str, Any]:

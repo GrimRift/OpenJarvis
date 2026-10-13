@@ -1,4 +1,4 @@
-# M42 — Audiobooks (scoped 2026-10-13; step 1 import + step 2 benchmark done 2026-10-13)
+# M42 — Audiobooks (scoped 2026-10-13; steps 1-3 built 2026-10-13: import, benchmark, render queue)
 
 Sage turns a book the user owns (PDF or EPUB) into an audiobook in one of Sage's
 voices, for personal listening on the PC and the phone. Scoped with the user
@@ -249,13 +249,96 @@ flags every chapter. Output: `D:\Downloads\audiobook-test\Ch01 - LOTM Narrator
 - Live-Sage latency was not re-measured in this run (10-13 morning: +0.6 s per
   live sentence while Turbo renders).
 
+## Step 3: render queue (built 2026-10-13)
+
+**User decisions at build (2026-10-13 evening):**
+- **A separate render process** ("book voice"), not the live sidecar: a second
+  `voice_sidecar` on port 8792, started only while the queue has work, stopped
+  2 min after it runs dry, below-normal CPU priority. A crash or OOM there
+  cannot take Sage's voice down, and live Nano never switches to Turbo. This
+  replaces the scope's "reuse the running voice sidecar" (decided before a
+  Turbo narrator was picked).
+- **M4A, AAC 64 kbps mono** per chapter (~11 MB per 22-min chapter, ~4 GB for
+  the reference book): M4B parts can be built by stream copy, Telegram can
+  send a chapter as is.
+- **Runs whenever Sage is idle**, games and films included (no full-screen
+  detection).
+
+**Modules:** `pieces.py` (render rules from step 2), `queue.py` (jobs),
+`render.py` (one chapter), `check.py` (listening back), `voiceproc.py` (the
+book voice process + memory/VRAM checks), `worker.py` (the thread started by
+`jarvis serve`; `SAGE_AUDIOBOOKS=0` turns it off).
+
+**Queue** (`<data>/books/queue.json`, shared by the worker and the CLI under
+a lock file): jobs in the order asked; `book` = every non-skip chapter,
+`range` = chapters by the book's own numbering ("32" = both halves),
+`rolling` = the next N non-skip chapters after `position`, never closes,
+refills when the position moves. The worker renders the first chapter of the
+first job that has no `<book>/audio/<voice>/NNNN.m4a` yet; a chapter already
+made in that voice counts for every job. Audio lives per voice, so changing
+the narrator never overwrites anything. Re-importing a book keeps its `audio/`
+and its `voice` (new `BookStore.update` changes book.json only).
+
+**By hand, until the Books page:** `python -m openjarvis.audiobooks`
+`render <book> [--chapters 40-60] [--voice v]`, `rolling <book> --ahead 5
+[--at 12]`, `at <book> <chapter>`, `queue` (jobs + what the worker is doing),
+`pause`, `resume`, `cancel <job|all>`, `voice <book> <voice>`. `<book>` = id,
+id prefix or part of the title. The worker's state: `<data>/books/render-status.json`.
+
+**Yielding to live Sage** (before every piece, from `core.activity`, the same
+record that keeps reminders off a reply): waits while Sage speaks (server
+voice), a TTS stream is open or the page is playing a reply, the mic is
+sending a turn to Flux, a reply is pending, for 10 s after the user's turn and
+6 s after a reply. A live reply that starts mid-piece waits at most that
+piece (median 0.9 s, longest 3.9 s on 10-13); a spoken turn takes longer than
+that, so normally the GPU is already free. Pause/cancel take effect at the
+next piece.
+
+**Resumable:** every piece is written to `audio/<voice>/work/NNNN/` with a
+manifest (digest of the spoken plan + voice) before the next is asked for; a
+restart, crash or pause continues from there. A changed text or voice starts
+the chapter over.
+
+**Before the book voice starts:** commit headroom (free commit + what the
+pagefile may still grow by: 16 GB fixed, 24 GB max here) >= 7 GB for Turbo /
+5.5 GB Nano, and free VRAM >= 4.0 / 2.4 GB; otherwise the status says "not
+enough memory ... (restarting Sage frees some)" and it retries every minute.
+
+**Listening back** (`check.py`, faster-whisper base.en, CPU, 2 threads, run
+while the next pieces render): a piece is retaken (up to 2 more takes, best
+kept) when it is too short (< 45% of the chapter's median s/char), too long
+(> 2.6x), a 1-4-word phrase repeats back to back that the text does not
+repeat, it has far more words than the text (a long line said twice), or its
+character similarity to the text is < 0.55 (garbled). Tuned so names and
+quotes do not count: replayed over all 321 step-2 transcripts it flags 0
+(the old word-exact score flagged 23). Pieces still failing after their last
+take are kept and listed in `status.json`.
+
+**Each chapter:** announcement ("Chapter 1." / "Chapter 7: Crimson."; an EPUB
+label that holds the title is said once), pieces through `to_spoken_text`
+like every live reply (architecture invariant; mostly dashes -> commas),
+gaps, two-pass loudnorm to -16 LUFS (linear), AAC 64k, tags (title, album,
+artist, track). Record per chapter in `audio/<voice>/status.json` (seconds,
+pieces, generation time, RTF, retakes, flags).
+
+**Cleaner fixes found on the way:** spaces inside quotes (`" Squeak ."`),
+plain-digit footnote markers glued to words ("sikhye3", "Speedwagon1": all 21
+such words in the book; `to_spoken_text` read them as "a code ending in N G
+1").
+
+**End-to-end runs (10-13 ~18:35-18:43, real worker + book voice + Whisper, a
+scratch copy of the store, live Sage running):** headroom 9.2 GB, VRAM 4.9 GB
+free at start; book voice up in ~35 s. Chapter 258: 32 pieces, 2.2 min audio
+in 59 s, 0 flags. **Chapter 1: 321 pieces, 22.5 min audio, RTF 0.238, 388 s
+wall incl. start-up (step 2's render alone: 309 s), 2 retakes, 0 flags left;
+11.0 MB, -16.4 LUFS.** Whole book: ~22-24 h of idle time.
+
 ## Suggested build order
 
 1. ~~Import~~ DONE 2026-10-13 (above).
 2. ~~Benchmark~~ DONE 2026-10-13 ~18:05 (user chose a quick lotm-narrator run
-   over the 2-voice pick): see "Step 2 result" below.
-3. Render queue (persistent, resumable after restart, yields to live voice) ->
-   per-chapter audio files.
+   over the 2-voice pick): see "Step 2 result" above.
+3. ~~Render queue~~ DONE 2026-10-13 (above).
 4. Export: M4B parts with chapters + OneDrive copy; Telegram send.
 5. Books page + chat tools.
 6. Narrator cloning flow for new voices.
