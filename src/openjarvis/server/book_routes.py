@@ -43,10 +43,9 @@ def create_book_router(
         library = lib()
         return {"books": library.summaries(), "worker": library.worker_status()}
 
-    @router.post("/import")
-    async def import_upload(file: UploadFile = File(...)) -> Dict[str, Any]:
-        """A PDF or EPUB from the page: written beside the store, imported,
-        kept (the book records its source path)."""
+    async def _save_upload(library: Library, file: UploadFile) -> Path:
+        """A PDF or EPUB from the page, written beside the store and kept
+        (a book records its source path)."""
         name = Path(file.filename or "book").name
         suffix = Path(name).suffix.lower()
         if suffix not in (".pdf", ".epub"):
@@ -54,7 +53,6 @@ def create_book_router(
         data = await file.read()
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "That file is too large")
-        library = lib()
         folder = library.store.root / "_sources"
         folder.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^\w.\- ]+", "_", Path(name).stem)[:120] or "book"
@@ -64,6 +62,13 @@ def create_book_router(
         ) as tmp:
             tmp.write(data)
         Path(tmp.name).replace(target)
+        return target
+
+    @router.post("/import")
+    async def import_upload(file: UploadFile = File(...)) -> Dict[str, Any]:
+        """A PDF or EPUB from the page, imported as a book."""
+        library = lib()
+        target = await _save_upload(library, file)
         try:
             book = await asyncio.to_thread(library.import_file, target)
         except ValueError as exc:
@@ -210,5 +215,82 @@ def create_book_router(
             "position": book.get("position"),
             "position_seconds": book.get("position_seconds"),
         }
+
+    # ------------------------------------------- flags (user, 2026-10-14)
+
+    @router.get("/{book_id}/chapters/{index}/flags")
+    async def chapter_flags(book_id: str, index: int) -> Dict[str, Any]:
+        _book_or_404(book_id)
+        return {"flags": lib().chapter_flags(book_id, index)}
+
+    @router.delete("/{book_id}/chapters/{index}/flags/{piece}")
+    async def dismiss_flag(book_id: str, index: int, piece: int) -> Dict[str, Any]:
+        """The user listened and the line is fine."""
+        _book_or_404(book_id)
+        try:
+            left = lib().dismiss_flag(book_id, index, piece)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"flags": left}
+
+    @router.post("/{book_id}/chapters/{index}/redo")
+    async def redo_chapter(book_id: str, index: int) -> Dict[str, Any]:
+        """Render the chapter again; the old file is kept in replaced/."""
+        _book_or_404(book_id)
+        library = lib()
+        try:
+            job = library.redo_chapter(book_id, index)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"job": job, "book": library.detail(book_id)}
+
+    # ------------------------------------ adding chapters (user, 2026-10-14)
+
+    @router.post("/{book_id}/chapters/from-file")
+    async def add_from_file(
+        book_id: str, file: UploadFile = File(...)
+    ) -> Dict[str, Any]:
+        """A newer PDF/EPUB of the book: only chapters it does not have."""
+        _book_or_404(book_id)
+        library = lib()
+        target = await _save_upload(library, file)
+        try:
+            result = await asyncio.to_thread(
+                library.add_chapters_from_file, book_id, target
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {**result, "book": library.detail(book_id)}
+
+    @router.post("/{book_id}/chapters")
+    async def add_chapter(book_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """One chapter from text: ``number``, ``title`` (optional), ``text``."""
+        _book_or_404(book_id)
+        library = lib()
+        try:
+            entry = library.add_chapter_text(
+                book_id,
+                str(body.get("number") or ""),
+                str(body.get("text") or ""),
+                str(body.get("title") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"added": entry, "book": library.detail(book_id)}
+
+    @router.post("/{book_id}/chapters/fetch")
+    async def fetch_chapter(book_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """A chapter's text from a web page the user pasted, to check in the
+        paste form before adding (nothing is saved here)."""
+        _book_or_404(book_id)
+        url = str(body.get("url") or "").strip()
+        if not url:
+            raise HTTPException(400, "Paste a link to the chapter")
+        from openjarvis.audiobooks.additions import fetch_page
+
+        try:
+            return await asyncio.to_thread(fetch_page, url)
+        except Exception as exc:  # network, bot wall, Opera missing
+            raise HTTPException(400, f"Could not read that page: {exc}") from exc
 
     return router

@@ -7,7 +7,7 @@ import {
   shouldSavePosition,
   useBookPlayer,
 } from './book-player';
-import { clock, workerLine, type BookChapter } from './books';
+import { clock, paragraphAt, workerLine, type BookChapter } from './books';
 
 const ch = (index: number, state: BookChapter['state'], skip = false): BookChapter => ({
   index,
@@ -101,5 +101,22 @@ describe('playing the chapter already loaded', () => {
     expect(s.wanted).toBe(true);
     useBookPlayer.getState().play({ ...now, index: 2, label: 'Chapter 2' });
     expect(useBookPlayer.getState().duration).toBe(0); // a new chapter is measured afresh
+  });
+});
+
+describe('added chapters and follow-along (2026-10-14)', () => {
+  it('goes on in list order, so an added chapter 3 (index 9) comes after 2', () => {
+    const chapters = [ch(1, 'ready'), ch(2, 'ready'), ch(9, 'ready'), ch(3, 'ready')];
+    expect(nextReadyChapter(chapters, 2)?.index).toBe(9);
+    expect(nextReadyChapter(chapters, 9)?.index).toBe(3);
+  });
+
+  it('lights the last paragraph that has started', () => {
+    const starts: [number, number][] = [[0, 1.8], [1, 4.4], [3, 6.9]];
+    expect(paragraphAt(starts, 0.5)).toBeNull();
+    expect(paragraphAt(starts, 4.4)).toBe(1);
+    expect(paragraphAt(starts, 6)).toBe(1);
+    expect(paragraphAt(starts, 100)).toBe(3);
+    expect(paragraphAt(null, 5)).toBeNull();
   });
 });

@@ -241,12 +241,12 @@ class RenderQueue:
         """The chapters *job* wants rendered, in order."""
         if job["mode"] != "rolling":
             return list(job["chapters"])
-        after = [
-            c["index"]
-            for c in book["chapters"]
-            if not c["skip"] and c["index"] > job["position"]
-        ]
-        return after[: job["ahead"]]
+        # Reading order is the list's: an added chapter (additions.py) has a
+        # higher index than the ones around it.
+        order = [c["index"] for c in book["chapters"]]
+        at = order.index(job["position"]) + 1 if job["position"] in order else 0
+        skip = {c["index"] for c in book["chapters"] if c["skip"]}
+        return [i for i in order[at:] if i not in skip][: job["ahead"]]
 
     def is_rendered(self, job: Dict[str, Any], index: int) -> bool:
         return chapter_file(self.store, job["book"], job["voice"], index).is_file()

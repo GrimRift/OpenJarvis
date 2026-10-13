@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../lib/store';
 import {
+  chaptersAfter,
   nextReadyChapter,
   sageNeedsTheRoom,
   shouldSavePosition,
@@ -100,7 +101,7 @@ export function BookPlayerHost() {
         return;
       }
       // Not made yet: park "where you are" on it so rolling renders it next.
-      const after = book.chapters.find((c) => !c.skip && c.index > playing.index);
+      const after = chaptersAfter(book.chapters, playing.index)[0];
       if (after) await savePosition(playing.book, after.index, 0);
     } catch {
       /* the page shows the book's state on its next refresh */

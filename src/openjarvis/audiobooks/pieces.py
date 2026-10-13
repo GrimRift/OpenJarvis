@@ -47,6 +47,9 @@ class Item:
 
     text: Optional[str]
     gap: float  # silence after it, or the pause itself
+    #: The stored paragraph it comes from (``text.split("\n\n")``, empty
+    #: ones left out: the reader's numbering); -1 for the title.
+    para: int = -1
 
 
 def _clauses(text: str) -> List[str]:
@@ -83,6 +86,59 @@ def _hard_split(piece: str) -> List[str]:
     return out + ([piece] if piece else [])
 
 
+#: A written stutter: up to three letters, a hyphen, repeated, then the word
+#: they start ("J-just", "I-I-I", "Th-that"). "T-shirt", "x-ray", "A-list"
+#: never match: the letters must begin the word that follows.
+_STUTTER = re.compile(r"(?<![\w-])([A-Za-z]{1,3})(?:-\1)*-(\1[A-Za-z']*)\b(?!-)", re.I)
+_VOWELS = "aeiouAEIOU"
+#: Ranks written like a stutter ("C-class hunter", "S-rank").
+_RANKS = {"class", "rank", "grade", "tier", "level", "type"}
+#: Real prefixes written with a hyphen ("re-read", "co-owner"), not stutters.
+_PREFIXES = {
+    "re", "pre", "co", "de", "un", "non", "sub", "pro", "bi", "tri", "mid", "mis", "ex"
+}
+#: How a stutter's broken-off start is joined to the next try. Sample takes
+#: (user, 2026-10-14) picked this one: see spoken_stutters.
+STUTTER_JOIN = "-- "
+
+
+def _stutter_sound(word: str) -> str:
+    """The start a speaker breaks off on: consonants up to the first vowel
+    sound, and that vowel ("just" -> "ju", "that" -> "tha", "are" -> "a");
+    the whole word when that is all of it ("no", "I")."""
+    k = 0
+    while k < len(word) and word[k] not in _VOWELS and not (k and word[k] in "yY"):
+        k += 1
+    while k < len(word) and word[k] in _VOWELS:
+        k += 1
+    return word[: max(k, 1)]
+
+
+def _respell(m: "re.Match[str]") -> str:
+    whole, letters, word = m.group(0), m.group(1), m.group(2)
+    if letters.lower() in _PREFIXES or word.lower() in _RANKS:
+        return whole
+    if len(letters) > 1 and letters.lower() == word.lower():
+        return whole  # a doubled word or a laugh: "win-win", "Kuk-kuk-kuk"
+    tries = whole.count("-")
+    sound = _stutter_sound(word.lower())
+    if word.isupper() and len(word) > 1:  # shouted: "N-NO!"
+        sound = sound.upper()
+    if word == "I" or (len(word) == 1 and word.isupper()):
+        sound = word
+    capital = whole[0].isupper()
+    first = sound[0].upper() + sound[1:] if capital else sound
+    again = first if word[0].isupper() else sound  # a name keeps its capital
+    return STUTTER_JOIN.join([first] + [again] * (tries - 1) + [word])
+
+
+def spoken_stutters(text: str) -> str:
+    """Written stutters as something a voice says like one (user,
+    2026-10-14): read as written, "J-just" comes out as the letter "Jay"
+    and then "just". The reader still shows the book's own spelling."""
+    return _STUTTER.sub(_respell, text)
+
+
 def speakable(text: str) -> bool:
     return bool(re.search(r"[^\W_]", text))
 
@@ -116,19 +172,18 @@ def _paragraph_pieces(para: str) -> List[Tuple[str, str]]:
 def build(text: str, title: str) -> List[Item]:
     """The chapter as pieces and pauses; *title* is announced first."""
     items: List[Item] = [Item(title, GAPS["title"])] if title else []
-    for para in (p.strip() for p in text.split("\n\n")):
-        if not para:
-            continue
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    for n, para in enumerate(paragraphs):
         if para == SCENE_BREAK:
-            items.append(Item(None, GAPS["scene"]))
+            items.append(Item(None, GAPS["scene"], n))
             continue
         if not speakable(para):
-            items.append(Item(None, GAPS["beat"]))
+            items.append(Item(None, GAPS["beat"], n))
             continue
         pieces = _paragraph_pieces(para)
         for k, (piece, gap) in enumerate(pieces):
             last = k + 1 == len(pieces)
-            items.append(Item(piece, GAPS["paragraph"] if last else GAPS[gap]))
+            items.append(Item(piece, GAPS["paragraph"] if last else GAPS[gap], n))
     return _merge_short_paragraphs(items)
 
 
@@ -143,11 +198,11 @@ def _merge_short_paragraphs(items: List[Item]) -> List[Item]:
         if short:
             nxt = items[k + 1] if k + 1 < len(items) else None
             if nxt is not None and nxt.text is not None:
-                items[k + 1] = Item(f"{item.text} {nxt.text}", nxt.gap)
+                items[k + 1] = Item(f"{item.text} {nxt.text}", nxt.gap, item.para)
                 k += 1
                 continue
             if out and out[-1].text is not None:
-                out[-1] = Item(f"{out[-1].text} {item.text}", item.gap)
+                out[-1] = Item(f"{out[-1].text} {item.text}", item.gap, out[-1].para)
                 k += 1
                 continue
         out.append(item)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Loader2,
@@ -27,6 +27,7 @@ import {
   fetchBooks,
   importBook,
   queueRender,
+  redoChapter,
   sendToPhone,
   setBookVoice,
   updateQueue,
@@ -38,6 +39,9 @@ import {
 } from '../lib/books';
 import { useBookPlayer } from '../lib/book-player';
 import { ChapterReader } from '../components/Books/ChapterReader';
+import { ChapterFlags } from '../components/Books/ChapterFlags';
+import { AddChapters } from '../components/Books/AddChapters';
+import { Scrubber } from '../components/Books/Scrubber';
 
 /**
  * Books page (M42 step 5). Layout "M1", picked by the user from mockups on
@@ -49,7 +53,9 @@ import { ChapterReader } from '../components/Books/ChapterReader';
 
 const POLL_MS = 5000;
 const SPEEDS = [0.5, 2 / 3, 0.75, 1];
-const BREAKS = [0, 2, 5, 10];
+/** Minutes; 0.5 = 30 s (user, 2026-10-14: a shorter break for faster books). */
+const BREAKS = [0, 0.5, 2, 5, 10];
+const breakLabel = (m: number) => (m === 0 ? 'none' : m < 1 ? `${Math.round(m * 60)} s` : `${m} min`);
 
 const STATE_PILL: Record<string, { label: string; color: string; bg: string }> = {
   ready: { label: 'ready', color: 'var(--color-success)', bg: 'rgba(61,220,151,.1)' },
@@ -116,6 +122,7 @@ export function BooksPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -163,7 +170,7 @@ export function BooksPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
+    <div ref={scrollRef} className="h-full overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
       <div className="max-w-6xl mx-auto px-6 py-6 grid gap-6" style={{ gridTemplateColumns: 'minmax(180px, 230px) 1fr' }}>
         <aside>
           <div className="flex items-center mb-3">
@@ -213,7 +220,7 @@ export function BooksPage() {
             </div>
           )}
           {book ? (
-            <BookView book={book} voices={voices} busy={busy} act={act} />
+            <BookView book={book} voices={voices} busy={busy} act={act} scrollRef={scrollRef} />
           ) : (
             <div className="text-sm py-20 text-center" style={{ color: 'var(--color-text-tertiary)' }}>
               No books yet. Import a PDF or EPUB you own, or ask Sage: “make an audiobook of D:\Downloads\book.epub”.
@@ -230,11 +237,13 @@ function BookView({
   voices,
   busy,
   act,
+  scrollRef,
 }: {
   book: BookDetail;
   voices: LocalVoiceInfo[];
   busy: string | null;
   act: (what: string, fn: () => Promise<unknown>) => Promise<void>;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const player = useBookPlayer();
   const heroObserver = useRef<IntersectionObserver | null>(null);
@@ -242,7 +251,23 @@ function BookView({
   const [mode, setMode] = useState<'range' | 'ahead' | 'book'>('ahead');
   const [range, setRange] = useState('');
   const [ahead, setAhead] = useState(5);
-  const [reading, setReading] = useState<number | null>(null);
+  const [reading, setReadingState] = useState<number | null>(null);
+  const [flagsOpen, setFlagsOpen] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
+  // The page and the reader share one scroller: the book page gets its own
+  // place back when the reader closes (user, 2026-10-14), the reader opens
+  // at its top.
+  const pageScroll = useRef<number | null>(null);
+  const setReading = (index: number | null) => {
+    if (reading == null && index != null) pageScroll.current = scrollRef.current?.scrollTop ?? 0;
+    setReadingState(index);
+  };
+  useEffect(() => {
+    if (reading != null || pageScroll.current == null) return;
+    const top = pageScroll.current;
+    pageScroll.current = null;
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ top }));
+  }, [reading, scrollRef]);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendSpec, setSendSpec] = useState('');
   const [exported, setExported] = useState<string[] | null>(null);
@@ -319,14 +344,13 @@ function BookView({
       <ChapterReader
         bookId={book.id}
         bookTitle={book.title}
+        voice={book.voice}
         chapters={book.chapters}
         index={reading}
+        position={book.position}
+        positionSeconds={book.position_seconds}
         onIndex={setReading}
         onClose={() => setReading(null)}
-        onListen={(c) => {
-          setReading(null);
-          playChapter(c, c.index === book.position ? book.position_seconds : 0);
-        }}
       />
     );
   }
@@ -457,7 +481,7 @@ function BookView({
           Break
           <select className="px-2 py-1.5 rounded-lg" style={selectStyle} value={String(book.queue.break_minutes)} onChange={(e) => void act('break', () => updateQueue({ break_minutes: Number(e.target.value) }))}>
             {(BREAKS.includes(book.queue.break_minutes) ? BREAKS : [...BREAKS, book.queue.break_minutes]).map((m) => (
-              <option key={m} value={String(m)}>{m ? `${m} min` : 'none'}</option>
+              <option key={m} value={String(m)}>{breakLabel(m)}</option>
             ))}
           </select>
         </label>
@@ -528,7 +552,22 @@ function BookView({
               {' '}· numbers missing in the source: {book.missing_numbers.join(', ')}
             </span>
           )}
+          <button
+            className="ml-3 normal-case font-normal inline-flex items-center gap-1 cursor-pointer"
+            style={{ color: 'var(--color-accent)' }}
+            onClick={() => setAdding(!adding)}
+            title="Add chapters the source skipped or newer ones"
+          >
+            <Plus size={12} /> Add chapters
+          </button>
         </div>
+        {adding && (
+          <AddChapters
+            book={book}
+            onClose={() => setAdding(false)}
+            act={act}
+          />
+        )}
         <div className="grid text-[11.5px] px-2 py-1" style={{ gridTemplateColumns: '30px 30px 60px 1fr 80px 90px', color: 'var(--color-text-tertiary)' }}>
           <span /><span /><span>#</span><span>Title</span><span>Length</span><span>Status</span>
         </div>
@@ -536,8 +575,8 @@ function BookView({
           const isHere = c.index === (playingHere?.index ?? book.position);
           const live = c.state === 'rendering' && workingHere && w.pieces ? `${Math.round((100 * (w.piece ?? 0)) / w.pieces)}%` : null;
           return (
+            <Fragment key={c.index}>
             <div
-              key={c.index}
               className="grid items-center gap-2 px-2 py-1.5 rounded-lg text-[13px]"
               style={{
                 gridTemplateColumns: '30px 30px 60px 1fr 80px 90px',
@@ -567,13 +606,37 @@ function BookView({
               <span className="truncate">
                 {c.title !== c.label && !c.label.includes(c.title) ? `${c.label}: ${c.title}` : c.label}
                 {isHere && <span style={{ color: 'var(--color-text-tertiary)' }}> · you are here</span>}
-                {c.flags > 0 && <span style={{ color: 'var(--color-warning)' }} title="Lines the check could not fix"> · {c.flags} flagged</span>}
+                {c.flags > 0 && (
+                  <button
+                    className="cursor-pointer underline decoration-dotted underline-offset-2"
+                    style={{ color: 'var(--color-warning)' }}
+                    title="Show the lines the check could not fix"
+                    onClick={() => setFlagsOpen(flagsOpen === c.index ? null : c.index)}
+                  >
+                    {' '}· {c.flags} flagged
+                  </button>
+                )}
               </span>
               <span className="tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>
                 {live ?? (c.seconds != null ? clock(c.seconds) : c.skip ? '' : `~${clock(c.estimate_seconds)}`)}
               </span>
               <span><Pill state={c.state} /></span>
             </div>
+            {flagsOpen === c.index && c.flags > 0 && (
+              <ChapterFlags
+                bookId={book.id}
+                chapter={c}
+                onPlay={(at) => playChapter(c, at)}
+                onChanged={() => void act('flags', async () => {})}
+                onRedo={() =>
+                  void act('redo', async () => {
+                    await redoChapter(book.id, c.index);
+                    setFlagsOpen(null);
+                  })
+                }
+              />
+            )}
+            </Fragment>
           );
         })}
       </div>
@@ -587,7 +650,7 @@ function BookView({
           <div className="text-[12.5px] whitespace-nowrap" style={{ color: 'var(--color-text)' }}>
             <b>{playingHere.label}</b> <span style={{ color: 'var(--color-text-tertiary)' }}>· {book.title}</span>
           </div>
-          <div className="flex-1"><Scrubber pct={pct} disabled={!canSeek} onSeek={seekTo} /></div>
+          <div className="flex-1 flex items-center"><Scrubber className="w-full" pct={pct} disabled={!canSeek} onSeek={seekTo} /></div>
           <span className="text-[12px] tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>{clock(position)} / {clock(duration || null)}</span>
         </div>
       )}
@@ -628,23 +691,6 @@ function DeliveryLine({ delivery, chapters, exported }: { delivery: Delivery; ch
           {sendLine}
         </span>
       )}
-    </div>
-  );
-}
-
-function Scrubber({ pct, disabled, onSeek }: { pct: number; disabled: boolean; onSeek: (fraction: number) => void }) {
-  return (
-    <div
-      className="relative h-1.5 rounded-full mt-4 mb-1"
-      style={{ background: 'var(--color-bg-tertiary)', cursor: disabled ? 'default' : 'pointer' }}
-      onClick={(e) => {
-        if (disabled) return;
-        const r = e.currentTarget.getBoundingClientRect();
-        onSeek(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)));
-      }}
-    >
-      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${pct}%`, background: 'var(--color-accent)' }} />
-      <div className="absolute w-3.5 h-3.5 rounded-full -top-1" style={{ left: `calc(${pct}% - 7px)`, background: '#fff', opacity: disabled ? 0.5 : 1 }} />
     </div>
   );
 }

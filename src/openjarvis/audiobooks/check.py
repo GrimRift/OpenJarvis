@@ -40,9 +40,17 @@ def _words(text: str) -> List[str]:
 
 
 def _repeated_phrase(said: List[str], heard: List[str]) -> Optional[str]:
-    """A run of 1-4 words heard twice in a row that the text does not repeat."""
+    """A run of 1-4 words heard twice in a row that the text does not repeat.
+
+    A voice that repeats itself says more words than the line has; a line
+    that repeats on purpose ("Rustle, rustle.") heard as a name ("Russell,
+    Russell") does not, and was flagged on 10-13 (chapters 6, 9 and 11).
+    """
     said_text = " ".join(said)
+    extra = len(heard) - len(said)
     for n in range(4, 0, -1):
+        if extra < n:
+            continue
         for i in range(len(heard) - 2 * n + 1):
             phrase = heard[i : i + n]
             if phrase == heard[i + n : i + 2 * n]:

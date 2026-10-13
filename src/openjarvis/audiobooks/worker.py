@@ -202,8 +202,9 @@ class RenderWorker(threading.Thread):
         self._render(job, index, voice, where)
 
     def _resting(self, now: float) -> None:
-        left = round(max(0.0, self._break_until - now) / 60, 1)
-        self._set_status("resting", reason=f"break between chapters, {left} min left")
+        left = max(0.0, self._break_until - now)
+        when = f"{round(left)} s" if left < 90 else f"{round(left / 60, 1):g} min"
+        self._set_status("resting", reason=f"break between chapters, {when} left")
 
     def _may_go(
         self, job_id: str, where: Dict[str, Any], progress: Dict[str, int]

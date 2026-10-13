@@ -78,10 +78,16 @@ export function sageNeedsTheRoom(inputs: {
   );
 }
 
+/** The chapters after `index` in reading order (the list's: an added
+ * chapter has a higher index than the ones around it), skipped ones left out. */
+export function chaptersAfter(chapters: BookChapter[], index: number): BookChapter[] {
+  const at = chapters.findIndex((c) => c.index === index);
+  return chapters.slice(at + 1).filter((c) => !c.skip);
+}
+
 /** The chapter after `index` that can be played, or null at the end. */
 export function nextReadyChapter(chapters: BookChapter[], index: number): BookChapter | null {
-  const after = chapters.filter((c) => !c.skip && c.index > index);
-  const next = after[0];
+  const next = chaptersAfter(chapters, index)[0];
   return next && next.state === 'ready' ? next : null;
 }
 

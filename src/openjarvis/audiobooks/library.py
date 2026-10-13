@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from openjarvis.audiobooks import pieces as piece_rules
 from openjarvis.audiobooks.importer import import_book
 from openjarvis.audiobooks.queue import (
     RenderQueue,
@@ -30,6 +31,35 @@ SECONDS_PER_WORD = 60 / 153
 
 class BookNotFound(LookupError):
     pass
+
+
+def _items(chapter: Dict[str, Any], text: str) -> List[piece_rules.Item]:
+    return piece_rules.build(text, piece_rules.announcement(chapter))
+
+
+def estimate_piece_starts(
+    chapter: Dict[str, Any], text: str, seconds: float
+) -> List[float]:
+    """Each item's start second for a chapter rendered before timings were
+    kept: the pauses are known, and speech is shared out by length."""
+    items = _items(chapter, text)
+    gaps = sum(it.gap for it in items)
+    chars = sum(len(it.text) for it in items if it.text) or 1
+    rate = max(0.0, seconds - gaps) / chars
+    out, at = [], 0.0
+    for it in items:
+        out.append(round(at, 2))
+        at += (len(it.text) * rate if it.text else 0.0) + it.gap
+    return out
+
+
+def estimate_starts(
+    chapter: Dict[str, Any], text: str, seconds: float
+) -> List[List[float]]:
+    from openjarvis.audiobooks.render import paragraph_starts
+
+    items = _items(chapter, text)
+    return paragraph_starts(items, estimate_piece_starts(chapter, text, seconds))
 
 
 class Library:
@@ -189,13 +219,107 @@ class Library:
         if chapter is None:
             raise FileNotFoundError(f"No chapter #{index}")
         text = self.store.chapter_text(book_id, int(index))
+        voice = book_voice(book)
+        entry = self._rendered(book_id, voice).get(int(index))
+        starts, exact = None, False
+        if entry:
+            starts = entry.get("paragraphs") or None
+            exact = starts is not None
+            if starts is None and entry.get("seconds"):
+                starts = estimate_starts(chapter, text, entry["seconds"])
         return {
             "index": chapter["index"],
             "label": chapter["label"],
             "title": chapter["title"],
             "words": chapter["words"],
             "paragraphs": [p.strip() for p in text.split("\n\n") if p.strip()],
+            # [paragraph, second] for the reader's follow-along (user,
+            # 2026-10-14); estimated for chapters rendered before timings
+            # were kept.
+            "starts": starts,
+            "starts_exact": exact,
         }
+
+    # ------------------------------------------------------------ flags
+
+    def _status(self, book_id: str, voice: str) -> Tuple[Path, Dict[str, Any]]:
+        path = audio_dir(self.store, book_id, voice) / "status.json"
+        try:
+            return path, json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return path, {}
+
+    @staticmethod
+    def _write_status(path: Path, status: Dict[str, Any]) -> None:
+        tmp = path.with_suffix(".tmp")
+        blob = json.dumps(status, indent=1, ensure_ascii=False)
+        tmp.write_text(blob, encoding="utf-8")
+        tmp.replace(path)
+
+    def chapter_flags(self, book_id: str, index: int) -> List[Dict[str, Any]]:
+        """Lines the check could not get right in a chapter: ``piece``,
+        ``text`` (what the voice was given), ``why``, ``at`` (second)."""
+        book = self.store.load(book_id)
+        voice = book_voice(book)
+        _, status = self._status(book_id, voice)
+        entry = status.get(str(int(index))) or {}
+        flags = [dict(f) for f in entry.get("flags") or []]
+        if flags and any("at" not in f for f in flags) and entry.get("seconds"):
+            chapter = next(c for c in book["chapters"] if c["index"] == int(index))
+            times = estimate_piece_starts(
+                chapter, self.store.chapter_text(book_id, int(index)), entry["seconds"]
+            )
+            for f in flags:
+                if "at" not in f and 0 <= f["piece"] < len(times):
+                    f["at"] = times[f["piece"]]
+        return flags
+
+    def dismiss_flag(self, book_id: str, index: int, piece: int) -> int:
+        """The user listened and the line is fine: drop its flag (kept under
+        ``dismissed``). Returns how many flags the chapter still has."""
+        voice = book_voice(self.store.load(book_id))
+        path, status = self._status(book_id, voice)
+        entry = status.get(str(int(index)))
+        if not entry:
+            raise FileNotFoundError(f"Chapter {index} is not rendered")
+        keep = [f for f in entry.get("flags") or [] if f.get("piece") != int(piece)]
+        gone = [f for f in entry.get("flags") or [] if f.get("piece") == int(piece)]
+        entry["flags"] = keep
+        entry["dismissed"] = (entry.get("dismissed") or []) + gone
+        self._write_status(path, status)
+        return len(keep)
+
+    def redo_chapter(self, book_id: str, index: int) -> Dict[str, Any]:
+        """Render a chapter again (a flagged line, or new reading rules): the
+        old file is moved to ``replaced/``, not deleted, and the chapter is
+        queued at once."""
+        book = self.store.load(book_id)
+        voice = book_voice(book)
+        folder = audio_dir(self.store, book_id, voice)
+        path = folder / f"{int(index):04d}.m4a"
+        if path.is_file():
+            backup = folder / "replaced"
+            backup.mkdir(exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            path.replace(backup / f"{int(index):04d}-{stamp}.m4a")
+        status_path, status = self._status(book_id, voice)
+        if status.pop(str(int(index)), None) is not None:
+            self._write_status(status_path, status)
+        return self.queue.add(book_id, "range", chapters=[int(index)], voice=voice)
+
+    # ------------------------------------------------------------ adding chapters
+
+    def add_chapters_from_file(self, book_id: str, path: str | Path) -> Dict[str, Any]:
+        from openjarvis.audiobooks.additions import add_from_file
+
+        return add_from_file(book_id, path, self.store)
+
+    def add_chapter_text(
+        self, book_id: str, number: str, text: str, title: str = ""
+    ) -> Dict[str, Any]:
+        from openjarvis.audiobooks.additions import add_text
+
+        return add_text(book_id, number, text, title, self.store)
 
     def chapter_audio(
         self, book_id: str, index: int, voice: Optional[str] = None

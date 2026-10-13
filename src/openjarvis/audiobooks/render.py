@@ -69,6 +69,20 @@ class ChapterResult:
     gen_seconds: float
     retakes: int
     flags: List[Dict[str, Any]] = field(default_factory=list)
+    #: [paragraph, start second] for every paragraph that has sound or a
+    #: pause, in order: the reader lights up the one being read.
+    paragraphs: List[List[float]] = field(default_factory=list)
+
+
+def paragraph_starts(
+    items: List[piece_rules.Item], starts: List[float]
+) -> List[List[float]]:
+    """[paragraph, second it starts] from the items and their start times."""
+    out: List[List[float]] = []
+    for item, start in zip(items, starts):
+        if item.para >= 0 and (not out or out[-1][0] != item.para):
+            out.append([item.para, round(start, 2)])
+    return out
 
 
 def _write_wav(path: Path, audio: np.ndarray) -> None:
@@ -185,8 +199,10 @@ class ChapterRenderer:
         # dashes become commas, and stray markup or codes are not read out.
         items = []
         for it in piece_rules.build(text, piece_rules.announcement(chapter)):
-            spoken = to_spoken_text(it.text).strip() if it.text else ""
-            items.append(piece_rules.Item(spoken or None, it.gap))
+            spoken = ""
+            if it.text:
+                spoken = to_spoken_text(piece_rules.spoken_stutters(it.text)).strip()
+            items.append(piece_rules.Item(spoken or None, it.gap, it.para))
         folder = audio_dir(self.store, book_id, voice)
         work = folder / "work" / f"{index:04d}"
         plan = [it.text for it in items]
@@ -242,11 +258,18 @@ class ChapterRenderer:
         )
 
         joined: List[np.ndarray] = []
+        starts: List[float] = []
+        samples = 0
         for k, item in enumerate(items):
+            starts.append(samples / SAMPLE_RATE)
             if item.text is not None:
                 joined.append(_read_wav(work / f"p{k:04d}.wav"))
+                samples += len(joined[-1])
             joined.append(np.zeros(int(SAMPLE_RATE * item.gap), np.float32))
+            samples += len(joined[-1])
         audio = np.concatenate(joined) if joined else np.zeros(0, np.float32)
+        for flag in flags:
+            flag["at"] = round(starts[flag["piece"]], 2)
         out = folder / f"{index:04d}.m4a"
         with tempfile.TemporaryDirectory() as tmp:
             wav = Path(tmp) / "chapter.wav"
@@ -271,6 +294,7 @@ class ChapterRenderer:
             gen_seconds=round(gen_total, 1),
             retakes=retakes,
             flags=flags,
+            paragraphs=paragraph_starts(items, starts),
         )
         self._record(folder, result)
         shutil.rmtree(work, ignore_errors=True)
@@ -355,6 +379,7 @@ class ChapterRenderer:
             else None,
             "retakes": result.retakes,
             "flags": result.flags,
+            "paragraphs": result.paragraphs,
             "rendered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         tmp = path.with_suffix(".tmp")

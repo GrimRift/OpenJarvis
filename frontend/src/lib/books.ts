@@ -205,11 +205,86 @@ export interface ChapterText {
   title: string;
   words: number;
   paragraphs: string[];
+  /** [paragraph, second it starts] in the narrated chapter; null when not made. */
+  starts: [number, number][] | null;
+  starts_exact: boolean;
 }
 
 /** A chapter's text, to read on the page without a narrator. */
 export async function fetchChapterText(id: string, index: number): Promise<ChapterText> {
   return json(await apiFetch(`/v1/books/${enc(id)}/chapters/${index}/text`), 'Loading the chapter');
+}
+
+/** The paragraph being read at `seconds`: the last one started by then. */
+export function paragraphAt(starts: [number, number][] | null, seconds: number): number | null {
+  if (!starts?.length) return null;
+  let found: number | null = null;
+  for (const [para, at] of starts) {
+    if (at > seconds + 0.05) break;
+    found = para;
+  }
+  return found;
+}
+
+/** A line the narration check could not get right (2026-10-14: shown, playable, dismissable). */
+export interface ChapterFlag {
+  piece: number;
+  text: string;
+  why: string[];
+  at?: number;
+}
+
+export async function fetchFlags(id: string, index: number): Promise<ChapterFlag[]> {
+  const r = await json<{ flags: ChapterFlag[] }>(
+    await apiFetch(`/v1/books/${enc(id)}/chapters/${index}/flags`),
+    'Loading the flagged lines',
+  );
+  return r.flags;
+}
+
+export async function dismissFlag(id: string, index: number, piece: number): Promise<void> {
+  await json(
+    await apiFetch(`/v1/books/${enc(id)}/chapters/${index}/flags/${piece}`, { method: 'DELETE' }),
+    'Dismissing',
+  );
+}
+
+export async function redoChapter(id: string, index: number): Promise<void> {
+  await json(await apiFetch(`/v1/books/${enc(id)}/chapters/${index}/redo`, { method: 'POST' }), 'Redo');
+}
+
+/** Adding chapters the source skipped or that came out later (2026-10-14). */
+export async function addChaptersFromFile(
+  id: string,
+  file: File,
+): Promise<{ added: string[]; already: number; unnumbered: number }> {
+  const form = new FormData();
+  form.append('file', file);
+  return json(await apiFetch(`/v1/books/${enc(id)}/chapters/from-file`, { method: 'POST', body: form }), 'Adding chapters');
+}
+
+export async function addChapterText(
+  id: string,
+  chapter: { number: string; title: string; text: string },
+): Promise<{ added: { label: string } }> {
+  const res = await apiFetch(`/v1/books/${enc(id)}/chapters`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chapter),
+  });
+  return json(res, 'Adding the chapter');
+}
+
+export async function fetchChapterPage(
+  id: string,
+  url: string,
+): Promise<{ url: string; title: string; number: string; text: string }> {
+  const res = await apiFetch(`/v1/books/${enc(id)}/chapters/fetch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  return json(res, 'Reading the page');
 }
 
 /** M42 step 4: getting the book off the PC (M4B parts, OneDrive, Telegram). */
