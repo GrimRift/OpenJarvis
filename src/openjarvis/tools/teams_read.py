@@ -34,6 +34,7 @@ from openjarvis.tools.opera_control import (
     ensure_opera,
     load_timeout,
     opera_session,
+    recover_frozen_opera,
 )
 
 TEAMS_URL = "https://teams.microsoft.com/v2/"
@@ -412,6 +413,7 @@ class TeamsReadTool(BaseTool):
             except Exception as error:
                 if attempt:
                     return self._fail(f"could not read Teams: {error}")
+                recover_frozen_opera()
                 continue
             got.update({k: v for k, v in read.items() if v is not None})
 

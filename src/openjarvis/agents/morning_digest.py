@@ -227,6 +227,14 @@ class MorningDigestAgent(ToolUsingAgent):
                 continue
             if result is not None and result.success and (result.content or "").strip():
                 gathered.append((label, result))
+            elif result is not None and not result.success:
+                # Warning, not info: info never reaches the log file, and the
+                # 13 October brief's "Outlook failed to load" left no reason.
+                logger.warning(
+                    "%s failed for the digest: %s",
+                    tool_name,
+                    (result.content or "")[:300],
+                )
             else:
                 logger.info(
                     "%s returned nothing for the digest: %s",

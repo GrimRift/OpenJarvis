@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 import threading
@@ -55,6 +56,8 @@ from openjarvis.core.types import ToolResult
 from openjarvis.security import page_access
 from openjarvis.tools import youtube_pick
 from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+logger = logging.getLogger(__name__)
 
 DEBUG_PORT = int(os.environ.get("OPENJARVIS_OPERA_CDP_PORT", "9222"))
 
@@ -174,7 +177,10 @@ def ensure_opera(minimized: bool = False) -> Optional[str]:
     with _LAUNCH_LOCK:
         if port_is_open():
             return None
-        if _opera_running():
+        # A frozen Opera refuses the port too, and used to be reported as
+        # "open without the setting" -- the user's choice (13 October) is that
+        # Sage restarts it rather than asking.
+        if _opera_running() and not _close_frozen_opera():
             return (
                 "Opera GX is open, but without the setting that lets me control it. "
                 "Close Opera completely (check the tray) and ask again: I will start "
@@ -207,6 +213,79 @@ def ensure_opera(minimized: bool = False) -> Optional[str]:
 
 
 _LAUNCH_LOCK = threading.Lock()
+
+#: How long Opera's processes get to exit after being killed.
+_EXIT_WAIT_SECONDS = 10.0
+
+
+def _opera_windows_hung() -> bool:
+    """Whether Opera has windows and every one has stopped answering Windows.
+
+    ``IsHungAppWindow`` is what Task Manager's "Not responding" reads: no
+    message handled for five seconds. One busy window is not enough -- a
+    heavy page can stall its own window while the browser is fine.
+    """
+    try:
+        import ctypes
+
+        from openjarvis.tools.reading_focus import _opera_windows
+
+        handles = list(_opera_windows())
+        if not handles:
+            return False
+        hung = ctypes.windll.user32.IsHungAppWindow
+        return all(hung(handle) for handle in handles)
+    except Exception:
+        return False
+
+
+def opera_frozen() -> bool:
+    """Whether Opera is running but frozen: windows hung AND the port dead.
+
+    Both, because killing Opera closes every tab the user has: on 13 October
+    it hung with its windows "Not responding", CPU time standing still and
+    the control port refusing connections, so every Outlook and Teams read
+    failed until it was restarted. A merely slow Opera answers one of them.
+    """
+    if not _opera_running() or not _opera_windows_hung():
+        return False
+    return not port_is_open(timeout=3.0)
+
+
+def _close_frozen_opera() -> bool:
+    """Kill Opera if it is frozen. True when it was, and is now gone."""
+    if not opera_frozen():
+        return False
+    import time
+
+    import psutil
+
+    logger.warning("Opera GX is frozen (not responding, port dead); restarting it")
+    victims = [
+        p
+        for p in psutil.process_iter(["name"])
+        if (p.info.get("name") or "").lower() == "opera.exe"
+    ]
+    for process in victims:
+        with contextlib.suppress(Exception):
+            process.kill()
+    psutil.wait_procs(victims, timeout=_EXIT_WAIT_SECONDS)
+    until = time.monotonic() + _EXIT_WAIT_SECONDS
+    while _opera_running() and time.monotonic() < until:
+        time.sleep(0.25)
+    return not _opera_running()
+
+
+def recover_frozen_opera(minimized: bool = True) -> bool:
+    """After a failed read: restart Opera if it froze. True when it is back.
+
+    A read can hang mid-way with the port still accepting -- the 13 October
+    probe sat 51 s in one ``Runtime.evaluate`` -- so the readers ask this
+    before giving up, then try once more.
+    """
+    if not _close_frozen_opera():
+        return False
+    return ensure_opera(minimized=minimized) is None
 
 
 def _first_window_ready() -> bool:
@@ -1734,6 +1813,18 @@ class OutlookReadTool(_OperaTool):
             timeout_seconds=READER_TIMEOUT_SECONDS,
         )
 
+    def _read_inbox(self, url: str, count: int):
+        """The inbox's tab groups, or None when the list never rendered."""
+        with opera_session(transient=True) as session:
+            page = session.page
+            page.navigate(url, timeout=load_timeout(_NAV_TIMEOUT))
+            if not page.wait_for(
+                "document.querySelector(\"div[role='option']\")",
+                timeout=load_timeout(_NAV_TIMEOUT),
+            ):
+                return None
+            return _read_inbox_tabs(page, count)
+
     def execute(self, **params: Any) -> ToolResult:
         blocked = self._guard(minimized=True)
         if blocked:
@@ -1743,21 +1834,19 @@ class OutlookReadTool(_OperaTool):
         except (TypeError, ValueError):
             count = 10
         url = str(params.get("url") or "").strip() or DEFAULT_OUTLOOK_URL
-        try:
-            with opera_session(transient=True) as session:
-                page = session.page
-                page.navigate(url, timeout=load_timeout(_NAV_TIMEOUT))
-                if not page.wait_for(
-                    "document.querySelector(\"div[role='option']\")",
-                    timeout=load_timeout(_NAV_TIMEOUT),
-                ):
-                    return self._fail(
-                        "The inbox did not load. If Outlook is asking for a "
-                        "login, sign in inside Opera GX once and try again."
-                    )
-                groups = _read_inbox_tabs(page, count)
-        except Exception as error:
-            return self._fail(f"could not read the inbox: {error}")
+        groups = None
+        for attempt in range(2):
+            try:
+                groups = self._read_inbox(url, count)
+                break
+            except Exception as error:
+                if attempt or not recover_frozen_opera():
+                    return self._fail(f"could not read the inbox: {error}")
+        if groups is None:
+            return self._fail(
+                "The inbox did not load. If Outlook is asking for a "
+                "login, sign in inside Opera GX once and try again."
+            )
 
         total = sum(len(messages) for _, messages, _ in groups)
         if not total:
