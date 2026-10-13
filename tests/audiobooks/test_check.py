@@ -50,7 +50,8 @@ def test_a_line_said_twice_is_flagged(said, heard):
     ],
 )
 def test_a_name_spelled_out_is_flagged(said, heard):
-    assert any(r.startswith("spelled out") for r in judge(said, heard, _secs(said), RATE))
+    reasons = judge(said, heard, _secs(said), RATE)
+    assert any(r.startswith("spelled out") for r in reasons)
 
 
 @pytest.mark.parametrize(
@@ -63,7 +64,8 @@ def test_a_name_spelled_out_is_flagged(said, heard):
     ],
 )
 def test_letters_that_spell_nothing_in_the_text_pass(said, heard):
-    assert not any(r.startswith("spelled out") for r in judge(said, heard, _secs(said), RATE))
+    reasons = judge(said, heard, _secs(said), RATE)
+    assert not any(r.startswith("spelled out") for r in reasons)
 
 
 def test_near_silent_and_runaway_pieces_are_flagged_by_length():
