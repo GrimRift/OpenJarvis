@@ -20,6 +20,7 @@ import { imageFromToolCall, imageToolPhase } from '../../lib/generated-image';
 import { useImagePresenter } from '../../lib/image-presenter';
 import { useWeatherPresenter } from '../../lib/weather-presenter';
 import { weatherFromToolCall } from '../../lib/weather-report';
+import { applyPlayCommand, playCommandFromToolCall } from '../../lib/book-player';
 import { useSystemPresenter } from '../../lib/system-presenter';
 import { systemFromToolCall } from '../../lib/system-report';
 import {
@@ -1346,6 +1347,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                   .showNew(made, useAppStore.getState().settings.imagesOpenAutomatically);
               }
               // M41: same route for the weather panel, so it opens on Voice too.
+              // M42: "read me chapter 4" plays in the app's book player, from any page.
+              const playCommand = playCommandFromToolCall(tc);
+              if (playCommand) applyPlayCommand(playCommand);
               const forecast = weatherFromToolCall(tc);
               if (forecast) {
                 useWeatherPresenter

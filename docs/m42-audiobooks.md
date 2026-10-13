@@ -1,4 +1,4 @@
-# M42 — Audiobooks (scoped 2026-10-13; steps 1-3 built 2026-10-13: import, benchmark, render queue)
+# M42 — Audiobooks (scoped 2026-10-13; steps 1-3 and 5 built 2026-10-13)
 
 Sage turns a book the user owns (PDF or EPUB) into an audiobook in one of Sage's
 voices, for personal listening on the PC and the phone. Scoped with the user
@@ -359,6 +359,57 @@ in 59 s, 0 flags. **Chapter 1: 321 pieces, 22.5 min audio, RTF 0.238, 388 s
 wall incl. start-up (step 2's render alone: 309 s), 2 retakes, 0 flags left;
 11.0 MB, -16.4 LUFS.** Whole book: ~22-24 h of idle time.
 
+## Step 5: Books page + chat tools (built 2026-10-13 evening)
+
+**User decisions:** layout "M1" -- a mix of mockups B (list + detail) and C
+(now listening), picked from `C:\AI\Sage-Staging-Tools\mockups\m42-books\`
+(`books-page-variants.html`, `books-page-mix.html`): book list left; the open
+book starts with a big now-listening player (cover, chapter, scrubber,
+prev/-15 s/play/+15 s/next), then the worker status, one control strip
+(narrator, render mode: keep N ahead / chapters / whole book, Queue, Pause
+all, speed, break; Export M4B / Send to phone greyed until step 4), job chips
+with cancel, the chapter table (play, read, #, title, length or live %,
+state); a mini player sticks to the bottom once the big one scrolls away.
+Playing **follows "where you are" automatically** (saved every 15 s and on
+pause; rolling jobs render ahead of it; at the end of a chapter the next
+made one plays, else the position parks on the next chapter). **Read a
+chapter yourself** (user asked mid-build): every chapter, made or not, opens
+in a reader (same cleaned text, scene breaks drawn, Notes heading,
+prev/next, text size kept per viewer); reading does not move "where you
+are". Chat tools: render / pause / status, play on the PC, import a file,
+export/send once step 4 lands.
+
+**Backend:** `audiobooks/library.py` = the one layer the page and the tools
+share (find a book by title piece, summaries, detail with per-chapter state
+ready/rendering/queued/skipped/not made from files + queue + worker status,
+render, set voice, set position, chapter text, spoken `describe`).
+`server/book_routes.py` (`/v1/books`, API-key guarded): list, `import`
+(multipart PDF/EPUB, kept in `<data>ooks\_sources\`), `queue` GET/PUT
+(paused, speed, break_minutes), `queue/jobs/{id}` DELETE, `{id}`,
+`{id}/cover`, `{id}/chapters/{n}/text`, `{id}/chapters/{n}/audio`
+(FileResponse, Range for seeking), `{id}/voice`, `{id}/render` (chapters /
+ahead / whole), `{id}/position`. Re-import keeps `voice` and the position.
+
+**Chat tools** (`tools/audiobook_tool.py`, local-access in the data-boundary
+audit; enabled by adding them to `[agent] tools` in the live config.toml):
+`audiobook_status`, `audiobook_render` (chapters / ahead / voice by name or
+label), `audiobook_pause` (pause / resume / cancel RENDERING),
+`audiobook_import` (PDF/EPUB from OPENJARVIS_FILE_READ_DIRS, Downloads,
+Documents, Desktop, OneDrive, D:\Downloads only), `audiobook_play`
+(play / pause / resume LISTENING; chapter number, 'continue', 'next'):
+returns `metadata.audiobook_play`, which InputArea hands to the book player
+on tool_call_end (the route pictures and the weather panel take, so it
+works from the Voice page too).
+
+**Frontend:** `pages/BooksPage.tsx`, `components/Books/BookPlayerHost.tsx`
+(the one `<audio>`, mounted in App so a chapter keeps playing across pages;
+audio and covers fetched with the key as blob URLs; volume =
+`volumeFor('chat')`, Sage's voice volume -- architecture invariant), 
+`components/Books/ChapterReader.tsx`, `lib/books.ts`, `lib/book-player.ts`
+(store + pure decisions, tested). **The player steps aside** while Sage
+listens, writes or speaks (voiceState / reply audio / server voice /
+streaming) and comes back 1.5 s after, unless the user paused it.
+
 ## Suggested build order
 
 1. ~~Import~~ DONE 2026-10-13 (above).
@@ -366,5 +417,5 @@ wall incl. start-up (step 2's render alone: 309 s), 2 retakes, 0 flags left;
    over the 2-voice pick): see "Step 2 result" above.
 3. ~~Render queue~~ DONE 2026-10-13 (above).
 4. Export: M4B parts with chapters + OneDrive copy; Telegram send.
-5. Books page + chat tools.
+5. ~~Books page + chat tools~~ DONE 2026-10-13 (above).
 6. Narrator cloning flow for new voices.

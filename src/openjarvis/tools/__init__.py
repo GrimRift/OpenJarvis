@@ -141,6 +141,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.audiobook_tool  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.audio_tool  # noqa: F401
 except ImportError:
     pass

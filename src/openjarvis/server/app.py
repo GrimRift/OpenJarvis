@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from openjarvis.server.analytics_routes import router as analytics_router
 from openjarvis.server.api_routes import include_all_routes
+from openjarvis.server.book_routes import create_book_router
 from openjarvis.server.comparison import comparison_router
 from openjarvis.server.connectors_router import create_connectors_router
 from openjarvis.server.dashboard import dashboard_router
@@ -429,6 +430,7 @@ def create_app(
     app.include_router(create_connectors_router())
     app.include_router(create_digest_router())
     app.include_router(create_image_router())
+    app.include_router(create_book_router())
     app.include_router(create_weather_router())
     app.include_router(create_system_router())
     app.include_router(drive_router)

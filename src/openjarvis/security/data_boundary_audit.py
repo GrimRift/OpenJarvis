@@ -270,6 +270,13 @@ LOCAL_ACCESS_TOOLS = {
     "close_media",
     # Pauses / resumes media through Windows' media controls; sends nothing.
     "media_pause",
+    # M42: read and change the local book store and render queue; playing is
+    # in the app. A spoken import reads a PDF/EPUB from the user's folders.
+    "audiobook_status",
+    "audiobook_render",
+    "audiobook_pause",
+    "audiobook_import",
+    "audiobook_play",
     # Reads the user's class schedule from a local file; no egress of its own.
     "check_class_schedule",
     # Reads file *names* across every fixed drive — no contents, but the paths

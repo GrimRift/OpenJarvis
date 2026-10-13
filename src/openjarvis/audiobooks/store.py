@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openjarvis.core.paths import get_data_dir
 
 #: book.json fields the user sets, carried over when a book is re-imported.
-KEPT_ON_REIMPORT = ("voice",)
+KEPT_ON_REIMPORT = ("voice", "position", "position_seconds", "position_at")
 
 
 class BookStore:

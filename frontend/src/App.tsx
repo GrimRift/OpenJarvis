@@ -6,6 +6,7 @@ import { VoicePage } from './pages/VoicePage';
 import { DashboardPage } from './pages/DashboardPage';
 import { HealthPage } from './pages/HealthPage';
 import { MemoryPage } from './pages/MemoryPage';
+import { BooksPage } from './pages/BooksPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { DataSourcesPage } from './pages/DataSourcesPage';
@@ -23,6 +24,7 @@ import { DiagramLayer } from './components/Diagram/DiagramLayer';
 import { ImageLayer } from './components/Image/ImageLayer';
 import { PhotoViewer } from './components/Image/PhotoViewer';
 import { WeatherLayer } from './components/Weather/WeatherLayer';
+import { BookPlayerHost } from './components/Books/BookPlayerHost';
 import { SystemLayer } from './components/System/SystemLayer';
 import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
@@ -221,6 +223,7 @@ export default function App() {
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="system-health" element={<HealthPage />} />
           <Route path="memory" element={<MemoryPage />} />
+          <Route path="books" element={<BooksPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="data-sources" element={<DataSourcesPage />} />
           <Route path="agents" element={<AgentsPage />} />
@@ -232,6 +235,7 @@ export default function App() {
       <ImageLayer />
       <PhotoViewer />
       <WeatherLayer />
+      <BookPlayerHost />
       <SystemLayer />
       {commandPaletteOpen && <CommandPalette />}
     </>
