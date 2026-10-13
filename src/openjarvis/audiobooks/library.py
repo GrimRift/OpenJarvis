@@ -43,14 +43,159 @@ def estimate_piece_starts(
     """Each item's start second for a chapter rendered before timings were
     kept: the pauses are known, and speech is shared out by length."""
     items = _items(chapter, text)
+    spoken = [it for it in items if it.text]
     gaps = sum(it.gap for it in items)
-    chars = sum(len(it.text) for it in items if it.text) or 1
-    rate = max(0.0, seconds - gaps) / chars
+    chars = sum(len(it.text) for it in spoken) or 1
+    # Each piece has a fixed lead-in and tail besides its words: without it
+    # short lines ("Hmm.") came out too short and the lit line ran seconds
+    # ahead of the voice (chapter 4, 2026-10-14).
+    overhead = min(PIECE_OVERHEAD, 0.5 * max(0.0, seconds - gaps) / max(len(spoken), 1))
+    rate = max(0.0, seconds - gaps - overhead * len(spoken)) / chars
     out, at = [], 0.0
     for it in items:
         out.append(round(at, 2))
-        at += (len(it.text) * rate if it.text else 0.0) + it.gap
+        at += (len(it.text) * rate + overhead if it.text else 0.0) + it.gap
     return out
+
+
+#: Seconds of every spoken piece that do not grow with its length (fitted to
+#: Whisper word times of chapter 4).
+PIECE_OVERHEAD = 1.0
+#: A pause at least this long in the audio can be a paragraph break: the
+#: renderer leaves 0.6 s after a paragraph (heard as ~1 s), 0.3 s after a sentence.
+PAUSE_SECONDS = 0.75
+
+
+def pauses_in(path: Path, frame: float = 0.02) -> List[Tuple[float, float]]:
+    """(start, end) seconds of the quiet stretches in an audio file."""
+    import shutil
+    import subprocess
+
+    import numpy as np
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return []
+    raw = subprocess.run(
+        [ffmpeg, "-v", "error", "-i", str(path)]
+        + ["-ac", "1", "-ar", "8000", "-f", "f32le", "-"],
+        capture_output=True,
+        check=False,
+    ).stdout
+    audio = np.frombuffer(raw, dtype="<f4")
+    if not len(audio):
+        return []
+    n = int(8000 * frame)
+    frames = audio[: len(audio) // n * n].reshape(-1, n)
+    level = np.sqrt((frames**2).mean(axis=1))
+    quiet = level < max(0.004, 0.06 * float(np.percentile(level, 90)))
+    out, start = [], None
+    for k, q in enumerate(np.append(quiet, False)):
+        if q and start is None:
+            start = k
+        elif not q and start is not None:
+            if (k - start) * frame >= PAUSE_SECONDS:
+                out.append((start * frame, k * frame))
+            start = None
+    return out
+
+
+#: Silence a piece carries at its ends besides the gap after it (measured
+#: on chapter 4: paragraph gaps of 0.6 s come out as ~0.95-1.2 s pauses).
+EDGE_SILENCE = 0.4
+
+
+def align_to_pauses(
+    chapter: Dict[str, Any], text: str, seconds: float, path: Path
+) -> Optional[List[List[float]]]:
+    """[paragraph, start] for a chapter rendered before exact timings were
+    kept, from the pauses in its audio (user, 2026-10-14: the lit line ran
+    seconds ahead of the voice).
+
+    Each paragraph break is a long pause whose length is known in advance
+    (a paragraph gap, a "..." beat, a scene break). One alignment over the
+    whole chapter matches the breaks, in order, to the real pauses by
+    length first and estimated time second, so a drifting estimate cannot
+    pull a start onto the wrong pause. None when the audio cannot be read."""
+    items = _items(chapter, text)
+    pauses = [p for p in pauses_in(path) if p[1] - p[0] >= PAUSE_SECONDS]
+    if not pauses:
+        return None
+    times = estimate_piece_starts(chapter, text, seconds)
+    # The paragraph starts, each with the silence expected before it.
+    want: List[Tuple[int, float, float]] = []  # (para, estimate, pause)
+    before = 0.0
+    for it, at in zip(items, times):
+        if it.text is None:
+            before += it.gap
+            continue
+        if it.para >= 0 and (not want or want[-1][0] != it.para) and before > 0:
+            want.append((it.para, at, before))
+        before = it.gap
+    n, m = len(want), len(pauses)
+    inf = float("inf")
+    skip_start, skip_pause = 2.0, 1.2
+    cost = [[inf] * (m + 1) for _ in range(n + 1)]
+    move = [[0] * (m + 1) for _ in range(n + 1)]
+    cost[0][0] = 0.0
+    for j in range(1, m + 1):
+        cost[0][j] = cost[0][j - 1] + skip_pause
+        move[0][j] = 2
+    for i in range(1, n + 1):
+        para, at, gap = want[i - 1]
+        cost[i][0] = cost[i - 1][0] + skip_start
+        move[i][0] = 1
+        for j in range(1, m + 1):
+            start, end = pauses[j - 1]
+            best, how = cost[i][j - 1] + skip_pause, 2
+            if cost[i - 1][j] + skip_start < best:
+                best, how = cost[i - 1][j] + skip_start, 1
+            off = abs(end - at)
+            if off <= 40:
+                fit = 2.0 * abs((end - start) - (gap + EDGE_SILENCE))
+                if i > 1 and j > 1 and move[i - 1][j - 1] == 0:
+                    # Following on from a match: the spacing to it should be
+                    # what the text predicts (a steady drift cancels out).
+                    step = (end - pauses[j - 2][1]) - (at - want[i - 2][1])
+                    fit += 0.5 * abs(step)
+                else:
+                    fit += 0.08 * off
+                if cost[i - 1][j - 1] + fit < best:
+                    best, how = cost[i - 1][j - 1] + fit, 0
+            cost[i][j], move[i][j] = best, how
+    found: Dict[int, float] = {}
+    i, j = n, m
+    while i > 0 or j > 0:
+        how = move[i][j]
+        if how == 0:
+            found[want[i - 1][0]] = pauses[j - 1][1]
+            i, j = i - 1, j - 1
+        elif how == 1:
+            i -= 1
+        else:
+            j -= 1
+    # Every paragraph start: the matched pause, else its estimate moved by
+    # the drift of the last matched one.
+    out: List[List[float]] = []
+    drift = 0.0
+    for para, at in paragraph_starts_estimate(items, times):
+        if para in found:
+            drift = found[para] - at
+            start = found[para]
+        else:
+            start = at + drift
+        if out and start <= out[-1][1]:
+            start = out[-1][1] + 0.01
+        out.append([para, round(start, 2)])
+    return out
+
+
+def paragraph_starts_estimate(
+    items: List[piece_rules.Item], times: List[float]
+) -> List[List[float]]:
+    from openjarvis.audiobooks.render import paragraph_starts
+
+    return paragraph_starts(items, times)
 
 
 def estimate_starts(
@@ -219,14 +364,7 @@ class Library:
         if chapter is None:
             raise FileNotFoundError(f"No chapter #{index}")
         text = self.store.chapter_text(book_id, int(index))
-        voice = book_voice(book)
-        entry = self._rendered(book_id, voice).get(int(index))
-        starts, exact = None, False
-        if entry:
-            starts = entry.get("paragraphs") or None
-            exact = starts is not None
-            if starts is None and entry.get("seconds"):
-                starts = estimate_starts(chapter, text, entry["seconds"])
+        starts, exact = self._starts(book, chapter, text)
         return {
             "index": chapter["index"],
             "label": chapter["label"],
@@ -256,6 +394,41 @@ class Library:
         tmp.write_text(blob, encoding="utf-8")
         tmp.replace(path)
 
+    def _starts(
+        self, book: Dict[str, Any], chapter: Dict[str, Any], text: str
+    ) -> Tuple[Optional[List[List[float]]], bool]:
+        """([paragraph, second], exact) for a rendered chapter, else (None,
+        False). Exact when the render recorded them; for older chapters,
+        aligned to the pauses in the audio once and kept."""
+        voice = book_voice(book)
+        entry = self._rendered(book["id"], voice).get(chapter["index"])
+        if not entry:
+            return None, False
+        if entry.get("paragraphs"):
+            return entry["paragraphs"], True
+        if not entry.get("seconds"):
+            return None, False
+        if entry.get("paragraphs_aligned"):
+            return entry["paragraphs_aligned"], False
+        path = audio_dir(self.store, book["id"], voice) / entry["file"]
+        starts = align_to_pauses(chapter, text, entry["seconds"], path)
+        if starts is None:
+            return estimate_starts(chapter, text, entry["seconds"]), False
+        self._save_aligned(book["id"], voice, chapter["index"], starts)
+        return starts, False
+
+    def _save_aligned(
+        self, book_id: str, voice: str, index: int, starts: List[List[float]]
+    ) -> None:
+        """Keep an older chapter's aligned timings: decoding it is ~1 s."""
+        try:
+            path, status = self._status(book_id, voice)
+            if str(index) in status:
+                status[str(index)]["paragraphs_aligned"] = starts
+                self._write_status(path, status)
+        except OSError:
+            pass  # computed again next time
+
     def chapter_flags(self, book_id: str, index: int) -> List[Dict[str, Any]]:
         """Lines the check could not get right in a chapter: ``piece``,
         ``text`` (what the voice was given), ``why``, ``at`` (second)."""
@@ -265,13 +438,26 @@ class Library:
         entry = status.get(str(int(index))) or {}
         flags = [dict(f) for f in entry.get("flags") or []]
         if flags and any("at" not in f for f in flags) and entry.get("seconds"):
+            # Older chapter: the line's paragraph start (aligned to the audio)
+            # plus how far into the paragraph the line is by estimate.
             chapter = next(c for c in book["chapters"] if c["index"] == int(index))
-            times = estimate_piece_starts(
-                chapter, self.store.chapter_text(book_id, int(index)), entry["seconds"]
-            )
+            text = self.store.chapter_text(book_id, int(index))
+            items = _items(chapter, text)
+            times = estimate_piece_starts(chapter, text, entry["seconds"])
+            starts, _ = self._starts(book, chapter, text)
+            para_at = {p: t for p, t in starts or []}
+            first: Dict[int, float] = {}
+            for it, t in zip(items, times):
+                first.setdefault(it.para, t)
             for f in flags:
-                if "at" not in f and 0 <= f["piece"] < len(times):
-                    f["at"] = times[f["piece"]]
+                k = f["piece"]
+                if "at" in f or not 0 <= k < len(items):
+                    continue
+                para = items[k].para
+                if para in para_at:
+                    f["at"] = round(para_at[para] + times[k] - first[para], 2)
+                else:
+                    f["at"] = times[k]
         return flags
 
     def dismiss_flag(self, book_id: str, index: int, piece: int) -> int:

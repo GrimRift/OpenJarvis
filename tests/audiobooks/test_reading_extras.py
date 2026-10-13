@@ -4,6 +4,7 @@ flags the user can see and dismiss, and chapters added after import."""
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 from fastapi import FastAPI
@@ -27,12 +28,16 @@ BODY = "<p>" + "The mill wheel turned slowly in the stream all day. " * 8 + "</p
 @pytest.mark.parametrize(
     "written, spoken",
     [
+        # The user's picks from sample takes, 2026-10-14:
         ('"J-just now..."', '"Ja-just now..."'),
-        ("W-what?", "Wha-what?"),
-        ("B-but", "Ba-but"),
+        ("Th-that's not", "Tha-that's not"),
+        ("B-but you know", "B-but you know"),  # "bee" already says it
+        ("...W-what is this", "...What-what is this"),
+        ("I-Is that so", "Is-is that so"),
+        ("N-no, absolutely not", "No-no, absolutely not"),
+        ("I-I'm just", "I-I'm just"),
         ("s-s-sorry", "so-so-sorry"),
         ("G-Gio", "Gio-Gio"),
-        ("N-NO!", "NO-NO!"),
     ],
 )
 def test_a_written_stutter_is_spoken_as_one(written, spoken):
@@ -111,6 +116,47 @@ def _rendered(lib, index, seconds=60.0, **extra):
     status[str(index)] = {"file": path.name, "seconds": seconds, "flags": [], **extra}
     status_path.write_text(json.dumps(status))
     return book
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
+def test_old_chapters_are_aligned_to_the_pauses_in_their_audio(tmp_path):
+    """A chapter whose speech is much slower than the estimate (long words
+    said slowly, short lines quickly) still lights the right paragraph:
+    each start lands on the pause before it."""
+    import wave
+
+    import numpy as np
+
+    from openjarvis.audiobooks.library import align_to_pauses
+
+    paras = [
+        ("A short line, said fast.", 0.8),
+        ("A much longer paragraph " * 3, 9.0),
+    ] * 6
+    text = "\n\n".join(p for p, _ in paras)
+    chapter = {"label": "Chapter 1", "title": "Chapter 1"}
+    sr, chunks, truth = 24000, [], []
+    t = 0.0
+    tone = lambda s: 0.3 * np.sin(np.arange(int(sr * s)) * 0.1)  # noqa: E731
+    edge = 0.2  # a voice's own quiet at both ends of a piece
+    for item in piece_rules.build(text, "Chapter 1."):
+        if item.text is None:
+            continue
+        if item.para >= 0 and (not truth or truth[-1][0] != item.para):
+            truth.append((item.para, t + edge))  # where the speech starts
+        said = 1.0 if item.para < 0 else paras[item.para][1]
+        quiet = np.zeros(int(sr * edge))
+        chunks += [quiet, tone(said), quiet, np.zeros(int(sr * item.gap))]
+        t += said + 2 * edge + item.gap
+    path = tmp_path / "c.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((np.concatenate(chunks) * 32767).astype("<i2").tobytes())
+    got = dict((p, s) for p, s in align_to_pauses(chapter, text, t, path))
+    for para, start in truth[1:]:
+        assert abs(got[para] - start) < 0.15, (para, got[para], start)
 
 
 def test_reader_gets_paragraph_starts_estimated_for_old_chapters(lib):

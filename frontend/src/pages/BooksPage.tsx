@@ -308,6 +308,17 @@ function BookView({
   const playChapter = (c: BookChapter, startAt = 0) =>
     player.play({ book: book.id, title: book.title, index: c.index, label: c.label, voice: book.voice, startAt });
 
+  /** Play `c` from `at` seconds: a jump when it is already loaded (play()
+   * only resumes a loaded chapter, so flag buttons did nothing, 2026-10-14). */
+  const playFrom = (c: BookChapter, at: number) => {
+    if (playingHere?.index === c.index) {
+      player.seek(at);
+      player.setWanted(true);
+    } else {
+      playChapter(c, at);
+    }
+  };
+
   const togglePlay = () => {
     if (playingHere) player.setWanted(!player.wanted);
     else if (current && current.state === 'ready')
@@ -627,7 +638,7 @@ function BookView({
               <ChapterFlags
                 bookId={book.id}
                 chapter={c}
-                onPlay={(at) => playChapter(c, at)}
+                onPlay={(at) => playFrom(c, at)}
                 onChanged={() => void act('flags', async () => {})}
                 onRedo={() =>
                   void act('redo', async () => {

@@ -138,14 +138,35 @@ def _stutter_sound(word: str) -> str:
     return sound[:-1] + ("A" if word[start] == "U" else "a") if short_u else sound
 
 
+#: Letters whose name starts with their own sound: "B-but" read as written
+#: ("bee-but") already sounds like a stutter, and the user preferred it to
+#: "Ba-but" (2026-10-14 sample takes).
+_SAYS_ITSELF = set("bdptkvBDPTKV")
+#: Words up to this long that start with W or a vowel are said whole, twice:
+#: "W-what" -> "What-what", "I-Is" -> "Is-is" ("Wha-" was heard "Wah"/"Why").
+WHOLE_UNDER = 6
+
+
 def _respell(m: "re.Match[str]") -> str:
     whole, letters, word = m.group(0), m.group(1), m.group(2)
     if letters.lower() in _PREFIXES or word.lower() in _RANKS:
         return whole
     if len(letters) > 1 and letters.lower() == word.lower():
         return whole  # a doubled word or a laugh: "win-win", "Kuk-kuk-kuk"
+    if len(letters) == 1 and letters in _SAYS_ITSELF:
+        return whole
     tries = whole.count("-")
     sound = _stutter_sound(word.lower())
+    said_whole = (
+        len(word) < WHOLE_UNDER
+        and word[0] in "wWaeiouAEIOU"
+        and not word.lower().startswith(("i'", "i’"))  # "I-I'm" stays
+        and word != "I"
+    )
+    if said_whole:
+        sound = word.lower()
+        if word[0].isupper() and not word.isupper():
+            word = word[0].lower() + word[1:]  # "Is-is that so"
     if word.isupper() and len(word) > 1:  # shouted: "N-NO!"
         sound = sound.upper()
     if word == "I" or (len(word) == 1 and word.isupper()):
