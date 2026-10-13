@@ -31,13 +31,32 @@ export function ChapterFlags({
   chapter: BookChapter;
   onPlay: (at: number) => void;
   onChanged: () => void;
-  onRedo: () => void;
+  onRedo: (note: string) => Promise<{ understood: string[]; not_possible: string[] }>;
 }) {
+  const [note, setNote] = useState('');
+  const [redoing, setRedoing] = useState(false);
+  const [result, setResult] = useState<{ understood: string[]; not_possible: string[] } | null>(null);
+  const redo = async () => {
+    setRedoing(true);
+    setError(null);
+    try {
+      setResult(await onRedo(note));
+      setNote('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRedoing(false);
+    }
+  };
   const [flags, setFlags] = useState<ChapterFlag[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
 
   useEffect(() => {
+    if (chapter.flags === 0) {
+      setFlags([]);
+      return;
+    }
     let cancelled = false;
     fetchFlags(bookId, chapter.index)
       .then((f) => !cancelled && setFlags(f))
@@ -68,11 +87,13 @@ export function ChapterFlags({
       className="ml-[70px] mr-2 mb-2 mt-1 px-3 py-2.5 rounded-lg text-[12.5px]"
       style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}
     >
-      <div className="mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-        The check listens back to short lines. Play each one: if it sounds right, mark it fine.
-      </div>
+      {chapter.flags > 0 && (
+        <div className="mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+          The check listens back to short lines. Play each one: if it sounds right, mark it fine.
+        </div>
+      )}
       {error && <div style={{ color: 'var(--color-error)' }}>{error}</div>}
-      {!flags && !error && <Loader2 size={14} className="animate-spin" />}
+      {!flags && !error && chapter.flags > 0 && <Loader2 size={14} className="animate-spin" />}
       {flags?.map((f) => (
         <div key={f.piece} className="flex items-center gap-2 py-1">
           <button
@@ -93,11 +114,40 @@ export function ChapterFlags({
           </button>
         </div>
       ))}
-      {flags && flags.length === 0 && <div style={{ color: 'var(--color-text-tertiary)' }}>Nothing flagged any more.</div>}
-      <div className="flex justify-end mt-1.5">
-        <button className={small} style={smallStyle} onClick={onRedo} title="Narrate this chapter again; the current file is kept as a backup">
-          <RotateCcw size={11} /> Redo chapter
-        </button>
+      {flags && flags.length === 0 && chapter.flags > 0 && (
+        <div style={{ color: 'var(--color-text-tertiary)' }}>Nothing flagged any more.</div>
+      )}
+
+      {/* redo with a note (user, 2026-10-14) */}
+      <div className={chapter.flags > 0 ? 'mt-3 pt-3' : ''} style={chapter.flags > 0 ? { borderTop: '1px solid var(--color-border)' } : undefined}>
+        {chapter.redo?.note && (
+          <div className="mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+            Last note: “{chapter.redo.note}”
+            {chapter.redo.understood.length > 0 && <> → {chapter.redo.understood.join(' ')}</>}
+          </div>
+        )}
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={2}
+          placeholder={'Optional: what should change? e.g. "say Gio as Jee-oh", "longer pauses", "a bit slower", "no sound effects"'}
+          className="w-full px-2 py-1.5 rounded-md resize-y"
+          style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+        />
+        <div className="flex items-start gap-3 mt-1.5">
+          <div className="flex-1 min-w-0" style={{ color: 'var(--color-text-secondary)' }}>
+            {result && (
+              <>
+                {result.understood.length > 0 && <div style={{ color: 'var(--color-success)' }}>Will change: {result.understood.join(' ')}</div>}
+                {result.not_possible.length > 0 && <div style={{ color: 'var(--color-warning)' }}>Can't do: {result.not_possible.join(' ')}</div>}
+              </>
+            )}
+            {!result && <span style={{ color: 'var(--color-text-tertiary)' }}>Every line gets a fresh take. The old file is kept as a backup.</span>}
+          </div>
+          <button className={small} style={smallStyle} disabled={redoing} onClick={() => void redo()} title="Narrate this chapter again">
+            {redoing ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />} Redo chapter
+          </button>
+        </div>
       </div>
     </div>
   );

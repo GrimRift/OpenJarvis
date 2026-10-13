@@ -579,7 +579,7 @@ function BookView({
             act={act}
           />
         )}
-        <div className="grid text-[11.5px] px-2 py-1" style={{ gridTemplateColumns: '30px 30px 60px 1fr 80px 90px', color: 'var(--color-text-tertiary)' }}>
+        <div className="grid text-[11.5px] px-2 py-1" style={{ gridTemplateColumns: '30px 30px 60px 1fr 80px 110px', color: 'var(--color-text-tertiary)' }}>
           <span /><span /><span>#</span><span>Title</span><span>Length</span><span>Status</span>
         </div>
         {book.chapters.map((c) => {
@@ -590,7 +590,7 @@ function BookView({
             <div
               className="grid items-center gap-2 px-2 py-1.5 rounded-lg text-[13px]"
               style={{
-                gridTemplateColumns: '30px 30px 60px 1fr 80px 90px',
+                gridTemplateColumns: '30px 30px 60px 1fr 80px 110px',
                 background: isHere ? 'var(--color-accent-subtle)' : undefined,
                 boxShadow: isHere ? 'inset 2px 0 0 var(--color-accent)' : undefined,
                 color: c.skip ? 'var(--color-text-tertiary)' : 'var(--color-text)',
@@ -632,20 +632,31 @@ function BookView({
               <span className="tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>
                 {live ?? (c.seconds != null ? clock(c.seconds) : c.skip ? '' : `~${clock(c.estimate_seconds)}`)}
               </span>
-              <span><Pill state={c.state} /></span>
+              <span className="flex items-center gap-1.5">
+                <Pill state={c.state} />
+                {c.state === 'ready' && (
+                  <button
+                    className="cursor-pointer opacity-60 hover:opacity-100"
+                    style={{ color: flagsOpen === c.index ? 'var(--color-accent)' : 'var(--color-text-secondary)' }}
+                    title={`Redo ${c.label}, with a note on what to change`}
+                    onClick={() => setFlagsOpen(flagsOpen === c.index ? null : c.index)}
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                )}
+              </span>
             </div>
-            {flagsOpen === c.index && c.flags > 0 && (
+            {flagsOpen === c.index && c.state === 'ready' && (
               <ChapterFlags
                 bookId={book.id}
                 chapter={c}
                 onPlay={(at) => playFrom(c, at)}
                 onChanged={() => void act('flags', async () => {})}
-                onRedo={() =>
-                  void act('redo', async () => {
-                    await redoChapter(book.id, c.index);
-                    setFlagsOpen(null);
-                  })
-                }
+                onRedo={async (note) => {
+                  const r = await redoChapter(book.id, c.index, note);
+                  void act('redo', async () => {});
+                  return r;
+                }}
               />
             )}
             </Fragment>

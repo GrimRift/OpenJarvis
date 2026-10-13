@@ -35,6 +35,18 @@ class BookNotFound(LookupError):
     pass
 
 
+def _redo_summary(redo: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The last redo note as the page shows it."""
+    if not redo:
+        return None
+    return {
+        "note": redo.get("note") or "",
+        "at": redo.get("at"),
+        "understood": redo.get("understood") or [],
+        "not_possible": redo.get("not_possible") or [],
+    }
+
+
 def _items(chapter: Dict[str, Any], text: str) -> List[piece_rules.Item]:
     return piece_rules.build(text, piece_rules.announcement(chapter))
 
@@ -332,6 +344,7 @@ class Library:
                     "seconds": (entry or {}).get("seconds"),
                     "estimate_seconds": round(c["words"] * SECONDS_PER_WORD),
                     "flags": len((entry or {}).get("flags") or []),
+                    "redo": _redo_summary(c.get("redo")),
                 }
             )
         return {
@@ -342,6 +355,7 @@ class Library:
             "has_cover": bool(book.get("cover")),
             "words": book.get("words"),
             "missing_numbers": book.get("missing_numbers") or [],
+            "pronunciations": book.get("pronunciations") or [],
             "position": book.get("position"),
             "position_seconds": book.get("position_seconds") or 0,
             "chapters": chapters,
@@ -470,10 +484,16 @@ class Library:
 
         return update_status_file(path, drop)
 
-    def redo_chapter(self, book_id: str, index: int) -> Dict[str, Any]:
+    def redo_chapter(
+        self, book_id: str, index: int, settings: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Render a chapter again (a flagged line, or new reading rules): the
         old file is moved to ``replaced/``, not deleted, and the chapter is
-        queued at once."""
+        queued at once. ``settings`` (redo_notes.interpret) come from the
+        user's note: kept on the chapter, and book-wide pronunciations on
+        the book; without a note an earlier note's settings stay."""
+        if settings is not None:
+            self._keep_redo(book_id, int(index), settings)
         book = self.store.load(book_id)
         voice = book_voice(book)
         folder = audio_dir(self.store, book_id, voice)
@@ -487,6 +507,25 @@ class Library:
             folder / "status.json", lambda status: status.pop(str(int(index)), None)
         )
         return self.queue.add(book_id, "range", chapters=[int(index)], voice=voice)
+
+    def _keep_redo(self, book_id: str, index: int, settings: Dict[str, Any]) -> None:
+        book = self.store.load(book_id)
+        sayings = {p["word"].lower(): p for p in book.get("pronunciations") or []}
+        chapter_only = []
+        for p in settings.get("pronunciations") or []:
+            entry = {"word": p["word"], "say": p["say"]}
+            if p.get("book_wide", True):
+                sayings[p["word"].lower()] = entry
+            else:
+                chapter_only.append(entry)
+        chapters = []
+        for c in book["chapters"]:
+            if c["index"] == index:
+                c = {**c, "redo": {**settings, "pronunciations": chapter_only}}
+            chapters.append(c)
+        self.store.update(
+            book_id, chapters=chapters, pronunciations=list(sayings.values())
+        )
 
     # ------------------------------------------------------------ adding chapters
 

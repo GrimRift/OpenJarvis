@@ -34,6 +34,7 @@ import numpy as np
 from openjarvis.audiobooks import pieces as piece_rules
 from openjarvis.audiobooks.check import Transcriber, chapter_rate, judge
 from openjarvis.audiobooks.queue import audio_dir, update_status_file
+from openjarvis.audiobooks.redo_notes import respell
 from openjarvis.audiobooks.store import BookStore
 from openjarvis.speech.spoken_text import to_spoken_text
 
@@ -112,9 +113,13 @@ def _ffmpeg() -> str:
     return exe
 
 
-def encode_m4a(wav: Path, out: Path, tags: Dict[str, str]) -> None:
-    """Two-pass loudnorm to LOUDNESS (linear, so no pumping), AAC, tagged."""
+def encode_m4a(
+    wav: Path, out: Path, tags: Dict[str, str], tempo: float = 1.0
+) -> None:
+    """Two-pass loudnorm to LOUDNESS (linear, so no pumping), AAC, tagged;
+    ``tempo`` speeds narration up or down with the pitch kept (redo note)."""
     ffmpeg = _ffmpeg()
+    speed = f"atempo={tempo:.3f}," if abs(tempo - 1.0) > 1e-3 else ""
     probe = subprocess.run(
         [
             ffmpeg,
@@ -123,7 +128,7 @@ def encode_m4a(wav: Path, out: Path, tags: Dict[str, str]) -> None:
             "-i",
             str(wav),
             "-af",
-            f"loudnorm=I={LOUDNESS}:TP=-1.5:LRA=11:print_format=json",
+            f"{speed}loudnorm=I={LOUDNESS}:TP=-1.5:LRA=11:print_format=json",
             "-f",
             "null",
             "-",
@@ -153,7 +158,8 @@ def encode_m4a(wav: Path, out: Path, tags: Dict[str, str]) -> None:
             "-i",
             str(wav),
             "-af",
-            f"loudnorm=I={LOUDNESS}:TP=-1.5:LRA=11:{measured},aresample={SAMPLE_RATE}",
+            f"{speed}loudnorm=I={LOUDNESS}:TP=-1.5:LRA=11:{measured},"
+            f"aresample={SAMPLE_RATE}",
             "-ac",
             "1",
             "-c:a",
@@ -198,14 +204,24 @@ class ChapterRenderer:
         book = self.store.load(book_id)
         chapter = next(c for c in book["chapters"] if c["index"] == index)
         text = self.store.chapter_text(book_id, index)
+        # What the user asked for in a redo note (redo_notes.py), and the
+        # book's pronunciations from earlier notes.
+        redo = chapter.get("redo") or {}
+        sayings = list(book.get("pronunciations") or []) + list(
+            redo.get("pronunciations") or []
+        )
+        pause_scale = float(redo.get("pause_scale") or 1.0)
+        tempo = float(redo.get("tempo") or 1.0)
         # The same last pass as every live reply (an architecture invariant):
         # dashes become commas, and stray markup or codes are not read out.
         items = []
         for it in piece_rules.build(text, piece_rules.announcement(chapter)):
             spoken = ""
             if it.text:
-                spoken = to_spoken_text(piece_rules.spoken_stutters(it.text)).strip()
-            items.append(piece_rules.Item(spoken or None, it.gap, it.para, it.sounds))
+                said = respell(piece_rules.spoken_stutters(it.text), sayings)
+                spoken = to_spoken_text(said).strip()
+            gap = it.gap * pause_scale
+            items.append(piece_rules.Item(spoken or None, gap, it.para, it.sounds))
         folder = audio_dir(self.store, book_id, voice)
         work = folder / "work" / f"{index:04d}"
         plan = [it.text for it in items]
@@ -274,7 +290,11 @@ class ChapterRenderer:
             joined.append(np.zeros(int(SAMPLE_RATE * item.gap), np.float32))
             samples += len(joined[-1])
         audio = np.concatenate(joined) if joined else np.zeros(0, np.float32)
-        sounds = self._add_sounds(audio, cues)
+        if redo.get("sfx") == "off":
+            cues = []
+        sounds = self._add_sounds(audio, cues, float(redo.get("sfx_level") or 1.0))
+        # Times in the finished file: a tempo change shortens or stretches it.
+        starts = [t / tempo for t in starts]
         for flag in flags:
             flag["at"] = round(starts[flag["piece"]], 2)
         out = folder / f"{index:04d}.m4a"
@@ -291,12 +311,13 @@ class ChapterRenderer:
                     "track": str(index),
                     "comment": f"Sage voice: {voice}",
                 },
+                tempo=tempo,
             )
         gen_total = sum(p["gen"] for p in manifest["pieces"].values())
         result = ChapterResult(
             index=index,
             path=out,
-            seconds=round(len(audio) / SAMPLE_RATE, 1),
+            seconds=round(len(audio) / SAMPLE_RATE / tempo, 1),
             pieces=len(spoken),
             gen_seconds=round(gen_total, 1),
             retakes=retakes,
@@ -357,7 +378,7 @@ class ChapterRenderer:
         return retakes, flags
 
     @staticmethod
-    def _add_sounds(audio: np.ndarray, cues: List[tuple]) -> int:
+    def _add_sounds(audio: np.ndarray, cues: List[tuple], level: float = 1.0) -> int:
         """Sound effects under the sound words (sfx.py); never fails a
         chapter -- without them it is still the narration."""
         if not cues or os.environ.get("SAGE_AUDIOBOOK_SFX", "1") == "0":
@@ -367,7 +388,7 @@ class ChapterRenderer:
 
             voiced = audio[np.abs(audio) > 0.01]
             rms = float(np.sqrt(np.mean(voiced**2))) if len(voiced) else 0.1
-            return sfx.mix_under(audio, cues, rms)
+            return sfx.mix_under(audio, cues, rms * level)
         except Exception:
             logger.warning("adding sound effects failed", exc_info=True)
             return 0

@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from openjarvis.audiobooks import export
@@ -238,15 +238,69 @@ def create_book_router(
         return {"flags": left}
 
     @router.post("/{book_id}/chapters/{index}/redo")
-    async def redo_chapter(book_id: str, index: int) -> Dict[str, Any]:
-        """Render the chapter again; the old file is kept in replaced/."""
+    async def redo_chapter(
+        book_id: str,
+        index: int,
+        request: Request,
+        body: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Render the chapter again; the old file is kept in replaced/.
+        ``note``: what the user wants different, read by Sage's model into
+        settings (redo_notes.py). ``preview``: only say what the note would
+        change; nothing is queued or saved."""
         _book_or_404(book_id)
         library = lib()
+        note = str((body or {}).get("note") or "").strip()[:2000]
+        settings = None
+        if note:
+            from openjarvis.audiobooks.redo_notes import interpret
+
+            book = library.store.load(book_id)
+            chapter = next((c for c in book["chapters"] if c["index"] == index), None)
+            if chapter is None:
+                raise HTTPException(404, f"No chapter #{index}")
+            flags = library.chapter_flags(book_id, index)
+            generate = _model_call(request)
+            settings = await asyncio.to_thread(
+                interpret, note, chapter["label"], flags, generate
+            )
+        if (body or {}).get("preview"):
+            return {
+                "preview": True,
+                "settings": settings,
+                "understood": (settings or {}).get("understood") or [],
+                "not_possible": (settings or {}).get("not_possible") or [],
+            }
         try:
-            job = library.redo_chapter(book_id, index)
+            job = library.redo_chapter(book_id, index, settings)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        return {"job": job, "book": library.detail(book_id)}
+        return {
+            "job": job,
+            "understood": (settings or {}).get("understood") or [],
+            "not_possible": (settings or {}).get("not_possible") or [],
+            "book": library.detail(book_id),
+        }
+
+    def _model_call(request: Request) -> Callable[[list], str]:
+        """The server's own model, for reading a redo note."""
+
+        def generate(messages: list) -> str:
+            from openjarvis.core.types import Message, Role
+
+            engine = getattr(request.app.state, "engine", None)
+            if engine is None:
+                raise RuntimeError("no model is loaded")
+            model = getattr(request.app.state, "model", None)
+            msgs = [Message(role=Role(m["role"]), content=m["content"])
+                    for m in messages]
+            # Reasoning models answer empty when max_tokens is small.
+            result = engine.generate(
+                msgs, model=model, temperature=0.0, max_tokens=2000
+            )
+            return str(result.get("content") or "")
+
+        return generate
 
     # ------------------------------------ adding chapters (user, 2026-10-14)
 

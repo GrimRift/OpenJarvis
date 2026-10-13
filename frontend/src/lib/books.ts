@@ -21,6 +21,15 @@ export interface BookChapter {
   seconds: number | null;
   estimate_seconds: number;
   flags: number;
+  /** The last redo note and what Sage made of it. */
+  redo?: RedoNote | null;
+}
+
+export interface RedoNote {
+  note: string;
+  at?: string;
+  understood: string[];
+  not_possible: string[];
 }
 
 export interface WorkerStatus {
@@ -249,8 +258,18 @@ export async function dismissFlag(id: string, index: number, piece: number): Pro
   );
 }
 
-export async function redoChapter(id: string, index: number): Promise<void> {
-  await json(await apiFetch(`/v1/books/${enc(id)}/chapters/${index}/redo`, { method: 'POST' }), 'Redo');
+/** Narrate a chapter again; `note` says what should come out differently. */
+export async function redoChapter(
+  id: string,
+  index: number,
+  note = '',
+): Promise<{ understood: string[]; not_possible: string[] }> {
+  const res = await apiFetch(`/v1/books/${enc(id)}/chapters/${index}/redo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  });
+  return json(res, 'Redo');
 }
 
 /** Adding chapters the source skipped or that came out later (2026-10-14). */

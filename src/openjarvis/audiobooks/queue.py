@@ -84,6 +84,7 @@ def update_status_file(path: Path, change: Callable[[Dict[str, Any]], Any]) -> A
     with _status_lock:
         status = read_status_file(path)
         result = change(status)
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(
             json.dumps(status, indent=1, ensure_ascii=False), encoding="utf-8"
