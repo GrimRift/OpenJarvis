@@ -233,20 +233,26 @@ function BookView({
   act: (what: string, fn: () => Promise<unknown>) => Promise<void>;
 }) {
   const player = useBookPlayer();
-  const heroRef = useRef<HTMLDivElement | null>(null);
+  const heroObserver = useRef<IntersectionObserver | null>(null);
   const [heroVisible, setHeroVisible] = useState(true);
   const [mode, setMode] = useState<'range' | 'ahead' | 'book'>('ahead');
   const [range, setRange] = useState('');
   const [ahead, setAhead] = useState(5);
   const [reading, setReading] = useState<number | null>(null);
 
-  useEffect(() => {
-    const el = heroRef.current;
+  // A callback ref, not a mount effect: the big player is a new element every
+  // time the reader closes, and an observer left on the old one reported it
+  // off screen, so the mini player showed under a visible big one.
+  const heroRef = useCallback((el: HTMLDivElement | null) => {
+    heroObserver.current?.disconnect();
+    heroObserver.current = null;
+    setHeroVisible(true);
     if (!el) return;
     const io = new IntersectionObserver(([e]) => setHeroVisible(e.isIntersecting), { threshold: 0.15 });
     io.observe(el);
-    return () => io.disconnect();
+    heroObserver.current = io;
   }, []);
+  useEffect(() => () => heroObserver.current?.disconnect(), []);
 
   const playingHere = player.now?.book === book.id ? player.now : null;
   const ready = book.chapters.filter((c) => c.state === 'ready');
@@ -279,8 +285,22 @@ function BookView({
   };
 
   const position = playingHere ? player.position : current?.index === book.position ? book.position_seconds : 0;
-  const duration = playingHere ? player.duration : (current?.seconds ?? 0);
+  // The player's own measure once it has one, else the chapter's known length.
+  const duration = (playingHere && player.duration) || current?.seconds || 0;
   const pct = duration ? Math.min(100, (position / duration) * 100) : 0;
+  const canSeek = !!current && current.state === 'ready' && duration > 0;
+
+  /** Clicking the slider jumps there and plays (user's choice, 2026-10-13). */
+  const seekTo = (fraction: number) => {
+    if (!current || !canSeek) return;
+    const target = fraction * duration;
+    if (playingHere && playingHere.index === current.index) {
+      player.seek(target);
+      player.setWanted(true);
+    } else {
+      playChapter(current, target);
+    }
+  };
 
   if (reading != null) {
     return (
@@ -320,7 +340,7 @@ function BookView({
             {book.title}{book.author ? ` · ${book.author}` : ''} · {narrated.length} chapters ·{' '}
             {ready.length} ready ({clock(totalReady)})
           </div>
-          <Scrubber pct={pct} disabled={!playingHere} onSeek={(f) => player.seek(f * duration)} />
+          <Scrubber pct={pct} disabled={!canSeek} onSeek={seekTo} />
           <div className="flex justify-between text-[12px] tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>
             <span>{clock(position)}</span>
             <span>{clock(duration || null)}</span>
@@ -509,7 +529,7 @@ function BookView({
           <div className="text-[12.5px] whitespace-nowrap" style={{ color: 'var(--color-text)' }}>
             <b>{playingHere.label}</b> <span style={{ color: 'var(--color-text-tertiary)' }}>· {book.title}</span>
           </div>
-          <div className="flex-1"><Scrubber pct={pct} disabled={false} onSeek={(f) => player.seek(f * duration)} /></div>
+          <div className="flex-1"><Scrubber pct={pct} disabled={!canSeek} onSeek={seekTo} /></div>
           <span className="text-[12px] tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>{clock(position)} / {clock(duration || null)}</span>
         </div>
       )}

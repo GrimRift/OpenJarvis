@@ -122,6 +122,10 @@ export function BookPlayerHost() {
         save();
       }}
       onLoadedMetadata={(e) => useBookPlayer.getState().report({ duration: e.currentTarget.duration })}
+      onDurationChange={(e) => {
+        const d = e.currentTarget.duration;
+        if (Number.isFinite(d)) useBookPlayer.getState().report({ duration: d });
+      }}
       onEnded={() => void onEnded()}
       style={{ display: 'none' }}
     />

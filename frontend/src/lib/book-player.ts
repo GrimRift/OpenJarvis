@@ -51,7 +51,15 @@ export const useBookPlayer = create<BookPlayerState>((set) => ({
   duration: 0,
   seekTick: 0,
   seekTo: 0,
-  play: (now) => set({ now, wanted: true, position: now.startAt, duration: 0 }),
+  // The chapter already loaded just resumes: the host reloads (and measures
+  // the length) only when the chapter changes, so resetting `duration` here
+  // left it at 0 -- the clock read --:-- and every slider click went to 0:00.
+  play: (now) =>
+    set((s) =>
+      s.now && s.now.book === now.book && s.now.index === now.index && s.now.voice === now.voice
+        ? { wanted: true }
+        : { now, wanted: true, position: now.startAt, duration: 0 },
+    ),
   setWanted: (wanted) => set({ wanted }),
   seek: (seconds) => set((s) => ({ seekTick: s.seekTick + 1, seekTo: Math.max(0, seconds) })),
   report: (fields) => set(fields),

@@ -85,3 +85,21 @@ describe('books helpers', () => {
     expect(workerLine({ state: 'unknown' }, 'b', chapters)).toBe('Render worker not running');
   });
 });
+
+describe('playing the chapter already loaded', () => {
+  beforeEach(() => useBookPlayer.getState().stop());
+
+  it('resumes it and keeps its measured length (slider clicks went to 0:00)', () => {
+    const now = { book: 'b', title: 'T', index: 1, label: 'Chapter 1', voice: 'v', startAt: 0 };
+    const player = useBookPlayer.getState();
+    player.play(now);
+    player.report({ duration: 1348.6, position: 2 });
+    player.setWanted(false);
+    useBookPlayer.getState().play({ ...now, startAt: 2 });
+    const s = useBookPlayer.getState();
+    expect(s.duration).toBe(1348.6);
+    expect(s.wanted).toBe(true);
+    useBookPlayer.getState().play({ ...now, index: 2, label: 'Chapter 2' });
+    expect(useBookPlayer.getState().duration).toBe(0); // a new chapter is measured afresh
+  });
+});
