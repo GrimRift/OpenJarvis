@@ -14,6 +14,7 @@
  * short, and Sage's leak past echo cancellation is not. It turns the reply
  * down, and the next word the user says arrives whole.
  */
+import { SPEAKING_MAX_GAIN } from './mic-gain';
 
 /** 20 ms at the 16 kHz the stream is cut to. */
 export const DUCK_WINDOW_SAMPLES = 320;
@@ -65,9 +66,14 @@ export function voiceOverSage(samples: Int16Array, autoGain: number): boolean {
  * after the automatic gain, and how many reach DUCK_VOICE_RMS. Traced while
  * Sage speaks, so the leak can be read off a reply instead of guessed (the
  * mic got 20 dB louder after the threshold was measured).
+ *
+ * The gain stops at SPEAKING_MAX_GAIN, as the audio sent while Sage speaks
+ * does. Uncapped, a quiet question raised it to 6.8 and multiplied Sage's
+ * own leak with it: unchanged at ~47 per slice raw, its loudest syllables
+ * read 2,644-2,897 and the reply dipped at nothing (13 October).
  */
 export function sliceLevels(samples: Int16Array, autoGain: number): { peak: number; loud: number } {
-  const gain = Number.isFinite(autoGain) && autoGain > 0 ? autoGain : 1;
+  const gain = Number.isFinite(autoGain) && autoGain > 0 ? Math.min(autoGain, SPEAKING_MAX_GAIN) : 1;
   const floor = (DUCK_VOICE_RMS / gain) ** 2;
   let loud = 0;
   let peak = 0;

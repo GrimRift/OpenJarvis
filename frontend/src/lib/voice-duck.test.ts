@@ -25,10 +25,17 @@ describe('voiceOverSage', () => {
     expect(voiceOverSage(frame([0, 6000, 0, 0]), 1)).toBe(false);
   });
 
-  it("judges a quiet microphone at the automatic gain's level", () => {
-    // Raw PD100X: the user's stops 225-400, Sage's leak under 180, gain 8.
-    expect(voiceOverSage(frame([0, 400, 380, 0]), 8)).toBe(true);
-    expect(voiceOverSage(frame([180, 180, 180, 180]), 8)).toBe(false);
+  it("judges a quiet microphone at the automatic gain's level, up to the speaking cap", () => {
+    expect(voiceOverSage(frame([0, 900, 880, 0]), 3)).toBe(true);
+    expect(voiceOverSage(frame([600, 600, 600, 600]), 3)).toBe(false);
+  });
+
+  it("does not multiply Sage's leak by a gain raised for a quiet question", () => {
+    // 13 October, gain 6.83: leak syllables of ~390-425 raw read 2,644-2,897
+    // uncapped and dipped the reply at nothing.
+    expect(voiceOverSage(frame([0, 425, 400, 0]), 6.83)).toBe(false);
+    // A real "stop" over the reply still dips (16:12:20, ~3,700 raw).
+    expect(voiceOverSage(frame([0, 3700, 3200, 0]), 6.83)).toBe(true);
   });
 
   it('treats a missing gain as unity', () => {
