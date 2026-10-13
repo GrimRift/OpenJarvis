@@ -1,4 +1,4 @@
-# M42 — Audiobooks (scoped 2026-10-13; step 1 import built 2026-10-13)
+# M42 — Audiobooks (scoped 2026-10-13; step 1 import + step 2 benchmark done 2026-10-13)
 
 Sage turns a book the user owns (PDF or EPUB) into an audiobook in one of Sage's
 voices, for personal listening on the PC and the phone. Scoped with the user
@@ -200,13 +200,60 @@ Not built in step 1; the render step must:
   short for their text (Frieren Nano dropped two lines as near-silence).
 - Level to -16 LUFS like the other clips.
 
+## Step 2 result: lotm-narrator benchmark (2026-10-13 ~18:05)
+
+Chapter 1 from the imported store (3,423 words incl. the Notes section), voice
+`lotm-narrator` (Turbo 0.6/0.85/300), standalone `ChatterboxEngine` (live
+`voice_sidecar.engine` code, scratch copy of the voice), app open, live
+sidecar on Nano beside it. Pieces built with the render rules above: chapter
+announcement, sentences merged to <= 90 chars, `split_for_generation`, hard cut
+at 160, pieces < 14 chars merged, `"..."` lines and `* * *` as pauses (gaps 0.08
+piece / 0.3 sentence / 0.6 paragraph / 0.9 beat / 1.6 scene / 1.2 after the
+title) -> 321 pieces + 20 pauses, none over 160 chars.
+
+| | lotm-narrator (this run) | Jarvis Turbo (10-13 morning, old piece rules) |
+|---|---|---|
+| Audio / wall | 22.4 min / 5.15 min | 19.3 min / 5.6 min |
+| RTF (wall / audio) | **0.23** (0.26 on speech only) | 0.289 |
+| Pace | 153 wpm | 165 wpm |
+| Peak VRAM proc / card | 3.69 / 6.23 GB | 3.58 / 6.8 GB |
+| Runaway retries | **3** (all recovered) | 21 (4 twice) |
+
+Median 0.9 s generation per piece, max 3.9 s. **Whole book** (863k words at
+153 wpm = ~94 h audio): **~22 h of GPU time**; a 25-chapter part (~6.3 h audio)
+~1 h 30 min. Model load 12.6 s.
+
+**Whisper round-trip** (small.en, CPU, per piece): 23 of 321 flagged, nearly
+all transcription artefacts -- the name "Seo Gio" as "C.O.G.O"/"Jio", the
+scorer counting single-quoted lines, "1cm"/"1 cm", "fibre"/"fiber". **No
+repeated lines, no too-short pieces** (the < 14-char merge works; Jarvis
+Turbo repeated 4 short lines in the morning). Possibly real, to hear:
+"gentle as silk" -> "gentler sill" (1:21; Nano slurred the same phrase in the
+morning, so maybe the phrase), "Gio thought." -> "Geothart" (7:47). For step 3,
+make the STT check name-tolerant (strip quotes; compare names fuzzily) or it
+flags every chapter. Output: `D:\Downloads\audiobook-test\Ch01 - LOTM Narrator
+(Turbo, imported text).mp3` (-16.8 LUFS, 96 kbps); scripts were scratch only.
+
+**Found for step 3:**
+- **Memory, not VRAM, is the limit.** The first attempt died loading Turbo:
+  "The paging file is too small" (os error 1455). The live server had grown to
+  10.4 GB commit over the day; commit limit = 15.6 GB RAM + a 16 GB pagefile
+  that can grow to ~24 GB. After a live restart (server 6.0 GB) it fitted. A
+  second engine process (~4-5 GB commit) beside a long-running Sage will not
+  always fit, which backs the scope's "reuse the running voice sidecar" -- but a
+  Turbo narrator there means Nano<->Turbo switches (6-13 s) or both models
+  resident (card 6.2 GB measured with both on it here; commit +~2 GB).
+- Importer text nits seen in the pieces: spaces inside quotes from the source
+  (`" Squeak ."`), and a one-word heading line merged into the next paragraph
+  ("Lulupu A flower..."). Small cleaner fixes.
+- Live-Sage latency was not re-measured in this run (10-13 morning: +0.6 s per
+  live sentence while Turbo renders).
+
 ## Suggested build order
 
 1. ~~Import~~ DONE 2026-10-13 (above).
-2. Benchmark: user decided 2026-10-13 that a **quick lotm-narrator benchmark**
-   is still wanted (narrator already picked, so not the 2-voice pick): render one
-   chapter from the imported text with `lotm-narrator` (Turbo), applying the
-   render-step rules above; report RTF, ETA for the book, peak VRAM, STT flags.
+2. ~~Benchmark~~ DONE 2026-10-13 ~18:05 (user chose a quick lotm-narrator run
+   over the 2-voice pick): see "Step 2 result" below.
 3. Render queue (persistent, resumable after restart, yields to live voice) ->
    per-chapter audio files.
 4. Export: M4B parts with chapters + OneDrive copy; Telegram send.
