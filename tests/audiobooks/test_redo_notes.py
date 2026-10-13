@@ -68,6 +68,19 @@ def test_respelling_keeps_whole_words_and_capitals():
     assert respell("Gio saw Giovanni. gio!", sayings) == "Jee-oh saw Giovanni. jee-oh!"
 
 
+def _plain_engine(monkeypatch, engine):
+    """The route asks a plain engine for the server's model (the wrapped
+    app.state.engine answers empty from a worker thread)."""
+    from openjarvis.core import config, model_preference
+    from openjarvis.engine import _discovery
+
+    monkeypatch.setattr(model_preference, "localize", lambda m, k="": (m, k))
+    monkeypatch.setattr(config, "load_config", lambda: None)
+    monkeypatch.setattr(
+        _discovery, "get_engine", lambda cfg, engine_key=None, model=None: ("x", engine)
+    )
+
+
 @pytest.fixture
 def lib(tmp_path):
     store = BookStore(tmp_path / "books")
@@ -115,14 +128,15 @@ def test_redo_with_a_note_keeps_settings_on_the_chapter_and_the_book(lib):
     assert lib.store.load(book["id"])["chapters"][0]["redo"]["pause_scale"] == 1.3
 
 
-def test_the_route_reads_the_note_with_the_servers_model(lib):
+def test_the_route_reads_the_note_with_the_servers_model(lib, monkeypatch):
     class Engine:
         def generate(self, messages, **kw):
             assert "slower" in messages[-1].content and kw["max_tokens"] >= 600
             return {"content": REPLY}
 
+    _plain_engine(monkeypatch, Engine())
     app = FastAPI()
-    app.state.engine, app.state.model = Engine(), "m"
+    app.state.model = "m"
     app.include_router(create_book_router(lambda: lib))
     book = _rendered(lib, 2)
     r = TestClient(app).post(
@@ -159,13 +173,14 @@ def test_a_render_uses_the_notes_settings(lib):
     assert slow.seconds > plain.seconds * 1.1
 
 
-def test_a_preview_reads_the_note_without_queueing(lib):
+def test_a_preview_reads_the_note_without_queueing(lib, monkeypatch):
     class Engine:
         def generate(self, messages, **kw):
             return {"content": REPLY}
 
+    _plain_engine(monkeypatch, Engine())
     app = FastAPI()
-    app.state.engine, app.state.model = Engine(), "m"
+    app.state.model = "m"
     app.include_router(create_book_router(lambda: lib))
     book = _rendered(lib, 2)
     r = TestClient(app).post(

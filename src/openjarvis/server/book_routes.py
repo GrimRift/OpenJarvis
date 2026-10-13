@@ -9,6 +9,7 @@ as a file (Starlette answers Range requests, so the player can seek).
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import tempfile
 import time
@@ -20,6 +21,8 @@ from fastapi.responses import FileResponse
 
 from openjarvis.audiobooks import export
 from openjarvis.audiobooks.library import Library
+
+logger = logging.getLogger(__name__)
 
 #: Largest book file the page accepts (the reference PDF is 12 MB).
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -283,22 +286,31 @@ def create_book_router(
         }
 
     def _model_call(request: Request) -> Callable[[list], str]:
-        """The server's own model, for reading a redo note."""
+        """Sage's model for reading a redo note: a plain engine for the
+        server's model, as the greetings use (app.state.engine is wrapped
+        and answers empty from a worker thread), all-local switch honoured."""
 
         def generate(messages: list) -> str:
+            from openjarvis.core.config import load_config
+            from openjarvis.core.model_preference import localize
             from openjarvis.core.types import Message, Role
+            from openjarvis.engine._discovery import get_engine
 
-            engine = getattr(request.app.state, "engine", None)
-            if engine is None:
-                raise RuntimeError("no model is loaded")
-            model = getattr(request.app.state, "model", None)
-            msgs = [Message(role=Role(m["role"]), content=m["content"])
-                    for m in messages]
+            model, key = localize(getattr(request.app.state, "model", "") or "", "")
+            resolved = get_engine(load_config(), engine_key=key or None, model=model)
+            if resolved is None:
+                raise RuntimeError(f"no engine can serve {model!r}")
+            msgs = [
+                Message(role=Role(m["role"]), content=m["content"]) for m in messages
+            ]
             # Reasoning models answer empty when max_tokens is small.
-            result = engine.generate(
+            result = resolved[1].generate(
                 msgs, model=model, temperature=0.0, max_tokens=2000
             )
-            return str(result.get("content") or "")
+            text = str(result.get("content") or "")
+            if "{" not in text:
+                logger.warning("redo note: model %s answered %r", model, text[:200])
+            return text
 
         return generate
 
