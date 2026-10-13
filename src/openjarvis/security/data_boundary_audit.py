@@ -221,7 +221,12 @@ NAVIGATION_TOOLS = {"navigate"}
 # notify_windows is here because deliver() fans a notification out to the
 # configured channel as well as the desktop toast -- the toast is local, the
 # channel leg is not.
-CHANNEL_OUTBOUND_TOOLS = {"channel_send", "image_to_phone", "notify_windows"}
+CHANNEL_OUTBOUND_TOOLS = {
+    "channel_send",
+    "image_to_phone",
+    "audiobook_send",
+    "notify_windows",
+}
 # notify_windows again: its speak() path synthesises reminder text through
 # Cartesia before falling back to the local voice, so reminder content -- the
 # body of a calendar or class alert -- reaches an external provider.
@@ -277,6 +282,9 @@ LOCAL_ACCESS_TOOLS = {
     "audiobook_pause",
     "audiobook_import",
     "audiobook_play",
+    # Writes M4B parts to the Audiobooks folder and the OneDrive folder (the
+    # OneDrive client syncs it; the tool itself sends nothing).
+    "audiobook_export",
     # Reads the user's class schedule from a local file; no egress of its own.
     "check_class_schedule",
     # Reads file *names* across every fixed drive — no contents, but the paths

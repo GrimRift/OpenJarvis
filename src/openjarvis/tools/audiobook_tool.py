@@ -192,6 +192,130 @@ class AudiobookPauseTool(_BookTool):
         return ToolResult(tool_name="audiobook_pause", content=text)
 
 
+@ToolRegistry.register("audiobook_export")
+class AudiobookExportTool(_BookTool):
+    tool_id = "audiobook_export"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="audiobook_export",
+            description=(
+                "Write an audiobook's M4B files (parts of 25 chapters with chapter "
+                "markers) to the Audiobooks folder and OneDrive, so they reach the "
+                "phone. 'Export the audiobook', 'put the book on OneDrive'. Writes "
+                "what is narrated so far; full parts are also written by themselves."
+            ),
+            parameters={"type": "object", "properties": {"book": _BOOK_PARAM}},
+            category="media",
+            timeout_seconds=300.0,
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        from openjarvis.audiobooks import export
+
+        lib = self.library
+        try:
+            book = lib.find(str(params.get("book") or ""))
+            written = export.export_parts(book["id"], partial=True, store=lib.store)
+        except (BookNotFound, ValueError, RuntimeError, OSError) as exc:
+            return _fail("audiobook_export", str(exc))
+        dest = export.destinations()
+        where = f"{dest.root}" + (" and OneDrive" if dest.onedrive else "")
+        if not written:
+            done = [
+                p for p in export.part_status(book["id"], store=lib.store)
+                if p["exported"]
+            ]  # fmt: skip
+            text = (
+                f"{book['title']} is already exported ({len(done)} part(s) in {where})."
+                if done
+                else f"No chapters of {book['title']} are narrated yet."
+            )
+            return ToolResult(tool_name="audiobook_export", content=text)
+        names = ", ".join(p.stem for p in written)
+        return ToolResult(
+            tool_name="audiobook_export",
+            content=f"Exported {names} of {book['title']} to {where}.",
+        )
+
+
+@ToolRegistry.register("audiobook_send")
+class AudiobookSendTool(_BookTool):
+    tool_id = "audiobook_send"
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="audiobook_send",
+            description=(
+                "Send narrated audiobook chapters to the user's phone (Telegram), "
+                "one audio message per chapter, in the background (about a minute "
+                "each). 'Send chapters 5-10 to my phone', 'send part 2 to my phone'."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "book": _BOOK_PARAM,
+                    "chapters": {
+                        "type": "string",
+                        "description": "Chapter numbers like '5-10' or '3'.",
+                    },
+                    "part": {
+                        "type": "integer",
+                        "description": "Instead of chapters: a part number "
+                        "(25 chapters each).",
+                    },
+                },
+            },
+            category="media",
+            required_capabilities=["network:fetch"],
+        )
+
+    def execute(self, **params: Any) -> ToolResult:
+        from openjarvis.audiobooks import export
+
+        lib = self.library
+        try:
+            book = lib.find(str(params.get("book") or ""))
+            part = int(params.get("part") or 0)
+            if part:
+                parts = export.part_status(book["id"], store=lib.store)
+                if not 1 <= part <= len(parts):
+                    raise ValueError(f"{book['title']} has {len(parts)} parts")
+                chapters: Any = parts[part - 1]["chapters"]
+            else:
+                chapters = str(params.get("chapters") or "").strip()
+                if not chapters:
+                    raise ValueError("Say which chapters to send")
+            status = export.start_send(book["id"], None, chapters, store=lib.store)
+        except (BookNotFound, ValueError, RuntimeError) as exc:
+            return _fail("audiobook_send", str(exc))
+        by_index = {c["index"]: c for c in book["chapters"]}
+        made = status["made"]
+        span = _span([by_index[i] for i in made])
+        minutes = max(1, round(status["estimate_seconds"] / 60))
+        text = (
+            f"Sending {len(made)} chapter(s) of {book['title']} ({span}) to the "
+            f"phone now, about {minutes} min in all."
+        )
+        if status["not_made"]:
+            text += (
+                f" Not narrated yet, so not sent: "
+                f"{_span([by_index[i] for i in status['not_made']])}."
+            )
+        return ToolResult(tool_name="audiobook_send", content=text)
+
+
+def _span(chapters: List[Dict[str, Any]]) -> str:
+    nums = [str(c.get("number") or c["index"]) for c in chapters]
+    if len(nums) == 1:
+        return f"chapter {nums[0]}"
+    if len(nums) == 2:
+        return f"chapters {nums[0]} and {nums[1]}"
+    return f"chapters {nums[0]}-{nums[-1]}"
+
+
 #: Folders a spoken import may read from besides OPENJARVIS_FILE_READ_DIRS:
 #: where the user's books actually are (the reference book is in Downloads).
 #: Only .pdf/.epub, and the tool reads nothing back to the model but counts.

@@ -74,6 +74,8 @@ export interface BookDetail {
   jobs: RenderJob[];
   queue: { paused: boolean; speed: number; break_minutes: number };
   worker: WorkerStatus;
+  /** Only on GET /v1/books/{id} (the page's poll). */
+  delivery?: Delivery;
 }
 
 async function json<T>(res: Response, what: string): Promise<T> {
@@ -208,4 +210,76 @@ export interface ChapterText {
 /** A chapter's text, to read on the page without a narrator. */
 export async function fetchChapterText(id: string, index: number): Promise<ChapterText> {
   return json(await apiFetch(`/v1/books/${enc(id)}/chapters/${index}/text`), 'Loading the chapter');
+}
+
+/** M42 step 4: getting the book off the PC (M4B parts, OneDrive, Telegram). */
+export interface PartStatus {
+  part: number;
+  name: string;
+  chapters: number[];
+  rendered: number;
+  total: number;
+  complete: boolean;
+  exported: null | {
+    file: string;
+    local: string;
+    onedrive: string | null;
+    chapters: number[];
+    partial: boolean;
+    seconds: number;
+    bytes: number;
+    exported_at: string;
+  };
+}
+
+export interface SendStatus {
+  state: 'sending' | 'done' | 'failed' | 'stopped';
+  book: string;
+  title: string;
+  made: number[];
+  not_made: number[];
+  sent: number[];
+  current: number | null;
+  estimate_seconds: number;
+  message: string;
+}
+
+export interface Delivery {
+  folders: { pc: string; onedrive: string | null };
+  part_size: number;
+  auto_export: boolean;
+  parts: PartStatus[];
+  sending: SendStatus | null;
+}
+
+export async function exportBook(id: string): Promise<{ written: string[]; delivery: Delivery }> {
+  const res = await apiFetch(`/v1/books/${enc(id)}/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ partial: true }),
+  });
+  return json(res, 'Export');
+}
+
+export async function sendToPhone(id: string, chapters: string): Promise<{ sending: SendStatus }> {
+  const res = await apiFetch(`/v1/books/${enc(id)}/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chapters }),
+  });
+  return json(res, 'Sending');
+}
+
+/** "2-4", "7", "2, 5, 9": book numbers of the chapters, ranges where they run on. */
+export function chapterSpec(chapters: Pick<BookChapter, 'index' | 'number'>[]): string {
+  const out: string[] = [];
+  let start = 0;
+  for (let i = 1; i <= chapters.length; i++) {
+    if (i < chapters.length && chapters[i].index === chapters[i - 1].index + 1) continue;
+    const a = chapters[start].number ?? String(chapters[start].index);
+    const b = chapters[i - 1].number ?? String(chapters[i - 1].index);
+    out.push(a === b ? a : `${a}-${b}`);
+    start = i;
+  }
+  return out.join(', ');
 }

@@ -32,10 +32,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from openjarvis.audiobooks import pieces as piece_rules
 from openjarvis.audiobooks.queue import (
@@ -97,13 +99,17 @@ class Part:
     def indexes(self) -> List[int]:
         return [c["index"] for c in self.chapters]
 
-    def name(self, last: Optional[Dict[str, Any]] = None) -> str:
-        """'Part 01 (Ch 1-25)'; ``last`` = the last chapter actually in the
-        file when a partial part is written."""
+    def name(
+        self,
+        last: Optional[Dict[str, Any]] = None,
+        first: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """'Part 01 (Ch 1-25)'; ``first``/``last`` = the chapters actually at
+        the ends of the file when a partial part is written."""
         width = max(2, len(str(self.of)))
-        first = _chapter_no(self.chapters[0])
+        start = _chapter_no(first or self.chapters[0])
         end = _chapter_no(last or self.chapters[-1])
-        span = first if first == end else f"{first}-{end}"
+        span = start if start == end else f"{start}-{end}"
         return f"Part {self.number:0{width}d} (Ch {span})"
 
 
@@ -342,8 +348,9 @@ def export_part(
 ) -> Optional[Path]:
     """Write one part (PC folder + OneDrive copy). Returns the PC file, or
     None when nothing was written: not every chapter is rendered (unless
-    ``partial``; then the rendered chapters from the part's start, up to the
-    first gap), or the file is already up to date (unless ``force``)."""
+    ``partial``; then every rendered chapter of the part, gaps skipped -- the
+    chapter markers say which are in), or the file is already up to date
+    (unless ``force``)."""
     store = store or BookStore()
     dest = dest or destinations()
     book = store.load(book_id)
@@ -353,12 +360,11 @@ def export_part(
     )
     if part is None:
         raise ValueError(f"{book['title']} has no part {part_number}")
-    present = []
-    for chapter in part.chapters:
-        path = chapter_file(store, book_id, voice, chapter["index"])
-        if not path.is_file():
-            break
-        present.append((chapter, path))
+    present = [
+        (chapter, path)
+        for chapter in part.chapters
+        if (path := chapter_file(store, book_id, voice, chapter["index"])).is_file()
+    ]
     if not present or (len(present) < len(part.chapters) and not partial):
         return None
     files = [p for _, p in present]
@@ -373,7 +379,8 @@ def export_part(
     ):
         return None
 
-    name = part.name(present[-1][0] if len(present) < len(part.chapters) else None)
+    whole = len(present) == len(part.chapters)
+    name = part.name() if whole else part.name(present[-1][0], present[0][0])
     filename = f"{_safe_name(name)}.m4b"
     folder = dest.root / book_folder_name(book, voice)
     folder.mkdir(parents=True, exist_ok=True)
@@ -542,6 +549,7 @@ def send_chapters(
     store: Optional[BookStore] = None,
     channel: Any = None,
     chat_id: str = "",
+    on_progress: Optional[Callable[[SendResult, int], None]] = None,
 ) -> SendResult:
     """Send rendered chapters to the phone, one Telegram audio message each.
 
@@ -572,6 +580,8 @@ def send_chapters(
         if path.stat().st_size > TELEGRAM_MAX_BYTES:
             result.too_big.append(index)
             continue
+        if on_progress is not None:
+            on_progress(result, index)
         title = piece_rules.announcement(chapter).rstrip(".")
         ok = channel.send_audio(
             chat_id,
@@ -582,3 +592,166 @@ def send_chapters(
         )
         (result.sent if ok else result.failed).append(index)
     return result
+
+
+# ------------------------------------------------- sending in the background
+
+#: Upload speed seen on 10-13 (10.9 MB in 55 s), for "about N minutes".
+UPLOAD_BYTES_PER_SECOND = 200_000
+_send_lock = threading.Lock()
+_status_lock = threading.Lock()
+_send_thread: Optional[threading.Thread] = None
+
+
+def _send_status_path(store: BookStore) -> Path:
+    return store.root / "send-status.json"
+
+
+def _write_send_status(store: BookStore, status: Dict[str, Any]) -> None:
+    path = _send_status_path(store)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    status["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    tmp = path.with_suffix(".tmp")
+    with _status_lock:
+        tmp.write_text(
+            json.dumps(status, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        # On Windows the swap fails while a reader (the page's poll) has the
+        # file open; it is shut again within milliseconds.
+        for attempt in range(20):
+            try:
+                tmp.replace(path)
+                return
+            except PermissionError:
+                time.sleep(0.05)
+        logger.warning("Could not update %s (kept busy by a reader)", path)
+
+
+def send_status(store: Optional[BookStore] = None) -> Optional[Dict[str, Any]]:
+    """The last background send: ``state`` sending / done / failed /
+    stopped (the server restarted mid-send), chapters, sent, current,
+    ``message`` (a sentence for the user)."""
+    store = store or BookStore()
+    try:
+        status = json.loads(_send_status_path(store).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if status.get("state") == "sending" and not sending():
+        status["state"] = "stopped"
+        status["message"] = "Sending stopped when Sage restarted."
+    return status
+
+
+def sending() -> bool:
+    return _send_thread is not None and _send_thread.is_alive()
+
+
+def start_send(
+    book_id: str,
+    voice: Optional[str] = None,
+    chapters: Any = None,
+    *,
+    store: Optional[BookStore] = None,
+    channel: Any = None,
+    chat_id: str = "",
+) -> Dict[str, Any]:
+    """Send chapters to the phone on a background thread (an upload takes
+    ~1 min per chapter) and return the starting status at once. One send at
+    a time: raises RuntimeError while another runs, ValueError when none of
+    the chapters is narrated yet."""
+    global _send_thread
+    store = store or BookStore()
+    book = store.load(book_id)
+    voice = voice or book_voice(book)
+    if isinstance(chapters, str):
+        indexes = parse_chapters(book, chapters)
+    else:
+        indexes = [int(i) for i in chapters or []]
+    made = [i for i in indexes if chapter_file(store, book_id, voice, i).is_file()]
+    if not made:
+        raise ValueError("None of those chapters is narrated yet")
+    size = sum(chapter_file(store, book_id, voice, i).stat().st_size for i in made)
+    with _send_lock:
+        if sending():
+            current = send_status(store) or {}
+            done = len(current.get("sent", []))
+            total = len(current.get("made", []))
+            raise RuntimeError(
+                f"Still sending {current.get('title', 'a book')} to the phone "
+                f"({done} of {total} chapters done)"
+            )
+        status: Dict[str, Any] = {
+            "state": "sending",
+            "book": book_id,
+            "title": book["title"],
+            "voice": voice,
+            "chapters": indexes,
+            "made": made,
+            "not_made": [i for i in indexes if i not in made],
+            "sent": [],
+            "current": None,
+            "estimate_seconds": round(size / UPLOAD_BYTES_PER_SECOND),
+            "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "message": "",
+        }
+        _write_send_status(store, status)
+
+        def run() -> None:
+            def progress(result: SendResult, index: int) -> None:
+                status.update(sent=list(result.sent), current=index)
+                _write_send_status(store, status)
+
+            started = time.monotonic()
+            try:
+                result = send_chapters(
+                    book_id,
+                    voice,
+                    made,
+                    store=store,
+                    channel=channel,
+                    chat_id=chat_id,
+                    on_progress=progress,
+                )
+                result.not_made = status["not_made"] + result.not_made
+                status.update(
+                    state="done" if result.ok else "failed",
+                    sent=result.sent,
+                    current=None,
+                    message=result.describe(book),
+                )
+            except Exception as exc:
+                logger.warning("Sending %s to the phone failed", book_id, exc_info=True)
+                status.update(
+                    state="failed", current=None, message=f"Could not send: {exc}."
+                )
+            logger.info(
+                "audiobook %s: sent %s to the phone in %.0f s",
+                book_id,
+                status["sent"],
+                time.monotonic() - started,
+            )
+            _write_send_status(store, status)
+
+        _send_thread = threading.Thread(target=run, name="audiobook-send", daemon=True)
+        _send_thread.start()
+    return dict(status)
+
+
+def delivery(
+    book_id: str, voice: Optional[str] = None, *, store: Optional[BookStore] = None
+) -> Dict[str, Any]:
+    """What the Books page shows about getting this book off the PC: the
+    folders, every part's state, and the last send if it was this book's."""
+    store = store or BookStore()
+    dest = destinations()
+    sent = send_status(store)
+    return {
+        "folders": {
+            "pc": str(dest.root),
+            "onedrive": str(dest.onedrive) if dest.onedrive else None,
+        },
+        "part_size": PART_SIZE,
+        "auto_export": auto_export_enabled(),
+        "parts": part_status(book_id, voice, store=store),
+        "sending": sent if sent and sent.get("book") == book_id else None,
+    }

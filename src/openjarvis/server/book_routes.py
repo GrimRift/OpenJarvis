@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from openjarvis.audiobooks import export
 from openjarvis.audiobooks.library import Library
 
 #: Largest book file the page accepts (the reference PDF is 12 MB).
@@ -96,7 +97,52 @@ def create_book_router(
     @router.get("/{book_id}")
     async def book_detail(book_id: str) -> Dict[str, Any]:
         _book_or_404(book_id)
-        return lib().detail(book_id)
+        library = lib()
+        return {
+            **library.detail(book_id),
+            "delivery": export.delivery(book_id, store=library.store),
+        }
+
+    @router.post("/{book_id}/export")
+    async def export_parts(book_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """M4B parts to the Audiobooks folder + OneDrive. ``parts`` (list of
+        numbers, default all), ``partial`` (default true: what is made so
+        far), ``force``."""
+        _book_or_404(book_id)
+        store = lib().store
+        try:
+            written = await asyncio.to_thread(
+                export.export_parts,
+                book_id,
+                None,
+                body.get("parts") or None,
+                partial=bool(body.get("partial", True)),
+                force=bool(body.get("force", False)),
+                store=store,
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {
+            "written": [str(p) for p in written],
+            "delivery": export.delivery(book_id, store=store),
+        }
+
+    @router.post("/{book_id}/send")
+    async def send_to_phone(book_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Chapters to the phone by Telegram, in the background: ``chapters``
+        ("5-10", book numbering) or ``indexes`` (list)."""
+        _book_or_404(book_id)
+        store = lib().store
+        chapters = body.get("indexes") or str(body.get("chapters") or "").strip()
+        if not chapters:
+            raise HTTPException(400, "Say which chapters to send")
+        try:
+            status = export.start_send(book_id, None, chapters, store=store)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"sending": status}
 
     @router.get("/{book_id}/cover")
     async def book_cover(book_id: str):

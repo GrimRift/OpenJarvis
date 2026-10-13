@@ -28,6 +28,8 @@ def _book(store, n=5, skip=()):
             "number": str(i),
             "title": f"Chapter {i}" if i != 2 else "The Well",
             "skip": i in skip,
+            "words": 100,
+            "skip_reason": None,
             "file": f"chapters/{i:04d}.txt",
         }
         for i in range(1, n + 1)
@@ -304,3 +306,128 @@ def test_telegram_send_audio_posts_multipart(tmp_path, monkeypatch):
     }
     assert posted["mime"] == "audio/mp4" and posted["body"] == b"aac"
     assert TelegramChannel(bot_token="").send_audio("1", str(audio)) is False
+
+
+# ------------------------------------------ background send, routes, tools
+
+
+def _fake_files(store, book, indexes, voice=VOICE):
+    for i in indexes:
+        f = chapter_file(store, book["id"], voice, i)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x" * 10)
+
+
+def _wait_send(store):
+    import time
+
+    for _ in range(200):
+        if not export.sending():
+            return export.send_status(store)
+        time.sleep(0.02)
+    raise AssertionError("send did not finish")
+
+
+def test_start_send_runs_in_the_background_and_records_progress(env):
+    store, _ = env
+    book = _book(store, n=4)
+    _fake_files(store, book, [1, 2])
+    phone = FakePhone()
+    status = export.start_send(
+        book["id"], None, "1-3", store=store, channel=phone, chat_id="42"
+    )
+    assert status["state"] == "sending" and status["made"] == [1, 2]
+    assert status["not_made"] == [3]
+    done = _wait_send(store)
+    assert done["state"] == "done" and done["sent"] == [1, 2]
+    assert "Sent chapter(s) 1, 2" in done["message"]
+    assert "Not narrated yet: 3" in done["message"]
+    with pytest.raises(ValueError):
+        export.start_send(book["id"], None, "4", store=store, channel=phone)
+
+
+def test_one_send_at_a_time(env):
+    import threading
+
+    store, _ = env
+    book = _book(store, n=2)
+    _fake_files(store, book, [1, 2])
+    gate = threading.Event()
+
+    class SlowPhone(FakePhone):
+        def send_audio(self, *a, **k):
+            gate.wait(5)
+            return super().send_audio(*a, **k)
+
+    export.start_send(book["id"], None, "1", store=store, channel=SlowPhone())
+    with pytest.raises(RuntimeError, match="Still sending"):
+        export.start_send(book["id"], None, "2", store=store, channel=FakePhone())
+    gate.set()
+    assert _wait_send(store)["sent"] == [1]
+
+
+def test_a_send_cut_by_a_restart_reads_as_stopped(env):
+    store, _ = env
+    export._write_send_status(store, {"state": "sending", "book": "b", "sent": []})
+    assert export.send_status(store)["state"] == "stopped"
+
+
+def _client(store):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from openjarvis.audiobooks.library import Library
+    from openjarvis.server.book_routes import create_book_router
+
+    app = FastAPI()
+    app.include_router(create_book_router(lambda: Library(store)))
+    return TestClient(app)
+
+
+@needs_ffmpeg
+def test_routes_export_send_and_detail_delivery(env, monkeypatch):
+    store, dest = env
+    monkeypatch.setattr(export, "destinations", lambda: dest)
+    book = _book(store, n=3)
+    _render(store, book, 1)
+    _render(store, book, 3)
+    client = _client(store)
+    r = client.post(f"/v1/books/{book['id']}/export", json={})
+    assert r.status_code == 200
+    # gaps are skipped in a partial part; the name says the ends
+    assert [Path(p).name for p in r.json()["written"]] == ["Part 01 (Ch 1-3).m4b"]
+    delivery = client.get(f"/v1/books/{book['id']}").json()["delivery"]
+    assert delivery["parts"][0]["exported"]["chapters"] == [1, 3]
+    assert delivery["folders"]["pc"] == str(dest.root)
+    phone = FakePhone()
+    monkeypatch.setattr(export, "_phone_channel", lambda: (phone, "42"))
+    r = client.post(f"/v1/books/{book['id']}/send", json={"chapters": "1"})
+    assert r.status_code == 200 and r.json()["sending"]["made"] == [1]
+    _wait_send(store)
+    sent = client.get(f"/v1/books/{book['id']}").json()["delivery"]["sending"]
+    assert sent["state"] == "done" and phone.sent[0][1] == "0001.m4a"
+    r = client.post(f"/v1/books/{book['id']}/send", json={"chapters": "2"})
+    assert r.status_code == 400 and "narrated" in r.json()["detail"]
+
+
+def test_chat_tools_export_and_send(env, monkeypatch):
+    from openjarvis.audiobooks.library import Library
+    from openjarvis.tools import audiobook_tool as tools
+
+    store, dest = env
+    monkeypatch.setattr(export, "destinations", lambda: dest)
+    book = _book(store, n=30)
+    lib = Library(store)
+    r = tools.AudiobookExportTool(lib).execute()
+    assert r.success and "No chapters" in r.content
+    phone = FakePhone()
+    monkeypatch.setattr(export, "_phone_channel", lambda: (phone, "42"))
+    _fake_files(store, book, [26, 27])
+    r = tools.AudiobookSendTool(lib).execute(part=2)
+    assert r.success and "Sending 2 chapter(s)" in r.content
+    assert "chapters 26 and 27" in r.content
+    assert "Not narrated yet, so not sent: chapters 28-30" in r.content
+    _wait_send(store)
+    assert [s[1] for s in phone.sent] == ["0026.m4a", "0027.m4a"]
+    assert not tools.AudiobookSendTool(lib).execute(part=3).success
+    assert not tools.AudiobookSendTool(lib).execute().success

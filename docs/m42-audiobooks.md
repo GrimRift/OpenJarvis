@@ -371,8 +371,9 @@ its chapters are rendered** (and on request).
 - `export_parts(book_id, voice=None, parts=None, *, partial=False, force=False)
   -> list[Path]`: writes the given parts (default all) that are complete and
   not already up to date; returns the PC files written. `partial=True` also
-  writes a part still being narrated, from its start up to the first missing
-  chapter ("Part 01 (Ch 1-3).m4b"); the full part replaces it later (an older
+  writes a part still being narrated: every rendered chapter of it, gaps
+  skipped (since 10-14; the chapter markers say which are in), named by the
+  first and last ("Part 01 (Ch 1-3).m4b"); the full part replaces it later (an older
   "Part 01 (...)" file is removed in both folders). `export_part(book_id, n,
   ...) -> Path | None` = one part.
 - `part_status(book_id, voice=None) -> list[dict]`: per part `part`, `name`,
@@ -416,6 +417,34 @@ performer=)` (`sendAudio`, M4A as `audio/mp4`, 300 s timeout). Chapters over
 **CLI:** `parts <book>`, `export <book> [--parts 1,3] [--partial] [--force]
 [--voice v]`, `send <book> --chapters 5-10 [--voice v]` (loads
 credentials.toml for the bot token like `jarvis serve`).
+
+**Wired into the page and chat (10-14).** User's choices: **Export M4B writes
+everything narrated so far** (complete parts + partial ones); **Send to phone
+opens a small chapters box prefilled with the next ready chapters from where
+you are** (up to 3, e.g. "2-3"), edit and Send.
+- **Background send:** `start_send(book_id, voice, chapters) -> status` runs
+  `send_chapters` on a thread (one send at a time: RuntimeError while one runs;
+  ValueError if none of the chapters is narrated) and keeps
+  `<data>/books/send-status.json` (state sending / done / failed / stopped,
+  made, not_made, sent, current, estimate_seconds at ~200 KB/s, message).
+  `send_status()` reads it ("sending" with no live thread = "stopped": Sage
+  restarted mid-send). Status writes retry the swap: on Windows it fails while
+  the page's poll has the file open (seen in a test). `delivery(book_id)` =
+  folders, part size, auto on/off, `part_status`, this book's last send.
+- **Routes:** `GET /v1/books/{id}` now carries `delivery`;
+  `POST {id}/export` (`parts`, `partial` default true, `force`) -> written +
+  delivery; `POST {id}/send` (`chapters` "5-10" or `indexes`) -> starting
+  status at once (400 none narrated, 409 already sending).
+- **Page:** the two buttons in the control strip, the send box, and one line
+  under it: parts exported (partial count) to the PC folder + OneDrive, or
+  that complete parts export by themselves; "Sending to phone: Chapter 2 (1 of
+  3)" with a spinner, then the result sentence.
+- **Chat tools** (live config `[agent] tools`): `audiobook_export` (writes what
+  is narrated, says which parts and where) and `audiobook_send` (`chapters`, or
+  `part` = that part's chapters; starts the background send and says how many
+  and about how long; lists chapters not narrated yet). Data-boundary audit:
+  export = local access (OneDrive syncs, the tool sends nothing),
+  send = channel outbound like `image_to_phone`.
 
 **Verified 10-13 ~20:45 on the reference book (chapters 1-3, live data,
 staging code):** `export --parts 1 --partial` -> `D:\Audiobooks\The Artist Who
@@ -486,7 +515,7 @@ streaming) and comes back 1.5 s after, unless the user paused it.
    over the 2-voice pick): see "Step 2 result" above.
 3. ~~Render queue~~ DONE 2026-10-13 (above).
 4. ~~Export~~ DONE 2026-10-13 (above): M4B parts + OneDrive copy + Telegram
-   send; the Books page's Export / Send buttons and an export/send chat tool
-   are still to wire (step 5's side).
+   send; Books page Export / Send buttons + `audiobook_export` /
+   `audiobook_send` chat tools wired 2026-10-14.
 5. ~~Books page + chat tools~~ DONE 2026-10-13 (above).
 6. Narrator cloning flow for new voices.

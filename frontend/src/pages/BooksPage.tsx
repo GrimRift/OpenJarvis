@@ -18,19 +18,23 @@ import {
 import { fetchSpeechVoices, type LocalVoiceInfo } from '../lib/api';
 import {
   cancelJob,
+  chapterSpec,
   clock,
   coverPath,
+  exportBook,
   fetchBlobUrl,
   fetchBook,
   fetchBooks,
   importBook,
   queueRender,
+  sendToPhone,
   setBookVoice,
   updateQueue,
   workerLine,
   type BookChapter,
   type BookDetail,
   type BookSummary,
+  type Delivery,
 } from '../lib/books';
 import { useBookPlayer } from '../lib/book-player';
 import { ChapterReader } from '../components/Books/ChapterReader';
@@ -40,7 +44,7 @@ import { ChapterReader } from '../components/Books/ChapterReader';
  * 2026-10-13: the book list on the left; the open book starts with a big
  * now-listening player, then what the render worker is doing, one control
  * strip and the chapter table; a mini player sticks to the bottom once the
- * big one scrolls away. Export / Send arrive with step 4.
+ * big one scrolls away. Export M4B / Send to phone use step 4 (export.py).
  */
 
 const POLL_MS = 5000;
@@ -239,6 +243,11 @@ function BookView({
   const [range, setRange] = useState('');
   const [ahead, setAhead] = useState(5);
   const [reading, setReading] = useState<number | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendSpec, setSendSpec] = useState('');
+  const [exported, setExported] = useState<string[] | null>(null);
+  const delivery = book.delivery;
+  const sendingNow = delivery?.sending?.state === 'sending';
 
   // A callback ref, not a mount effect: the big player is a new element every
   // time the reader closes, and an observer left on the old one reported it
@@ -260,6 +269,9 @@ function BookView({
   const here = book.chapters.find((c) => c.index === (playingHere?.index ?? book.position));
   const current: BookChapter | undefined = here ?? ready[0];
   const totalReady = ready.reduce((s, c) => s + (c.seconds ?? 0), 0);
+  // Send box prefill (user's choice): the next ready chapters from where you are.
+  const ahead3 = ready.filter((c) => c.index >= (book.position ?? 0)).slice(0, 3);
+  const nextUnheard = chapterSpec(ahead3.length ? ahead3 : ready.slice(0, 3));
   const w = book.worker;
   const workingHere = w.book === book.id && ['rendering', 'waiting', 'starting'].includes(w.state);
   const counts = useMemo(() => {
@@ -323,6 +335,12 @@ function BookView({
     act('queue', () =>
       queueRender(book.id, mode === 'ahead' ? { ahead } : mode === 'range' ? { chapters: range } : {}),
     );
+
+  const send = () =>
+    act('send', async () => {
+      await sendToPhone(book.id, sendSpec.trim());
+      setSendOpen(false);
+    });
 
   return (
     <div>
@@ -444,10 +462,50 @@ function BookView({
           </select>
         </label>
         <span className="ml-auto flex gap-2">
-          <button className={btn} style={{ ...btnStyle, opacity: 0.45 }} disabled title="Comes with M42 step 4"><Package size={14} /> Export M4B</button>
-          <button className={btn} style={{ ...btnStyle, opacity: 0.45 }} disabled title="Comes with M42 step 4"><Smartphone size={14} /> Send to phone</button>
+          <button
+            className={btn}
+            style={btnStyle}
+            disabled={busy === 'export' || ready.length === 0}
+            onClick={() => void act('export', () => exportBook(book.id).then((r) => setExported(r.written)))}
+            title={`Write M4B parts (${delivery?.part_size ?? 25} chapters each) of what is narrated to ${delivery?.folders.pc ?? 'the Audiobooks folder'}${delivery?.folders.onedrive ? ' and OneDrive' : ''}`}
+          >
+            {busy === 'export' ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />} Export M4B
+          </button>
+          <button
+            className={btn}
+            style={sendOpen ? priStyle : btnStyle}
+            disabled={ready.length === 0}
+            onClick={() => {
+              if (!sendOpen) setSendSpec(nextUnheard);
+              setSendOpen(!sendOpen);
+            }}
+            title="Send narrated chapters to your phone (Telegram)"
+          >
+            <Smartphone size={14} /> Send to phone
+          </button>
         </span>
       </div>
+
+      {sendOpen && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px] justify-end" style={{ color: 'var(--color-text-secondary)' }}>
+          Chapters
+          <input
+            autoFocus
+            value={sendSpec}
+            onChange={(e) => setSendSpec(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && sendSpec.trim() && void send()}
+            placeholder="e.g. 2-4"
+            className="w-28 px-2 py-1.5 rounded-lg"
+            style={selectStyle}
+          />
+          <button className={btn} style={priStyle} disabled={busy === 'send' || !sendSpec.trim() || sendingNow} onClick={() => void send()}>
+            {busy === 'send' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />} Send
+          </button>
+          <button className="cursor-pointer" title="Close" onClick={() => setSendOpen(false)}><X size={14} /></button>
+        </div>
+      )}
+
+      {delivery && <DeliveryLine delivery={delivery} chapters={book.chapters} exported={exported} />}
 
       {book.jobs.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2 text-[12px]">
@@ -532,6 +590,43 @@ function BookView({
           <div className="flex-1"><Scrubber pct={pct} disabled={!canSeek} onSeek={seekTo} /></div>
           <span className="text-[12px] tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>{clock(position)} / {clock(duration || null)}</span>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** One line under the controls: what is exported where, and the last send. */
+function DeliveryLine({ delivery, chapters, exported }: { delivery: Delivery; chapters: BookChapter[]; exported: string[] | null }) {
+  const done = delivery.parts.filter((p) => p.exported);
+  const s = delivery.sending;
+  const label = (i: number | null) => chapters.find((c) => c.index === i)?.label ?? `#${i}`;
+  const parts: string[] = [];
+  if (exported && exported.length === 0) parts.push('Export: already up to date');
+  if (done.length) {
+    const partial = done.filter((p) => p.exported?.partial).length;
+    parts.push(
+      `${done.length} part${done.length > 1 ? 's' : ''} exported${partial ? ` (${partial} partial)` : ''} to ${delivery.folders.pc}` +
+        (delivery.folders.onedrive ? ' + OneDrive' : ''),
+    );
+  } else {
+    parts.push(
+      delivery.auto_export
+        ? `Parts of ${delivery.part_size} chapters are exported by themselves when complete`
+        : 'Nothing exported yet',
+    );
+  }
+  let sendLine: string | null = null;
+  if (s?.state === 'sending')
+    sendLine = `Sending to phone: ${label(s.current)} (${s.sent.length + 1} of ${s.made.length})`;
+  else if (s?.message) sendLine = s.message;
+  return (
+    <div className="mt-2 text-[12px] flex flex-wrap gap-x-4 gap-y-1 justify-end" style={{ color: 'var(--color-text-tertiary)' }}>
+      {parts.map((t) => <span key={t}>{t}</span>)}
+      {sendLine && (
+        <span className="inline-flex items-center gap-1.5" style={{ color: s?.state === 'failed' ? 'var(--color-error)' : undefined }}>
+          {s?.state === 'sending' && <Loader2 size={12} className="animate-spin" />}
+          {sendLine}
+        </span>
       )}
     </div>
   );
