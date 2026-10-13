@@ -300,9 +300,22 @@ restart, crash or pause continues from there. A changed text or voice starts
 the chapter over.
 
 **Before the book voice starts:** commit headroom (free commit + what the
-pagefile may still grow by: 16 GB fixed, 24 GB max here) >= 7 GB for Turbo /
-5.5 GB Nano, and free VRAM >= 4.0 / 2.4 GB; otherwise the status says "not
-enough memory ... (restarting Sage frees some)" and it retries every minute.
+pagefile may still grow by: 16 GB initial, 24 GB max here) >= 10.5 GB for
+Turbo / 8 GB Nano, and free VRAM >= 4.0 / 2.4 GB; otherwise the status says
+"not enough memory ... (restarting Sage frees some)" and it retries every
+minute. **While rendering**, if less than 1.5 GB can still be committed, the
+book voice is stopped at once (pieces kept) so live Sage is never the process
+that cannot allocate.
+
+**Measured on live 10-13 19:01 (why those numbers):** the Turbo book voice
+held **8.6 GB of commit** while rendering (on WDDM the CUDA allocations count
+against commit), the live Nano sidecar 6.1 GB an hour after a start, the
+server 4.5 GB; free commit fell to **0.8 GB with the pagefile at its 24 GB
+maximum**. The first live run started under the old 7 GB threshold and was
+paused by hand. The process that had grown to 10.4 GB by the afternoon was
+most likely the live voice sidecar, not the server (step 2 said server). A
+larger pagefile maximum would let rendering run beside a long-running Sage;
+it is the user's setting to change.
 
 **Listening back** (`check.py`, faster-whisper base.en, CPU, 2 threads, run
 while the next pieces render): a piece is retaken (up to 2 more takes, best

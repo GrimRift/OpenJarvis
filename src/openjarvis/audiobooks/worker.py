@@ -27,7 +27,12 @@ from openjarvis.audiobooks.check import WhisperTranscriber
 from openjarvis.audiobooks.queue import RenderQueue
 from openjarvis.audiobooks.render import ChapterRenderer, Stopped
 from openjarvis.audiobooks.store import BookStore
-from openjarvis.audiobooks.voiceproc import BookVoice, resource_problem, voice_exists
+from openjarvis.audiobooks.voiceproc import (
+    BookVoice,
+    resource_problem,
+    running_memory_problem,
+    voice_exists,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +76,7 @@ class RenderWorker(threading.Thread):
         busy: Callable[[], Optional[str]] = live_busy,
         transcriber: Any = "default",
         resources: Callable[[str], Optional[str]] = resource_problem,
+        memory: Callable[[], Optional[str]] = running_memory_problem,
         poll: float = POLL_SECONDS,
     ) -> None:
         super().__init__(name="audiobook-render", daemon=True)
@@ -82,6 +88,8 @@ class RenderWorker(threading.Thread):
             WhisperTranscriber() if transcriber == "default" else transcriber
         )
         self.resources = resources
+        self.memory = memory
+        self._memory_stop: Optional[str] = None
         self.poll = poll
         self._halt = threading.Event()
         self._idle_since: Optional[float] = None
@@ -181,6 +189,10 @@ class RenderWorker(threading.Thread):
             data = self.queue.load()
             if data["paused"] or not self.queue.active(job_id):
                 return False
+            low = self.memory()
+            if low:
+                self._memory_stop = low
+                return False
             reason = self.busy()
             if not reason:
                 self._set_status("rendering", **where, **progress)
@@ -208,6 +220,14 @@ class RenderWorker(threading.Thread):
         try:
             result = renderer.render(job["book"], index, voice)
         except Stopped:
+            if self._memory_stop:
+                # Free the book voice's memory now; the start check decides
+                # when there is room again. Finished pieces are kept.
+                self.voice.stop()
+                self._set_status("waiting", reason=self._memory_stop, **where)
+                self._memory_stop = None
+                self._retry_at = time.monotonic() + RESOURCE_RETRY_SECONDS
+                return
             self._set_status("stopped", **where, **progress)
             return
         except Exception as exc:

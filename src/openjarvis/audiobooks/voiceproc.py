@@ -38,7 +38,14 @@ START_TIMEOUT_SECONDS = 240.0
 SYNTH_TIMEOUT_SECONDS = 180.0
 #: Commit (GB) a render process needs to load, with room left for the live
 #: server: a Turbo process peaked ~5 GB beside Sage on 10-13; Nano ~4.3 GB.
-COMMIT_NEEDED_GB = {"turbo": 7.0, "nano": 5.5}
+#: Measured on live 10-13 19:01: the Turbo book voice held 8.6 GB of commit
+#: while rendering (on WDDM the CUDA allocations count too), the live Nano
+#: sidecar 6.1 GB an hour after a start (it grew to ~10 GB over a day).
+COMMIT_NEEDED_GB = {"turbo": 10.5, "nano": 8.0}
+#: While rendering, stop the book voice when less than this can still be
+#: committed, so live Sage is never the process that cannot allocate. On
+#: 10-13 a render left 0.8 GB with the pagefile at its maximum.
+MIN_RUNNING_HEADROOM_GB = 1.5
 #: Free VRAM (GB) needed on the card: Turbo peaked 3.69 GB in the process
 #: (card 6.23 GB with live Nano beside it); Nano ~2.2 GB.
 VRAM_NEEDED_GB = {"turbo": 4.0, "nano": 2.4}
@@ -117,6 +124,14 @@ def free_vram_gb() -> Optional[float]:
         return round(int(out.strip().splitlines()[0]) / 1024, 1)
     except Exception:
         return None
+
+
+def running_memory_problem() -> Optional[str]:
+    """Why a running book voice must stop to protect live Sage, or None."""
+    headroom = commit_headroom_gb()
+    if headroom is not None and headroom < MIN_RUNNING_HEADROOM_GB:
+        return f"memory ran low while rendering ({headroom:.1f} GB left): stopped"
+    return None
 
 
 def resource_problem(voice: str) -> Optional[str]:

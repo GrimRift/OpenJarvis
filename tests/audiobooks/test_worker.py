@@ -62,9 +62,15 @@ def setup(tmp_path, monkeypatch):
     return book, store
 
 
-def _worker(store, voice, busy=lambda: None, resources=lambda v: None):
+def _worker(store, voice, busy=lambda: None, resources=lambda v: None, memory=None):
     return RenderWorker(
-        store, voice, busy=busy, transcriber=None, resources=resources, poll=0
+        store,
+        voice,
+        busy=busy,
+        transcriber=None,
+        resources=resources,
+        memory=memory or (lambda: None),
+        poll=0,
     )
 
 
@@ -167,3 +173,16 @@ def test_live_busy_reads_the_servers_activity(monkeypatch):
     monkeypatch.setattr("openjarvis.speech.player.is_speaking", lambda: True)
     assert live_busy() == "Sage is speaking"
     activity.reset()
+
+
+def test_low_memory_mid_chapter_stops_the_book_voice(setup):
+    book, store = setup
+    RenderQueue(store).add(book["id"], "range", chapters=[1])
+    voice = FakeBookVoice()
+    left = iter([None, "memory ran low while rendering (0.8 GB left): stopped"])
+    w = _worker(store, voice, memory=lambda: next(left, None))
+    w.step()
+    assert voice.said == ["Chapter 1."]
+    assert not voice.up  # stopped at once, not after the idle wait
+    status = _status(store)
+    assert status["state"] == "waiting" and "memory ran low" in status["reason"]
