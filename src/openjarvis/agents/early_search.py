@@ -106,4 +106,35 @@ def _localised(text: str) -> str:
     return out
 
 
-__all__ = ["early_search_query"]
+_WORD = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
+_FILLER = frozenset(
+    "what whats is are was who when where which how much many long old big far "
+    "the a an of for to in on at and or vs versus better best does do did can "
+    "you check find look up search there it its this that be will has have "
+    "about than with".split()
+)
+
+
+def _key_words(text: str) -> set:
+    return {w for w in _WORD.findall(str(text or "").lower()) if w not in _FILLER}
+
+
+def matches_model_query(early_query: str, model_query: str) -> bool:
+    """Whether the early search answers the search the model asked for.
+
+    The model knows the conversation; the early search only has the
+    message. "which is better for sage?" -- about two local models just
+    discussed -- went out as written and its sage-herb recipes were handed
+    back as the result of the model's "Qwen3.5 4B 9B tool calling BFCL
+    benchmark" (10 October). Used when at least a third of the message's
+    key words are in the model's query: the model rewrites ("USD to PHP
+    exchange rate") but keeps the subject.
+    """
+    early = _key_words(early_query)
+    if not early:
+        return False
+    model = _key_words(model_query)
+    return len(early & model) * 3 >= len(early)
+
+
+__all__ = ["early_search_query", "matches_model_query"]

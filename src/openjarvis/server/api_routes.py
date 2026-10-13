@@ -715,8 +715,10 @@ async def wake_word_stream(websocket: WebSocket):
     from dataclasses import replace
 
     from openjarvis.speech.player import is_speaking
+    from openjarvis.speech.speaker_id import clearly_the_user as _clearly_the_user
     from openjarvis.speech.wake_word_verify import (
         LOW_SCORE_NOTE,
+        NOISY_ROOM_NOTE,
         SILENT_FRAME,
         VERIFY_STAGE_FRAMES,
         VERIFY_STAGE_SECONDS,
@@ -935,13 +937,24 @@ async def wake_word_stream(websocket: WebSocket):
                     )
                 if verdict is not None:
                     verdict = noisy_room.judge(verdict)
+                    if verdict.note == NOISY_ROOM_NOTE and await asyncio.to_thread(
+                        _clearly_the_user,
+                        getattr(websocket.app.state, "config", None),
+                        ring.pcm(),
+                    ):
+                        # The room is noisy, but this is the user's own voice:
+                        # the piano the rule exists for is no one's voice.
+                        verdict = replace(verdict, confirmed=True, note="muffled")
+                        wake_log.info(
+                            "Wake word kept in a noisy room: the user's voice"
+                        )
                     # Not while media plays: at MEDIA_THRESHOLD the video
                     # fires the detector every few seconds, each rejected
                     # (strict rule), and counting them kept the noisy-room
                     # rule on -- it dropped the user's muffled "Hey Sage"
                     # ("I'm Sage.", 8 October 07:39:24).
                     if not verdict.confirmed and not getattr(detector, "media", False):
-                        noisy_room.rejected()
+                        noisy_room.rejected(verdict.heard)
                         if verdict.note:
                             wake_log.info(
                                 "Wake word rejected (%s): heard %r",

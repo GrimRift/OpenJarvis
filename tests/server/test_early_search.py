@@ -75,3 +75,21 @@ def test_a_long_message_is_left_to_the_model():
 def test_a_price_or_peso_is_the_philippines_unless_said(text, query):
     """9 October: "dollar to peso" searched as-is came back as the Mexican peso."""
     assert early_search_query(text, has_history=False) == query
+
+
+def test_the_model_query_must_share_the_subject():
+    from openjarvis.agents.early_search import matches_model_query
+
+    # 10 October: sage-herb recipes returned for a Qwen benchmark search.
+    assert not matches_model_query(
+        "which is better for sage?",
+        "Qwen3.5 4B 9B tool calling BFCL benchmark official results",
+    )
+    assert matches_model_query(
+        "When is the next public holiday?", "next public holiday Philippines 2026"
+    )
+    assert matches_model_query(
+        "US dollar to Philippine peso exchange rate today",
+        "USD to PHP exchange rate today",
+    )
+    assert not matches_model_query("what is it?", "anything")

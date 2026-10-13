@@ -12,6 +12,7 @@ import {
 } from '../../lib/image-attach';
 import { apiFetch } from '../../lib/api';
 import { streamChat, streamResearch } from '../../lib/sse';
+import { RoundSpeech } from '../../lib/round-speech';
 import { finalizePendingRewind } from '../../lib/rewind';
 import { researchHistory } from '../../lib/research-history';
 import type { FluxWord } from '../../lib/barge-in';
@@ -942,6 +943,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         incrementalSpeech?.flush?.();
       }
     };
+    // Each model round says its opening and holds the rest until it is
+    // known to be the answer, not a draft before a tool (lib/round-speech.ts).
+    const roundSpeech = new RoundSpeech(speakDelta);
     // A tool is about to run: say the line before it now, not after it.
     const flushSpeech = () => {
       if (fillerPlaying) flushHeld = true;
@@ -980,6 +984,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // ended and the words held behind it have gone out.
     const finishSpeech = () => {
       if (!incrementalSpeech) return undefined;
+      if (!userStopped) roundSpeech.release();
       if (!fillerPlaying) return incrementalSpeech.finish();
       return fillerPlaying.then(() => {
         releaseHeld();
@@ -1256,8 +1261,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           // The model wrote this in the same round as a tool call: a
           // preamble, not the answer. Take it off the message (the answer
           // after the tool restates it) and let it stand as the status line
-          // while the tool runs. Speech already synthesised from it cannot
-          // be unsaid; that is the one limit here.
+          // while the tool runs. Its opening was said; the rest was held
+          // (lib/round-speech.ts) and is dropped unspoken.
           try {
             const data = JSON.parse(sseEvent.data);
             const chars = Number(data.chars ?? 0);
@@ -1266,6 +1271,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
             }
             const said = String(data.text ?? '').trim();
+            roundSpeech.retract();
             if (said) flushSpeech();
             if (said) setStreamState({ phase: said.length > 80 ? `${said.slice(0, 77)}...` : said });
           } catch {
@@ -1371,7 +1377,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               if (!ttftMs) ttftMs = Date.now() - startTime;
               accumulatedContent += delta.content;
               noteContentStarted();
-              speakDelta(delta.content);
+              roundSpeech.push(delta.content);
 
               const now = Date.now();
               if (
@@ -1385,7 +1391,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 lastFlush = now;
               }
             }
-            if (data.choices?.[0]?.finish_reason === 'stop') break;
+            if (data.choices?.[0]?.finish_reason === 'stop') {
+              roundSpeech.release();
+              break;
+            }
           } catch {}
         }
       }
@@ -2517,8 +2526,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // Echo cancellation chops a word said over the reply; with the reply
     // turned down the next one arrives whole (lib/voice-duck.ts). Only a
     // dip: whether to stop is still barge-in's decision, from words.
-    onVoiceOverSage: () => {
-      if (duckSpeech()) voiceTrace('barge.duck');
+    onVoiceOverSage: (peak) => {
+      if (duckSpeech()) voiceTrace('barge.duck', { peak });
     },
     onUnavailable: handleFluxUnavailable,
   });

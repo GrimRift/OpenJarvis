@@ -451,6 +451,15 @@ class TestNoisyRoom:
         clock["t"] += 61
         assert room.judge(self.MUFFLED).confirmed
 
+    def test_the_users_own_retries_do_not_keep_the_room_noisy(self):
+        # 12 October: each dropped "Hey Sage" counted as a rejection and
+        # kept the rule on for the next one -- 8 in 3 minutes.
+        room, _ = self._room()
+        room.rejected("")
+        for _ in range(3):
+            room.rejected("Hey Sage.")
+        assert room.judge(self.MUFFLED).confirmed
+
     def test_a_clear_accept_is_never_touched(self):
         room, _ = self._room()
         for _ in range(5):

@@ -329,8 +329,16 @@ class NoisyRoom:
         self._now = now
         self._rejected: Deque[float] = deque()
 
-    def rejected(self) -> None:
-        """Record a firing whose final verdict was a rejection."""
+    def rejected(self, heard: str = "") -> None:
+        """Record a firing whose final verdict was a rejection.
+
+        Not one that was heard as "Hey Sage": that is the user calling again,
+        and counting it kept the room "noisy" for as long as they kept
+        trying -- 8 of their own "Hey Sage"s dropped in 3 minutes on 12
+        October, each one renewing the rule that dropped the next.
+        """
+        if heard and heard_wake_phrase(heard, muffled=True):
+            return
         self._rejected.append(self._now())
 
     def judge(self, verdict: Verdict) -> Verdict:

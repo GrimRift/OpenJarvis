@@ -375,10 +375,21 @@ def _after_two_rejections(heard, no_speech):
         return _fire(ws)
 
 
-def test_a_muffled_hey_sage_in_a_noisy_room_is_rejected():
+def test_a_muffled_hey_sage_in_a_noisy_room_is_rejected(monkeypatch):
     # 29 September: a piano fired the detector every few seconds and tiny.en,
     # prompted with the phrase, wrote "Hey Sage." for some of it (muffled).
+    import openjarvis.speech.speaker_id as sid
+
+    monkeypatch.setattr(sid, "clearly_the_user", lambda config, pcm: False)
     assert _after_two_rejections("Hey Sage.", 0.64)["type"] == "rejected"
+
+
+def test_a_muffled_hey_sage_in_the_users_voice_wakes_in_a_noisy_room(monkeypatch):
+    import openjarvis.speech.speaker_id as sid
+
+    monkeypatch.setattr(sid, "clearly_the_user", lambda config, pcm: True)
+    reply = _after_two_rejections("Hey Sage.", 0.64)
+    assert reply["type"] == "detected" and reply["verified"] is True
 
 
 def test_a_clear_hey_sage_in_a_noisy_room_still_wakes():
@@ -488,7 +499,9 @@ def test_video_firings_do_not_make_the_room_noisy(monkeypatch):
     from openjarvis.speech import wake_word_verify as wv
 
     counted = []
-    monkeypatch.setattr(wv.NoisyRoom, "rejected", lambda self: counted.append(1))
+    monkeypatch.setattr(
+        wv.NoisyRoom, "rejected", lambda self, heard="": counted.append(1)
+    )
     monkeypatch.setattr(
         "openjarvis.speech.wake_word_verify.media_is_playing", lambda: True
     )

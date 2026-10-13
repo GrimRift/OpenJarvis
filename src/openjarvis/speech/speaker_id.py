@@ -341,6 +341,31 @@ def get(config: Any) -> Optional[SpeakerId]:
     return _INSTANCE
 
 
+#: A wake clip this close to the user's fingerprint, and this far ahead of
+#: Sage's, is the user beyond doubt. Stricter than ``verdict``: the rejected
+#: firings of 12 October (the user's own murmurs) still scored "user" at
+#: 0.60-0.67; the "Hey Sage"s the noisy-room rule dropped scored 0.76-0.93,
+#: Sage 0.50-0.55.
+CLEAR_USER = 0.75
+CLEAR_USER_MARGIN = 0.15
+
+
+def clearly_the_user(config: Any, pcm: bytes) -> bool:
+    """Whether *pcm* is unmistakably the user's voice; False when unsure,
+    switched off, or the fingerprint cannot be taken."""
+    try:
+        instance = get(config)
+        scored = instance.score(pcm) if instance is not None else None
+    except Exception:  # noqa: BLE001 -- a check that fails keeps the rule
+        logger.debug("speaker check failed", exc_info=True)
+        return False
+    if not scored:
+        return False
+    user = scored["user"]
+    sage = scored["sage"]
+    return user >= CLEAR_USER and (sage is None or user - sage >= CLEAR_USER_MARGIN)
+
+
 #: Seconds between attempts to learn from the kept clips. Tried again, not
 #: once: the first use comes as the page reconnects after a restart, before
 #: the sidecar has loaded, and a one-shot seed learnt nothing (24 September).

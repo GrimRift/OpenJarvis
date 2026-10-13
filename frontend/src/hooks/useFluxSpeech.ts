@@ -5,7 +5,7 @@ import { getBase } from '../lib/api';
 import type { FluxWord, SpeakerCheck } from '../lib/barge-in';
 import { buildWsProtocols } from '../lib/useAgentEvents';
 import { openMicrophone, type MicChoice } from '../lib/mic-device';
-import { voiceOverSage } from '../lib/voice-duck';
+import { DUCK_MIN_WINDOWS, DUCK_SETTLE_MS, sliceLevels } from '../lib/voice-duck';
 import { mediaHeld } from '../lib/media-hold';
 import {
   SPEAKING_MAX_GAIN,
@@ -134,9 +134,10 @@ export interface UseFluxSpeechOptions {
   onTurnResumed?: (turnIndex: number) => void;
   /**
    * The user's voice is in the microphone while Sage speaks and no other
-   * app is audible (lib/voice-duck.ts). Called on every such frame.
+   * app is audible (lib/voice-duck.ts). Called on every such frame, with
+   * its loudest 20 ms slice after the automatic gain.
    */
-  onVoiceOverSage?: () => void;
+  onVoiceOverSage?: (peak: number) => void;
   /**
    * Flux cannot be used, or failed mid-session. `audio` carries whatever of
    * the current turn was captured so the caller can transcribe it locally
@@ -385,6 +386,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   const gainRef = useRef(1);
   /** This stream's own measured room level. */
   const noiseRef = useRef(0);
+  /** Each frame's loudest slice while Sage speaks, traced when it stops. */
+  const leakPeaksRef = useRef<number[]>([]);
+  /** The loudest of them in Sage's first 2 s, before echo cancellation settles. */
+  const leakStartRef = useRef({ since: 0, max: 0 });
   /** Whether Sage's own voice is playing right now. */
   const speakingRef = useRef(false);
   /** Another app has been audible lately (the server's word for it). */
@@ -678,12 +683,20 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       // Echo cancellation does not know a video's voice, so with one
       // audible the reply dips only while Sage has it turned down: at full
       // volume it is as loud as the user.
-      if (
-        sageSpeaking &&
-        (!mediaAudibleRef.current || mediaHeld()) &&
-        voiceOverSage(raw, autoGainRef.current)
-      ) {
-        optsRef.current.onVoiceOverSage?.();
+      if (sageSpeaking) {
+        const slices = sliceLevels(raw, autoGainRef.current);
+        leakPeaksRef.current.push(slices.peak);
+        const sinceStart = Date.now() - leakStartRef.current.since;
+        if (sinceStart < 2000) {
+          leakStartRef.current.max = Math.max(leakStartRef.current.max, slices.peak);
+        }
+        if (
+          sinceStart >= DUCK_SETTLE_MS &&
+          slices.loud >= DUCK_MIN_WINDOWS &&
+          (!mediaAudibleRef.current || mediaHeld())
+        ) {
+          optsRef.current.onVoiceOverSage?.(Math.round(slices.peak));
+        }
       }
       if (!sageSpeaking) {
         // Sage's own voice is not the room, and must not teach the gain
@@ -829,6 +842,27 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   }, []);
   /** Sage's voice is playing, so the microphone is mostly hearing Sage. */
   const setSageSpeaking = useCallback((speaking: boolean) => {
+    if (speakingRef.current && !speaking) {
+      // How loud Sage's own leak was this time, user's words included: the
+      // duck threshold is set against these numbers (lib/voice-duck.ts).
+      const peaks = leakPeaksRef.current.sort((a, b) => a - b);
+      if (peaks.length) {
+        const at = (share: number) => Math.round(peaks[Math.floor((peaks.length - 1) * share)]);
+        voiceTrace('barge.leak', {
+          frames: peaks.length,
+          p50: at(0.5),
+          p90: at(0.9),
+          p99: at(0.99),
+          max: at(1),
+          first2s: Math.round(leakStartRef.current.max),
+          autoGain: Number(autoGainRef.current.toFixed(2)),
+        });
+      }
+    }
+    if (speaking !== speakingRef.current) {
+      leakPeaksRef.current = [];
+      leakStartRef.current = { since: Date.now(), max: 0 };
+    }
     speakingRef.current = speaking;
   }, []);
   /** The Settings slider, multiplied into the automatic gain. */

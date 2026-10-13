@@ -1751,7 +1751,22 @@ async def _handle_streaming_orchestrator(
                             if call.name == "web_search"
                         ]
                         if searches:
+                            from openjarvis.agents.early_search import (
+                                matches_model_query,
+                            )
+
                             index, call = searches[0]
+                            try:
+                                asked = str(
+                                    _json.loads(call.arguments or "{}").get("query", "")
+                                )
+                            except (ValueError, AttributeError):
+                                asked = ""
+                            if not matches_model_query(early_query, asked):
+                                # Not the search the model wanted: run its own.
+                                early_search.cancel()
+                                searches = []
+                        if searches:
                             try:
                                 early_result = await early_search
                             except Exception:  # noqa: BLE001

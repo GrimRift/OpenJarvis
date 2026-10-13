@@ -32,6 +32,16 @@ export const DUCK_VOICE_RMS = 2500;
  * syllable of leak is one slice; the shortest chopped "stop" was three. */
 export const DUCK_MIN_WINDOWS = 2;
 
+/**
+ * No dip this soon after Sage starts speaking. Echo cancellation is still
+ * learning the room then: a quiet reply's leak was 40-53 per slice
+ * throughout, except 1,933 inside its first 2 s (13 October), and on 12
+ * October the unwanted dips came within a second of a reply starting. A
+ * "stop" said then still stops Sage -- that is decided from the words --
+ * it only isn't helped through.
+ */
+export const DUCK_SETTLE_MS = 1500;
+
 /** How far the reply drops, of its own volume (the user's choice). */
 export const DUCK_LEVEL = 0.3;
 
@@ -47,16 +57,26 @@ export const DUCK_HOLD_MS = 1500;
  * duck at its own echo.
  */
 export function voiceOverSage(samples: Int16Array, autoGain: number): boolean {
+  return sliceLevels(samples, autoGain).loud >= DUCK_MIN_WINDOWS;
+}
+
+/**
+ * The frame's 20 ms slices as the duck sees them: the loudest one's RMS
+ * after the automatic gain, and how many reach DUCK_VOICE_RMS. Traced while
+ * Sage speaks, so the leak can be read off a reply instead of guessed (the
+ * mic got 20 dB louder after the threshold was measured).
+ */
+export function sliceLevels(samples: Int16Array, autoGain: number): { peak: number; loud: number } {
   const gain = Number.isFinite(autoGain) && autoGain > 0 ? autoGain : 1;
   const floor = (DUCK_VOICE_RMS / gain) ** 2;
   let loud = 0;
+  let peak = 0;
   for (let start = 0; start + DUCK_WINDOW_SAMPLES <= samples.length; start += DUCK_WINDOW_SAMPLES) {
     let sum = 0;
     for (let i = start; i < start + DUCK_WINDOW_SAMPLES; i++) sum += samples[i] * samples[i];
-    if (sum / DUCK_WINDOW_SAMPLES >= floor) {
-      loud += 1;
-      if (loud >= DUCK_MIN_WINDOWS) return true;
-    }
+    const mean = sum / DUCK_WINDOW_SAMPLES;
+    if (mean >= floor) loud += 1;
+    if (mean > peak) peak = mean;
   }
-  return false;
+  return { peak: Math.sqrt(peak) * gain, loud };
 }

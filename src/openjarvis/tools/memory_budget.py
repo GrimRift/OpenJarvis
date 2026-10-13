@@ -12,6 +12,7 @@ a fresh state. The time window also covers standalone tool callers.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -38,6 +39,18 @@ AFTER_WEB_MESSAGE = (
     "A web search already ran for this message, so it is a web question: do "
     "not search the user's notes or mail. Answer from the web results."
 )
+
+#: The user's accounts, also retired once a web search ran -- unless the
+#: message itself asks about them. Mid-way through "what about other
+#: benchmarks like agentic tool use" Sage read Teams' activity feed: 50 of
+#: the turn's 65 s, nothing to do with the question (10 October).
+ACCOUNT_READ_TOOLS = {
+    "teams_read": re.compile(
+        r"\b(?:teams|assignments?|class(?:es)?|course|school)\b", re.I
+    ),
+    "gmail_read": re.compile(r"\b(?:e-?mails?|mail|inbox|gmail)\b", re.I),
+    "outlook_read": re.compile(r"\b(?:e-?mails?|mail|inbox|outlook)\b", re.I),
+}
 
 _lock = threading.Lock()
 
@@ -115,13 +128,23 @@ def spent() -> bool:
 
 
 def available_tools(tools: List[dict[str, Any]]) -> List[dict[str, Any]]:
-    """Retire unavailable memory tools in both orchestration loops."""
-    if not (spent() or web_searched()):
+    """Retire unavailable memory tools in both orchestration loops, and the
+    account reads the message did not ask for once it is a web question."""
+    after_web = web_searched()
+    if not (spent() or after_web):
         return tools
+    retired = set(MEMORY_SEARCH_TOOLS)
+    if after_web:
+        from openjarvis.security import page_access
+
+        asked = page_access.turn_text()
+        retired |= {
+            name for name, cue in ACCOUNT_READ_TOOLS.items() if not cue.search(asked)
+        }
     return [
         tool
         for tool in tools
-        if (tool.get("function") or {}).get("name") not in MEMORY_SEARCH_TOOLS
+        if (tool.get("function") or {}).get("name") not in retired
     ]
 
 

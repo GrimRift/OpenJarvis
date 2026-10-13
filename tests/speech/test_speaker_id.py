@@ -239,3 +239,25 @@ def test_sages_fingerprint_follows_the_selected_voice(monkeypatch):
     assert fetch() == [12]
     selected["id"] = "cartesia:some-voice"
     assert fetch() is None
+
+
+def test_clearly_the_user_needs_a_close_match_and_a_lead_over_sage(monkeypatch):
+    import openjarvis.speech.speaker_id as sid
+
+    class Fake:
+        def __init__(self, scored):
+            self.scored = scored
+
+        def score(self, pcm):
+            return self.scored
+
+    def judge(scored):
+        monkeypatch.setattr(sid, "get", lambda config: Fake(scored))
+        return sid.clearly_the_user(None, b"")
+
+    # 12 October: dropped "Hey Sage"s vs the user's murmurs.
+    assert judge({"user": 0.762, "sage": 0.502})
+    assert not judge({"user": 0.674, "sage": 0.543})
+    assert not judge({"user": 0.80, "sage": 0.70})
+    assert judge({"user": 0.80, "sage": None})
+    assert not judge(None)
