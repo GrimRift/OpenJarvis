@@ -46,6 +46,9 @@ STOP_IDLE_SECONDS = 120.0
 #: After a failure, wait before trying again.
 BACKOFF_SECONDS = 300.0
 RESOURCE_RETRY_SECONDS = 60.0
+#: The book voice is unloaded for a chapter break and reloaded this long
+#: before it ends: loading took ~35 s on 10-13 (Turbo + warm-up).
+RELOAD_LEAD_SECONDS = 45.0
 
 
 def live_busy(now: Optional[float] = None) -> Optional[str]:
@@ -154,11 +157,13 @@ class RenderWorker(threading.Thread):
         self._idle_since = None
         if now < self._retry_at:
             return
-        if now < self._break_until:
-            left = round((self._break_until - now) / 60, 1)
-            self._set_status(
-                "resting", reason=f"break between chapters, {left} min left"
-            )
+        if self._break_until - now > RELOAD_LEAD_SECONDS:
+            # The break frees the book voice's ~8 GB too (user, 10-13); it is
+            # reloaded RELOAD_LEAD_SECONDS before the break ends, so the next
+            # chapter starts on time with the same model and voice.
+            if self.voice.running():
+                self.voice.stop()
+            self._resting(now)
             return
         job, index = work
         voice = job["voice"]
@@ -190,7 +195,14 @@ class RenderWorker(threading.Thread):
                 self._set_status("error", reason=str(exc), **where)
                 self._retry_at = now + BACKOFF_SECONDS
                 return
+        if time.monotonic() < self._break_until:
+            self._resting(time.monotonic())  # loaded early: wait out the break
+            return
         self._render(job, index, voice, where)
+
+    def _resting(self, now: float) -> None:
+        left = round(max(0.0, self._break_until - now) / 60, 1)
+        self._set_status("resting", reason=f"break between chapters, {left} min left")
 
     def _may_go(
         self, job_id: str, where: Dict[str, Any], progress: Dict[str, int]

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 
 import numpy as np
 import pytest
@@ -210,7 +211,7 @@ def test_speed_rests_between_pieces_in_proportion(setup, speed, rests):
 
 
 @needs_ffmpeg
-def test_rests_between_chapters_with_the_voice_kept_warm(setup):
+def test_chapter_break_unloads_the_voice_and_reloads_it_before_the_end(setup):
     book, store = setup
     queue = RenderQueue(store)
     job = queue.add(book["id"], "range", chapters=[1, 2])
@@ -218,11 +219,16 @@ def test_rests_between_chapters_with_the_voice_kept_warm(setup):
     w = _worker(store, voice)
     w.step()  # chapter 1
     said = len(voice.said)
-    w.step()  # break (default 5 min): nothing said, voice still loaded
-    assert len(voice.said) == said and voice.up
+    w.step()  # break (default 5 min): nothing said, the voice's memory freed
+    assert len(voice.said) == said and not voice.up
     status = _status(store)
     assert status["state"] == "resting" and "between chapters" in status["reason"]
+    # 30 s before the break ends: loaded again, but chapter 2 waits for the end
+    w._break_until = time.monotonic() + 30
+    w.step()
+    assert voice.up and voice.starts == 2 and len(voice.said) == said
     assert not chapter_file(store, book["id"], job["voice"], 2).exists()
     w._break_until = 0  # the break is over
     w.step()
     assert chapter_file(store, book["id"], job["voice"], 2).is_file()
+    assert voice.starts == 2

@@ -266,11 +266,13 @@ flags every chapter. Output: `D:\Downloads\audiobook-test\Ch01 - LOTM Narrator
   chapters at full speed "maxed out the system", made things sluggish and
   heated the PC): **speed 2/3** (after a piece that took g s the book voice
   rests g/2 s; user said "2/3 or 75%"; `speed 75` sets the other), a **break
-  between chapters** (default 5 min, `break <minutes>`; the book voice stays
-  loaded through it), and **Whisper only on pieces under 40 characters**
+  between chapters** (default 5 min, `break <minutes>`; the book voice is
+  UNLOADED for it -- user asked, "if no speed or quality decrease" -- and
+  reloaded 45 s before it ends, so the ~35 s load is inside the break and the
+  same model/voice comes back), and **Whisper only on pieces under 40 characters**
   (the full check kept 2 CPU threads busy). The user will **raise the
-  pagefile maximum** themselves for the memory squeeze (not the threads cap
-  or per-chapter unloading, which were offered). At 2/3 + 5 min breaks the
+  pagefile maximum** themselves for the memory squeeze (the CPU-threads cap
+  offered was not chosen; unloading came with the breaks). At 2/3 + 5 min breaks the
   reference book is ~33 h + ~31 h of breaks of idle time.
 
 **Modules:** `pieces.py` (render rules from step 2), `queue.py` (jobs),
