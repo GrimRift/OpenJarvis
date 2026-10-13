@@ -1881,6 +1881,11 @@ async def _handle_streaming_orchestrator(
                                         "system": tool_result.metadata.get(
                                             "system"
                                         ),
+                                        # M42: what the app's book player
+                                        # should play ("read me chapter 4").
+                                        "audiobook_play": tool_result.metadata.get(
+                                            "audiobook_play"
+                                        ),
                                     }
                                     if isinstance(tool_result.metadata, dict)
                                     else {}
@@ -2406,6 +2411,9 @@ async def _handle_agent_stream(
                             "system": getattr(tool_result, "metadata", {}).get(
                                 "system"
                             ),
+                            "audiobook_play": getattr(
+                                tool_result, "metadata", {}
+                            ).get("audiobook_play"),
                         }
                         if isinstance(getattr(tool_result, "metadata", {}), dict)
                         else {}
