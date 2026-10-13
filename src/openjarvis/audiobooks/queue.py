@@ -30,6 +30,14 @@ from openjarvis.audiobooks.store import BookStore
 #: The narrator the user picked on 2026-10-13; any local voice can be set per book.
 DEFAULT_VOICE = "lotm-narrator"
 MODES = ("book", "range", "rolling")
+#: Share of the time the book voice may work (user, 2026-10-13: full speed
+#: heated the PC and made it sluggish; "2/3 or 75%"). After a piece that took
+#: g seconds it rests g * (1/speed - 1).
+DEFAULT_SPEED = 2 / 3
+MIN_SPEED = 0.1
+#: Minutes the GPU rests after each chapter (user, 2026-10-13: "pause in
+#: between chapters" -- to cool down; the length was left to me).
+DEFAULT_BREAK_MINUTES = 5.0
 _LOCK_STALE_SECONDS = 30.0
 _VOICE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
@@ -96,9 +104,11 @@ class RenderQueue:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return {"paused": False, "jobs": []}
+            data = {}
         data.setdefault("paused", False)
         data.setdefault("jobs", [])
+        data.setdefault("speed", DEFAULT_SPEED)
+        data.setdefault("break_minutes", DEFAULT_BREAK_MINUTES)
         return data
 
     @contextmanager
@@ -173,6 +183,22 @@ class RenderQueue:
 
     def set_paused(self, paused: bool) -> None:
         self._mutate(lambda d: d.__setitem__("paused", bool(paused)))
+
+    def set_speed(self, speed: float) -> float:
+        """How hard the book voice works: 1 = flat out, 0.5 = half the time."""
+        speed = float(speed)
+        if not MIN_SPEED <= speed <= 1.0:
+            raise ValueError(f"speed must be between {MIN_SPEED} and 1")
+        self._mutate(lambda d: d.__setitem__("speed", speed))
+        return speed
+
+    def set_break(self, minutes: float) -> float:
+        """Minutes to rest after each chapter (0 = none)."""
+        minutes = float(minutes)
+        if not 0 <= minutes <= 240:
+            raise ValueError("break must be between 0 and 240 minutes")
+        self._mutate(lambda d: d.__setitem__("break_minutes", minutes))
+        return minutes
 
     def cancel(self, job_id: str) -> int:
         """Cancel one job, or every open one with "all". Returns how many."""

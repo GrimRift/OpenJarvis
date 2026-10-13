@@ -121,14 +121,16 @@ def test_a_repeated_piece_gets_another_take(chapter):
             self.n = 0
 
         def transcribe(self, audio, rate):
-            # the 3rd piece is heard twice on its first listen only
+            # only "Chapter 1." is short enough to be listened to; its first
+            # take is heard twice, as Turbo did with short lines on 10-13
             self.n += 1
-            text = voice.calls[min(self.n, len(voice.calls)) - 1]
-            return f"{text} {text}" if self.n == 3 else text
+            return "Chapter 1. Chapter 1." if self.n == 1 else "Chapter 1."
 
-    result = _renderer(store, voice, ears=Ears()).render(book["id"], 1, "narrator")
+    ears = Ears()
+    result = _renderer(store, voice, ears=ears).render(book["id"], 1, "narrator")
     assert result.retakes == 1 and result.flags == []
-    assert len(voice.calls) == 4
+    assert voice.calls.count("Chapter 1.") == 2 and len(voice.calls) == 4
+    assert ears.n == 2  # the two long pieces were never sent to Whisper
 
 
 def test_a_dead_voice_raises_and_keeps_finished_pieces(chapter):

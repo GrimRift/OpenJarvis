@@ -31,7 +31,11 @@ def _find_book(store: BookStore, ref: str) -> Dict[str, Any]:
 
 def _print_queue(store: BookStore, queue: RenderQueue) -> None:
     data = queue.load()
-    print("queue: PAUSED" if data["paused"] else "queue: running")
+    state = "PAUSED" if data["paused"] else "running"
+    print(
+        f"queue: {state}, speed {round(data['speed'] * 100)}%, "
+        f"{data['break_minutes']:g} min break between chapters"
+    )
     status_path = store.root / "render-status.json"
     if status_path.is_file():
         status = json.loads(status_path.read_text(encoding="utf-8"))
@@ -80,6 +84,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("queue", help="show the queue and what the worker is doing")
     sub.add_parser("pause", help="pause rendering")
     sub.add_parser("resume", help="resume rendering")
+    brk = sub.add_parser("break", help="minutes to rest after each chapter (0 = none)")
+    brk.add_argument("minutes", type=float)
+    spd = sub.add_parser("speed", help="how hard to work: 100 = flat out, 67 = 2/3")
+    spd.add_argument("percent", type=float)
     can = sub.add_parser("cancel", help="cancel a job (or 'all')")
     can.add_argument("job")
     voi = sub.add_parser("voice", help="set a book's narrator voice")
@@ -143,6 +151,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd in ("pause", "resume"):
         queue.set_paused(args.cmd == "pause")
         print(f"queue {args.cmd}d")
+    elif args.cmd == "speed":
+        speed = queue.set_speed(args.percent / 100)
+        print(f"speed {round(speed * 100)}%: rests {1 / speed - 1:.2f} s per s of work")
+    elif args.cmd == "break":
+        print(f"{queue.set_break(args.minutes):g} min break between chapters")
     elif args.cmd == "cancel":
         print(f"cancelled {queue.cancel(args.job)} job(s)")
     elif args.cmd == "voice":

@@ -262,7 +262,16 @@ flags every chapter. Output: `D:\Downloads\audiobook-test\Ch01 - LOTM Narrator
   the reference book): M4B parts can be built by stream copy, Telegram can
   send a chapter as is.
 - **Runs whenever Sage is idle**, games and films included (no full-screen
-  detection).
+  detection) -- **but gently** (user, 10-13 ~19:20, after the first live
+  chapters at full speed "maxed out the system", made things sluggish and
+  heated the PC): **speed 2/3** (after a piece that took g s the book voice
+  rests g/2 s; user said "2/3 or 75%"; `speed 75` sets the other), a **break
+  between chapters** (default 5 min, `break <minutes>`; the book voice stays
+  loaded through it), and **Whisper only on pieces under 40 characters**
+  (the full check kept 2 CPU threads busy). The user will **raise the
+  pagefile maximum** themselves for the memory squeeze (not the threads cap
+  or per-chapter unloading, which were offered). At 2/3 + 5 min breaks the
+  reference book is ~33 h + ~31 h of breaks of idle time.
 
 **Modules:** `pieces.py` (render rules from step 2), `queue.py` (jobs),
 `render.py` (one chapter), `check.py` (listening back), `voiceproc.py` (the
@@ -282,7 +291,8 @@ and its `voice` (new `BookStore.update` changes book.json only).
 **By hand, until the Books page:** `python -m openjarvis.audiobooks`
 `render <book> [--chapters 40-60] [--voice v]`, `rolling <book> --ahead 5
 [--at 12]`, `at <book> <chapter>`, `queue` (jobs + what the worker is doing),
-`pause`, `resume`, `cancel <job|all>`, `voice <book> <voice>`. `<book>` = id,
+`pause`, `resume`, `speed <percent>`, `break <minutes>`, `cancel <job|all>`,
+`voice <book> <voice>`. `<book>` = id,
 id prefix or part of the title. The worker's state: `<data>/books/render-status.json`.
 
 **Yielding to live Sage** (before every piece, from `core.activity`, the same
@@ -318,7 +328,8 @@ larger pagefile maximum would let rendering run beside a long-running Sage;
 it is the user's setting to change.
 
 **Listening back** (`check.py`, faster-whisper base.en, CPU, 2 threads, run
-while the next pieces render): a piece is retaken (up to 2 more takes, best
+while the next pieces render; since 10-13 ~19:20 only pieces under 40
+characters, every piece still gets the length checks): a piece is retaken (up to 2 more takes, best
 kept) when it is too short (< 45% of the chapter's median s/char), too long
 (> 2.6x), a 1-4-word phrase repeats back to back that the text does not
 repeat, it has far more words than the text (a long line said twice), or its

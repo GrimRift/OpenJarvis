@@ -159,6 +159,8 @@ class BookVoice:
         self.port = port
         self._proc: Optional[subprocess.Popen] = None
         self.started_at = 0.0
+        #: How long the last piece took (None once the worker has rested for it).
+        self.last_seconds: Optional[float] = None
 
     @property
     def url(self) -> str:
@@ -252,8 +254,12 @@ class BookVoice:
             data=body,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=SYNTH_TIMEOUT_SECONDS) as r:
-            data = r.read()
+        started = time.monotonic()
+        try:
+            with urllib.request.urlopen(request, timeout=SYNTH_TIMEOUT_SECONDS) as r:
+                data = r.read()
+        finally:
+            self.last_seconds = time.monotonic() - started
         with wave.open(io.BytesIO(data), "rb") as w:
             frames = w.readframes(w.getnframes())
             width = w.getsampwidth()

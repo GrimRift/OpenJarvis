@@ -113,3 +113,22 @@ def test_pause_and_bad_input(book):
     with pytest.raises(ValueError):
         queue.add(b["id"], "book", voice="../x")
     assert not (store.root / "queue.lock").exists()
+
+
+def test_speed_defaults_to_two_thirds_and_is_bounded(book):
+    _, store = book
+    queue = RenderQueue(store)
+    assert queue.load()["speed"] == pytest.approx(2 / 3)
+    assert queue.set_speed(0.75) == 0.75 and queue.load()["speed"] == 0.75
+    for bad in (0, 1.5, -1):
+        with pytest.raises(ValueError):
+            queue.set_speed(bad)
+
+
+def test_break_between_chapters_defaults_and_bounds(book):
+    _, store = book
+    queue = RenderQueue(store)
+    assert queue.load()["break_minutes"] == 5.0
+    assert queue.set_break(0) == 0
+    with pytest.raises(ValueError):
+        queue.set_break(-1)

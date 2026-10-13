@@ -2,10 +2,11 @@
 
 Every finished piece is saved before the next is asked for
 (``audio/<voice>/work/<NNNN>/``), so a restart, a crash or a pause for live
-speech resumes where it stopped instead of re-rendering the chapter. When
-all pieces exist each is listened back (``check.py``); a piece that comes
-out repeated, garbled or too short gets up to two more takes and the best
-one is kept. Then the chapter is joined with its pauses, levelled to
+speech resumes where it stopped instead of re-rendering the chapter. Every
+piece's length is checked, and short pieces are also listened back by
+Whisper (``check.py``); a piece that comes out repeated, garbled, too short
+or too long gets up to two more takes and the best one is kept. Then the
+chapter is joined with its pauses, levelled to
 -16 LUFS like Sage's other clips, and encoded as AAC 64 kbps M4A (user's
 choice, 2026-10-13: M4B parts are later built by stream copy and Telegram
 can send a chapter as it is).
@@ -40,6 +41,10 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 24000
 #: Extra takes for a piece the check rejects.
 RETAKES = 2
+#: Whisper listens only to pieces shorter than this (user, 2026-10-13: the
+#: full check kept 2 CPU threads busy). Short lines are where Turbo repeats
+#: itself; every piece still gets the free length checks (near-silent, run-on).
+LISTEN_UNDER_CHARS = 40
 LOUDNESS = -16.0
 BITRATE = "64k"
 
@@ -217,8 +222,10 @@ class ChapterRenderer:
                     "seconds": len(audio) / SAMPLE_RATE,
                     "gen": gen,
                 }
-                if ears is not None:
-                    heard[k] = ears.submit(self._listen, audio)
+                if ears is not None and self._listens_to(items[k].text):
+                    heard[k] = ears.submit(self._listen, items[k].text, audio)
+                elif ears is not None:
+                    manifest["pieces"][str(k)]["heard"] = None
                 self._collect(heard, manifest)
                 save_manifest()
                 self.on_progress(done(), len(spoken))
@@ -317,8 +324,13 @@ class ChapterRenderer:
                 flags.append({"piece": k, "text": text, "why": best})
         return retakes, flags
 
-    def _listen(self, audio: np.ndarray) -> Optional[str]:
-        if self.transcriber is None:
+    def _listens_to(self, text: str) -> bool:
+        return self.transcriber is not None and len(text) < LISTEN_UNDER_CHARS
+
+    def _listen(self, text: str, audio: np.ndarray) -> Optional[str]:
+        """What Whisper hears in a short piece; None for long ones (length
+        checks only) or when it fails."""
+        if not self._listens_to(text):
             return None
         try:
             return self.transcriber.transcribe(audio, SAMPLE_RATE)
@@ -327,7 +339,8 @@ class ChapterRenderer:
             return None
 
     def _judge(self, text: str, audio: np.ndarray, rate: float) -> List[str]:
-        return judge(text, self._listen(audio), len(audio) / SAMPLE_RATE, rate)
+        heard = self._listen(text, audio)
+        return judge(text, heard, len(audio) / SAMPLE_RATE, rate)
 
     def _record(self, folder: Path, result: ChapterResult) -> None:
         path = folder / "status.json"

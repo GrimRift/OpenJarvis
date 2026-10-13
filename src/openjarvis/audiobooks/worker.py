@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from openjarvis.audiobooks.check import WhisperTranscriber
-from openjarvis.audiobooks.queue import RenderQueue
+from openjarvis.audiobooks.queue import MIN_SPEED, RenderQueue
 from openjarvis.audiobooks.render import ChapterRenderer, Stopped
 from openjarvis.audiobooks.store import BookStore
 from openjarvis.audiobooks.voiceproc import (
@@ -94,6 +94,11 @@ class RenderWorker(threading.Thread):
         self._halt = threading.Event()
         self._idle_since: Optional[float] = None
         self._retry_at = 0.0
+        #: Waits before the next piece: a share of the book voice's work on
+        #: the last one (``voice.last_seconds``, the queue's speed setting).
+        self.rest: Callable[[float], Any] = self._halt.wait
+        #: Until when the GPU rests after a finished chapter (monotonic).
+        self._break_until = 0.0
         self.status: Dict[str, Any] = {}
 
     # ------------------------------------------------------------ status
@@ -149,6 +154,12 @@ class RenderWorker(threading.Thread):
         self._idle_since = None
         if now < self._retry_at:
             return
+        if now < self._break_until:
+            left = round((self._break_until - now) / 60, 1)
+            self._set_status(
+                "resting", reason=f"break between chapters, {left} min left"
+            )
+            return
         job, index = work
         voice = job["voice"]
         where = {
@@ -185,6 +196,12 @@ class RenderWorker(threading.Thread):
         self, job_id: str, where: Dict[str, Any], progress: Dict[str, int]
     ) -> bool:
         """Block while live Sage needs the GPU; False to stop this chapter."""
+        speed = self.queue.load()["speed"]
+        worked = self.voice.last_seconds
+        if worked is not None and speed < 1.0:
+            # Rest in proportion to the work: cooler, and the PC stays usable.
+            self.rest(worked * (1.0 / max(speed, MIN_SPEED) - 1.0))
+        self.voice.last_seconds = None
         while not self._halt.is_set():
             data = self.queue.load()
             if data["paused"] or not self.queue.active(job_id):
@@ -249,6 +266,8 @@ class RenderWorker(threading.Thread):
             len(result.flags),
         )
         self._set_status("rendered", last_seconds=result.seconds, **where)
+        minutes = self.queue.load()["break_minutes"]
+        self._break_until = time.monotonic() + minutes * 60
 
 
 _worker: Optional[RenderWorker] = None

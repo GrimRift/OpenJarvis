@@ -27,6 +27,7 @@ class FakeBookVoice:
         self.starts = 0
         self.said = []
         self.fail_start = fail_start
+        self.last_seconds = None
 
     def running(self):
         return self.up
@@ -42,6 +43,7 @@ class FakeBookVoice:
 
     def synthesize(self, text, voice):
         self.said.append(text)
+        self.last_seconds = 0.0  # as BookVoice: set after every piece
         return np.zeros(int(SAMPLE_RATE * len(text) * 0.062), np.float32) + 0.1
 
 
@@ -122,6 +124,7 @@ def test_renders_queue_then_stops_the_voice_when_idle(setup, monkeypatch):
     book, store = setup
     queue = RenderQueue(store)
     job = queue.add(book["id"], "book")
+    queue.set_break(0)
     voice = FakeBookVoice()
     w = _worker(store, voice)
     w.step()
@@ -186,3 +189,40 @@ def test_low_memory_mid_chapter_stops_the_book_voice(setup):
     assert not voice.up  # stopped at once, not after the idle wait
     status = _status(store)
     assert status["state"] == "waiting" and "memory ran low" in status["reason"]
+
+
+@pytest.mark.parametrize("speed, rests", [(1.0, 0), (0.5, 1)])
+def test_speed_rests_between_pieces_in_proportion(setup, speed, rests):
+    book, store = setup
+    queue = RenderQueue(store)
+    queue.add(book["id"], "range", chapters=[1])
+    queue.set_speed(speed)
+    voice = FakeBookVoice()
+    w = _worker(store, voice)
+    slept = []
+    w.rest = slept.append
+    w.step()
+    spoken = len(voice.said)
+    assert spoken >= 2
+    # one rest before every piece after the first (none at full speed)
+    assert len(slept) == rests * (spoken - 1)
+    assert all(s >= 0 for s in slept)
+
+
+@needs_ffmpeg
+def test_rests_between_chapters_with_the_voice_kept_warm(setup):
+    book, store = setup
+    queue = RenderQueue(store)
+    job = queue.add(book["id"], "range", chapters=[1, 2])
+    voice = FakeBookVoice()
+    w = _worker(store, voice)
+    w.step()  # chapter 1
+    said = len(voice.said)
+    w.step()  # break (default 5 min): nothing said, voice still loaded
+    assert len(voice.said) == said and voice.up
+    status = _status(store)
+    assert status["state"] == "resting" and "between chapters" in status["reason"]
+    assert not chapter_file(store, book["id"], job["voice"], 2).exists()
+    w._break_until = 0  # the break is over
+    w.step()
+    assert chapter_file(store, book["id"], job["voice"], 2).is_file()
