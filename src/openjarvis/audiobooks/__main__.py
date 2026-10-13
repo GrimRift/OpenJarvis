@@ -12,7 +12,7 @@ import json
 import sys
 from typing import Any, Dict
 
-from openjarvis.audiobooks import BookStore, import_book
+from openjarvis.audiobooks import BookStore, export, import_book
 from openjarvis.audiobooks.queue import RenderQueue, check_voice, parse_chapters
 
 
@@ -93,6 +93,21 @@ def main(argv: list[str] | None = None) -> int:
     voi = sub.add_parser("voice", help="set a book's narrator voice")
     voi.add_argument("book")
     voi.add_argument("voice")
+    prt = sub.add_parser("parts", help="the book's M4B parts and what is exported")
+    prt.add_argument("book")
+    prt.add_argument("--voice")
+    exp = sub.add_parser("export", help="write M4B parts (PC folder + OneDrive)")
+    exp.add_argument("book")
+    exp.add_argument("--voice")
+    exp.add_argument("--parts", help='e.g. "1" or "1,3" (default: every part)')
+    exp.add_argument(
+        "--partial", action="store_true", help="also parts not fully narrated yet"
+    )
+    exp.add_argument("--force", action="store_true", help="rewrite up-to-date parts")
+    snd = sub.add_parser("send", help="send chapters to the phone (Telegram)")
+    snd.add_argument("book")
+    snd.add_argument("--chapters", required=True, help='e.g. "5-10" (book numbering)')
+    snd.add_argument("--voice")
     args = parser.parse_args(argv)
 
     store = BookStore()
@@ -162,6 +177,44 @@ def main(argv: list[str] | None = None) -> int:
         book = _find_book(store, args.book)
         store.update(book["id"], voice=check_voice(args.voice))
         print(f"{book['title']}: narrator {args.voice}")
+    elif args.cmd == "parts":
+        book = _find_book(store, args.book)
+        dest = export.destinations()
+        print(f"PC: {dest.root}  OneDrive: {dest.onedrive or 'off'}")
+        for part in export.part_status(book["id"], args.voice, store=store):
+            done = part["exported"]
+            where = (
+                f"exported {done['file']}" + (" (partial)" if done["partial"] else "")
+                if done
+                else "not exported"
+            )
+            made = f"{part['rendered']}/{part['total']}"
+            print(f"  {part['name']}: {made} narrated, {where}")
+    elif args.cmd == "export":
+        book = _find_book(store, args.book)
+        numbers = [int(n) for n in args.parts.split(",")] if args.parts else None
+        written = export.export_parts(
+            book["id"],
+            args.voice,
+            numbers,
+            partial=args.partial,
+            force=args.force,
+            store=store,
+        )
+        for path in written:
+            print(f"wrote {path}")
+        if not written:
+            print("nothing to write (parts not complete, or already up to date)")
+    elif args.cmd == "send":
+        from openjarvis.core.credentials import inject_credentials
+
+        inject_credentials()  # the bot token, as `jarvis serve` loads it
+        book = _find_book(store, args.book)
+        result = export.send_chapters(
+            book["id"], args.voice, args.chapters, store=store
+        )
+        print(result.describe(book))
+        return 0 if result.ok else 1
     return 0
 
 

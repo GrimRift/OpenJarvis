@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from openjarvis.audiobooks.check import WhisperTranscriber
+from openjarvis.audiobooks.export import auto_export
 from openjarvis.audiobooks.queue import MIN_SPEED, RenderQueue
 from openjarvis.audiobooks.render import ChapterRenderer, Stopped
 from openjarvis.audiobooks.store import BookStore
@@ -278,6 +279,17 @@ class RenderWorker(threading.Thread):
             len(result.flags),
         )
         self._set_status("rendered", last_seconds=result.seconds, **where)
+        try:
+            # A part whose chapters are now all made is written to the
+            # Audiobooks folder + OneDrive (M42 step 4; user's choice).
+            auto_export(job["book"], voice, index, store=self.store)
+        except Exception:
+            logger.warning(
+                "exporting the part of %s chapter %s failed",
+                job["book"],
+                index,
+                exc_info=True,
+            )
         minutes = self.queue.load()["break_minutes"]
         self._break_until = time.monotonic() + minutes * 60
 

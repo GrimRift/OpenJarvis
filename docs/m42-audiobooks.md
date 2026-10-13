@@ -1,4 +1,4 @@
-# M42 — Audiobooks (scoped 2026-10-13; steps 1-3 and 5 built 2026-10-13)
+# M42 — Audiobooks (scoped 2026-10-13; steps 1-5 built 2026-10-13)
 
 Sage turns a book the user owns (PDF or EPUB) into an audiobook in one of Sage's
 voices, for personal listening on the PC and the phone. Scoped with the user
@@ -359,6 +359,75 @@ in 59 s, 0 flags. **Chapter 1: 321 pieces, 22.5 min audio, RTF 0.238, 388 s
 wall incl. start-up (step 2's render alone: 309 s), 2 retakes, 0 flags left;
 11.0 MB, -16.4 LUFS.** Whole book: ~22-24 h of idle time.
 
+## Step 4: export -- M4B parts, OneDrive, Telegram (built 2026-10-13 evening)
+
+**User decisions at build (2026-10-13 ~20:30):** parts go to
+**`D:\Audiobooks\<Book>\`**, copied to **`OneDrive\Sage\Audiobooks\<Book>\`**;
+**25 narrated chapters per part**; a part is written **automatically when all
+its chapters are rendered** (and on request).
+
+**Module `audiobooks/export.py`** -- the API the Books page and chat tools call
+(all take `store=` / `dest=` for tests; `voice=None` = the book's narrator):
+- `export_parts(book_id, voice=None, parts=None, *, partial=False, force=False)
+  -> list[Path]`: writes the given parts (default all) that are complete and
+  not already up to date; returns the PC files written. `partial=True` also
+  writes a part still being narrated, from its start up to the first missing
+  chapter ("Part 01 (Ch 1-3).m4b"); the full part replaces it later (an older
+  "Part 01 (...)" file is removed in both folders). `export_part(book_id, n,
+  ...) -> Path | None` = one part.
+- `part_status(book_id, voice=None) -> list[dict]`: per part `part`, `name`,
+  `chapters` (indexes), `rendered`/`total`, `complete`, `exported` (the record
+  below when the file exists and its chapters have not changed, else None).
+- `send_chapters(book_id, voice=None, chapters) -> SendResult`: `chapters` =
+  a spec in the book's numbering ("5-10"; "32" = both halves) or a list of
+  indexes; one Telegram audio message per chapter (title "Chapter 5",
+  performer = book title) via `[notifications] channel`. `SendResult.sent /
+  not_made / too_big / failed / error`, `.ok`, `.describe(book)` = a sentence
+  for the user. Uploads are slow (chapter 1, 10.9 MB: 55 s), so a chat tool
+  should send in the background or say it may take a minute per chapter.
+  Telegram can't take a part (~270 MB > 50 MB bot limit): "send part 2" =
+  send that part's chapters (`part_status(...)[1]["chapters"]`).
+- `auto_export(book_id, voice, index)`: called by the render worker after
+  each chapter; writes the chapter's part once it is complete.
+  `SAGE_AUDIOBOOKS_AUTO_EXPORT=0` turns that off.
+- `plan_parts(book)`, `part_of(book, index)`, `destinations()`.
+
+**Parts:** the book's non-skip chapters in runs of 25, named by the book's
+own numbers: `Part 01 (Ch 1-25)`, `Part 02 (Ch 26-46)` (the reference book's
+32.1/32.2 halves count as chapters). Built by **stream copy** (ffmpeg concat
+demuxer, `-c copy`, ~3 s for 3 chapters) with an ffmetadata file: one chapter
+marker per chapter titled like its announcement ("Chapter 7: Crimson"),
+times from ffprobe of each chapter file; tags title "<Book> - Part 01 (Ch
+1-25)", album = book, artist + album_artist = author, genre Audiobook, track
+"1/15", media_type 2 (audiobook), comment = the voice; `cover.jpg` as the
+attached picture. Written as `~$<name>.tmp` then renamed (OneDrive skips
+`~$` and `.tmp` files, so it never uploads half a part). A voice other than
+the book's narrator exports to `<Book> (<voice>)`. Records per voice:
+`audio/<voice>/exports.json` (file, PC + OneDrive paths, chapters, partial,
+seconds, bytes, size+mtime of every chapter file) -- a part is rewritten only
+when a chapter file changed or `force`. A failed OneDrive copy is logged and
+the PC file kept. `SAGE_AUDIOBOOKS_DIR` / `SAGE_AUDIOBOOKS_ONEDRIVE` (`off` =
+no copy) override the folders; OneDrive = `%OneDrive%`, skipped if missing.
+
+**Telegram:** `TelegramChannel.send_audio(chat, path, caption=, title=,
+performer=)` (`sendAudio`, M4A as `audio/mp4`, 300 s timeout). Chapters over
+50 MB are reported, not sent.
+
+**CLI:** `parts <book>`, `export <book> [--parts 1,3] [--partial] [--force]
+[--voice v]`, `send <book> --chapters 5-10 [--voice v]` (loads
+credentials.toml for the bot token like `jarvis serve`).
+
+**Verified 10-13 ~20:45 on the reference book (chapters 1-3, live data,
+staging code):** `export --parts 1 --partial` -> `D:\Audiobooks\The Artist Who
+Paints Dungeon\Part 01 (Ch 1-3).m4b`, 32.5 MB in 3 s; ffprobe: AAC 24 kHz,
+3 chapter markers at 0 / 1348.6 / 2591.7 s ending 4016.9 s, duration 4016.94 s
+= sum of the chapter files (1348.6 + 1243.1 + 1425.2), all tags, cover as
+attached_pic; OneDrive copy identical. `send --chapters 1`: sent in 55 s; the user
+confirmed it arrived on the phone and plays.
+Tests: `tests/audiobooks/test_export.py` (real ffmpeg on tiny sine chapters,
+fake phone; the worker's auto-export), `tests/audiobooks/conftest.py` points
+every audiobook test's export folders at tmp.
+
 ## Step 5: Books page + chat tools (built 2026-10-13 evening)
 
 **User decisions:** layout "M1" -- a mix of mockups B (list + detail) and C
@@ -416,6 +485,8 @@ streaming) and comes back 1.5 s after, unless the user paused it.
 2. ~~Benchmark~~ DONE 2026-10-13 ~18:05 (user chose a quick lotm-narrator run
    over the 2-voice pick): see "Step 2 result" above.
 3. ~~Render queue~~ DONE 2026-10-13 (above).
-4. Export: M4B parts with chapters + OneDrive copy; Telegram send.
+4. ~~Export~~ DONE 2026-10-13 (above): M4B parts + OneDrive copy + Telegram
+   send; the Books page's Export / Send buttons and an export/send chat tool
+   are still to wire (step 5's side).
 5. ~~Books page + chat tools~~ DONE 2026-10-13 (above).
 6. Narrator cloning flow for new voices.

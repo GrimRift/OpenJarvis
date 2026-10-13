@@ -181,6 +181,50 @@ class TelegramChannel(BaseChannel):
             logger.warning("Telegram sendPhoto failed", exc_info=True)
             return False
 
+    def send_audio(
+        self,
+        channel: str,
+        path: str,
+        *,
+        caption: str = "",
+        title: str = "",
+        performer: str = "",
+    ) -> bool:
+        """Send an MP3/M4A file to a Telegram chat (``sendAudio``), so it
+        plays in Telegram's music player. Bot uploads cap at 50 MB."""
+        if not self._token:
+            logger.warning("Cannot send audio: no Telegram bot token")
+            return False
+        try:
+            import httpx
+
+            url = f"https://api.telegram.org/bot{self._token}/sendAudio"
+            data = {"chat_id": channel, "caption": caption[:1024]}
+            if title:
+                data["title"] = title
+            if performer:
+                data["performer"] = performer
+            mime = "audio/mpeg" if path.lower().endswith(".mp3") else "audio/mp4"
+            with open(path, "rb") as handle:
+                resp = httpx.post(
+                    url,
+                    data=data,
+                    files={"audio": (os.path.basename(path), handle, mime)},
+                    timeout=300.0,
+                )
+            if resp.status_code >= 300:
+                logger.warning(
+                    "Telegram sendAudio returned status %d: %s",
+                    resp.status_code,
+                    resp.text,
+                )
+                return False
+            self._publish_sent(channel, f"[audio] {caption}", "")
+            return True
+        except Exception:
+            logger.warning("Telegram sendAudio failed", exc_info=True)
+            return False
+
     def status(self) -> ChannelStatus:
         """Return the current connection status."""
         return self._status
