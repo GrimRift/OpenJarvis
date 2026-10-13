@@ -921,6 +921,44 @@ def test_several_web_searches_on_different_angles(
     assert "up to 4 web_search calls" in prompt
 
 
+def test_searches_of_one_round_run_as_a_batch(
+    stub_search: MagicMock, stub_web_search: MagicMock
+) -> None:
+    """A batch cuts a slow retry once the others are done (13 October); a
+    search on its own keeps its full budget."""
+    from openjarvis.tools import web_search
+
+    seen: Dict[str, Any] = {}
+    plain = stub_web_search.execute.return_value
+
+    def record(**params: Any) -> ToolResult:
+        seen[params["query"]] = web_search._batch_member.get()
+        return plain
+
+    stub_web_search.execute.side_effect = record
+    engine = _MockEngine(
+        responses=[
+            _two_web_searches("EV prices", "EV incentives"),
+            _web_search_call("w3", query="EV charging stations"),
+            _text_response("done"),
+        ]
+    )
+    agent = ResearchAgent(
+        engine,
+        stub_search,
+        web_search=stub_web_search,
+        model="mock",
+        max_iterations=8,
+        max_web_searches=4,
+    )
+    agent.run("is an EV worth it?")
+    first, second = seen["EV prices"], seen["EV incentives"]
+    assert first is not None and second is not None
+    assert first.batch is second.batch
+    assert first.batch.cutoff.is_set()  # closed when the round ended
+    assert seen["EV charging stations"] is None
+
+
 def test_the_same_query_twice_is_not_searched_again(
     stub_search: MagicMock, stub_web_search: MagicMock
 ) -> None:

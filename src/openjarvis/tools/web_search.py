@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import html as _html
 import json
 import logging
@@ -9,7 +10,7 @@ import os
 import re
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Tuple
 from urllib.parse import urlparse
@@ -444,6 +445,99 @@ _MIN_RETRY_SECONDS = 1.0
 #: the Pasig question timed out and the model tried to read Google's result
 #: page instead, then asked the user for details.
 FALLBACK_SECONDS = 4.5
+
+#: In a batch of parallel searches (Deep Research), a better-results retry
+#: still running this long after every search of the batch has its first
+#: results is cut, and that search keeps its first results. Measured 13
+#: October: 7 of 8 batch searches took 2.5-4.1 s; the one that retried took
+#: 8.3 s and the batch waited for it. The user's choice: retry only if quick.
+RETRY_GRACE_SECONDS = 2.0
+
+
+class _RetryCut(Exception):
+    """The batch stopped waiting for this search's retry."""
+
+
+class SearchBatch:
+    """Parallel searches that finish together.
+
+    Each search reports when it has its first results; once all have,
+    ``cutoff`` is set ``grace`` seconds later. A retry not yet started is
+    then skipped, and one still running is no longer waited for.
+    """
+
+    def __init__(self, size: int, grace: float = RETRY_GRACE_SECONDS) -> None:
+        self.cutoff = threading.Event()
+        self._waiting = size
+        self._grace = grace
+        self._lock = threading.Lock()
+        self._timer: threading.Timer | None = None
+
+    def member(self) -> "_BatchMember":
+        return _BatchMember(self)
+
+    def _arrived(self) -> None:
+        with self._lock:
+            self._waiting -= 1
+            if self._waiting > 0 or self._timer is not None:
+                return
+            self._timer = threading.Timer(self._grace, self.cutoff.set)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+        self.cutoff.set()
+
+
+class _BatchMember:
+    def __init__(self, batch: SearchBatch) -> None:
+        self.batch = batch
+        self._reported = False
+
+    def first_results_in(self) -> None:
+        """Counted once, whether from the search or when it returns."""
+        if not self._reported:
+            self._reported = True
+            self.batch._arrived()
+
+
+#: Set (in a copied context) for a search that runs as part of a batch. A
+#: context variable rather than a parameter: the model never sees it.
+_batch_member: contextvars.ContextVar[_BatchMember | None] = contextvars.ContextVar(
+    "web_search_batch_member", default=None
+)
+
+
+def join_batch(batch: SearchBatch) -> _BatchMember:
+    """Make the searches of the current context part of ``batch``."""
+    member = batch.member()
+    _batch_member.set(member)
+    return member
+
+
+def _search_until_cut(
+    client: Any, cutoff: threading.Event, *args: Any, **kwargs: Any
+) -> dict[str, Any]:
+    """``client.search``, unless ``cutoff`` is set first (raises _RetryCut).
+
+    The call itself cannot be cancelled; it ends on its own timeout in the
+    background and its result is dropped.
+    """
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(client.search, *args, **kwargs)
+        while True:
+            done, _ = wait([future], timeout=0.1)
+            if done:
+                return future.result()
+            if cutoff.is_set():
+                raise _RetryCut()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
 
 #: The past-week news pass for an ongoing story. Basic depth (1.3-3.7 s
 #: measured), run alongside the main call, so it adds no wait of its own.
@@ -1211,6 +1305,10 @@ class WebSearchTool(BaseTool):
         images = _gallery_images(response) if plan.explicit_images else []
         quality_passed = _results_are_sufficient(results, query, plan, images=images)
 
+        member = _batch_member.get()
+        if member is not None:
+            member.first_results_in()
+
         # The better-results retry only runs with time left, and a slow or
         # failed one keeps the first results rather than losing them.
         if (
@@ -1219,14 +1317,28 @@ class WebSearchTool(BaseTool):
             and not fell_back
             and not quality_passed
             and left() >= _MIN_RETRY_SECONDS
+            and not (member is not None and member.batch.cutoff.is_set())
         ):
             retry = None
             try:
                 provider_calls += 1
-                retry = client.search(
-                    _retry_query(query),
-                    timeout=left(),
-                    **self._search_kwargs(plan, "advanced", retry_max_results),
+                retry_kwargs = self._search_kwargs(plan, "advanced", retry_max_results)
+                if member is None:
+                    retry = client.search(
+                        _retry_query(query), timeout=left(), **retry_kwargs
+                    )
+                else:
+                    retry = _search_until_cut(
+                        client,
+                        member.batch.cutoff,
+                        _retry_query(query),
+                        timeout=left(),
+                        **retry_kwargs,
+                    )
+            except _RetryCut:
+                logger.info(
+                    "Tavily retry cut: the other searches of the batch were done; "
+                    "keeping the first results"
                 )
             except Exception as exc:
                 logger.info(

@@ -747,20 +747,38 @@ class ResearchAgent:
                 }
             )
 
+        from openjarvis.tools.web_search import SearchBatch, join_batch
+
+        # The batch waited for its slowest search, usually one doing a
+        # better-results retry (8.3 s vs 2.5-4.1 s, 13 October): a retry still
+        # running 2 s after the others are done is cut (web_search).
+        batch = SearchBatch(len(jobs)) if len(jobs) > 1 else None
+
+        def search(args: Dict[str, Any]) -> ToolInvocation:
+            if batch is None:
+                return self._execute_web_search(args)
+            member = join_batch(batch)
+            try:
+                return self._execute_web_search(args)
+            finally:
+                member.first_results_in()
+
         def one(job: Tuple[str, int]) -> ToolInvocation:
             query, max_results = job
             # Each search runs in this question's context: page_access keeps
             # what it returned readable for web_read.
             return contextvars.copy_context().run(
-                self._execute_web_search,
-                {"query": query, "max_results": max_results},
+                search, {"query": query, "max_results": max_results}
             )
 
-        if len(jobs) == 1:
+        if batch is None:
             results = [one(jobs[0])]
         else:
-            with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-                results = list(pool.map(one, jobs))
+            try:
+                with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+                    results = list(pool.map(one, jobs))
+            finally:
+                batch.close()
         out: Dict[str, ToolInvocation] = {}
         for (query, _), inv in zip(jobs, results):
             self._emit(

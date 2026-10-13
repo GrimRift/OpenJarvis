@@ -1120,6 +1120,110 @@ class TestSearchBudget:
         assert "kept result" in result.content
 
 
+class TestABatchDoesNotWaitForASlowRetry:
+    """13 October: Deep Research's 4 parallel searches waited for the one
+    doing a better-results retry (8.3 s; the others 2.5-4.1 s). The user's
+    choice: retry only if quick -- cut 2 s after the others are done."""
+
+    _THIN = {
+        "results": [
+            _result("OpenJarvis notes", "https://a.example/x", "OpenJarvis kept result")
+        ]
+    }
+
+    def _search_in(self, batch, search_side_effect):
+        import contextvars
+
+        from openjarvis.tools.web_search import join_batch
+
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_side_effect=search_side_effect
+        )
+
+        def run():
+            join_batch(batch)
+            return WebSearchTool(api_key="key").execute(query="OpenJarvis")
+
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = contextvars.copy_context().run(run)
+        return result, mock_client_cls.return_value.search
+
+    def test_a_retry_after_the_cut_is_not_started(self):
+        from openjarvis.tools.web_search import SearchBatch
+
+        batch = SearchBatch(2)
+        batch.cutoff.set()
+        result, search = self._search_in(batch, [self._THIN])
+        assert search.call_count == 1  # no retry, no credits spent on it
+        assert result.success is True
+        assert "kept result" in result.content
+
+    def test_a_running_retry_is_cut_and_the_first_results_kept(self):
+        import threading
+        import time
+
+        from openjarvis.tools.web_search import SearchBatch
+
+        release = threading.Event()
+        calls = []
+
+        def first_then_slow_retry(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 1:
+                return self._THIN
+            release.wait(5)
+            return {"results": [_result("Late", "https://late.example", "late")]}
+
+        batch = SearchBatch(2, grace=0.05)
+        batch.member().first_results_in()  # the other search is done
+        started = time.monotonic()
+        try:
+            result, search = self._search_in(batch, first_then_slow_retry)
+        finally:
+            release.set()
+        assert time.monotonic() - started < 2
+        assert search.call_count == 2
+        assert "kept result" in result.content
+        assert "late.example" not in result.content
+        assert result.metadata["provider_calls"] == 2
+
+    def test_a_quick_retry_is_still_used(self):
+        from openjarvis.tools.web_search import SearchBatch
+
+        better = {
+            "results": [
+                _result("OpenJarvis A", "https://a.example/a", "OpenJarvis better a"),
+                _result("OpenJarvis B", "https://b.example/b", "OpenJarvis better b"),
+                _result("OpenJarvis C", "https://c.example/c", "OpenJarvis better c"),
+            ]
+        }
+        result, search = self._search_in(SearchBatch(2), [self._THIN, better])
+        assert search.call_count == 2
+        assert "better a" in result.content
+
+    def test_the_cut_waits_for_every_search_then_the_grace(self):
+        import time
+
+        from openjarvis.tools.web_search import SearchBatch
+
+        batch = SearchBatch(2, grace=0.05)
+        first, second = batch.member(), batch.member()
+        first.first_results_in()
+        first.first_results_in()  # counted once
+        time.sleep(0.15)
+        assert not batch.cutoff.is_set()
+        second.first_results_in()
+        assert not batch.cutoff.is_set()
+        assert batch.cutoff.wait(1)
+
+    def test_close_sets_the_cut(self):
+        from openjarvis.tools.web_search import SearchBatch
+
+        batch = SearchBatch(3)
+        batch.close()
+        assert batch.cutoff.is_set()
+
+
 _CLANCY_EVENT = [
     _result(
         "Mistrial declared in Lindsay Clancy case",
