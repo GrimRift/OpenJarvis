@@ -186,8 +186,20 @@ def _generated(name: str, seed: int) -> np.ndarray:
     raise KeyError(name)
 
 
-@functools.lru_cache(maxsize=None)
 def _variants(kind: str) -> Tuple[np.ndarray, ...]:
+    """The takes of *kind*, loaded once per state of the pack folders, so a
+    pack added while Sage runs is used without a restart (review, 10-14)."""
+    root = library_dir()
+    stamp = (
+        tuple((d.name, d.stat().st_mtime) for d in sorted(root.glob("*")) if d.is_dir())
+        if root.is_dir()
+        else ()
+    )
+    return _load_variants(kind, stamp)
+
+
+@functools.lru_cache(maxsize=64)
+def _load_variants(kind: str, stamp: tuple) -> Tuple[np.ndarray, ...]:
     out: List[np.ndarray] = []
     root = library_dir()
     for source in SOURCES.get(kind, []):

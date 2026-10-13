@@ -57,6 +57,7 @@ export function ChapterReader({
   const topRef = useRef<HTMLDivElement | null>(null);
   const paraRefs = useRef<Map<number, HTMLElement>>(new Map());
   const handsOffUntil = useRef(0);
+  const selfScrollUntil = useRef(0);
   const player = useBookPlayer();
 
   const chapter = chapters.find((c) => c.index === index);
@@ -71,6 +72,7 @@ export function ChapterReader({
     fetchChapterText(bookId, index)
       .then((t) => !cancelled && setText(t))
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+    selfScrollUntil.current = Date.now() + 500;
     topRef.current?.scrollIntoView({ block: 'start' });
     return () => {
       cancelled = true;
@@ -78,22 +80,21 @@ export function ChapterReader({
     // `ready` turns true when the chapter is narrated: fetch again for its timings.
   }, [bookId, index, ready]);
 
-  // Hand scrolling (wheel, touch, keys) holds the follow-along off for a bit.
+  // Any scroll the follow-along did not make (wheel, touch, keys, the
+  // scrollbar) holds it off for a bit. Scroll events do not bubble, so they
+  // are caught on the way down.
   useEffect(() => {
     const off = () => {
-      handsOffUntil.current = Date.now() + HANDS_OFF_MS;
+      if (Date.now() > selfScrollUntil.current) handsOffUntil.current = Date.now() + HANDS_OFF_MS;
     };
-    window.addEventListener('wheel', off, { passive: true });
-    window.addEventListener('touchmove', off, { passive: true });
-    return () => {
-      window.removeEventListener('wheel', off);
-      window.removeEventListener('touchmove', off);
-    };
+    document.addEventListener('scroll', off, { capture: true, passive: true });
+    return () => document.removeEventListener('scroll', off, { capture: true });
   }, []);
 
   const current = playingThis ? paragraphAt(text?.starts ?? null, player.position) : null;
   useEffect(() => {
     if (current == null || !player.playing || Date.now() < handsOffUntil.current) return;
+    selfScrollUntil.current = Date.now() + 1200; // the smooth scroll's own events
     paraRefs.current.get(current)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [current, player.playing]);
 

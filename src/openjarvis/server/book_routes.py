@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -43,9 +44,12 @@ def create_book_router(
         library = lib()
         return {"books": library.summaries(), "worker": library.worker_status()}
 
-    async def _save_upload(library: Library, file: UploadFile) -> Path:
+    async def _save_upload(
+        library: Library, file: UploadFile, tag: str = ""
+    ) -> Path:
         """A PDF or EPUB from the page, written beside the store and kept
-        (a book records its source path)."""
+        (a book records its source path). ``tag`` keeps an added-chapters
+        file from overwriting a book's own source of the same name."""
         name = Path(file.filename or "book").name
         suffix = Path(name).suffix.lower()
         if suffix not in (".pdf", ".epub"):
@@ -56,7 +60,7 @@ def create_book_router(
         folder = library.store.root / "_sources"
         folder.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^\w.\- ]+", "_", Path(name).stem)[:120] or "book"
-        target = folder / f"{safe}{suffix}"
+        target = folder / f"{safe}{tag}{suffix}"
         with tempfile.NamedTemporaryFile(
             dir=folder, suffix=suffix, delete=False
         ) as tmp:
@@ -253,7 +257,8 @@ def create_book_router(
         """A newer PDF/EPUB of the book: only chapters it does not have."""
         _book_or_404(book_id)
         library = lib()
-        target = await _save_upload(library, file)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        target = await _save_upload(library, file, f" (added {stamp})")
         try:
             result = await asyncio.to_thread(
                 library.add_chapters_from_file, book_id, target

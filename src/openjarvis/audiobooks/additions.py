@@ -223,6 +223,12 @@ def fetch_page(url: str) -> Dict[str, Any]:
     url = url.strip()
     if not url.lower().startswith(("http://", "https://")):
         url = "https://" + url
+    from openjarvis.security.ssrf import check_ssrf
+
+    blocked = check_ssrf(url)
+    if blocked:
+        # Never on to the browser either (review, 10-14).
+        raise ValueError(f"That address can't be read: {blocked}")
     tool = WebReadTool()
     tool._description = ""
     tool._walled = False

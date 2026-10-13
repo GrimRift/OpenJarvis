@@ -21,6 +21,8 @@ from openjarvis.audiobooks.queue import (
     book_voice,
     check_voice,
     parse_chapters,
+    read_status_file,
+    update_status_file,
 )
 from openjarvis.audiobooks.store import BookStore
 
@@ -248,10 +250,7 @@ class Library:
     def _rendered(self, book_id: str, voice: str) -> Dict[str, Dict[str, Any]]:
         """index -> status.json entry, for chapters whose file exists."""
         folder = audio_dir(self.store, book_id, voice)
-        try:
-            status = json.loads((folder / "status.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            status = {}
+        status = read_status_file(folder / "status.json")
         out = {}
         for key, entry in status.items():
             if (folder / entry.get("file", "")).is_file():
@@ -382,17 +381,7 @@ class Library:
 
     def _status(self, book_id: str, voice: str) -> Tuple[Path, Dict[str, Any]]:
         path = audio_dir(self.store, book_id, voice) / "status.json"
-        try:
-            return path, json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return path, {}
-
-    @staticmethod
-    def _write_status(path: Path, status: Dict[str, Any]) -> None:
-        tmp = path.with_suffix(".tmp")
-        blob = json.dumps(status, indent=1, ensure_ascii=False)
-        tmp.write_text(blob, encoding="utf-8")
-        tmp.replace(path)
+        return path, read_status_file(path)
 
     def _starts(
         self, book: Dict[str, Any], chapter: Dict[str, Any], text: str
@@ -421,11 +410,14 @@ class Library:
         self, book_id: str, voice: str, index: int, starts: List[List[float]]
     ) -> None:
         """Keep an older chapter's aligned timings: decoding it is ~1 s."""
-        try:
-            path, status = self._status(book_id, voice)
+        path = audio_dir(self.store, book_id, voice) / "status.json"
+
+        def keep(status: Dict[str, Any]) -> None:
             if str(index) in status:
                 status[str(index)]["paragraphs_aligned"] = starts
-                self._write_status(path, status)
+
+        try:
+            update_status_file(path, keep)
         except OSError:
             pass  # computed again next time
 
@@ -464,16 +456,19 @@ class Library:
         """The user listened and the line is fine: drop its flag (kept under
         ``dismissed``). Returns how many flags the chapter still has."""
         voice = book_voice(self.store.load(book_id))
-        path, status = self._status(book_id, voice)
-        entry = status.get(str(int(index)))
-        if not entry:
-            raise FileNotFoundError(f"Chapter {index} is not rendered")
-        keep = [f for f in entry.get("flags") or [] if f.get("piece") != int(piece)]
-        gone = [f for f in entry.get("flags") or [] if f.get("piece") == int(piece)]
-        entry["flags"] = keep
-        entry["dismissed"] = (entry.get("dismissed") or []) + gone
-        self._write_status(path, status)
-        return len(keep)
+        path = audio_dir(self.store, book_id, voice) / "status.json"
+
+        def drop(status: Dict[str, Any]) -> int:
+            entry = status.get(str(int(index)))
+            if not entry:
+                raise FileNotFoundError(f"Chapter {index} is not rendered")
+            flags = entry.get("flags") or []
+            entry["flags"] = [f for f in flags if f.get("piece") != int(piece)]
+            gone = [f for f in flags if f.get("piece") == int(piece)]
+            entry["dismissed"] = (entry.get("dismissed") or []) + gone
+            return len(entry["flags"])
+
+        return update_status_file(path, drop)
 
     def redo_chapter(self, book_id: str, index: int) -> Dict[str, Any]:
         """Render a chapter again (a flagged line, or new reading rules): the
@@ -488,9 +483,9 @@ class Library:
             backup.mkdir(exist_ok=True)
             stamp = time.strftime("%Y%m%d-%H%M%S")
             path.replace(backup / f"{int(index):04d}-{stamp}.m4a")
-        status_path, status = self._status(book_id, voice)
-        if status.pop(str(int(index)), None) is not None:
-            self._write_status(status_path, status)
+        update_status_file(
+            folder / "status.json", lambda status: status.pop(str(int(index)), None)
+        )
         return self.queue.add(book_id, "range", chapters=[int(index)], voice=voice)
 
     # ------------------------------------------------------------ adding chapters

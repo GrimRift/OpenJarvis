@@ -61,6 +61,8 @@ def test_a_name_spelled_out_is_flagged(said, heard):
         ("The letters were A, B and C.", "The letters were A, B and C."),
         ("Seo Gio was an art teacher.", "C.O.G.O was an art teacher."),
         ("I said I would.", "I, I said I would."),
+        # two stray letters inside a word are not a spelling: "ai" in "said"
+        ("He said it again, then left.", "He said it again, A I then left."),
     ],
 )
 def test_letters_that_spell_nothing_in_the_text_pass(said, heard):

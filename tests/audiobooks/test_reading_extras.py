@@ -330,3 +330,52 @@ def test_sounds_are_mixed_under_the_voice(monkeypatch):
     assert sfx.mix_under(audio, [("rustle", 1.0), ("thud", 5.0)], voice_rms=0.2) == 1
     assert audio[24000] == pytest.approx(0.2 * sfx.UNDER_VOICE)
     assert audio[:24000].max() == 0
+
+
+# ------------------------------------------------------------------ review fixes
+
+
+def test_status_writers_running_together_lose_nothing(tmp_path):
+    import threading
+
+    from openjarvis.audiobooks.queue import read_status_file, update_status_file
+
+    path = tmp_path / "status.json"
+
+    def write(k):
+        for n in range(20):
+            update_status_file(path, lambda s, k=k, n=n: s.__setitem__(f"{k}-{n}", n))
+
+    threads = [threading.Thread(target=write, args=(k,)) for k in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(read_status_file(path)) == 80
+
+
+def test_a_status_swap_waits_for_a_reader_to_let_go(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from openjarvis.audiobooks.queue import read_status_file, update_status_file
+
+    path = tmp_path / "status.json"
+    real = Path.replace
+    refusals = {"n": 2}
+
+    def busy_then_fine(self, target):
+        if refusals["n"]:
+            refusals["n"] -= 1
+            raise PermissionError(5, "Access is denied")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", busy_then_fine)
+    update_status_file(path, lambda s: s.__setitem__("1", {"file": "0001.m4a"}))
+    assert read_status_file(path) == {"1": {"file": "0001.m4a"}}
+
+
+def test_a_chapter_link_to_a_private_address_is_refused():
+    from openjarvis.audiobooks.additions import fetch_page
+
+    with pytest.raises(ValueError, match="can't be read"):
+        fetch_page("http://127.0.0.1:8000/v1/books")

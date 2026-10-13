@@ -42,11 +42,11 @@ export function AddChapters({
     setError(null);
     setNote(null);
     try {
-      let message: string | null = null;
-      await act('add', async () => {
-        message = await fn();
-      });
+      // Errors stay in this panel (act() would show them in the page banner);
+      // act() only refreshes the book afterwards.
+      const message = await fn();
       setNote(message);
+      await act('add', async () => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -118,7 +118,10 @@ export function AddChapters({
           <button className={primary} style={primaryStyle} disabled={working} onClick={() => fileRef.current?.click()}>
             {working ? <Loader2 size={14} className="animate-spin" /> : <FileUp size={14} />} Choose file
           </button>
-          <input ref={fileRef} type="file" accept=".pdf,.epub" className="hidden" onChange={(e) => fromFile(e.target.files?.[0])} />
+          <input ref={fileRef} type="file" accept=".pdf,.epub" className="hidden" onChange={(e) => {
+              fromFile(e.target.files?.[0]);
+              e.target.value = ''; // the same file can be picked again
+            }} />
         </div>
       )}
 

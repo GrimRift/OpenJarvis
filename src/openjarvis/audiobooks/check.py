@@ -78,8 +78,16 @@ def _spelled_out(said: List[str], heard: List[str]) -> Optional[str]:
             continue
         if len(run) >= 2 and " ".join(run) not in said_text:
             joined = "".join(run)
-            # "s e o" is part of "seo"; "s e o g o" holds all of it
-            if any(joined in w or w in joined for w in said if len(w) > 1):
+
+            # "s e o" is part of "seo"; "s e o g o" holds all of it. Two
+            # letters count only as a whole word or a word's start: "a i"
+            # is not "said" spelled out (review, 10-14).
+            def spells(w: str, joined: str = joined) -> bool:
+                if len(joined) == 2:
+                    return w.startswith(joined)
+                return joined in w or w in joined
+
+            if any(spells(w) for w in said if len(w) > 1):
                 return joined
         run = []
     return None

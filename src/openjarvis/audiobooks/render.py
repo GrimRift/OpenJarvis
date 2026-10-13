@@ -33,7 +33,7 @@ import numpy as np
 
 from openjarvis.audiobooks import pieces as piece_rules
 from openjarvis.audiobooks.check import Transcriber, chapter_rate, judge
-from openjarvis.audiobooks.queue import audio_dir
+from openjarvis.audiobooks.queue import audio_dir, update_status_file
 from openjarvis.audiobooks.store import BookStore
 from openjarvis.speech.spoken_text import to_spoken_text
 
@@ -391,9 +391,7 @@ class ChapterRenderer:
         return judge(text, heard, len(audio) / SAMPLE_RATE, rate)
 
     def _record(self, folder: Path, result: ChapterResult) -> None:
-        path = folder / "status.json"
-        status = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-        status[str(result.index)] = {
+        entry = {
             "file": result.path.name,
             "seconds": result.seconds,
             "pieces": result.pieces,
@@ -407,8 +405,6 @@ class ChapterRenderer:
             "sounds": result.sounds,
             "rendered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(status, indent=1, ensure_ascii=False), encoding="utf-8"
+        update_status_file(
+            folder / "status.json", lambda s: s.__setitem__(str(result.index), entry)
         )
-        tmp.replace(path)

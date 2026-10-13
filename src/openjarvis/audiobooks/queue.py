@@ -16,8 +16,10 @@ read-modify-write under a lock file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -56,6 +58,44 @@ def audio_dir(store: BookStore, book_id: str, voice: str) -> Path:
 
 def chapter_file(store: BookStore, book_id: str, voice: str, index: int) -> Path:
     return audio_dir(store, book_id, voice) / f"{index:04d}.m4a"
+
+
+_status_lock = threading.RLock()
+_log = logging.getLogger(__name__)
+
+
+def read_status_file(path: Path) -> Dict[str, Any]:
+    """A voice folder's status.json ({} when missing or unreadable)."""
+    for _ in range(10):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:  # mid-swap on Windows
+            time.sleep(0.05)
+        except (OSError, ValueError):
+            return {}
+    return {}
+
+
+def update_status_file(path: Path, change: Callable[[Dict[str, Any]], Any]) -> Any:
+    """Read, change and write a status.json as one step. Every writer (the
+    render worker, flag dismiss, redo, timing alignment) goes through here:
+    a lock so no update is lost, and a retried swap because Windows refuses
+    to replace a file the page is reading at that moment (review, 10-14)."""
+    with _status_lock:
+        status = read_status_file(path)
+        result = change(status)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(status, indent=1, ensure_ascii=False), encoding="utf-8"
+        )
+        for _ in range(40):
+            try:
+                tmp.replace(path)
+                return result
+            except PermissionError:
+                time.sleep(0.05)
+        _log.warning("Could not update %s (kept busy by a reader)", path)
+        raise PermissionError(f"{path} stayed locked")
 
 
 def book_voice(book: Dict[str, Any]) -> str:
