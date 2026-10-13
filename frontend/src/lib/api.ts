@@ -1109,6 +1109,7 @@ export async function sendAgentMessage(
             }
             continue;
           }
+          if (evName === 'text_restore') continue;
           if (evName === 'tool_call_end') {
             try {
               const parsed = JSON.parse(data);

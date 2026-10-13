@@ -1971,6 +1971,10 @@ async def _handle_streaming_orchestrator(
                 if not turn_content.strip() and all_tool_results and not full_content:
                     if preamble:
                         turn_content = preamble
+                        # Its opening was said aloud before the retract; the
+                        # page says only the rest (lib/round-speech.ts).
+                        restore_payload = _json.dumps({"text": preamble})
+                        yield f"event: text_restore\ndata: {restore_payload}\n\n"
                         restore_chunk = ChatCompletionChunk(
                             id=chunk_id,
                             model=model,

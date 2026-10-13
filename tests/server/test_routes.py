@@ -2506,6 +2506,7 @@ class TestNothingAfterTheToolsIsNotNothing:
             },
         )
         assert resp.status_code == 200
+        self.raw = resp.text
         content = ""
         for line in resp.text.split("\n"):
             if line.startswith("data:") and '"content"' in line:
@@ -2518,6 +2519,19 @@ class TestNothingAfterTheToolsIsNotNothing:
         # Streamed once before the retract and once restored: the client
         # trims the first, so the second is what stays on the message.
         assert content.count("I'll remind you at 12:19, Sir.") == 2
+
+    def test_the_restore_is_marked_so_it_is_not_said_twice(self):
+        """13 October: the page said the restored preamble's opening a second
+        time; marked, it says only what it held back."""
+        self._body("I'll remind you at 12:19, Sir.", [""])
+        marker = self.raw.index("event: text_restore")
+        restore = json.loads(self.raw[marker:].split("\n")[1][5:].strip())
+        assert restore == {"text": "I'll remind you at 12:19, Sir."}
+        assert "I'll remind you at 12:19, Sir." in self.raw[marker:].split("\n\n")[1]
+
+    def test_a_real_answer_is_not_marked_as_restored(self):
+        self._body("I'll remind you.", ["Done, Sir, at 12:19."])
+        assert "text_restore" not in self.raw
 
     def test_with_no_preamble_it_asks_once_more(self):
         content, turns = self._body("", ["", "Done, Sir."])

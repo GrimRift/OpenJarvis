@@ -50,6 +50,48 @@ describe('RoundSpeech', () => {
     expect(said()).toBe(`${OPENING} more words.`);
   });
 
+  it('a restored short preamble is not said again', () => {
+    // 13 October: the server gives the preamble back as the answer when the
+    // model says nothing after its tool; it had been said in full.
+    const { speech, said } = gate();
+    speech.push("I'll remind you at 12:19, Sir.");
+    speech.retract();
+    speech.restore("I'll remind you at 12:19, Sir.");
+    speech.push("I'll remind you at 12:19, Sir.");
+    speech.release();
+    expect(said()).toBe("I'll remind you at 12:19, Sir.");
+  });
+
+  it('a restored long draft says only the part it held', () => {
+    const { speech, said } = gate();
+    const draft = `${OPENING} and more words. Hamilton needs 106 points. He can still win.`;
+    speech.push(draft.slice(0, 120));
+    speech.push(draft.slice(120));
+    speech.retract();
+    speech.restore(draft);
+    speech.push(draft.slice(0, 50));
+    speech.push(draft.slice(50));
+    expect(said()).toBe(draft);
+  });
+
+  it('a restore that does not start with what was said is said whole', () => {
+    const { speech, said } = gate();
+    speech.push('Let me check, Sir.');
+    speech.retract();
+    speech.restore('Something else entirely.');
+    speech.push('Something else entirely.');
+    expect(said()).toBe('Let me check, Sir.Something else entirely.');
+  });
+
+  it('a new round after a restore-free retract is said as before', () => {
+    const { speech, said } = gate();
+    speech.push('Let me check, Sir.');
+    speech.retract();
+    speech.push('Let me check, Sir. It is sunny.');
+    speech.release();
+    expect(said()).toBe('Let me check, Sir.Let me check, Sir. It is sunny.');
+  });
+
   it('finishes the sentence it is in before holding', () => {
     const { speech, said } = gate();
     speech.push(`${OPENING} still going`);

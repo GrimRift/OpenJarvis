@@ -1277,6 +1277,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           } catch {
             /* skip */
           }
+        } else if (eventName === 'text_restore') {
+          // Nothing came after the tools: the last preamble is the answer
+          // and follows as content. Its opening was said already.
+          try {
+            roundSpeech.restore(String(JSON.parse(sseEvent.data).text ?? ''));
+          } catch {
+            /* skip */
+          }
         } else if (eventName === 'tool_call_start') {
           try {
             const data = JSON.parse(sseEvent.data);
