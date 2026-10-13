@@ -24,6 +24,11 @@ const RETRY_MAX_MS = 30_000;
  * missed a reminder: its first attempt failed, and nothing noticed the one
  * after it was never answered. */
 const SILENT_MS = 40_000;
+/** Fired on window whenever this stream (re)connects: the server is up. A
+ * server restart outlasts Flux's quick reconnects, and after them nothing
+ * reconnected Flux, so every wake turn went to no socket until the mic was
+ * switched off and on (13 October, 10:54 and 12:34). useFluxSpeech listens. */
+export const SERVER_BACK_EVENT = 'sage-server-back';
 
 export function useServerVoice(): void {
   useEffect(() => {
@@ -71,6 +76,7 @@ export function useServerVoice(): void {
         });
         if (!res.ok || !res.body) throw new Error(`voice stream ${res.status}`);
         voiceTrace('serverVoice.connected', {});
+        window.dispatchEvent(new Event(SERVER_BACK_EVENT));
         retryMs = RETRY_MIN_MS;
         const reader = res.body.getReader();
         const decoder = new TextDecoder();

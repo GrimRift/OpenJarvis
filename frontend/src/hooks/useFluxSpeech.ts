@@ -7,6 +7,7 @@ import { buildWsProtocols } from '../lib/useAgentEvents';
 import { openMicrophone, type MicChoice } from '../lib/mic-device';
 import { DUCK_MIN_WINDOWS, DUCK_SETTLE_MS, sliceLevels } from '../lib/voice-duck';
 import { mediaHeld } from '../lib/media-hold';
+import { SERVER_BACK_EVENT } from './useServerVoice';
 import {
   SPEAKING_MAX_GAIN,
   adaptFloor,
@@ -228,6 +229,18 @@ export const MAX_FLUX_RECONNECTS = 3;
 export function reconnectDelay(attemptsSoFar: number): number | null {
   if (attemptsSoFar >= MAX_FLUX_RECONNECTS) return null;
   return 500 * 2 ** attemptsSoFar;
+}
+
+/**
+ * Whether to start over after the quick reconnects gave up (see retryNow):
+ * only a transport fault ('error') with no socket, while Flux is wanted.
+ */
+export function shouldRetryFlux(state: {
+  enabled: boolean;
+  hasSocket: boolean;
+  status: FluxStatus;
+}): boolean {
+  return state.enabled && !state.hasSocket && state.status === 'error';
 }
 
 /**
@@ -758,6 +771,41 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     silent.connect(ctx.destination);
   }, [eager, fail, handleMessage, provider]);
 
+  // After the quick reconnects are spent the page stays on status 'error'
+  // with no socket. A server restart outlasts them (about 25 s against 3.5 s
+  // of retries), and the wake word then opened turns into no socket at all:
+  // "Hey Sage" confirmed, nothing transcribed (13 October). So try again
+  // when the server is back, and when a turn begins with no connection.
+  // Never after 'unavailable': that is the server's verdict, not a fault.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const retryNow = useCallback(
+    (why: string) => {
+      const state = {
+        enabled: enabledRef.current,
+        hasSocket: wsRef.current !== null,
+        status: statusRef.current,
+      };
+      if (!shouldRetryFlux(state)) return;
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      reconnectsRef.current = 0;
+      voiceTrace('flux.retry', { why });
+      void connect();
+    },
+    [connect],
+  );
+
+  useEffect(() => {
+    const onServerBack = () => retryNow('server back');
+    window.addEventListener(SERVER_BACK_EVENT, onServerBack);
+    return () => window.removeEventListener(SERVER_BACK_EVENT, onServerBack);
+  }, [retryNow]);
+
   const beginTurn = useCallback((preRoll?: Int16Array) => {
     // A wake turn carries the phrase as pre-roll: its level is what the
     // pause after it is judged against (lib/wake-follow.ts restartsPause).
@@ -793,7 +841,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
       }
     }
     preRollEndRef.current = sentSamplesRef.current / TARGET_SAMPLE_RATE;
-  }, []);
+    // This turn's opening is lost, but the words after the reconnect are
+    // sent (sending is already on), and the next turn has a socket.
+    if (!wsRef.current) retryNow('turn without a connection');
+  }, [retryNow]);
 
   // Audio sent on this socket, and where the last pre-roll ended on that
   // clock: Deepgram's partials of the pre-rolled wake phrase itself ("Please",
