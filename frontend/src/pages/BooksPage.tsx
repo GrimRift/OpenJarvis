@@ -606,6 +606,7 @@ function BookView({
               <span className="truncate">
                 {c.title !== c.label && !c.label.includes(c.title) ? `${c.label}: ${c.title}` : c.label}
                 {isHere && <span style={{ color: 'var(--color-text-tertiary)' }}> · you are here</span>}
+                {c.flags > 0 && <span style={{ color: 'var(--color-text-tertiary)' }}> · </span>}
                 {c.flags > 0 && (
                   <button
                     className="cursor-pointer underline decoration-dotted underline-offset-2"
@@ -613,7 +614,7 @@ function BookView({
                     title="Show the lines the check could not fix"
                     onClick={() => setFlagsOpen(flagsOpen === c.index ? null : c.index)}
                   >
-                    {' '}· {c.flags} flagged
+                    {c.flags} flagged
                   </button>
                 )}
               </span>

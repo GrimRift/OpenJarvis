@@ -15,7 +15,7 @@ The rules come from the 2026-10-13 renders (docs/m42-audiobooks.md):
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 from openjarvis.audiobooks.text import SCENE_BREAK
@@ -50,6 +50,26 @@ class Item:
     #: The stored paragraph it comes from (``text.split("\n\n")``, empty
     #: ones left out: the reader's numbering); -1 for the title.
     para: int = -1
+    #: Sound effects to play under it (user, 2026-10-14): (kind, where in
+    #: the text as a share of its length) for each sound word of a
+    #: sound-only paragraph ("Rustle, rustle.").
+    sounds: List[Tuple[str, float]] = field(default_factory=list)
+
+
+def _join(a: Item, b: Item, gap: float, para: int) -> Item:
+    """*a* and *b* said as one piece; their sound cues move with their text."""
+    text = f"{a.text} {b.text}"
+    la, lb, n = len(a.text or ""), len(b.text or ""), len(text) or 1
+    sounds = [(k, f * la / n) for k, f in a.sounds]
+    sounds += [(k, (la + 1 + f * lb) / n) for k, f in b.sounds]
+    return Item(text, gap, para, sounds)
+
+
+def _sound_cues(para: str) -> List[Tuple[str, float]]:
+    from openjarvis.audiobooks.sfx import sound_words
+
+    found = sound_words(para)
+    return [(kind, at / max(len(para), 1)) for kind, at in found or []]
 
 
 def _clauses(text: str) -> List[str]:
@@ -97,21 +117,25 @@ _RANKS = {"class", "rank", "grade", "tier", "level", "type"}
 _PREFIXES = {
     "re", "pre", "co", "de", "un", "non", "sub", "pro", "bi", "tri", "mid", "mis", "ex"
 }
-#: How a stutter's broken-off start is joined to the next try. Sample takes
-#: (user, 2026-10-14) picked this one: see spoken_stutters.
-STUTTER_JOIN = "-- "
+#: How a stutter's broken-off start is joined to the next try. The user
+#: listened to "--", "...", "," and picked a plain hyphen (2026-10-14).
+STUTTER_JOIN = "-"
 
 
 def _stutter_sound(word: str) -> str:
-    """The start a speaker breaks off on: consonants up to the first vowel
-    sound, and that vowel ("just" -> "ju", "that" -> "tha", "are" -> "a");
-    the whole word when that is all of it ("no", "I")."""
+    """The start a speaker breaks off on, spelled as it sounds: consonants up
+    to the first vowel, and that vowel ("that" -> "tha", "are" -> "a"); the
+    whole word when that is all of it ("no", "I"). A short u is written "a"
+    (user, 2026-10-14: "Ju" is read "Jew"; "just" should start "ja")."""
     k = 0
     while k < len(word) and word[k] not in _VOWELS and not (k and word[k] in "yY"):
         k += 1
+    start = k
     while k < len(word) and word[k] in _VOWELS:
         k += 1
-    return word[: max(k, 1)]
+    sound = word[: max(k, 1)]
+    short_u = k == start + 1 and word[start] in "uU" and k < len(word) and k > 1
+    return sound[:-1] + ("A" if word[start] == "U" else "a") if short_u else sound
 
 
 def _respell(m: "re.Match[str]") -> str:
@@ -181,9 +205,10 @@ def build(text: str, title: str) -> List[Item]:
             items.append(Item(None, GAPS["beat"], n))
             continue
         pieces = _paragraph_pieces(para)
+        cues = _sound_cues(para) if len(pieces) == 1 else []
         for k, (piece, gap) in enumerate(pieces):
             last = k + 1 == len(pieces)
-            items.append(Item(piece, GAPS["paragraph"] if last else GAPS[gap], n))
+            items.append(Item(piece, GAPS["paragraph"] if last else GAPS[gap], n, cues))
     return _merge_short_paragraphs(items)
 
 
@@ -198,11 +223,11 @@ def _merge_short_paragraphs(items: List[Item]) -> List[Item]:
         if short:
             nxt = items[k + 1] if k + 1 < len(items) else None
             if nxt is not None and nxt.text is not None:
-                items[k + 1] = Item(f"{item.text} {nxt.text}", nxt.gap, item.para)
+                items[k + 1] = _join(item, nxt, nxt.gap, item.para)
                 k += 1
                 continue
             if out and out[-1].text is not None:
-                out[-1] = Item(f"{out[-1].text} {item.text}", item.gap, out[-1].para)
+                out[-1] = _join(out[-1], item, item.gap, out[-1].para)
                 k += 1
                 continue
         out.append(item)

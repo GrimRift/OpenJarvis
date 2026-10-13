@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -72,6 +73,8 @@ class ChapterResult:
     #: [paragraph, start second] for every paragraph that has sound or a
     #: pause, in order: the reader lights up the one being read.
     paragraphs: List[List[float]] = field(default_factory=list)
+    #: Sound effects mixed under sound words.
+    sounds: int = 0
 
 
 def paragraph_starts(
@@ -202,7 +205,7 @@ class ChapterRenderer:
             spoken = ""
             if it.text:
                 spoken = to_spoken_text(piece_rules.spoken_stutters(it.text)).strip()
-            items.append(piece_rules.Item(spoken or None, it.gap, it.para))
+            items.append(piece_rules.Item(spoken or None, it.gap, it.para, it.sounds))
         folder = audio_dir(self.store, book_id, voice)
         work = folder / "work" / f"{index:04d}"
         plan = [it.text for it in items]
@@ -259,15 +262,19 @@ class ChapterRenderer:
 
         joined: List[np.ndarray] = []
         starts: List[float] = []
+        cues: List[tuple] = []
         samples = 0
         for k, item in enumerate(items):
             starts.append(samples / SAMPLE_RATE)
             if item.text is not None:
                 joined.append(_read_wav(work / f"p{k:04d}.wav"))
+                said = len(joined[-1]) / SAMPLE_RATE
+                cues += [(kind, starts[-1] + f * said) for kind, f in item.sounds]
                 samples += len(joined[-1])
             joined.append(np.zeros(int(SAMPLE_RATE * item.gap), np.float32))
             samples += len(joined[-1])
         audio = np.concatenate(joined) if joined else np.zeros(0, np.float32)
+        sounds = self._add_sounds(audio, cues)
         for flag in flags:
             flag["at"] = round(starts[flag["piece"]], 2)
         out = folder / f"{index:04d}.m4a"
@@ -295,6 +302,7 @@ class ChapterRenderer:
             retakes=retakes,
             flags=flags,
             paragraphs=paragraph_starts(items, starts),
+            sounds=sounds,
         )
         self._record(folder, result)
         shutil.rmtree(work, ignore_errors=True)
@@ -348,6 +356,22 @@ class ChapterRenderer:
                 flags.append({"piece": k, "text": text, "why": best})
         return retakes, flags
 
+    @staticmethod
+    def _add_sounds(audio: np.ndarray, cues: List[tuple]) -> int:
+        """Sound effects under the sound words (sfx.py); never fails a
+        chapter -- without them it is still the narration."""
+        if not cues or os.environ.get("SAGE_AUDIOBOOK_SFX", "1") == "0":
+            return 0
+        try:
+            from openjarvis.audiobooks import sfx
+
+            voiced = audio[np.abs(audio) > 0.01]
+            rms = float(np.sqrt(np.mean(voiced**2))) if len(voiced) else 0.1
+            return sfx.mix_under(audio, cues, rms)
+        except Exception:
+            logger.warning("adding sound effects failed", exc_info=True)
+            return 0
+
     def _listens_to(self, text: str) -> bool:
         return self.transcriber is not None and len(text) < LISTEN_UNDER_CHARS
 
@@ -380,6 +404,7 @@ class ChapterRenderer:
             "retakes": result.retakes,
             "flags": result.flags,
             "paragraphs": result.paragraphs,
+            "sounds": result.sounds,
             "rendered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         tmp = path.with_suffix(".tmp")

@@ -27,12 +27,12 @@ BODY = "<p>" + "The mill wheel turned slowly in the stream all day. " * 8 + "</p
 @pytest.mark.parametrize(
     "written, spoken",
     [
-        ('"J-just now..."', '"Ju-- just now..."'),
-        ("W-what?", "Wha-- what?"),
-        ("I-I-I don't know", "I-- I-- I don't know"),
-        ("s-s-sorry", "so-- so-- sorry"),
-        ("G-Gio", "Gio-- Gio"),
-        ("N-NO!", "NO-- NO!"),
+        ('"J-just now..."', '"Ja-just now..."'),
+        ("W-what?", "Wha-what?"),
+        ("B-but", "Ba-but"),
+        ("s-s-sorry", "so-so-sorry"),
+        ("G-Gio", "Gio-Gio"),
+        ("N-NO!", "NO-NO!"),
     ],
 )
 def test_a_written_stutter_is_spoken_as_one(written, spoken):
@@ -235,3 +235,52 @@ def test_routes_add_and_dismiss(lib):
         ).status_code
         == 400
     )
+
+
+# ------------------------------------------------------------------ sound effects
+
+
+@pytest.mark.parametrize(
+    "paragraph, kinds",
+    [
+        ("Rustle...", ["rustle"]),
+        ("Rustle, rustle. Swish...", ["rustle", "rustle", "whoosh"]),
+        ("Swoooosh, Rustle, rustle!", ["whoosh", "rustle", "rustle"]),
+        ("SPLASH!!", ["splash"]),
+        ("Creeeak...", ["creak"]),
+    ],
+)
+def test_sound_only_paragraphs_get_their_sounds(paragraph, kinds):
+    from openjarvis.audiobooks.sfx import sound_words
+
+    assert [k for k, _ in sound_words(paragraph)] == kinds
+
+
+@pytest.mark.parametrize(
+    "paragraph", ["The leaves rustle.", "Rustle, he said.", "Yes."]
+)
+def test_sound_words_inside_narration_get_none(paragraph):
+    from openjarvis.audiobooks.sfx import sound_words
+
+    assert sound_words(paragraph) is None
+
+
+def test_sound_cues_follow_their_words_through_a_merge():
+    items = piece_rules.build(
+        "Rustle...\n\nA long and pale hand disturbs the petals.", "Chapter 4."
+    )
+    merged = items[1]
+    assert merged.text.startswith("Rustle... A long")
+    assert merged.sounds == [("rustle", 0.0)]
+
+
+def test_sounds_are_mixed_under_the_voice(monkeypatch):
+    import numpy as np
+
+    from openjarvis.audiobooks import sfx
+
+    monkeypatch.setattr(sfx, "sound", lambda kind, pick: np.ones(100, np.float32))
+    audio = np.zeros(48000, np.float32)
+    assert sfx.mix_under(audio, [("rustle", 1.0), ("thud", 5.0)], voice_rms=0.2) == 1
+    assert audio[24000] == pytest.approx(0.2 * sfx.UNDER_VOICE)
+    assert audio[:24000].max() == 0
