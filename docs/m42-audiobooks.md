@@ -1,0 +1,214 @@
+# M42 — Audiobooks (scoped 2026-10-13; step 1 import built 2026-10-13)
+
+Sage turns a book the user owns (PDF or EPUB) into an audiobook in one of Sage's
+voices, for personal listening on the PC and the phone. Scoped with the user
+2026-10-13; every decision below is theirs. (Moved here from the data folder's
+`notes\m42-audiobooks.md` with the step 1 commit; this file is the one to update.)
+
+## Reference book (the test case)
+
+`D:\Downloads\_OceanofPDF.com_The_Artist_Who_Paints_Dungeon_-_Hobby_Writing_Principle.pdf`
+(measured 2026-10-13 with pypdfium2 from the OpenJarvis-Lab venv):
+- 4,327 pages, ~868,000 words, clean text layer (0 replacement chars, no OCR).
+- **372 chapters, and 372 is right** (checked at build, 2026-10-13): 372 bookmarks
+  and 372 `CHAPTER N` heading lines, on the same pages, one per page top. The
+  numbers run to 375 because the source itself skips 88, 321, 322, 331, 332, 351
+  and 352 (the chapters around them are normal length, nothing is merged in) and
+  splits 32, 33, 35 and 41 into `.1`/`.2` halves: 375 - 7 + 4 = 372. The EPUB of
+  the same book (`...Principle.epub`, same folder) has the identical 372 entries
+  and gaps. Headings are only `CHAPTER N`, no title text.
+- ~95 h of audio at ~150 wpm; ~2-3 GB MP3 / ~1.4 GB Opus.
+- Text uses curly quotes, ellipses and the odd superscript (U+2074): normalise for TTS.
+
+## Decisions (user, 2026-10-13)
+
+- **Engine: local Chatterbox only** (Nano/Turbo, the existing voice sidecar). No cloud TTS.
+- **One narrator voice per book.** No dialogue voice, no per-character voices.
+- **Voices:** any existing Sage voice (Jarvis, J.A.R.V.I.S., Frieren, Jarvis Turbo...)
+  **plus new narrator clones**: the user supplies a clean 10-30 s clip; clone as with
+  Jarvis Turbo, offer 2 takes, user picks by ear (see sage_voice_character).
+- **Narrator PICKED 2026-10-13: `lotm-narrator` ("LOTM Narrator", Turbo,
+  0.6/0.85/300) = the default narrator.** Cloned from narrator A of an
+  AI-narrated LOTM audiobook on YouTube (details in HANDOFF M42 item). The user
+  must still be able to pick ANY local voice (Nano or Turbo) per book instead:
+  the Books page voice picker lists every voice, default lotm-narrator.
+  Long sentences must be split (<=160 chars) -- Nano's 30% VRAM cap OOMed on a
+  ~230-char sentence; Turbo's cap is 55%.
+- **Generation: all three modes, on request:** whole book; a chapter range
+  ("chapters 40-60"); rolling ("keep N chapters ahead of where I am"). One queue,
+  three ways of filling it.
+- **Delivery (all three):**
+  1. M4B parts in a folder, e.g. `<Audiobooks>\<Book>\Part 01 (Ch 1-25).m4b`,
+     with chapter markers, title, cover (first PDF page/image if any).
+  2. Same files also written to a OneDrive folder so they reach the phone.
+  3. Telegram on request ("send chapters 5-10 to my phone"): per-chapter MP3/M4A
+     via the existing Telegram channel (bot uploads cap at 50 MB per file).
+- **Controls (both):** a new **Books page** in Sage (import, voice, per-chapter
+  progress, play on PC, pause/resume queue, export) **and chat/voice tools**
+  ("make an audiobook of this in the Jarvis voice", "how far is the book?",
+  "render chapters 40-60", "send part 2 to my phone").
+- **Formats: PDF + EPUB.** No scanned/OCR PDFs in v1.
+- **Audiobookshelf: explained, not chosen.** Output files are compatible with it,
+  so it can be added later without Sage changes (needs Tailscale off-LAN; iOS app
+  situation to re-check then).
+
+## Open questions to settle at build time
+
+- **Speed: MEASURED 2026-10-13 (narrator since picked: lotm-narrator, Turbo -> expect
+  the Turbo row below: ~25-28 h GPU for the whole book).**
+  Chapter 1 (pages 1-15, 3,190 narrated words; footnotes, translator's note and
+  `OceanofPDF.com` dropped), app open, cloud mode (router had no model loaded),
+  standalone engine process (live `voice_sidecar.engine` code, copy of the voices)
+  so no graph was captured in the live sidecar. Pieces as live: sentences merged
+  to <= 90 chars, then `split_for_generation`; 327 pieces, all in the warm
+  512/640/768 buckets. Gaps added: 0.08 s piece / 0.3 s sentence / 0.6 s
+  paragraph / 0.9 s `"..."` beat / 1.6 s scene break. Levelled to -16 LUFS.
+
+  | Voice | Audio | Wall | RTF | Pace | Peak VRAM (proc / card) | Runaways |
+  |---|---|---|---|---|---|---|
+  | Jarvis (Nano, `jarvis`) | 18.2 min | 2.5 min | 0.137 | 175 wpm | 1.76 / 4.9 GB | 0 |
+  | Jarvis Turbo (`jarvis-turbo`) | 19.3 min | 5.6 min | 0.289 | 165 wpm | 3.58 / 6.8 GB | 21 retries (4 twice), short lines |
+  | J.A.R.V.I.S. (Nano, `jarvis-mix-a`) | 18.7 min | 3.0 min | 0.158* | 170 wpm | 1.75 / 5.0 GB | 0 |
+
+  *ran beside a CPU Whisper check, so slightly pessimistic. Card was 3.1 GB
+  before each run (dwm + live Nano sidecar + app).
+  **Whole book** (868k words at the measured pace = 83-88 h audio; ~95 h at
+  150 wpm): Nano Jarvis ~11-13 h, J.A.R.V.I.S. ~13-15 h, Turbo ~25-28 h of GPU
+  time. **25-chapter part** (avg chapter ~2,300 words): Nano ~45 min, J.A.R.V.I.S.
+  ~55 min, Turbo ~1 h 40 min. Not counting pauses for live speech.
+  **Live Sage while rendering** (probe: one 59-char sentence to the live sidecar
+  every 20 s, jarvis-mix-a): 0.52-0.56 s idle -> ~0.9 s during Nano, ~1.1 s
+  during Turbo (+0.35 / +0.6 s per sentence). No conversation during the runs,
+  no new device-side asserts. So the queue must yield to live speech.
+  **Long-text faults** (Whisper small.en round-trip per piece, `*.stt.json`):
+  most flags are STT misspelling "Seo Gio". Real ones: Turbo REPEATS short lines
+  ("It's nice. It's nice.", "Squeak. Squeak.", "It's small, it's small.",
+  "Rustle" x2) and voices bare `"...` fragments as "Uh"/"Huh"/"Ah"/"My"; Nano
+  sometimes slurs a word ("gentle as silk" -> "gentler silk", "a gourmet and a
+  glutton" -> "...in the platen"), hears as fine otherwise. Build fixes: merge
+  short lines (< ~14 chars) with a neighbour, never send an ellipsis-only piece
+  (make it a pause), STT-check + re-render flagged pieces.
+  **VRAM note for the build:** Turbo narrator + live Nano = two models (card
+  6.8 GB) or the live sidecar switching models (6-13 s each); a Nano narrator
+  shares the live model and only swaps conditioning. The live sidecar's
+  `generate()` calls `use_voice` outside its lock, so a book voice and a live
+  reply in another voice could cross: fix before reusing the live sidecar.
+  **3-min samples, all 6 voices** (same opening, items 0-46, user asked
+  2026-10-13): `D:\Downloads\audiobook-test\3-min samples\`. Frieren Nano RTF
+  0.13, J.A.R.V.I.S. Turbo 0.24, Frieren Turbo 0.24. Frieren Nano DROPPED two
+  lines (came out near-silent: "The well-ripened apple emitted a pleasant
+  fragrance.", "And the second rule.") -> the build's STT check must also catch
+  pieces whose audio is far too short for their text. Turbo voices add a mumble
+  after a bare "Hmm.".
+  Files: `D:\Downloads\audiobook-test\Ch01 - *.mp3`; scripts + per-piece logs:
+  session scratchpad `m42\` (extract/normalize/bench/finish/stt_check.py),
+  not kept.
+- **Sharing the GPU with live Sage:** reuse the running voice sidecar (no second
+  model copy in VRAM); live speech always wins: rendering pauses between sentences
+  while Sage speaks/listens and resumes after. Must not stall replies (sage_latency).
+- **Long-form quality:** chunking at sentence/paragraph bounds, consistent loudness
+  (-16 LUFS like other clips), pauses between paragraphs/scene breaks, and a
+  check for Chatterbox drift/garbles on long runs (spot-listen + maybe STT
+  round-trip check per chunk, re-render failures).
+- **Rolling mode's "where I am":** Sage only knows playback position for chapters
+  played on the PC Books page; for phone listening the user says the chapter.
+- **Folder locations:** Audiobooks root and the OneDrive path (OneDrive may redirect
+  Documents; ask, as with Pictures\Sage in M40).
+
+## Step 1: import (built 2026-10-13)
+
+`src/openjarvis/audiobooks/`: `pdf.py` and `epub.py` read a book into chapters
+of raw paragraphs, `text.py` cleans a paragraph for TTS, `importer.py` puts it
+together, `store.py` saves it. No server route or UI yet; by hand:
+`python -m openjarvis.audiobooks import <file>` / `list` (with the live venv;
+`OPENJARVIS_HOME` picks the data folder). Tests: `tests/audiobooks/` (synthetic
+PDF/EPUB builders in `builders.py`; `test_reference_books.py` runs on the three
+real books in `D:\Downloads` and skips elsewhere).
+
+**User decisions at build (2026-10-13):** keep chapters as the source has them
+(372, `32.1`/`32.2` separate; skipped numbers recorded as `missing_numbers`);
+EPUB front/back matter (Cover, Copyright, Table of Contents, Image Gallery,
+Characters, Map...) and near-empty entries are imported but flagged `skip`
+(the Books page can flip one back); footnotes and translator's notes are KEPT
+and read at the end of their chapter.
+
+**Store** (`<data>/books/<id>/`): `book.json` (title, author, language, cover,
+source path/format/sha256/pages, `missing_numbers`, `structure` = how chapters
+were found, and per chapter: index, label, number, title, words, chars,
+paragraphs, notes, skip, skip_reason, source pages/files, file),
+`chapters/0001.txt`, `cover.jpg`. Id = title slug + first 8 hex of the file's
+SHA-256: re-importing the same file replaces the book (written beside it and
+swapped in). The source file is not copied.
+
+**Chapter text format** (what the render step reads): paragraphs separated by a
+blank line; `* * *` = scene break; story first, then (if any) `* * *`,
+`Notes.` and one paragraph per note. The chapter heading is NOT in the text: it
+is `label`/`title` in book.json, for the render step to announce.
+
+**How chapters are found.** PDF: bookmarks and `CHAPTER N` heading lines
+(`Chapter 32.1`, `Chapter 7: Title`) reconciled -- a bookmark with a matching
+heading on its page starts at the heading; a heading with no bookmark becomes
+its own chapter (`structure.heading_only`); a bookmark with no heading starts
+at its page top (`bookmark_only`); text before the first chapter is a skipped
+"Front matter" entry. EPUB: the EPUB 3 nav, else the NCX, over the spine
+(a `#fragment` splits a document; no TOC = one chapter per spine document).
+
+**How paragraphs are found in a PDF.** The text layer has none (the reference
+book has no blank lines); they come from line geometry: first-line indent
+(margins = outermost edge at least 2% of long lines share, odd/even pages
+apart for mirrored print margins -- NOT the commonest edge, which in a
+dialogue-heavy book is the indent), a short last line ending in punctuation,
+or a gap over 1.6x the line pitch measured from a line's LAST character
+(PDFium sometimes reports two visual lines as one). Checked against the same
+book's EPUB `<p>` tags: identical paragraph counts in 368 of 372 chapters, the
+rest off by one; words within 3 per chapter. Running headers/footers and page
+numbers: the topmost/bottommost line (by position) repeating on 30%+ of pages.
+Line-end hyphens (PDFium reports them as U+FFFE): dropped only if the book also
+spells the joined word whole ("beau-tiful"), else kept ("wood-fired", "Sung-woon").
+
+**Cleaning** (`text.py`): `OceanofPDF.com`; a web-novel watermark planted
+mid-sentence a few hundred times, written to dodge search (Cyrillic/Greek look-alike
+letters, math-alphabet letters, letters spaced or bullet-separated, wrapped in
+`~ ° • ➤ ◆ {}`) plus asides like "(Read more on our source)"; footnote markers
+(superscripts incl. U+2074); curly quotes, CJK corner brackets -> straight;
+every ellipsis shape -> `...`; symbols, emoji, kaomoji and gibberish words
+(non-Latin letters left after folding look-alikes, Latin-script books only);
+URLs; letter runs capped at 4 ("Haaaah"), `!!!!` at 2. Notes: paragraphs led
+by a superscript or `t/n :`, `TL note:`, `A/N -`, `Note:`...; when they start
+in a chapter's last 20 paragraphs (or last seventh), everything after is notes
+too (translators chat after their notes, unmarked).
+
+**Reference book result:** 372 chapters, 863,525 narrated words (median
+chapter 2,232, min 315, max 5,243), 76 notes in 19 chapters (all within
+chapters 1-61), cover = the first page's image, 0 watermark/curly/ellipsis
+leftovers; ~12 s to import. LOTM Vol. 1 EPUB: 227 entries, 14 flagged skip,
+213 narrated, 419k words.
+
+### For the render step (findings from the 2026-10-13 sample renders)
+
+Not built in step 1; the render step must:
+- Split sentences over ~160 chars at a comma (Nano's 30% VRAM cap OOMed on a
+  ~230-char sentence; Turbo's cap is 55%).
+- Merge pieces under ~14 chars with a neighbour (Turbo repeats short lines:
+  "It's nice. It's nice.").
+- Never send an ellipsis-only piece (`"..."` paragraphs are kept in the text as
+  beats): make it a pause (~0.9 s). Turbo also mumbles after a bare "Hmm.".
+- `* * *` -> ~1.6 s pause, paragraph ~0.6 s, sentence ~0.3 s, piece ~0.08 s;
+  never voice the marker. Announce the chapter (`label`, plus `title` when it
+  differs) before the text; `Notes.` is spoken as written.
+- STT round-trip per piece; re-render pieces that come back wrong OR far too
+  short for their text (Frieren Nano dropped two lines as near-silence).
+- Level to -16 LUFS like the other clips.
+
+## Suggested build order
+
+1. ~~Import~~ DONE 2026-10-13 (above).
+2. Benchmark: user decided 2026-10-13 that a **quick lotm-narrator benchmark**
+   is still wanted (narrator already picked, so not the 2-voice pick): render one
+   chapter from the imported text with `lotm-narrator` (Turbo), applying the
+   render-step rules above; report RTF, ETA for the book, peak VRAM, STT flags.
+3. Render queue (persistent, resumable after restart, yields to live voice) ->
+   per-chapter audio files.
+4. Export: M4B parts with chapters + OneDrive copy; Telegram send.
+5. Books page + chat tools.
+6. Narrator cloning flow for new voices.
