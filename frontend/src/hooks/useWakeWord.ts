@@ -428,6 +428,9 @@ export function useWakeWord(
       wakeGainRef.current = saved === null
         ? 1
         : Math.min(saved, wakeGainCeiling(micBoostRef.current));
+      // `wakeword.armed gain=` is logged before this load, so it reads 1 after
+      // every reload; this is the mic and gain actually in use (14 October).
+      voiceTrace('wakeword.mic', { label: micLabel, gain: Number(wakeGainRef.current.toFixed(2)) });
       let savedAt = Date.now();
       if (track) {
         trackMutedRef.current = track.muted;
