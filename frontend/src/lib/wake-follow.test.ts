@@ -50,7 +50,7 @@ describe('isGreetingEchoFragment ("Yes. And" was sent, 14 October)', () => {
     expect(isGreetingEchoFragment('Yes. And', 1800, 'user')).toBe(false);
     expect(isGreetingEchoFragment('Yes, play it', 1800, 'unsure')).toBe(false);
     expect(isGreetingEchoFragment("I'll do that. Thank you.", 1800, 'unsure')).toBe(false);
-    expect(isGreetingEchoFragment('Yes. And', 4500, 'unsure')).toBe(false);
+    expect(isGreetingEchoFragment('Yes. And', 3200, 'unsure')).toBe(false);
   });
 });
 
