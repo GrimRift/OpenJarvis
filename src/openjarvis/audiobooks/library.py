@@ -364,6 +364,10 @@ class Library:
                 "paused": queue["paused"],
                 "speed": queue["speed"],
                 "break_minutes": queue["break_minutes"],
+                "auto_send": queue["auto_send"],
+                # Waiting for the next send (failed before, or behind a send
+                # that is running now).
+                "send_waiting": len(queue["send_pending"]),
             },
             "worker": status,
         }

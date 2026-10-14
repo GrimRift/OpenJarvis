@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from openjarvis.audiobooks.check import WhisperTranscriber
-from openjarvis.audiobooks.export import auto_export
+from openjarvis.audiobooks.export import auto_export, auto_send_pending
 from openjarvis.audiobooks.queue import MIN_SPEED, RenderQueue
 from openjarvis.audiobooks.render import ChapterRenderer, Stopped
 from openjarvis.audiobooks.store import BookStore
@@ -287,6 +287,19 @@ class RenderWorker(threading.Thread):
         except Exception:
             logger.warning(
                 "exporting the part of %s chapter %s failed",
+                job["book"],
+                index,
+                exc_info=True,
+            )
+        try:
+            # Auto-send (user, 2026-10-14): the chapter goes to the phone now,
+            # with any that failed before; the upload runs on its own thread.
+            if self.queue.load()["auto_send"]:
+                self.queue.add_send_pending(job["book"], voice, index)
+                auto_send_pending(self.queue, store=self.store)
+        except Exception:
+            logger.warning(
+                "sending %s chapter %s to the phone failed",
                 job["book"],
                 index,
                 exc_info=True,

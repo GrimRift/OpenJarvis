@@ -81,7 +81,15 @@ export interface BookDetail {
   position_seconds: number;
   chapters: BookChapter[];
   jobs: RenderJob[];
-  queue: { paused: boolean; speed: number; break_minutes: number };
+  queue: {
+    paused: boolean;
+    speed: number;
+    break_minutes: number;
+    /** Send each chapter to the phone as soon as it is made (2026-10-14). */
+    auto_send: boolean;
+    /** Chapters waiting to go to the phone (a failed send, or behind one). */
+    send_waiting: number;
+  };
   worker: WorkerStatus;
   /** Only on GET /v1/books/{id} (the page's poll). */
   delivery?: Delivery;
@@ -141,6 +149,7 @@ export async function updateQueue(change: {
   paused?: boolean;
   speed?: number;
   break_minutes?: number;
+  auto_send?: boolean;
 }): Promise<void> {
   const res = await apiFetch('/v1/books/queue', {
     method: 'PUT',

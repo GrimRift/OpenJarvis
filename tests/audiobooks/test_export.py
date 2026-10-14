@@ -431,3 +431,104 @@ def test_chat_tools_export_and_send(env, monkeypatch):
     assert [s[1] for s in phone.sent] == ["0026.m4a", "0027.m4a"]
     assert not tools.AudiobookSendTool(lib).execute(part=3).success
     assert not tools.AudiobookSendTool(lib).execute().success
+
+
+# ------------------------------------------- auto-send (user, 2026-10-14)
+
+
+def test_queue_auto_send_switch_and_pending_list(env):
+    from openjarvis.audiobooks.queue import RenderQueue
+
+    store, _ = env
+    queue = RenderQueue(store)
+    assert queue.load()["auto_send"] is False and queue.load()["send_pending"] == []
+    assert queue.set_auto_send(True) is True and queue.load()["auto_send"] is True
+    queue.add_send_pending("b", VOICE, 3)
+    queue.add_send_pending("b", VOICE, 3)  # a redo of a waiting chapter: once
+    queue.add_send_pending("b", VOICE, 4)
+    queue.add_send_pending("c", VOICE, 3)
+    assert len(queue.load()["send_pending"]) == 3
+    queue.drop_send_pending("b", VOICE, [3, 4])
+    assert queue.load()["send_pending"] == [{"book": "c", "voice": VOICE, "index": 3}]
+
+
+def test_auto_send_retries_a_failed_chapter_with_the_next_one(env):
+    from openjarvis.audiobooks.queue import RenderQueue
+
+    store, _ = env
+    book = _book(store, n=4)
+    _fake_files(store, book, [1, 2])
+    queue = RenderQueue(store)
+    phone = FakePhone(ok=False)  # Telegram unreachable
+    queue.add_send_pending(book["id"], VOICE, 1)
+    assert export.auto_send_pending(queue, store=store, channel=phone, chat_id="42")
+    assert _wait_send(store)["state"] == "failed"
+    assert [p["index"] for p in queue.load()["send_pending"]] == [1]  # kept
+
+    phone.ok = True  # back online; chapter 2 finishes
+    queue.add_send_pending(book["id"], VOICE, 2)
+    export.auto_send_pending(queue, store=store, channel=phone, chat_id="42")
+    assert _wait_send(store)["sent"] == [1, 2]
+    assert queue.load()["send_pending"] == []
+
+
+def test_auto_send_keeps_everything_without_a_phone_channel(env, monkeypatch):
+    from openjarvis.audiobooks.queue import RenderQueue
+
+    store, _ = env
+    book = _book(store, n=2)
+    _fake_files(store, book, [1])
+    queue = RenderQueue(store)
+
+    def no_channel():
+        raise RuntimeError("no phone channel is configured")
+
+    monkeypatch.setattr(export, "_phone_channel", no_channel)
+    queue.add_send_pending(book["id"], VOICE, 1)
+    export.auto_send_pending(queue, store=store)
+    _wait_send(store)
+    assert len(queue.load()["send_pending"]) == 1
+
+
+def test_auto_send_drops_chapters_whose_audio_is_gone(env):
+    from openjarvis.audiobooks.queue import RenderQueue
+
+    store, _ = env
+    book = _book(store, n=2)
+    queue = RenderQueue(store)
+    queue.add_send_pending(book["id"], VOICE, 2)  # never made / removed since
+    assert export.auto_send_pending(queue, store=store, channel=FakePhone()) is None
+    assert queue.load()["send_pending"] == []
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_render_worker_sends_each_chapter_when_auto_send_is_on(
+    tmp_path, monkeypatch, on
+):
+    from openjarvis.audiobooks import worker as worker_mod
+    from openjarvis.audiobooks.importer import import_book
+    from openjarvis.audiobooks.queue import RenderQueue
+    from tests.audiobooks.builders import make_epub
+    from tests.audiobooks.test_worker import FakeBookVoice, _worker
+
+    store = BookStore(tmp_path / "books")
+    para = "<p>" + "The mill wheel turned in the stream all day. " * 4 + "</p>"
+    book = import_book(
+        make_epub(
+            tmp_path / "b.epub", [("c1.xhtml", para)], [("Chapter 1", "c1.xhtml")]
+        ),
+        store,
+    )
+    monkeypatch.setattr(worker_mod, "voice_exists", lambda v: True)
+    phone = FakePhone()
+    monkeypatch.setattr(export, "_phone_channel", lambda: (phone, "42"))
+    queue = RenderQueue(store)
+    queue.add(book["id"], "book")
+    queue.set_break(0)
+    queue.set_auto_send(on)
+    _worker(store, FakeBookVoice()).step()
+    _wait_send(store)
+    assert len(phone.sent) == (1 if on else 0)
+    if on:
+        assert phone.sent[0][0] == "42" and phone.sent[0][1].endswith(".m4a")
+    assert queue.load()["send_pending"] == []

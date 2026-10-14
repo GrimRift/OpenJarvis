@@ -496,6 +496,27 @@ function BookView({
             ))}
           </select>
         </label>
+        {/* auto-send (user, 2026-10-14): every chapter the queue makes goes to the phone */}
+        <label
+          className="flex items-center gap-1.5 cursor-pointer"
+          style={{ color: 'var(--color-text-secondary)' }}
+          title="Send each chapter to your phone (Telegram) as soon as it is narrated, redone ones too. A failed send goes with the next chapter."
+        >
+          <input
+            type="checkbox"
+            className="cursor-pointer"
+            style={{ accentColor: 'var(--color-accent)' }}
+            checked={book.queue.auto_send}
+            disabled={busy === 'autosend'}
+            onChange={(e) => void act('autosend', () => updateQueue({ auto_send: e.target.checked }))}
+          />
+          Send to phone
+          {book.queue.send_waiting > 0 && !sendingNow && (
+            <span className="text-[12px]" style={{ color: 'var(--color-text-tertiary)' }}>
+              · {book.queue.send_waiting} waiting
+            </span>
+          )}
+        </label>
         <span className="ml-auto flex gap-2">
           <button
             className={btn}

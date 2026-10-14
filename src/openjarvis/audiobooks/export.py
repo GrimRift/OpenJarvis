@@ -654,11 +654,13 @@ def start_send(
     store: Optional[BookStore] = None,
     channel: Any = None,
     chat_id: str = "",
+    on_done: Optional[Callable[[SendResult], None]] = None,
 ) -> Dict[str, Any]:
     """Send chapters to the phone on a background thread (an upload takes
     ~1 min per chapter) and return the starting status at once. One send at
     a time: raises RuntimeError while another runs, ValueError when none of
-    the chapters is narrated yet."""
+    the chapters is narrated yet. ``on_done`` gets the result when the send
+    finishes (not if it crashed)."""
     global _send_thread
     store = store or BookStore()
     book = store.load(book_id)
@@ -719,6 +721,8 @@ def start_send(
                     current=None,
                     message=result.describe(book),
                 )
+                if on_done is not None:
+                    on_done(result)
             except Exception as exc:
                 logger.warning("Sending %s to the phone failed", book_id, exc_info=True)
                 status.update(
@@ -735,6 +739,57 @@ def start_send(
         _send_thread = threading.Thread(target=run, name="audiobook-send", daemon=True)
         _send_thread.start()
     return dict(status)
+
+
+def auto_send_pending(
+    queue: Any,
+    *,
+    store: Optional[BookStore] = None,
+    channel: Any = None,
+    chat_id: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Send the chapters waiting in the queue's ``send_pending`` (auto-send,
+    user 2026-10-14: each chapter as soon as it is rendered, redone ones
+    too). One book+voice per send; what is sent (or can never be: missing,
+    over 50 MB) leaves the list, a failed one stays for the next chapter.
+    Does nothing while another send runs: the next finished chapter starts
+    it again. Returns the starting send status, or None."""
+    store = store or BookStore()
+    pending = queue.load()["send_pending"]
+    if not pending or sending():
+        return None
+    book_id, voice = pending[0]["book"], pending[0]["voice"]
+    group = [
+        p["index"] for p in pending if p["book"] == book_id and p["voice"] == voice
+    ]
+
+    def done(result: SendResult) -> None:
+        if result.error:  # no phone channel, or it could not be built: keep all
+            logger.warning("Auto-send to the phone: %s", result.error)
+            return
+        if result.failed:
+            logger.warning(
+                "Auto-send to the phone failed for %s chapter(s) %s; "
+                "they go with the next chapter",
+                book_id,
+                result.failed,
+            )
+        queue.drop_send_pending(
+            book_id, voice, [i for i in group if i not in result.failed]
+        )
+
+    try:
+        return start_send(
+            book_id, voice, group, store=store, channel=channel, chat_id=chat_id,
+            on_done=done,
+        )
+    except ValueError:  # none of them exists any more (book or audio removed)
+        queue.drop_send_pending(book_id, voice, group)
+    except RuntimeError:  # another send started first; picked up next time
+        pass
+    except Exception:
+        logger.warning("Auto-send of %s to the phone failed", book_id, exc_info=True)
+    return None
 
 
 def delivery(

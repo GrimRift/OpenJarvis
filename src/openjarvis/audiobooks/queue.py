@@ -150,6 +150,8 @@ class RenderQueue:
         data.setdefault("jobs", [])
         data.setdefault("speed", DEFAULT_SPEED)
         data.setdefault("break_minutes", DEFAULT_BREAK_MINUTES)
+        data.setdefault("auto_send", False)
+        data.setdefault("send_pending", [])
         return data
 
     @contextmanager
@@ -240,6 +242,37 @@ class RenderQueue:
             raise ValueError("break must be between 0 and 240 minutes")
         self._mutate(lambda d: d.__setitem__("break_minutes", minutes))
         return minutes
+
+    def set_auto_send(self, on: bool) -> bool:
+        """Send each chapter to the phone as soon as it is rendered (user,
+        2026-10-14: a switch beside Break, for every book)."""
+        self._mutate(lambda d: d.__setitem__("auto_send", bool(on)))
+        return bool(on)
+
+    def add_send_pending(self, book_id: str, voice: str, index: int) -> None:
+        """Remember a chapter to send; a failed send keeps it here so it goes
+        with the next chapter that finishes."""
+        entry = {"book": book_id, "voice": voice, "index": int(index)}
+
+        def change(d: Dict[str, Any]) -> None:
+            if entry not in d["send_pending"]:
+                d["send_pending"].append(entry)
+
+        self._mutate(change)
+
+    def drop_send_pending(self, book_id: str, voice: str, indexes: List[int]) -> None:
+        gone = {int(i) for i in indexes}
+
+        def change(d: Dict[str, Any]) -> None:
+            d["send_pending"] = [
+                p
+                for p in d["send_pending"]
+                if not (
+                    p["book"] == book_id and p["voice"] == voice and p["index"] in gone
+                )
+            ]
+
+        self._mutate(change)
 
     def cancel(self, job_id: str) -> int:
         """Cancel one job, or every open one with "all". Returns how many."""

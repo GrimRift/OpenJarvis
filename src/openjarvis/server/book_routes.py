@@ -89,7 +89,8 @@ def create_book_router(
 
     @router.put("/queue")
     async def queue_settings(body: Dict[str, Any]) -> Dict[str, Any]:
-        """``paused``, ``speed`` (0.1-1), ``break_minutes`` -- any of them."""
+        """``paused``, ``speed`` (0.1-1), ``break_minutes``, ``auto_send`` --
+        any of them."""
         library = lib()
         try:
             if "paused" in body:
@@ -98,6 +99,8 @@ def create_book_router(
                 library.queue.set_speed(float(body["speed"]))
             if "break_minutes" in body:
                 library.queue.set_break(float(body["break_minutes"]))
+            if "auto_send" in body:
+                library.queue.set_auto_send(bool(body["auto_send"]))
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return library.queue.load()
