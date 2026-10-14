@@ -501,6 +501,7 @@ def test_auto_send_drops_chapters_whose_audio_is_gone(env):
     assert queue.load()["send_pending"] == []
 
 
+@needs_ffmpeg  # the worker encodes the chapter with ffmpeg (CI has none)
 @pytest.mark.parametrize("on", [True, False])
 def test_render_worker_sends_each_chapter_when_auto_send_is_on(
     tmp_path, monkeypatch, on
