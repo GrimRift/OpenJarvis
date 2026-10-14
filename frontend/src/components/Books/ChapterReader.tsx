@@ -98,7 +98,13 @@ export function ChapterReader({
   // The voice finished this chapter: follow it to the next one.
   const [notMade, setNotMade] = useState<string | null>(null);
   useEffect(() => setNotMade(null), [index]);
+  // Ends from before the reader opened are old news: without this, opening
+  // the chapter that ended last (68 -> 69) jumped straight to 69.
+  const seenEnd = useRef(player.ended?.tick ?? 0);
   useEffect(() => {
+    const tick = player.ended?.tick ?? 0;
+    if (tick <= seenEnd.current) return;
+    seenEnd.current = tick;
     const step = readerAfterChapterEnd(player.ended, bookId, index);
     if (!step) return;
     if ('turnTo' in step) {
@@ -178,7 +184,9 @@ export function ChapterReader({
         {nav}
       </div>
 
-      <article className="mx-auto py-6" style={{ maxWidth: '40rem', color: 'var(--color-text)' }}>
+      {/* At least a screen tall: while the next chapter loads the page is
+          empty, and the sticky player bar jumped up under the title. */}
+      <article className="mx-auto py-6" style={{ maxWidth: '40rem', minHeight: '100vh', color: 'var(--color-text)' }}>
         <h1 className="text-2xl font-semibold mb-1">{chapter?.label ?? text?.label}</h1>
         {text && text.title !== text.label && !text.label.includes(text.title) && (
           <div className="text-[15px] mb-1" style={{ color: 'var(--color-text-secondary)' }}>{text.title}</div>
