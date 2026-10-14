@@ -42,13 +42,15 @@ describe('isGreetingEchoFragment ("Yes. And" was sent, 14 October)', () => {
     expect(isGreetingEchoFragment("Yes, I'm", 1200, undefined)).toBe(true);
     expect(isGreetingEchoFragment('Mm. What is it?', 900, 'sage')).toBe(false); // 4 words
     expect(isGreetingEchoFragment('What is it?', 900, 'sage')).toBe(true);
+    // 13:28: the clip's end plus Deepgram's end of turn came 2.77 s in.
+    expect(isGreetingEchoFragment('What is it?', 2770, 'sage')).toBe(true);
   });
 
   it('keeps the user', () => {
     expect(isGreetingEchoFragment('Yes. And', 1800, 'user')).toBe(false);
     expect(isGreetingEchoFragment('Yes, play it', 1800, 'unsure')).toBe(false);
     expect(isGreetingEchoFragment("I'll do that. Thank you.", 1800, 'unsure')).toBe(false);
-    expect(isGreetingEchoFragment('Yes. And', 4000, 'unsure')).toBe(false);
+    expect(isGreetingEchoFragment('Yes. And', 4500, 'unsure')).toBe(false);
   });
 });
 

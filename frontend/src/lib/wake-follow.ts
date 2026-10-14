@@ -264,8 +264,11 @@ export function stripGreetingEcho(transcript: string): string {
     .trim();
 }
 
-/** How long after a greeting starts its echo can still arrive as a turn. */
-export const GREETING_ECHO_MS = 2500;
+/** How long after a greeting starts its echo can still arrive as a turn: the
+ * clip (up to 1.7 s) plus Deepgram's end of turn. 2.5 s let "Mm. What is it?"
+ * through as the user's "What is it?" at 2.77 s (14 October, voice check
+ * sage 0.605 / user 0.479). */
+export const GREETING_ECHO_MS = 4000;
 /** Every word a greeting's echo has come out as. */
 const GREETING_ECHO_WORDS = new Set([
   'yes', 'yeah', 'and', "i'm", 'im', 'i', 'am', 'an', 'listening', 'listen',
