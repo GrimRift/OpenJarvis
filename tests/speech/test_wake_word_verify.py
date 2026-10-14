@@ -15,6 +15,7 @@ from openjarvis.speech.wake_word_verify import (
     AudioRing,
     Verdict,
     WakeWordVerifier,
+    heard_only_lead,
     heard_wake_phrase,
     make_verifier,
     pcm_to_wav,
@@ -503,3 +504,17 @@ def test_a_faint_clear_take_is_too_quiet(monkeypatch):
     assert not faint.confirmed and faint.note == "too quiet"
     quietest_real = asyncio.run(verifier.verify(_voice(0.027)))
     assert quietest_real.confirmed and quietest_real.note == ""
+
+
+@pytest.mark.parametrize("text", ["Hey.", "hey", "Hi!", "Hey, hey.", "Hay."])
+def test_only_the_phrase_s_first_word_was_heard(text):
+    assert heard_only_lead(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "Thank you.", "Hey Sage.", "Hey you.", "And.", "Okay.", "Hey, hey, hey."],
+)
+def test_anything_more_or_else_is_not_only_the_first_word(text):
+    # "Thank you." is what the recogniser writes for noise: no extra look.
+    assert not heard_only_lead(text)

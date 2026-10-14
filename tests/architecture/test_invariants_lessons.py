@@ -290,7 +290,10 @@ class TestTheWakeWordWaitsForTheRestOfThePhrase:
         assert wv.VERIFY_STAGE_FRAMES * 80 >= 320
         assert wv.VERIFY_STAGES >= 2
         source = (SRC / "server" / "api_routes.py").read_text(encoding="utf-8")
-        assert "for _stage in range(VERIFY_STAGES):" in source
+        # A while loop since 14 October: a check that heard only "Hey." gets
+        # one extra stage (VERIFY_EXTRA_STAGES).
+        assert "stages, stage = VERIFY_STAGES, 0" in source
+        assert "while stage < stages:" in source
         assert "for _ in range(VERIFY_STAGE_FRAMES):" in source
 
     def test_the_detector_threshold_leans_on_verification(self):

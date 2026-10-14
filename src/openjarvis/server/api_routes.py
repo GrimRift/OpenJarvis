@@ -720,12 +720,14 @@ async def wake_word_stream(websocket: WebSocket):
         LOW_SCORE_NOTE,
         NOISY_ROOM_NOTE,
         SILENT_FRAME,
+        VERIFY_EXTRA_STAGES,
         VERIFY_STAGE_FRAMES,
         VERIFY_STAGE_SECONDS,
         VERIFY_STAGE_SLACK_SECONDS,
         VERIFY_STAGES,
         AudioRing,
         NoisyRoom,
+        heard_only_lead,
         make_verifier,
         media_is_playing,
     )
@@ -892,7 +894,9 @@ async def wake_word_stream(websocket: WebSocket):
                     early = asyncio.create_task(
                         verifier.verify(ring.pcm(), strict=strict)
                     )
-                    for _stage in range(VERIFY_STAGES):
+                    stages, stage = VERIFY_STAGES, 0
+                    while stage < stages:
+                        stage += 1
                         # Due by the clock (VERIFY_STAGE_SECONDS): in a quiet
                         # room no frame follows the phrase, and a stage that
                         # counted frames waited for the user's next sound.
@@ -919,6 +923,18 @@ async def wake_word_stream(websocket: WebSocket):
                         verdict = await verifier.verify(ring.pcm(), strict=strict)
                         if verdict.confirmed:
                             break
+                        if (
+                            stage == stages
+                            and stages == VERIFY_STAGES
+                            and heard_only_lead(verdict.heard)
+                        ):
+                            # Only "Hey." so far: the name may still be on
+                            # its way. One more look, never more.
+                            stages += VERIFY_EXTRA_STAGES
+                            wake_log.info(
+                                "Wake word heard only %r: one more check",
+                                verdict.heard,
+                            )
                     if early is not None:
                         early.cancel()
                     since_firing_ms = int((time.monotonic() - fired_at) * 1000)
@@ -955,12 +971,15 @@ async def wake_word_stream(websocket: WebSocket):
                     # ("I'm Sage.", 8 October 07:39:24).
                     if not verdict.confirmed and not getattr(detector, "media", False):
                         noisy_room.rejected(verdict.heard)
-                        if verdict.note:
-                            wake_log.info(
-                                "Wake word rejected (%s): heard %r",
-                                verdict.note,
-                                verdict.heard,
-                            )
+                        # Every rejection with the detector's score: whether a
+                        # "heard nothing" was a strong detection the check
+                        # spoiled or a weak one rightly dropped (14 October).
+                        wake_log.info(
+                            "Wake word rejected (%s): heard %r score=%.2f",
+                            verdict.note or "words",
+                            verdict.heard,
+                            score,
+                        )
                 if verdict is not None and not verdict.confirmed:
                     # Not a reset: a reset detector ignores the next 2 s
                     # (WARMUP_FRAMES), and that was the user's repeat -- on 6

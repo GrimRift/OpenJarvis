@@ -166,6 +166,57 @@ def test_a_phrase_still_being_said_waits_for_the_staged_check():
     assert len(second) == 44 + (3 + VERIFY_STAGE_FRAMES) * 2560
 
 
+class _NameLate(_Backend):
+    """Hears "Hey." until the read after the last regular stage."""
+
+    def __init__(self, reads_before_name):
+        super().__init__("Hey.")
+        self.reads_before_name = reads_before_name
+
+    def transcribe(self, audio, **kwargs):
+        super().transcribe(audio, **kwargs)
+        r = type("R", (), {})()
+        r.text = "Hey Sage." if len(self.audio) > self.reads_before_name else "Hey."
+        return r
+
+
+def test_only_hey_at_the_last_stage_gets_one_more_look():
+    """14 October 14:19:25: "Hey." at every check, rejected, said again."""
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGES
+
+    app = _app("hey sage")
+    # The check at the firing plus every regular stage hear only "Hey.".
+    app.state.speech_backend = _NameLate(VERIFY_STAGES + 1)
+    out = _drive(app)
+    assert out[-1]["type"] == "detected"
+    assert len(app.state.speech_backend.audio) == VERIFY_STAGES + 2
+
+
+def test_the_extra_look_happens_once():
+    from openjarvis.speech.wake_word_verify import (
+        VERIFY_EXTRA_STAGES,
+        VERIFY_STAGES,
+    )
+
+    app = _app("Hey.")
+    out = _drive(app)
+    assert out[-1]["type"] == "rejected"
+    reads = len(app.state.speech_backend.audio)
+    assert reads == VERIFY_STAGES + 1 + VERIFY_EXTRA_STAGES
+
+
+def test_a_rejection_that_heard_more_than_hey_gets_no_extra_look(caplog):
+    from openjarvis.speech.wake_word_verify import VERIFY_STAGES
+
+    app = _app("Thank you.")
+    with caplog.at_level("INFO", logger="openjarvis.wake"):
+        out = _drive(app)
+    assert out[-1]["type"] == "rejected"
+    assert len(app.state.speech_backend.audio) == VERIFY_STAGES + 1
+    # Every rejection is logged with the detector's score (14 October).
+    assert "Wake word rejected (words): heard 'Thank you.' score=0.90" in caplog.text
+
+
 def test_a_firing_with_the_words_is_detected_and_marked_verified():
     out = _drive(_app("Hey Sage, what's up"))
     assert out[-1]["type"] == "detected"

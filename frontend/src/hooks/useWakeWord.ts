@@ -299,6 +299,7 @@ export function useWakeWord(
           const heard = String(data.heard ?? '');
           voiceTrace('wakeword.rejected', {
             heard,
+            score: Number(Number(data.score ?? 0).toFixed(2)),
             ms: Number(data.ms ?? 0),
             waitMs: Number(data.wait_ms ?? 0),
             strict: Boolean(data.strict),

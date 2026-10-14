@@ -178,6 +178,26 @@ def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[^a-z']+", text.lower()) if t]
 
 
+#: The "hey" alone, as heard when the check ran before the name arrived.
+#: Narrower than ``_HEY``: "Thank you." is what Whisper writes for noise.
+_LEAD_ONLY = {"hey", "hi", "hay", "hei", "hej", "he", "eh", "ay"}
+
+#: One more stage, once, when the last one heard only that.
+VERIFY_EXTRA_STAGES = 1
+
+
+def heard_only_lead(text: str) -> bool:
+    """Whether the transcript is the phrase's first word and nothing else.
+
+    14 October 14:19:25: the detector fired, the last staged check heard
+    "Hey." and the firing was rejected; the user said it a third time. The
+    name had not arrived yet (+640 ms holds the whole phrase for 51 of 61
+    recorded takes, 17 September), so it is worth one more look.
+    """
+    words = _tokens(text)
+    return 0 < len(words) <= 2 and all(w in _LEAD_ONLY for w in words)
+
+
 #: Words that may come just before the name while media plays: the hey-words
 #: plus the greetings the user really said over music ("Hello Sage", "Good
 #: morning Sage", 22-30 September).
@@ -793,12 +813,14 @@ __all__ = [
     "VERIFY_STAGE_SECONDS",
     "VERIFY_STAGE_SLACK_SECONDS",
     "VERIFY_STAGES",
+    "VERIFY_EXTRA_STAGES",
     "AudioRing",
     "NoisyRoom",
     "RING_FRAMES",
     "VERIFY_MODES",
     "Verdict",
     "WakeWordVerifier",
+    "heard_only_lead",
     "heard_wake_phrase",
     "local_verifier_backend",
     "make_verifier",
