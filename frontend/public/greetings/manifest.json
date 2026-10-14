@@ -24,8 +24,7 @@
     "chatterbox:frieren": [
       "greetings/frieren-local/mm-nano.wav",
       "greetings/frieren-local/yes-nano.wav",
-      "greetings/frieren-local/listening-nano.wav",
-      "greetings/frieren-local/go-on-nano.wav"
+      "greetings/frieren-local/listening-nano.wav"
     ],
     "chatterbox:turbo-jarvis": [
       "greetings/turbo-jarvis-local/hello-sir-turbo.wav",
@@ -35,8 +34,7 @@
     "chatterbox:turbo-frieren": [
       "greetings/turbo-frieren-local/mm-turbo.wav",
       "greetings/turbo-frieren-local/yes-turbo.wav",
-      "greetings/turbo-frieren-local/listening-turbo.wav",
-      "greetings/turbo-frieren-local/go-on-turbo.wav"
+      "greetings/turbo-frieren-local/listening-turbo.wav"
     ],
     "chatterbox:jarvis-turbo": [
       "greetings/jarvis-turbo-local/hello-sir-turbo.wav",
