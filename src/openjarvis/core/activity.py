@@ -38,6 +38,9 @@ REPLY_PENDING_TTL = 20.0
 class Activity:
     last_user_turn_at: Optional[float] = None
     last_reply_end_at: Optional[float] = None
+    #: The last accepted "Hey Sage". Someone said it at the desk, so it counts
+    #: as being there even when nothing else follows (presence, 15 October).
+    last_wake_at: Optional[float] = None
     tts_streams: int = 0
     flux_transmitting: bool = False
     #: Until when the page says a reply is still being heard. The TTS stream
@@ -91,6 +94,11 @@ def note_user_turn(now: Optional[float] = None) -> None:
         _state.reply_pending_since = _state.last_user_turn_at
 
 
+def note_wake(now: Optional[float] = None) -> None:
+    with _lock:
+        _state.last_wake_at = now if now is not None else time.time()
+
+
 def user_talking(active: bool, now: Optional[float] = None) -> None:
     with _lock:
         now = now if now is not None else time.time()
@@ -132,6 +140,7 @@ def snapshot() -> Activity:
         return Activity(
             last_user_turn_at=_state.last_user_turn_at,
             last_reply_end_at=_state.last_reply_end_at,
+            last_wake_at=_state.last_wake_at,
             tts_streams=_state.tts_streams,
             flux_transmitting=_state.flux_transmitting,
             browser_playing_until=_state.browser_playing_until,
@@ -153,6 +162,7 @@ __all__ = [
     "browser_playing",
     "flux_transmitting",
     "note_user_turn",
+    "note_wake",
     "reset",
     "snapshot",
     "tts_begin",

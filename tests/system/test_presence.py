@@ -40,6 +40,30 @@ class TestDecideState:
         assert decide_state(None, 300) == STATE_UNKNOWN
 
 
+class TestSecondsSinceSage:
+    def test_an_accepted_wake_word_counts_as_being_there(self) -> None:
+        # "Hey Sage" with nothing after it is still someone at the desk.
+        from openjarvis.core import activity
+        from openjarvis.core.presence import seconds_since_sage
+
+        activity.reset()
+        try:
+            assert seconds_since_sage(now=1000.0) is None
+            activity.note_wake(now=990.0)
+            assert seconds_since_sage(now=1000.0) == 10.0
+        finally:
+            activity.reset()
+
+    def test_the_monitor_ignores_hid_devices_other_than_mouse_and_keyboard(
+        self,
+    ) -> None:
+        # The PD100X's knob interface reports ~18 times a second and kept
+        # Windows' any-input idle at 0 s: the orb never said AWAY.
+        from openjarvis.core.presence import input_idle_seconds
+
+        assert PresenceMonitor.idle_sensor is input_idle_seconds
+
+
 class TestSettings:
     def test_defaults_are_off(self, tmp_path: Path) -> None:
         settings = load_settings(tmp_path)

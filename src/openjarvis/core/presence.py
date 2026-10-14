@@ -240,6 +240,117 @@ def idle_seconds() -> Optional[float]:
         return None
 
 
+class KeyboardMouseWatch:
+    """Seconds since the last keyboard or mouse input, and nothing else.
+
+    ``GetLastInputInfo`` counts every HID device. The PD100X's consumer-control
+    interface (its mute button and knob) reports about 18 times a second, so
+    Windows read 0 s idle all day and the orb never once said AWAY (15
+    October). Raw input for the mouse and keyboard usages alone ignores it,
+    and a gamepad or a media key with it. The touchpad reports as a mouse.
+
+    Raw input is posted, not hooked: a slow Python thread here can never lag
+    the cursor, which a low-level hook would.
+    """
+
+    _WM_INPUT = 0x00FF
+    _RIDEV_INPUTSINK = 0x00000100
+    _HWND_MESSAGE = -3
+
+    def __init__(self) -> None:
+        self._last: Optional[float] = None
+        self._started_at: Optional[float] = None
+        self._ready = threading.Event()
+        self._ok = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self, timeout: float = 2.0) -> bool:
+        if self._thread is None:
+            self._thread = threading.Thread(
+                target=self._run, name="presence-input", daemon=True
+            )
+            self._thread.start()
+        self._ready.wait(timeout)
+        return self._ok
+
+    def idle(self) -> Optional[float]:
+        if not self._ok or self._started_at is None:
+            return None
+        return max(0.0, time.monotonic() - (self._last or self._started_at))
+
+    def _run(self) -> None:
+        try:
+            self._listen()
+        except Exception:
+            pass
+        finally:
+            self._ok = False
+            self._ready.set()
+
+    def _listen(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+        ]
+
+        class _Device(ctypes.Structure):
+            _fields_ = [
+                ("page", wintypes.USHORT),
+                ("usage", wintypes.USHORT),
+                ("flags", wintypes.DWORD),
+                ("target", wintypes.HWND),
+            ]
+
+        # A message-only window of a stock class: its window procedure is
+        # DefWindowProc, so no Python callback runs per mouse report.
+        hwnd = user32.CreateWindowExW(
+            0, "STATIC", "sage-presence", 0, 0, 0, 0, 0,
+            wintypes.HWND(self._HWND_MESSAGE), None, None, None,
+        )
+        if not hwnd:
+            return
+        devices = (_Device * 2)(
+            _Device(0x01, 0x02, self._RIDEV_INPUTSINK, hwnd),  # mouse
+            _Device(0x01, 0x06, self._RIDEV_INPUTSINK, hwnd),  # keyboard
+        )
+        if not user32.RegisterRawInputDevices(devices, 2, ctypes.sizeof(_Device)):
+            return
+        self._started_at = time.monotonic()
+        self._ok = True
+        self._ready.set()
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == self._WM_INPUT:
+                self._last = time.monotonic()
+            # WM_INPUT has to reach DefWindowProc to free its data.
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+
+_keyboard_mouse: Optional[KeyboardMouseWatch] = None
+_keyboard_mouse_lock = threading.Lock()
+
+
+def input_idle_seconds() -> Optional[float]:
+    """Keyboard-and-mouse idle time, or Windows' any-input figure if the
+    raw-input listener could not start."""
+    global _keyboard_mouse
+    if sys.platform != "win32":
+        return None
+    with _keyboard_mouse_lock:
+        if _keyboard_mouse is None:
+            _keyboard_mouse = KeyboardMouseWatch()
+            _keyboard_mouse.start()
+        watch = _keyboard_mouse
+    idle = watch.idle()
+    return idle if idle is not None else idle_seconds()
+
+
 def foreground_title() -> Optional[str]:
     """Title of the window in front, or None if it cannot be read."""
     try:
@@ -257,7 +368,8 @@ def foreground_title() -> Optional[str]:
 
 
 def seconds_since_sage(now: Optional[float] = None) -> Optional[float]:
-    """How long since the user last said something to Sage, or Sage replied.
+    """How long since the user last said something to Sage, or Sage replied,
+    or the wake word was accepted.
 
     Both halves count: listening to a long answer is being present just as
     much as asking the question was.
@@ -268,7 +380,11 @@ def seconds_since_sage(now: Optional[float] = None) -> Optional[float]:
         state = activity.snapshot()
     except Exception:
         return None
-    marks = [t for t in (state.last_user_turn_at, state.last_reply_end_at) if t]
+    marks = [
+        t
+        for t in (state.last_user_turn_at, state.last_reply_end_at, state.last_wake_at)
+        if t
+    ]
     if not marks:
         return None
     return max(0.0, (now if now is not None else time.time()) - max(marks))
@@ -334,7 +450,7 @@ class PresenceMonitor:
     """
 
     config_dir: Optional[Path] = None
-    idle_sensor: Callable[[], Optional[float]] = idle_seconds
+    idle_sensor: Callable[[], Optional[float]] = input_idle_seconds
     #: Seconds since the user last dealt with Sage, or None. Windows counts
     #: only keyboard and mouse, so a spoken conversation reads as an empty
     #: desk: twenty minutes of talking and the orb said AWAY.
@@ -483,6 +599,8 @@ __all__ = [
     "decide_state",
     "foreground_title",
     "idle_seconds",
+    "input_idle_seconds",
+    "KeyboardMouseWatch",
     "load_settings",
     "save_settings",
 ]

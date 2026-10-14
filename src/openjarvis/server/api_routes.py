@@ -1010,6 +1010,10 @@ async def wake_word_stream(websocket: WebSocket):
                 # voice began. Fire-and-forget -- warming never fails a turn.
                 _warm_speech_connection()
                 _warm_local_model()
+                # Someone said "Hey Sage" at the desk: present, for the orb.
+                from openjarvis.core import activity as _activity
+
+                _activity.note_wake()
                 await websocket.send_json(
                     {
                         "type": "detected",
