@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Minus, Pause, Play, Plus, RotateCcw, RotateCw } from 'lucide-react';
 import { clock, fetchChapterText, paragraphAt, type BookChapter, type ChapterText } from '../../lib/books';
-import { useBookPlayer } from '../../lib/book-player';
+import { readerAfterChapterEnd, useBookPlayer } from '../../lib/book-player';
 import { Scrubber } from './Scrubber';
 
 /**
@@ -14,6 +14,10 @@ import { Scrubber } from './Scrubber';
  * plays the paragraph being read is lit and kept in view ("follow along").
  * A click on a paragraph plays from it. Scrolling by hand pauses the
  * following for a few seconds so the page is not pulled away.
+ *
+ * 2026-10-14 (user): when the voice finishes this chapter and goes on to
+ * the next, the page turns with it at once (even if scrolled away); if the
+ * next one isn't narrated yet the page stays and says so.
  */
 
 const SIZES = [15, 17, 19, 21, 23];
@@ -90,6 +94,22 @@ export function ChapterReader({
     document.addEventListener('scroll', off, { capture: true, passive: true });
     return () => document.removeEventListener('scroll', off, { capture: true });
   }, []);
+
+  // The voice finished this chapter: follow it to the next one.
+  const [notMade, setNotMade] = useState<string | null>(null);
+  useEffect(() => setNotMade(null), [index]);
+  useEffect(() => {
+    const step = readerAfterChapterEnd(player.ended, bookId, index);
+    if (!step) return;
+    if ('turnTo' in step) {
+      handsOffUntil.current = 0;
+      onIndex(step.turnTo);
+    } else {
+      setNotMade(step.notMade);
+    }
+    // Only a new end is news, not a re-render with the old one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player.ended?.tick]);
 
   const current = playingThis ? paragraphAt(text?.starts ?? null, player.position) : null;
   useEffect(() => {
@@ -235,6 +255,9 @@ export function ChapterReader({
               <b>{chapter?.label}</b>
               {playingThis && player.wanted && !player.playing && (
                 <span style={{ color: 'var(--color-text-tertiary)' }}> · paused while Sage talks</span>
+              )}
+              {notMade && !(playingThis && player.wanted) && (
+                <span style={{ color: 'var(--color-text-tertiary)' }}> · {notMade} isn't narrated yet</span>
               )}
             </div>
             <div className="flex-1 flex items-center">

@@ -98,11 +98,23 @@ export function BookPlayerHost() {
       const next = nextReadyChapter(book.chapters, playing.index);
       if (next) {
         useBookPlayer.getState().play({ ...playing, index: next.index, label: next.label, startAt: 0 });
+        useBookPlayer.getState().chapterEnded({
+          book: playing.book,
+          from: playing.index,
+          next: { index: next.index, label: next.label },
+          playing: true,
+        });
         return;
       }
       // Not made yet: park "where you are" on it so rolling renders it next.
       const after = chaptersAfter(book.chapters, playing.index)[0];
       if (after) await savePosition(playing.book, after.index, 0);
+      useBookPlayer.getState().chapterEnded({
+        book: playing.book,
+        from: playing.index,
+        next: after ? { index: after.index, label: after.label } : null,
+        playing: false,
+      });
     } catch {
       /* the page shows the book's state on its next refresh */
     }

@@ -25,8 +25,23 @@ export interface NowPlaying {
   startAt: number;
 }
 
+/** A chapter that played to its end, and what came after it. */
+export interface ChapterEnd {
+  book: string;
+  /** The chapter that ended. */
+  from: number;
+  /** The chapter after it in reading order, if there is one. */
+  next: { index: number; label: string } | null;
+  /** True when `next` is playing now; false when it isn't narrated yet. */
+  playing: boolean;
+  /** Bumped on every end, so the same end twice is still news. */
+  tick: number;
+}
+
 interface BookPlayerState {
   now: NowPlaying | null;
+  /** The last chapter end (the reader turns the page on it). */
+  ended: ChapterEnd | null;
   /** The user wants it playing (their play/pause, or a tool's). */
   wanted: boolean;
   /** Playing right now (false while Sage talks, even if wanted). */
@@ -40,11 +55,13 @@ interface BookPlayerState {
   setWanted: (wanted: boolean) => void;
   seek: (seconds: number) => void;
   report: (fields: Partial<Pick<BookPlayerState, 'playing' | 'position' | 'duration'>>) => void;
+  chapterEnded: (end: Omit<ChapterEnd, 'tick'>) => void;
   stop: () => void;
 }
 
 export const useBookPlayer = create<BookPlayerState>((set) => ({
   now: null,
+  ended: null,
   wanted: false,
   playing: false,
   position: 0,
@@ -63,8 +80,24 @@ export const useBookPlayer = create<BookPlayerState>((set) => ({
   setWanted: (wanted) => set({ wanted }),
   seek: (seconds) => set((s) => ({ seekTick: s.seekTick + 1, seekTo: Math.max(0, seconds) })),
   report: (fields) => set(fields),
+  chapterEnded: (end) => set((s) => ({ ended: { ...end, tick: (s.ended?.tick ?? 0) + 1 } })),
   stop: () => set({ now: null, wanted: false, playing: false, position: 0, duration: 0 }),
 }));
+
+/**
+ * What the reader does when a chapter ends (user, 2026-10-14): if it shows
+ * the chapter that ended and the next one is playing, it turns the page at
+ * once, even if the user had scrolled away; if the next one isn't narrated
+ * yet it stays and says so. Reading without the voice never turns a page.
+ */
+export function readerAfterChapterEnd(
+  end: ChapterEnd | null,
+  bookId: string,
+  shown: number,
+): { turnTo: number } | { notMade: string } | null {
+  if (!end || end.book !== bookId || end.from !== shown || !end.next) return null;
+  return end.playing ? { turnTo: end.next.index } : { notMade: end.next.label };
+}
 
 /** Sage needs the room: the user is talking, Sage is thinking or speaking. */
 export function sageNeedsTheRoom(inputs: {
