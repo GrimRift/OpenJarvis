@@ -98,6 +98,16 @@ const STARTERS = new Set([
   'quit', 'pause', 'skip', 'next', 'mute', 'search', 'look', 'check', 'note',
   'list', 'start', 'wake', 'time', 'date', 'news', 'help', 'thanks', 'thank',
   'never', 'not', 'nothing', 'just', 'so', 'and', 'but', 'please', 'be',
+  // Short openings the debris rule below ate: "I'll do that. Thanks." was
+  // sent as "do that. Thanks." (14 October), and the user loses first words
+  // like these often.
+  "i'll", 'ill', "i'd", "i've", 'ive', 'we', "we're", "we'll", 'you', 'it',
+  "it's", 'its', 'that', 'this', 'they', 'she', "let's", 'lets', 'yeah',
+  'yep', 'yup', 'sure', 'nope', 'nah', 'also', 'now', 'then', 'was', 'were',
+  'have', 'has', 'had', 'need', 'want', 'try', 'use', 'all', 'some', 'one',
+  'more', 'much', 'very', 'well', 'wait', 'hold', 'keep', 'stay', 'move',
+  'pick', 'buy', 'text', 'mail', 'ask', 'for', 'with', 'from', 'if', 'or',
+  'cool', 'nice', 'fine', "how's", "who's", "why's",
 ]);
 
 function isDebris(token: string): boolean {
@@ -163,6 +173,22 @@ export function stripWakePhrase(transcript: string): string {
   }
   const rest = tokens.slice(i).join(' ').replace(/^[\s,.;:!?—-]+/, '');
   return rest.trim();
+}
+
+/**
+ * Only an actual "hey sage" (or the name alone) off the front, nothing else.
+ * For the turns after a phrase-only one: the phrase was already its own
+ * turn, so a short first word is the user's, not debris of the phrase.
+ */
+export function stripLeadingWakePhrase(transcript: string): string {
+  const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  const text = transcript.trim();
+  const tokens = text.split(/\s+/);
+  let i = 0;
+  if (tokens.length > 1 && LEAD.has(norm(tokens[0])) && isNameToken(norm(tokens[1]))) i = 2;
+  else if (NAME.has(norm(tokens[0]))) i = 1;
+  if (i === 0) return text;
+  return tokens.slice(i).join(' ').replace(/^[\s,.;:!?—-]+/, '').trim();
 }
 
 /**
@@ -236,6 +262,35 @@ export function stripGreetingEcho(transcript: string): string {
     .replace(/^\s*sir\b[,.!?]*/i, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** How long after a greeting starts its echo can still arrive as a turn. */
+export const GREETING_ECHO_MS = 2500;
+/** Every word a greeting's echo has come out as. */
+const GREETING_ECHO_WORDS = new Set([
+  'yes', 'yeah', 'and', "i'm", 'im', 'i', 'am', 'an', 'listening', 'listen',
+  'here', 'go', 'ahead', 'mm', 'hmm', 'm', 'what', 'is', 'it', 'sir', 'hello',
+]);
+
+/**
+ * Whether a short turn is what echo cancellation left of the greeting, in
+ * pieces the whole-phrase patterns of stripGreetingEcho miss: "Yes? I'm
+ * listening." came back as "Yes. And" and was sent as the user's message
+ * (14 October, voice check unsure 0.575/0.568). Only up to three words, all
+ * of them greeting words, soon after it started, and never when the voice
+ * check says it was the user.
+ */
+export function isGreetingEchoFragment(
+  transcript: string,
+  sinceGreetingMs: number,
+  voice?: string,
+): boolean {
+  if (voice === 'user' || sinceGreetingMs > GREETING_ECHO_MS) return false;
+  const words = transcript
+    .split(/\s+/)
+    .map((t) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, ''))
+    .filter(Boolean);
+  return words.length > 0 && words.length <= 3 && words.every((w) => GREETING_ECHO_WORDS.has(w));
 }
 
 /**

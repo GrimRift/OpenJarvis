@@ -2,11 +2,55 @@ import { describe, expect, it } from 'vitest';
 import {
   PHRASE_LOUDNESS_SHARE,
   PRE_DETECTION_AUDIO_MS,
+  isGreetingEchoFragment,
   isOnlyWakePhrase,
   phraseLoudness,
   restartsPause,
+  stripLeadingWakePhrase,
   stripWakePhrase,
 } from './wake-follow';
+
+describe('first words the user keeps (14 October)', () => {
+  it('keeps a short first word that begins a sentence', () => {
+    expect(stripWakePhrase("I'll do that. Thanks.")).toBe("I'll do that. Thanks.");
+    expect(stripWakePhrase("We should leave at six.")).toBe('We should leave at six.');
+    expect(stripWakePhrase("It's too loud.")).toBe("It's too loud.");
+    expect(stripWakePhrase('Yeah go ahead and play it')).toBe('Yeah go ahead and play it');
+    expect(stripWakePhrase("Hey Sage, I'll be late")).toBe("I'll be late");
+  });
+
+  it('still drops what is left of the phrase', () => {
+    expect(stripWakePhrase('ACGE what time is it')).toBe('what time is it');
+    expect(stripWakePhrase('his age what time is it')).toBe('what time is it');
+  });
+
+  it('after a phrase-only turn strips only a said-again "hey sage"', () => {
+    expect(stripLeadingWakePhrase("I'll do that. Thanks.")).toBe("I'll do that. Thanks.");
+    expect(stripLeadingWakePhrase('ACGE what time is it')).toBe('ACGE what time is it');
+    expect(stripLeadingWakePhrase('Hey Sage, what time is it')).toBe('what time is it');
+    expect(stripLeadingWakePhrase('Sage. Play music')).toBe('Play music');
+  });
+
+  it('does not take "I\'ll check" after the greeting for the phrase', () => {
+    expect(isOnlyWakePhrase("I'll check", 3000, true)).toBe(false);
+  });
+});
+
+describe('isGreetingEchoFragment ("Yes. And" was sent, 14 October)', () => {
+  it('drops a piece of the greeting heard back soon after it', () => {
+    expect(isGreetingEchoFragment('Yes. And', 1800, 'unsure')).toBe(true);
+    expect(isGreetingEchoFragment("Yes, I'm", 1200, undefined)).toBe(true);
+    expect(isGreetingEchoFragment('Mm. What is it?', 900, 'sage')).toBe(false); // 4 words
+    expect(isGreetingEchoFragment('What is it?', 900, 'sage')).toBe(true);
+  });
+
+  it('keeps the user', () => {
+    expect(isGreetingEchoFragment('Yes. And', 1800, 'user')).toBe(false);
+    expect(isGreetingEchoFragment('Yes, play it', 1800, 'unsure')).toBe(false);
+    expect(isGreetingEchoFragment("I'll do that. Thank you.", 1800, 'unsure')).toBe(false);
+    expect(isGreetingEchoFragment('Yes. And', 4000, 'unsure')).toBe(false);
+  });
+});
 
 describe('stripWakePhrase', () => {
   it('drops sound from before the phrase, such as a video playing', () => {

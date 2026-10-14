@@ -48,8 +48,10 @@ import {
   PRE_ROLL_MS,
   continuesPastWakePhrase,
   greetingDelayMs,
+  isGreetingEchoFragment,
   isOnlyWakePhrase,
   stripGreetingEcho,
+  stripLeadingWakePhrase,
   stripWakePhrase,
 } from '../../lib/wake-follow';
 import { fillerDue, initialFillerState, nextFillerCheckMs } from '../../lib/filler';
@@ -261,6 +263,10 @@ async function checkAddition(
 
 /** A turn ending this soon after Sage's reply finished may be Sage's tail. */
 const HANDOFF_ECHO_MS = 5000;
+/** Sage's words are cut out of a turn after the reply only when Deepgram
+ * heard the turn start this soon after the reply ended (its StartOfTurn
+ * lags the speech by a few hundred ms). */
+const HANDOFF_STRIP_MS = 800;
 /** A lone "stop" this soon after Sage was stopped by voice repeats it. The
  * user says "stop" again when the first did not seem to land; on 7 October
  * the second arrived 1 s after the cut and was answered as a question. */
@@ -327,6 +333,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const lastBargeWordsRef = useRef<FluxWord[]>([]);
   /** When a reply finished with the user's turn still open (barge.handoff). */
   const handoffAtRef = useRef(0);
+  /** When Deepgram last heard a turn start (StartOfTurn). */
+  const turnStartedAtRef = useRef(0);
+  /** When the greeting last started playing into an open turn. */
+  const greetingAtRef = useRef(0);
   /** The Flux turn that was only "close the diagram", so it never becomes a
    * message and never counts as an interruption. */
   const diagramCommandTurnRef = useRef<number | null>(null);
@@ -423,7 +433,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // from the wake phrase, greeting deferred until a pause. `greeted` keeps
   // the pause greeting to one per wake, whichever path notices the pause
   // first (the timer, or an end-of-turn holding only the phrase).
-  const fastFollowRef = useRef<{ active: boolean; greeted: boolean; startedAt: number }>({
+  // `phraseDone`: the phrase already came as a turn of its own, so the next
+  // turn starts with the user's words, not with what is left of the phrase.
+  const fastFollowRef = useRef<{
+    active: boolean;
+    greeted: boolean;
+    startedAt: number;
+    phraseDone?: boolean;
+  }>({
     active: false,
     greeted: false,
     startedAt: 0,
@@ -1920,6 +1937,17 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           return;
         }
         spoken = cleaned;
+        const verdict = useAppStore.getState().settings.recogniseMyVoice
+          ? detail?.speaker?.verdict
+          : undefined;
+        if (isGreetingEchoFragment(spoken, Date.now() - greetingAtRef.current, verdict)) {
+          // What echo cancellation left of "Yes? I'm listening.": "Yes. And"
+          // was sent as the user's message (14 October).
+          voiceTrace('wake.greetingEchoFragment', { chars: spoken.length, voice: verdict ?? 'none' });
+          flux.beginTurn();
+          armFluxSilenceTimer('wake');
+          return;
+        }
       }
       if (fastFollowRef.current.active) {
         clearGreetingTimer();
@@ -1931,12 +1959,17 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             greetAfterPause('phrase-only');
           }
           voiceTrace('wake.phraseOnly');
+          fastFollowRef.current.phraseDone = true;
           flux.beginTurn();
           armFluxSilenceTimer('wake');
           return;
         }
+        const phraseDone = fastFollowRef.current.phraseDone === true;
         fastFollowRef.current = { active: false, greeted: false, startedAt: 0 };
-        spoken = stripWakePhrase(spoken);
+        // After a phrase-only turn the guesswork of stripWakePhrase ate the
+        // user's own first word: "I'll do that. Thanks." was sent as "do
+        // that. Thanks." (14 October). Only a said-again "hey sage" goes.
+        spoken = phraseDone ? stripLeadingWakePhrase(spoken) : stripWakePhrase(spoken);
       }
 
       // The rest of a sentence that was cut off. The half-answer was stopped
@@ -2180,6 +2213,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // check stopped it being answered.
       const overHandoff =
         !wasBargeIn && Date.now() - handoffAtRef.current < HANDOFF_ECHO_MS;
+      // Sage's words can only be mixed into a turn that began while it was
+      // still audible. One that began 2.4 s after the reply ended lost three
+      // of the user's words to the echo cut (14 October, 31 -> 15 chars).
+      const startedOverSage =
+        turnStartedAtRef.current - handoffAtRef.current < HANDOFF_STRIP_MS;
       handoffAtRef.current = 0;
       if (overHandoff && spoken && voice === 'sage') {
         voiceTrace('handoff.voiceSage', { chars: spoken.length });
@@ -2193,7 +2231,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       }
 
       // This turn began over Sage's voice, so Sage's words may be in it.
-      if ((wasBargeIn || overHandoff) && spoken) {
+      if ((wasBargeIn || (overHandoff && startedOverSage)) && spoken) {
         const over = cleanOverSage(spoken, detail?.words, spokenTextRef.current, voice);
         if (over.removed) {
           voiceTrace('barge.echoStripped', {
@@ -2399,6 +2437,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       lastFluxTurnRef.current = null;
     },
     onTurnStarted: () => {
+      turnStartedAtRef.current = Date.now();
       // Real speech: from here Deepgram owns the ending.
       clearFluxSilenceTimer();
       const state = continuationRef.current;
@@ -2710,6 +2749,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // September). The greeting plays out in full; its echo is taken out
         // of the transcript.
         greetingInTurnRef.current = Boolean(greeting);
+        greetingAtRef.current = Date.now();
         flux.beginTurn();
         armFluxSilenceTimer('wake');
         return;
@@ -2751,6 +2791,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     voiceTrace('wake.pauseGreeting', { why, ...(why === 'timer' ? {} : flux.pauseDetail()) });
     // Heard through, not held: the user may already be answering it.
     greetingInTurnRef.current = true;
+    greetingAtRef.current = Date.now();
     playGreeting({
       voiceId: ttsVoice.id,
       onFailure: (reason) =>
