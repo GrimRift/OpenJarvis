@@ -270,10 +270,14 @@ export function stripGreetingEcho(transcript: string): string {
  * sage 0.605 / user 0.479). 4 s, then 3 s at the user's choice the same day,
  * with shorter greetings to go with it. */
 export const GREETING_ECHO_MS = 3000;
-/** Every word a greeting's echo has come out as. */
+/** Every word a greeting's echo has come out as. The Frieren voices greet
+ * with "Mm?", "Yes?", "I'm here.", "Go on." since 14 October; the earlier
+ * lines' words stay for the other voices and old clips. */
 const GREETING_ECHO_WORDS = new Set([
   'yes', 'yeah', 'and', "i'm", 'im', 'i', 'am', 'an', 'listening', 'listen',
-  'here', 'go', 'ahead', 'mm', 'hmm', 'm', 'what', 'is', 'it', 'sir', 'hello',
+  'here', 'go', 'on', 'ahead', 'mm', 'hmm', 'hm', 'mmm', 'mmhmm', 'mhm', 'm',
+  'what', 'is', 'it',
+  'sir', 'hello',
 ]);
 
 /**

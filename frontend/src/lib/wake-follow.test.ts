@@ -42,6 +42,12 @@ describe('isGreetingEchoFragment ("Yes. And" was sent, 14 October)', () => {
     expect(isGreetingEchoFragment("Yes, I'm", 1200, undefined)).toBe(true);
     expect(isGreetingEchoFragment('Mm. What is it?', 900, 'sage')).toBe(false); // 4 words
     expect(isGreetingEchoFragment('What is it?', 900, 'sage')).toBe(true);
+    // The Frieren greetings since 14 October.
+    expect(isGreetingEchoFragment('Hmm?', 1200, 'unsure')).toBe(true);
+    expect(isGreetingEchoFragment('Mmm.', 1200, 'sage')).toBe(true);
+    expect(isGreetingEchoFragment("I'm here.", 1500, 'unsure')).toBe(true);
+    expect(isGreetingEchoFragment('Go on.', 1500, 'sage')).toBe(true);
+    expect(isGreetingEchoFragment('Go on YouTube', 1500, 'unsure')).toBe(false);
     // 13:28: the clip's end plus Deepgram's end of turn came 2.77 s in.
     expect(isGreetingEchoFragment('What is it?', 2770, 'sage')).toBe(true);
   });
