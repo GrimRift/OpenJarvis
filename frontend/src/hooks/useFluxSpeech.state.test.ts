@@ -149,12 +149,13 @@ describe('Flux message interpretation', () => {
       expect(action).toEqual({ kind: 'unavailable', reason: 'no key' });
     });
 
-    it('treats a mid-session FluxError as unavailable so it can fall back', () => {
+    it('treats a mid-session FluxError as a drop, so it falls back and reconnects', () => {
+      // 14 October: Deepgram's INTERNAL_SERVER_ERROR left voice deaf for good.
       const action = interpretFluxMessage(
-        JSON.stringify({ type: 'FluxError', reason: 'socket died' }),
+        JSON.stringify({ type: 'FluxError', reason: 'INTERNAL_SERVER_ERROR' }),
         null,
       );
-      expect(action.kind).toBe('unavailable');
+      expect(action).toEqual({ kind: 'dropped', reason: 'INTERNAL_SERVER_ERROR' });
     });
 
     it('reports readiness', () => {

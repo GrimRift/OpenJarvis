@@ -164,6 +164,8 @@ export type FluxAction =
   | { kind: 'ignore' }
   | { kind: 'ready' }
   | { kind: 'unavailable'; reason: string }
+  /** Deepgram failed mid-stream: a fault, reconnected like a dropped socket. */
+  | { kind: 'dropped'; reason: string }
   | { kind: 'turnStarted'; turnIndex: number }
   /** Whether another app (a video, music) has been audible lately. */
   | { kind: 'media'; audible: boolean }
@@ -271,8 +273,14 @@ export function interpretFluxMessage(
 
   const kind = data.type;
   if (kind === 'FluxReady') return { kind: 'ready' };
-  if (kind === 'FluxUnavailable' || kind === 'FluxError') {
+  if (kind === 'FluxUnavailable') {
     return { kind: 'unavailable', reason: String(data.reason ?? 'Flux unavailable') };
+  }
+  // Not the server's verdict: Deepgram's "INTERNAL_SERVER_ERROR ... please
+  // try again later" was taken as one, and voice stayed deaf with no
+  // reconnect until the page reloaded (14 October).
+  if (kind === 'FluxError') {
+    return { kind: 'dropped', reason: String(data.reason ?? 'Flux error') };
   }
   if (kind === 'Media') return { kind: 'media', audible: data.audible === true };
   if (kind !== 'TurnInfo') return { kind: 'ignore' };
@@ -414,6 +422,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   // the wake word on a different mic (Settings), the phrase and the words
   // after it must come from THIS mic, at this stream's level.
   const recentRef = useRef<Int16Array[]>([]);
+  /** The live session's drop-and-reconnect, for a FluxError message. */
+  const droppedRef = useRef<((why: string) => void) | null>(null);
 
   // Gates transmission without tearing the socket down, so a turn can start
   // again without paying for a new handshake.
@@ -517,6 +527,10 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
           break;
         case 'unavailable':
           fail(action.reason, 'unavailable');
+          break;
+        case 'dropped':
+          if (droppedRef.current) droppedRef.current(action.reason);
+          else fail(action.reason, 'error');
           break;
         case 'turnStarted':
           voiceTrace('flux.startOfTurn', { turn: action.turnIndex });
@@ -647,6 +661,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
         connectRef.current?.();
       }, delay);
     };
+    droppedRef.current = dropped;
 
     ws.onerror = () => {
       if (session === sessionIdRef.current && !intentionalStopRef.current) {
