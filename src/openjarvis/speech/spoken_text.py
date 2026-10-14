@@ -230,10 +230,12 @@ def _hold_colons(text: str, boundaries: list[int]) -> list[int]:
 
 
 def _hold_lists(text: str, boundaries: list[int]) -> list[int]:
-    """Keep each list in one segment, released once it has ended.
+    """Keep each list item in one segment, released once the next begins.
 
     Whether a step is read out depends on the whole of it -- its heading
-    comes before its working -- so a list is never cut, like a table.
+    comes before its working -- so an item is never cut. Only the item:
+    holding the whole list kept a reply that opens with one silent ~1.7 s
+    longer (measured 14 October).
     """
     blocks: list[tuple[int, int]] = []
     offset = 0
@@ -241,24 +243,39 @@ def _hold_lists(text: str, boundaries: list[int]) -> list[int]:
     lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines):
         last = index == len(lines) - 1 and not line.endswith("\n")
-        in_list = bool(_LIST_ITEM.match(line)) or (
+        item = bool(_LIST_ITEM.match(line))
+        in_list = item or (
             start is not None and (not line.strip() or line[:1] in " \t")
         )
         undecided = last and bool(
             re.fullmatch(r"[ \t]*(?:\d+[.)]?|[-*+•]|\*\*?)?", line)
         )
-        if in_list and start is None:
+        if item and start is not None:
+            blocks.append((start, offset))
+            start = offset
+        elif in_list and start is None:
             start = offset
         elif not in_list and not undecided and start is not None:
             blocks.append((start, offset))
             start = None
         offset += len(line)
 
-    kept = [b for b in boundaries if not any(s < b < e for s, e in blocks)]
-    kept.extend(e for _s, e in blocks)
     if start is not None:
+        blocks.append((start, len(text)))
+    # Only an item that reads like a step of a solution is held: a heading
+    # ("First setup:") or an equation. A list of tips is said sentence by
+    # sentence as it arrives.
+    blocks = [(s, e) for s, e in blocks if _looks_like_step(text[s:e])]
+    kept = [b for b in boundaries if not any(s < b < e for s, e in blocks)]
+    kept.extend(e for s, e in blocks if e < len(text) or s != start)
+    if start is not None and any(s == start for s, _e in blocks):
         kept = [b for b in kept if b <= start]
     return sorted(set(kept))
+
+
+def _looks_like_step(item: str) -> bool:
+    first = item.split("\n", 1)[0].replace("*", "").rstrip()
+    return first.endswith(":") or "=" in item
 
 
 #: Said once where working was left out of the voice (the user's choice, 14
@@ -433,10 +450,13 @@ class SpokenTextStream:
         if self._finished or not delta:
             return []
         self._pending += delta
-        boundaries = _hold_colons(
-            self._pending, _completed_speech_boundaries(self._pending)
-        )
+        boundaries = _completed_speech_boundaries(self._pending)
         if not self._steps:
+            # Once working has been left out, a "...the benchmark:" line
+            # likely leads into more of it. Before that, an intro line
+            # ("Here's what to pack, Sir:") is said at once.
+            if self._noted:
+                boundaries = _hold_colons(self._pending, boundaries)
             boundaries = _hold_lists(self._pending, boundaries)
         boundaries, table_open = _hold_tables(self._pending, boundaries)
         segments: list[str] = []

@@ -129,6 +129,26 @@ class TestSummary:
         ]
 
 
+class TestNoWaitForOrdinaryLists:
+    """Holding a whole list kept a reply that opens with one silent ~1.7 s
+    longer (14 October); only an item that reads like a step is held."""
+
+    def test_an_intro_line_is_said_at_once(self):
+        stream = SpokenTextStream()
+        assert stream.push("Here's what to pack for Lucban, Sir:\n\n1. ") == [
+            "Here's what to pack for Lucban, Sir:"
+        ]
+
+    def test_a_tip_is_said_before_the_list_ends(self):
+        stream = SpokenTextStream()
+        out = stream.push("1. **Sleep early.** Rest helps. Really it does.\n2. Dri")
+        assert out == ["Sleep early. Rest helps.", "Really it does."]
+
+    def test_a_step_heading_waits_for_its_working(self):
+        stream = SpokenTextStream()
+        assert stream.push("1. **First setup:**\n   HI = BM + BS\n   = 1") == []
+
+
 class TestStepByStep:
     def test_every_step_is_said_in_words(self):
         spoken = _stream(LEVELLING, steps=True)
