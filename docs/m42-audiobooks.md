@@ -519,3 +519,34 @@ streaming) and comes back 1.5 s after, unless the user paused it.
    `audiobook_send` chat tools wired 2026-10-14.
 5. ~~Books page + chat tools~~ DONE 2026-10-13 (above).
 6. Narrator cloning flow for new voices.
+
+## Step 7 (SCOPED 2026-10-14, not built): Audiobookshelf with progress sync
+
+Goal: the narrated chapters show up in Audiobookshelf (ABS) on the phone as they
+are made, and listening position syncs both ways with Sage's "where you are", so
+rolling mode follows phone listening too (today Sage only knows PC listening).
+
+- **Server on this PC.** Docker Desktop + WSL2 is the usual route but costs RAM this
+  machine does not have (see the 10-06 memory crunch); a community native Windows
+  build exists (mikiher/audiobookshelf-windows) -- check it is current. Off the home
+  network it needs Tailscale on PC + phone.
+- **Library.** Sage writes each chapter (already -16 LUFS AAC .m4a) into an ABS library
+  folder, e.g. `D:\Audiobooks\ABS\<Book>\NNNN - Chapter N.m4a` (copy or hardlink of
+  `audio\<voice>\NNNN.m4a`), track number + title tags set; ABS's folder watcher (or
+  `POST` scan) adds new tracks to the same book item. A Redo replaces the file ->
+  rescan. M4B parts stay as they are (25 chapters is too coarse for a growing book).
+- **Progress sync.** API token (Bearer). Read the user's progress for the item
+  (`/api/me/progress/<itemId>`), turn `currentTime` into a chapter via the tracks'
+  `startOffset`s, and move Sage's position (+ rolling job) when ABS is newer; the PC
+  player's saves go the other way (PATCH progress). Newest `lastUpdate` wins.
+  The public API docs say they are out of date: verify paths, and that `currentTime`
+  is cumulative over tracks, against a real server first.
+- **Phone app.** The official ABS iOS app is still TestFlight-only (10-2026). App
+  Store clients: SoundLeaf (free, offline), Absorb, Still; ShelfPlayer's repo is
+  archived. User picks by trying one.
+- **Telegram auto-send** (5bd22a99) stays as the fallback; probably switched off once
+  ABS works.
+- **Open questions for the user:** native vs Docker; which phone app; Tailscale OK;
+  per-chapter tracks (recommended) vs parts; does ABS replace Telegram.
+- **Size:** ~1 session for install + library writer, ~1 for progress sync + tests,
+  then a real phone check.
