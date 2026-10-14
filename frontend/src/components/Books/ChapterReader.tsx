@@ -253,7 +253,7 @@ export function ChapterReader({
             <button className="cursor-pointer" style={iconStyle} onClick={() => playingThis && player.seek(posNow + 15)} title="Forward 15 s"><RotateCw size={16} /></button>
             <div className="text-[12.5px] whitespace-nowrap" style={{ color: 'var(--color-text)' }}>
               <b>{chapter?.label}</b>
-              {playingThis && player.wanted && !player.playing && (
+              {playingThis && player.steppedAside && (
                 <span style={{ color: 'var(--color-text-tertiary)' }}> · paused while Sage talks</span>
               )}
               {notMade && !(playingThis && player.wanted) && (

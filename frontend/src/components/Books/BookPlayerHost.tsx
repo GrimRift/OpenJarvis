@@ -73,6 +73,10 @@ export function BookPlayerHost() {
   }, [wanted, quiet, now]);
 
   useEffect(() => {
+    useBookPlayer.getState().report({ steppedAside: !!now && wanted && !quiet });
+  }, [wanted, quiet, now]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (audio && seekTick) audio.currentTime = useBookPlayer.getState().seekTo;
   }, [seekTick]);

@@ -422,7 +422,7 @@ function BookView({
                 <BookOpen size={14} /> Read
               </button>
             )}
-            {playingHere && player.wanted && !player.playing && (
+            {playingHere && player.steppedAside && (
               <span className="text-[12px]" style={{ color: 'var(--color-text-tertiary)' }}>paused while Sage talks</span>
             )}
           </div>

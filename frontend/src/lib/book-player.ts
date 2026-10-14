@@ -46,6 +46,10 @@ interface BookPlayerState {
   wanted: boolean;
   /** Playing right now (false while Sage talks, even if wanted). */
   playing: boolean;
+  /** Wanted but held back because Sage needs the room. Not the same as
+   * `wanted && !playing`: that is also true for the moment between pressing
+   * play and the audio starting, which flashed "paused while Sage talks". */
+  steppedAside: boolean;
   position: number;
   duration: number;
   /** Bumped to make the host seek to `seekTo`. */
@@ -54,7 +58,9 @@ interface BookPlayerState {
   play: (now: NowPlaying) => void;
   setWanted: (wanted: boolean) => void;
   seek: (seconds: number) => void;
-  report: (fields: Partial<Pick<BookPlayerState, 'playing' | 'position' | 'duration'>>) => void;
+  report: (
+    fields: Partial<Pick<BookPlayerState, 'playing' | 'position' | 'duration' | 'steppedAside'>>,
+  ) => void;
   chapterEnded: (end: Omit<ChapterEnd, 'tick'>) => void;
   stop: () => void;
 }
@@ -64,6 +70,7 @@ export const useBookPlayer = create<BookPlayerState>((set) => ({
   ended: null,
   wanted: false,
   playing: false,
+  steppedAside: false,
   position: 0,
   duration: 0,
   seekTick: 0,
