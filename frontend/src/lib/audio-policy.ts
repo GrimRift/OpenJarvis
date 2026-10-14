@@ -41,6 +41,18 @@ export function shouldStreamReplySpeech(
   return wasVoice || speakTyped;
 }
 
+const STEPS_ASKED =
+  /\bstep[\s-]*by[\s-]*step\b|\b(?:each|every|all the) steps?\b|\bwalk me through\b|\b(?:full|complete|detailed|whole)\s+(?:solution|working|computation|calculation)s?\b|\bshow\b.{0,30}\b(?:working|solution|computation|calculation|steps)\b/i;
+
+/**
+ * Whether the question asks for a step-by-step solution. The voice then
+ * reads every line of working; otherwise it says the rule and the answer and
+ * leaves the working on screen (the user's choice, 14 October).
+ */
+export function asksForSteps(prompt: string): boolean {
+  return STEPS_ASKED.test(prompt);
+}
+
 /** Returned by pushSpokenDelta once the stream has been finished by the cap. */
 export const SPEECH_CAPPED = -1;
 

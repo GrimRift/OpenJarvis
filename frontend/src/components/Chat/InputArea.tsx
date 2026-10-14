@@ -78,6 +78,7 @@ import {
 import { listConnectors, getSyncStatus } from '../../lib/connectors-api';
 import { serializeToolCallArguments } from '../../lib/tool-call';
 import {
+  asksForSteps,
   pushSpokenDelta,
   shouldStreamReplySpeech,
   shouldSynthesizeReplyAudio,
@@ -921,7 +922,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     const incrementalSpeech =
       voiceRepliesEnabled &&
       shouldStreamReplySpeech(wasVoice, content, speakTypedReplies)
-        ? beginStreamingSpeech(ttsVoice)
+        ? beginStreamingSpeech(ttsVoice, { steps: asksForSteps(content) })
         : null;
     // A typed question whose answer is read aloud is a spoken exchange too:
     // the user can talk over it, stop it, and be heard after it. Typed

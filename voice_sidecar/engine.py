@@ -582,8 +582,17 @@ class ChatterboxEngine:
 
     # --------------------------------------------------------- synthesis
 
-    def generate(self, text: str, voice: str) -> np.ndarray:
-        """Float32 mono at 24 kHz for one utterance. Blocking."""
+    def generate(
+        self, text: str, voice: str, *, skip_runaway: bool = False
+    ) -> np.ndarray:
+        """Float32 mono at 24 kHz for one utterance. Blocking.
+
+        *skip_runaway*: a line that still runs away after its retries comes
+        back empty instead of cut at the budget. A live reply asks for this:
+        the cut kept the garble ("eyh") and lost the line's end anyway
+        (14 October, plain-text equations), and the user chose silence. A
+        book render keeps the cut, which its transcript check catches.
+        """
         import torch
 
         text = text.strip()
@@ -603,7 +612,9 @@ class ChatterboxEngine:
             last = attempt == RUNAWAY_RETRIES
             with self.lock, torch.inference_mode(), self._autocast():
                 try:
-                    audio = self._synthesize(text, sampling, vocode_runaway=last)
+                    audio = self._synthesize(
+                        text, sampling, vocode_runaway=last and not skip_runaway
+                    )
                 except Exception as exc:
                     _exit_if_cuda_poisoned(exc)
                     raise
@@ -621,8 +632,12 @@ class ChatterboxEngine:
                 attempt + 1,
             )
             sampling = dict(LIBRARY_SAMPLING)
-        if _ran_away(audio, text):
-            audio = audio[: _budget_samples(text)]
+        if audio is None or _ran_away(audio, text):
+            if skip_runaway:
+                logger.warning("runaway generation for %d chars; skipped", len(text))
+                audio = np.zeros(0, dtype=np.float32)
+            else:
+                audio = audio[: _budget_samples(text)]
         self.last_generation_seconds = round(time.monotonic() - started, 3)
         self.generations += 1
         # Hand the allocator's cache back after every piece: the activations

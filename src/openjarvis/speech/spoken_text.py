@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 
-from openjarvis.speech.spoken_math import speak_math
+from openjarvis.speech.spoken_math import is_working, speak_math, speak_plain_math
 
 # A row of only pipes, dashes, colons and spaces — the bar under a table's
 # header. Spoken aloud it is a long run of "dash".
@@ -75,6 +75,10 @@ _LONG_CODE = re.compile(
 )
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE)
 _BULLET = re.compile(r"^\s*[-*+•]\s+", re.MULTILINE)
+#: "1." before a step. Said aloud it ran onto the line before ("99.310
+#: m. 3."); the steps' own headings ("First setup") already give the order.
+_ORDERED = re.compile(r"^\s*\d+[.)]\s+", re.MULTILINE)
+_LIST_ITEM = re.compile(r"^(?P<indent>[ \t]*)(?:[-*+•]|\d+[.)])[ \t]+")
 _BLOCKQUOTE = re.compile(r"^\s*>\s?", re.MULTILINE)
 _RULE = re.compile(r"^\s*([-*_])\s*(?:\1\s*){2,}$", re.MULTILINE)
 _EMPHASIS = re.compile(r"(\*{1,3}|_{1,3})(?=\S)(.+?)(?<=\S)\1", re.DOTALL)
@@ -181,7 +185,9 @@ def _completed_speech_boundaries(text: str) -> list[int]:
         outside_markup = link_label_depth == 0 and link_target_depth == 0
         if next_is_space and outside_markup and not unsafe_token:
             if char in ".!?":
-                if not _has_unfinished_emphasis(text[segment_start : index + 1]):
+                if char == "." and _is_list_number(text, token_start, index):
+                    pass
+                elif not _has_unfinished_emphasis(text[segment_start : index + 1]):
                     boundaries.append(index + 1)
                     segment_start = index + 1
             elif char in ";:" and index + 1 - segment_start >= 80:
@@ -192,8 +198,126 @@ def _completed_speech_boundaries(text: str) -> list[int]:
                 if not _has_unfinished_emphasis(text[segment_start : index + 1]):
                     boundaries.append(index + 1)
                     segment_start = index + 1
+        elif (
+            char == "\n"
+            and outside_markup
+            and _LIST_ITEM.match(text[index + 1 : index + 40])
+            and text[segment_start:index].strip()
+            and not _has_unfinished_emphasis(text[segment_start : index + 1])
+        ):
+            # The next step starts: its "2." no longer ends this one.
+            boundaries.append(index + 1)
+            segment_start = index + 1
         index += 1
     return boundaries
+
+
+def _is_list_number(text: str, token_start: int, index: int) -> bool:
+    """Whether the "." at *index* closes a list number ("2.") at a line start."""
+    if not text[token_start:index].isdigit():
+        return False
+    line_start = text.rfind("\n", 0, token_start) + 1
+    return not text[line_start:token_start].strip()
+
+
+def _hold_colons(text: str, boundaries: list[int]) -> list[int]:
+    """Keep a line that ends "...from the benchmark:" with what follows it.
+
+    When what follows is working that is not read out, the colon has to
+    become a full stop; the voice cannot take back a pause already said.
+    """
+    return [b for b in boundaries if not re.search(r":\**\s*$", text[:b])]
+
+
+def _hold_lists(text: str, boundaries: list[int]) -> list[int]:
+    """Keep each list in one segment, released once it has ended.
+
+    Whether a step is read out depends on the whole of it -- its heading
+    comes before its working -- so a list is never cut, like a table.
+    """
+    blocks: list[tuple[int, int]] = []
+    offset = 0
+    start: int | None = None
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        last = index == len(lines) - 1 and not line.endswith("\n")
+        in_list = bool(_LIST_ITEM.match(line)) or (
+            start is not None and (not line.strip() or line[:1] in " \t")
+        )
+        undecided = last and bool(
+            re.fullmatch(r"[ \t]*(?:\d+[.)]?|[-*+•]|\*\*?)?", line)
+        )
+        if in_list and start is None:
+            start = offset
+        elif not in_list and not undecided and start is not None:
+            blocks.append((start, offset))
+            start = None
+        offset += len(line)
+
+    kept = [b for b in boundaries if not any(s < b < e for s, e in blocks)]
+    kept.extend(e for _s, e in blocks)
+    if start is not None:
+        kept = [b for b in kept if b <= start]
+    return sorted(set(kept))
+
+
+#: Said once where working was left out of the voice (the user's choice, 14
+#: October: the rule and the answer aloud, the steps on screen, unless they
+#: asked for a step-by-step solution).
+WORKING_NOTE = "The working is on screen."
+
+
+def _working_lines(markdown: str) -> int:
+    return sum(is_working(line) for line in markdown.split("\n"))
+
+
+def _drop_working(
+    markdown: str, *, note: bool = True, force: bool = False
+) -> tuple[str, bool]:
+    """*markdown* without its lines of arithmetic; whether any were dropped.
+
+    A list item goes whole when any of its lines is working: "First setup:
+    height of instrument = benchmark + backsight" means nothing without
+    the numbers under it. A line before the cut that ends in a colon ends
+    in a full stop instead. One line of working alone ("2 x 3 = 6") is the
+    answer itself and stays, unless *force* (working was already left out).
+    """
+    if not force and _working_lines(markdown) < 2:
+        return markdown, False
+    lines = markdown.split("\n")
+    out: list[str] = []
+    dropped = False
+    index = 0
+    while index < len(lines):
+        item = _LIST_ITEM.match(lines[index])
+        end = index + 1
+        if item:
+            depth = len(item.group("indent").expandtabs())
+            while end < len(lines):
+                line = lines[end]
+                inner = _LIST_ITEM.match(line)
+                if inner and len(inner.group("indent").expandtabs()) <= depth:
+                    break
+                if line.strip() and not inner and line[:1] not in " \t":
+                    break
+                if not line.strip():
+                    following = next((ln for ln in lines[end:] if ln.strip()), "")
+                    if following[:1] not in " \t" or _LIST_ITEM.match(following):
+                        break
+                end += 1
+        unit = lines[index:end]
+        if any(is_working(line) for line in unit):
+            for back in range(len(out) - 1, -1, -1):
+                if out[back].strip():
+                    out[back] = re.sub(r":(\**)\s*$", r".\1", out[back])
+                    break
+            if note and not dropped:
+                out.append(WORKING_NOTE)
+            dropped = True
+        else:
+            out.extend(unit)
+        index = end
+    return "\n".join(out), dropped
 
 
 def _safe_final_text(text: str) -> str:
@@ -268,12 +392,38 @@ def _hold_tables(text: str, boundaries: list[int]) -> tuple[list[int], bool]:
 class SpokenTextStream:
     """Buffer raw model deltas and release only stable sanitized speech."""
 
-    def __init__(self, *, max_pending_chars: int = 4096) -> None:
+    def __init__(self, *, max_pending_chars: int = 4096, steps: bool = False) -> None:
         if max_pending_chars <= 0:
             raise ValueError("max_pending_chars must be positive")
         self._pending = ""
         self._max_pending_chars = max_pending_chars
         self._finished = False
+        #: The user asked for a step-by-step solution: read the working.
+        self._steps = steps
+        #: Working was left out, and said so, earlier in this reply.
+        self._noted = False
+        #: A segment with one line of working, waiting for the next: it is
+        #: the answer if alone, the first step if more working follows.
+        self._held: str | None = None
+
+    def _speak(self, raw: str, *, last: bool = False) -> list[str]:
+        if not self._steps:
+            if self._held is not None:
+                held, self._held = self._held, None
+                if not _working_lines(raw):
+                    return [*self._say(held), *self._say(raw)]
+                raw = f"{held}\n\n{raw}"
+            elif not last and not self._noted and _working_lines(raw) == 1:
+                self._held = raw
+                return []
+        return self._say(raw)
+
+    def _say(self, raw: str) -> list[str]:
+        spoken, dropped = _to_spoken(
+            raw, steps=self._steps, note=not self._noted, force=self._noted
+        )
+        self._noted = self._noted or dropped
+        return [spoken] if spoken and _is_speakable(spoken) else []
 
     @property
     def pending_chars(self) -> int:
@@ -283,17 +433,18 @@ class SpokenTextStream:
         if self._finished or not delta:
             return []
         self._pending += delta
-        boundaries, table_open = _hold_tables(
+        boundaries = _hold_colons(
             self._pending, _completed_speech_boundaries(self._pending)
         )
+        if not self._steps:
+            boundaries = _hold_lists(self._pending, boundaries)
+        boundaries, table_open = _hold_tables(self._pending, boundaries)
         segments: list[str] = []
         consumed = 0
         for boundary in boundaries:
             raw = self._pending[consumed:boundary].strip()
             consumed = boundary
-            spoken = to_spoken_text(raw)
-            if spoken and _is_speakable(spoken):
-                segments.append(spoken)
+            segments.extend(self._speak(raw))
         if consumed:
             self._pending = self._pending[consumed:].lstrip()
         # A table is held whole until it ends, so it may be several sentences
@@ -310,8 +461,7 @@ class SpokenTextStream:
             return []
         raw = _safe_final_text(self._pending).strip()
         self._pending = ""
-        spoken = to_spoken_text(raw)
-        return [spoken] if spoken and _is_speakable(spoken) else []
+        return self._speak(raw, last=True)
 
     def finish(self) -> list[str]:
         if self._finished:
@@ -319,8 +469,7 @@ class SpokenTextStream:
         self._finished = True
         raw = _safe_final_text(self._pending).strip()
         self._pending = ""
-        spoken = to_spoken_text(raw)
-        return [spoken] if spoken and _is_speakable(spoken) else []
+        return self._speak(raw, last=True)
 
 
 #: Up to this many rows a table is read out, one sentence per row. A longer
@@ -628,10 +777,21 @@ def _diagram_as_table(match: re.Match[str]) -> str:
     return "\n" + "\n".join(lines) + "\n"
 
 
-def to_spoken_text(markdown: str) -> str:
-    """Create speech-only prose without changing the source chat reply."""
+def to_spoken_text(markdown: str, *, steps: bool = False) -> str:
+    """Create speech-only prose without changing the source chat reply.
+
+    Lines of arithmetic are left to the screen unless *steps* (the user
+    asked for a step-by-step solution); see ``_drop_working``.
+    """
+    return _to_spoken(markdown, steps=steps)[0]
+
+
+def _to_spoken(
+    markdown: str, *, steps: bool, note: bool = True, force: bool = False
+) -> tuple[str, bool]:
+    """``to_spoken_text`` and whether working was left out."""
     if not markdown:
-        return ""
+        return "", False
 
     hidden_counts = {
         "raw_link": 0,
@@ -687,6 +847,9 @@ def to_spoken_text(markdown: str) -> str:
     # The model's private-use citation markers ("cite<url>",
     # 9 October): a URL read aloud, and invisible on screen.
     text = _CITATION.sub("", markdown)
+    dropped = False
+    if not steps:
+        text, dropped = _drop_working(text, note=note, force=force)
     text = _DIAGRAM_BLOCK.sub(_diagram_as_table, text)
     text = _FENCED_CODE.sub(" ", text)
     # Formulas become words before anything else looks at them: the
@@ -732,11 +895,13 @@ def to_spoken_text(markdown: str) -> str:
     text = _RULE.sub("", text)
     text = _HEADING.sub("", text)
     text = _BULLET.sub("", text)
+    text = _ORDERED.sub("", text)
     text = _BLOCKQUOTE.sub("", text)
     # Applied after the line rules so a bullet's "*" is already gone and
     # cannot be mistaken for the opening of an emphasis span.
     text = _EMPHASIS.sub(r"\2", text)
     # After emphasis, or a padded "** sigma **" no longer reads as a span.
+    text = speak_plain_math(text)
     text = _speak_symbols(text)
 
     # Dashes are punctuation to the eye and a hazard to the ear. An en dash
@@ -761,7 +926,7 @@ def to_spoken_text(markdown: str) -> str:
     # after every such reply was the thing the user asked to have removed.
     # hidden_counts is still kept by the substitutions above for callers that
     # want to know what was withheld.
-    return text
+    return text, dropped
 
 
-__all__ = ["SpokenTextOverflow", "SpokenTextStream", "to_spoken_text"]
+__all__ = ["SpokenTextOverflow", "SpokenTextStream", "WORKING_NOTE", "to_spoken_text"]

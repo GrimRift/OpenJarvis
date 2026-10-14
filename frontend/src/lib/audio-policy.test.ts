@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  asksForSteps,
   isDigestPrompt,
   pushSpokenDelta,
   shouldStreamReplySpeech,
@@ -161,5 +162,25 @@ describe('pushSpokenDelta', () => {
     n = pushSpokenDelta(n, '\n- item two', true, s, 10);
     expect(s.pushed.join('')).toBe('- item one that is long\n');
     expect(n).toBe(SPEECH_CAPPED);
+  });
+});
+
+describe('asksForSteps', () => {
+  it('hears a request for the working', () => {
+    expect(asksForSteps('Can you solve this step by step?')).toBe(true);
+    expect(asksForSteps('give me a step-by-step solution')).toBe(true);
+    expect(asksForSteps('walk me through it')).toBe(true);
+    expect(asksForSteps('show me the full solution please')).toBe(true);
+    expect(asksForSteps('show your working')).toBe(true);
+  });
+
+  it('does not hear it in a plain question', () => {
+    // The levelling question of 14 October: rule and answer only.
+    expect(
+      asksForSteps(
+        "Can you look at the main screen? There's a math problem about differential leveling. Can you help me with it? I can explain it to me so I could understand it better.",
+      ),
+    ).toBe(false);
+    expect(asksForSteps('what is 2 times 3')).toBe(false);
   });
 });

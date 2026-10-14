@@ -195,7 +195,9 @@ async def tts_stream(websocket: WebSocket) -> None:
         while True:
             # Flattened before the length check so a markdown table is not
             # refused for characters that would never be spoken anyway.
-            text = to_spoken_text(request.get("text") or "")
+            text = to_spoken_text(
+                request.get("text") or "", steps=bool(request.get("steps"))
+            )
             if not text:
                 await websocket.send_json({"type": "error", "reason": "empty text"})
                 request = await websocket.receive_json()
@@ -255,7 +257,11 @@ async def _stream_incremental_turn(
     segment_queue: asyncio.Queue[tuple[str, bool] | None] = asyncio.Queue(
         maxsize=MAX_PENDING_SEGMENTS
     )
-    segmenter = SpokenTextStream(max_pending_chars=MAX_PENDING_RAW_CHARS)
+    # "steps": the user asked for a step-by-step solution, so the working
+    # is read out rather than left to the screen.
+    segmenter = SpokenTextStream(
+        max_pending_chars=MAX_PENDING_RAW_CHARS, steps=bool(begin.get("steps"))
+    )
     total_chars = 0
     started = False
     finished = False

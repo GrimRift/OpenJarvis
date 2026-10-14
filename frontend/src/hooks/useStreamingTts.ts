@@ -157,7 +157,11 @@ function createStreamingTtsPlayer() {
     if (out && out.state !== 'running') void out.resume().catch(() => {});
   };
 
-  const begin = (voice: VoiceProfile): IncrementalTtsSession => {
+  /** `steps`: the user asked for a step-by-step solution (asksForSteps). */
+  const begin = (
+    voice: VoiceProfile,
+    { steps = false }: { steps?: boolean } = {},
+  ): IncrementalTtsSession => {
     teardown();
     const generation = generationsRef.current.begin();
     const owner = playbackOwnerRef.current;
@@ -299,6 +303,8 @@ function createStreamingTtsPlayer() {
           // Which engine synthesises this reply; the audio protocol back
           // is the same for both.
           provider: voice.provider,
+          // Read the working aloud rather than leave it to the screen.
+          steps,
         }),
       );
     };

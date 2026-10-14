@@ -240,7 +240,7 @@ class TestEdges:
         assert to_spoken_text("Good evening, sir.") == "Good evening, sir."
 
     def test_multiplication_is_not_treated_as_emphasis(self):
-        assert to_spoken_text("2 * 3 * 4") == "2 * 3 * 4"
+        assert to_spoken_text("2 * 3 * 4") == "2 times 3 times 4"
 
 
 class TestAwkwardPrivateValues:

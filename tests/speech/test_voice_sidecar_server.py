@@ -38,7 +38,7 @@ class FakeEngine:
     def use_voice(self, name):
         self.current_voice = name
 
-    def generate(self, text, voice):
+    def generate(self, text, voice, *, skip_runaway=False):
         self.pieces.append(text)
         self.generations += 1
         return np.zeros(int(SR * 0.075 * len(text)), dtype=np.float32)

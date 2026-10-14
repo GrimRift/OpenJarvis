@@ -292,7 +292,9 @@ async def _stream_reply(
             for piece in pieces:
                 waited = time.monotonic()
                 try:
-                    audio = await asyncio.to_thread(engine.generate, piece, voice)
+                    audio = await asyncio.to_thread(
+                        engine.generate, piece, voice, skip_runaway=True
+                    )
                 except Exception as exc:
                     logger.exception("generation failed")
                     await send_json(

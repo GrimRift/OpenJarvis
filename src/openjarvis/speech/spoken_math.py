@@ -251,4 +251,131 @@ def speak_math(text: str) -> str:
     return re.sub(r" +([,.;:!?])", r"\1", text)
 
 
-__all__ = ["speak_formula", "speak_math"]
+# Arithmetic typed as plain text rather than LaTeX ("= 101.425 − 2.115 =
+# 99.310 m"). The voice was handed it raw: every such line ran away and
+# came out as a cut-off garble or a shout (14 October, a levelling problem).
+
+_NUMBER = r"\d[\d,]*(?:\.\d+)?"
+#: Two numbers joined by an operator: the mark of a line of working. A
+#: hyphen counts only spaced ("3 - 1"), so "2023-2024" stays a range.
+_CALC = re.compile(
+    rf"{_NUMBER}\)?\s*(?:[+×÷*−]|\s-\s|\\times|\\div|\\cdot)\s*\(?\s*-?{_NUMBER}"
+)
+_EQUALS = re.compile(r"=|≈|\\approx")
+_LIST_MARK = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s+")
+
+
+def is_working(line: str) -> bool:
+    """Whether *line* is a step of arithmetic ("= 100.000 + 1.425 = 101.425").
+
+    A result alone ("x = 5") or a rule in words ("elevation = HI −
+    foresight") is not: those carry the answer, the working only shows it.
+    """
+    body = _LIST_MARK.sub("", line).replace("*", " ").replace("$", " ").strip()
+    if not _EQUALS.search(body):
+        return False
+    return bool(_CALC.search(body)) or body.startswith(("=", "≈"))
+
+
+_ONES = (
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen"
+).split()
+_TENS = "- - twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def _int_words(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        tens, ones = divmod(n, 10)
+        return _TENS[tens] + (f"-{_ONES[ones]}" if ones else "")
+    if n < 1000:
+        hundreds, rest = divmod(n, 100)
+        return f"{_ONES[hundreds]} hundred" + (f" {_int_words(rest)}" if rest else "")
+    for size, name in ((10**9, "billion"), (10**6, "million"), (1000, "thousand")):
+        if n >= size:
+            high, rest = divmod(n, size)
+            tail = f" {_int_words(rest)}" if rest else ""
+            return f"{_int_words(high)} {name}{tail}"
+    return str(n)
+
+
+def decimal_words(number: str) -> str:
+    """"101.425" -> "one hundred one point four two five" (the user's pick,
+    14 October: the integer said whole, the decimals digit by digit, every
+    written digit kept -- in surveying "100.060" is not "100.06")."""
+    whole, _, fraction = number.replace(",", "").partition(".")
+    if not whole.isdigit() or len(whole) > 12 or not fraction.isdigit():
+        return number
+    digits = " ".join(_ONES[int(d)] for d in fraction)
+    return f"{_int_words(int(whole))} point {digits}"
+
+
+#: Units said after a number. "m" needs its space: "5m" may be minutes or
+#: millions.
+_UNIT_WORDS = {
+    "mm": "millimeters",
+    "cm": "centimeters",
+    "km": "kilometers",
+    "m²": "square meters",
+    "m³": "cubic meters",
+    "m/s": "meters per second",
+    "kg": "kilograms",
+    "kN": "kilonewtons",
+    "kPa": "kilopascals",
+    "MPa": "megapascals",
+    "ha": "hectares",
+}
+_UNIT = re.compile(
+    rf"(?<![\w.])(?P<n>{_NUMBER})"
+    r"(?:\s?(?P<u>m/s|m²|m³|mm|cm|km|kg|kN|kPa|MPa|ha)|\s(?P<m>m))"
+    r"(?![\w²³/'’])"
+)
+_DECIMAL = re.compile(r"(?<![\w.])\d[\d,]*\.\d+(?![\w.]|\.\d)")
+
+
+def _unit(match: re.Match) -> str:
+    number = match.group("n")
+    words = _UNIT_WORDS.get(match.group("u") or "", "meters")
+    if number == "1":
+        words = re.sub(r"s\b", "", words, count=1)
+    spoken = decimal_words(number) if "." in number else number
+    return f"{spoken} {words}"
+
+
+def _speak_line(line: str) -> str:
+    calc = bool(_CALC.search(line))
+    equation = "=" in line
+    if calc or re.search(r"^\s*=|(?<=\S) = (?=\S)", line):
+        # "= 101.425" carries on from the line above: "That's 101.425".
+        line = re.sub(r"^(\s*)=\s*", r"\1That's ", line)
+        line = re.sub(r"\s*=\s*", " equals ", line)
+        if equation:  # "won 3 - 1" is a score, not a sum
+            line = re.sub(r"(?<=[\w)])\s+-\s+(?=[\w(])", " minus ", line)
+        line = re.sub(r"(?<=[\w)])\s*\+\s*(?=[\w(])", " plus ", line)
+        line = re.sub(r"(?<=[\d)])\s*\*\s*(?=[\d(])", " times ", line)
+    line = line.replace("−", " minus ")
+    line = _UNIT.sub(_unit, line)
+    if calc and equation:
+        # Brackets are a pause: "100 plus, 1.425 plus 1.735, minus, ..."
+        line = re.sub(r"\s*[()]\s*", ", ", line)
+        line = _DECIMAL.sub(lambda m: decimal_words(m.group(0)), line)
+        line = re.sub(r"(?:,\s*){2,}", ", ", line)
+        line = re.sub(r"^(\s*), ", r"\1", line)
+        line = re.sub(r",\s*([.!?:;]|$)", r"\1", line)
+    return re.sub(r"(?<=\S)[ \t]{2,}", " ", line)
+
+
+def speak_plain_math(text: str) -> str:
+    """Say typed arithmetic, units and minus signs as words."""
+    return "\n".join(_speak_line(line) for line in text.split("\n"))
+
+
+__all__ = [
+    "decimal_words",
+    "is_working",
+    "speak_formula",
+    "speak_math",
+    "speak_plain_math",
+]

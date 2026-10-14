@@ -78,6 +78,19 @@ class TestRetry:
         assert len(eng.model.calls) == 1 + engine.RUNAWAY_RETRIES
         assert len(audio) == engine._budget_samples(text)
 
+    def test_a_live_reply_skips_a_line_that_keeps_running_away(self):
+        # The cut kept the garble ("eyh") and lost the line's end anyway.
+        eng = self._engine([_seconds(6.6), _seconds(7.0), _seconds(8.0)])
+        audio = eng.generate("= 101.425 − 2.115 = 99.310 m.", "v", skip_runaway=True)
+        assert len(audio) == 0
+
+    def test_skipping_keeps_a_good_retake(self):
+        eng = self._engine([_seconds(6.6), _seconds(2.6)])
+        audio = eng.generate(
+            "It is three o'clock in the afternoon.", "v", skip_runaway=True
+        )
+        assert len(audio) == int(SR * 2.6)
+
 
 class TestGraphedTokens:
     """The graphed speech-token loop (fast_t3.py) in the engine's retry."""
@@ -112,6 +125,14 @@ class TestGraphedTokens:
         audio = eng.generate(text, "v")
         assert [call[1] for call in eng.graphed_calls] == [False, False, True]
         assert len(audio) == engine._budget_samples(text)
+
+    def test_a_skipped_line_is_never_vocoded(self):
+        eng = self._engine([None, None, None])
+        audio = eng.generate(
+            "It is three o'clock in the afternoon.", "v", skip_runaway=True
+        )
+        assert [call[1] for call in eng.graphed_calls] == [False, False, False]
+        assert len(audio) == 0
 
     def test_a_failure_falls_back_to_the_stock_loop_for_good(self):
         eng = self._engine([RuntimeError("capture failed")])
