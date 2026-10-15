@@ -2643,7 +2643,8 @@ class TestAFollowUpNotMeantForSageIsDeclined:
         # 15 October: Sage stopped at a pause; it continues from there
         # instead of starting the answer over.
         _, seen = self._stream(["Yes, Sir."], followup=False, carry_on=True)
-        assert any("Carry on from where you stopped" in (m.content or "") for m in seen[0])
+        note = "Carry on from where you stopped"
+        assert any(note in (m.content or "") for m in seen[0])
 
     def test_a_turn_the_user_opened_is_never_offered_the_choice(self):
         body, seen = self._stream(["Yes, Sir."], followup=False)
