@@ -466,6 +466,12 @@ class EngineConfig:
     """Inference engine settings with nested per-engine configs."""
 
     default: str = "ollama"
+    # Engines discovery may probe, comma-separated; empty probes every
+    # registered one. Each absent engine on "localhost" costs ~4 s on Windows
+    # (IPv6 tried first), which made Sage's start 4 s slower for engines it
+    # does not have, and two that answered on someone else's port (mlx on
+    # llama.cpp's 8080, uzu on Sage's own 8000) were taken for real ones.
+    discover: str = ""
     ollama: OllamaEngineConfig = field(default_factory=OllamaEngineConfig)
     vllm: VLLMEngineConfig = field(default_factory=VLLMEngineConfig)
     sglang: SGLangEngineConfig = field(default_factory=SGLangEngineConfig)

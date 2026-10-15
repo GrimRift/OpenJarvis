@@ -1082,11 +1082,20 @@ def serve(
             "authenticated requests to your instance."
         )
 
-    # Imported here, not on the first chat turn: the chat route imports the
+    # Warmed here, not on the first chat turn: the chat route imports the
     # complexity scorer lazily, and openjarvis.learning's package import takes
     # ~3.5 s -- the first turn after every start sat that long before the
-    # model was called, on the event loop (23 September).
-    import openjarvis.learning.routing.complexity  # noqa: F401
+    # model was called, on the event loop (23 September). On a thread, because
+    # importing it inline held the server back from answering for those same
+    # 3.5 s on every start (15 October); a turn that arrives first just waits
+    # on the import lock for what is left.
+    def _warm_learning() -> None:
+        try:
+            import openjarvis.learning.routing.complexity  # noqa: F401
+        except Exception:
+            logger.debug("Complexity scorer warm-up failed", exc_info=True)
+
+    threading.Thread(target=_warm_learning, name="warm-learning", daemon=True).start()
 
     # Per-turn timing lines (routes._log_turn_timing) and the wake word's
     # rejections and near misses reach the log. Sage's own loggers have no

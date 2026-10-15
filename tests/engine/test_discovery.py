@@ -75,6 +75,26 @@ class TestDiscoverEngines:
             result = discover_engines(cfg)
         assert result[0][0] == "b"
 
+    def test_discover_limits_what_is_probed(self) -> None:
+        # Absent engines on "localhost" cost ~4 s each on Windows, and mlx /
+        # uzu answered on other servers' ports and were taken for real.
+        _reg("wanted", "wanted")
+        _reg("absent", "absent")
+
+        cfg = JarvisConfig()
+        cfg.engine.discover = "wanted, cloud"
+        probed: list[str] = []
+
+        def _make(key, config):  # noqa: ANN001, ANN202
+            probed.append(key)
+            return _FakeEngine(healthy=True)
+
+        with mock.patch("openjarvis.engine._discovery._make_engine", side_effect=_make):
+            result = discover_engines(cfg)
+        assert "absent" not in probed
+        assert set(probed) <= {"wanted", "cloud"}
+        assert "wanted" in [k for k, _ in result]
+
     def test_health_checks_run_concurrently(self) -> None:
         """Regression for #263 — discovery must probe engines in parallel.
 

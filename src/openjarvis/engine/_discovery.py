@@ -121,6 +121,13 @@ def discover_engines(config: JarvisConfig) -> List[Tuple[str, InferenceEngine]]:
     # healthy.sort() below normalizes order, so completion order is
     # irrelevant and the result is identical to the serial version (#263).
     keys = list(EngineRegistry.keys())
+    wanted = {
+        k.strip()
+        for k in (getattr(config.engine, "discover", "") or "").split(",")
+        if k.strip()
+    }
+    if wanted:
+        keys = [k for k in keys if k in wanted]
 
     def _probe(key: str) -> Tuple[str, InferenceEngine] | None:
         try:
