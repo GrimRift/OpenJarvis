@@ -787,6 +787,9 @@ interface AppState {
    *  `unless` = only replace the box if it still holds this text. */
   composerDraft: { text: string; unless?: string; at: number } | null;
   setComposerDraft: (draft: { text: string; unless?: string } | null) => void;
+  /** Add words to the user's last message: what they said over Sage's
+   *  answer joins the question it belongs to (lib/interjection.ts). */
+  extendLastUserMessage: (conversationId: string, words: string) => void;
   updateLastAssistant: (
     conversationId: string,
     content: string,
@@ -1156,6 +1159,24 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setComposerDraft: (draft) =>
       set({ composerDraft: draft ? { ...draft, at: Date.now() } : null }),
+
+    extendLastUserMessage: (conversationId: string, words: string) => {
+      const added = words.trim();
+      if (!added) return;
+      const store = loadConversations();
+      const conv = store.conversations[conversationId];
+      if (!conv) return;
+      for (let i = conv.messages.length - 1; i >= 0; i--) {
+        const message = conv.messages[i];
+        if (message.role !== 'user') continue;
+        const content = typeof message.content === 'string' ? message.content.trimEnd() : '';
+        conv.messages[i] = { ...message, content: content ? `${content} ${added}` : added };
+        conv.updatedAt = Date.now();
+        saveConversations(store);
+        if (get().activeId === conversationId) set({ messages: [...conv.messages] });
+        return;
+      }
+    },
 
     updateLastAssistant: (
       conversationId: string,

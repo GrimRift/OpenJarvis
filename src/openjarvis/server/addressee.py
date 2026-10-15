@@ -46,7 +46,8 @@ AMEND_NOTE = (
 
 
 #: What words heard while Sage answered turned out to be (decide_interjection).
-#: noise: let pass. after: the answer stands; a short line follows it.
+#: noise: let pass (a repeat too). after: the answer stands; a short line
+#: is said at its next pause, then it carries on.
 #: now: the answer changes; Sage stops at its next pause and carries on from
 #: there. new: a different request, answered instead.
 INTERJECTION_KINDS = ("noise", "after", "now", "new")
@@ -55,12 +56,17 @@ INTERJECTION_PROMPT = (
     "You are Sage, a voice assistant. While you were answering the user, the "
     "microphone heard them say more. Decide what to do. Start your reply "
     "with exactly one of these markers:\n"
-    "[[noise]] -- garbled, filler (um, uh), a fragment that means nothing, or "
-    "plainly someone else talking. Write nothing after it.\n"
-    "[[after]] -- your answer still stands: they react, agree, thank you, or "
-    "tell you something that needs only a brief reply. After the marker "
-    "write that one short spoken line (under 20 words, plain words, no "
-    "markdown); it is said once your current answer ends.\n"
+    "[[noise]] -- nothing to answer: garbled, filler (um, uh), a fragment "
+    "that means nothing, plainly someone else talking, or words that only "
+    "repeat or agree with what they already said or what you are saying "
+    "(\"maybe I'm doing better\" after \"I'm doing a little better\"). "
+    "Write nothing after it; you just carry on.\n"
+    "[[after]] -- your answer still stands, but they said something new that "
+    "deserves a brief reply: thanks, a reaction, a small fact about "
+    "themselves. After the marker write that one short spoken line (under 15 "
+    "words, plain words, no markdown, no greeting or name). It is said at "
+    "the next pause in your answer, which then carries on, so it must fit "
+    "between two of your sentences.\n"
     "[[now]] -- it changes what you should be saying: a correction, a detail "
     "that matters to the answer, or a request to say it differently. Write "
     "nothing after it: you will stop at the end of your sentence and carry on "
@@ -124,7 +130,9 @@ CONTINUE_NOTE = (
     "anything you had written after it. Their new message came while you "
     "were talking. Carry on from where you stopped, taking what they said "
     "into account: do not repeat or restart what they already heard, and do "
-    "not apologise for stopping. If their words turn out to be noise or not "
+    "not apologise for stopping. Open with a short natural bridge of a few "
+    "words that shows you heard them (for example \"Ah, in the Philippines, "
+    "then:\"), never a greeting. If their words turn out to be noise or not "
     "meant for you, just finish the point you were making. Do not mention "
     "this note."
 )

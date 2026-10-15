@@ -6,8 +6,9 @@
  * user was already listening to and wrote it again from the top. Now the
  * server decides (server/addressee.py decide_interjection):
  *
- * - noise: let pass;
- * - after: the answer stands, and a short line is said once it ends;
+ * - noise: let pass, and so are words that only repeat what was said;
+ * - after: the answer stands; Sage says a short line at its next pause and
+ *          carries on;
  * - now:   Sage finishes the sentence it is on, stops at the pause after it,
  *          and carries on from there with what the user added;
  * - new:   a different request, answered instead.

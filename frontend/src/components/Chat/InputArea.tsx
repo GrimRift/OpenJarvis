@@ -1956,11 +1956,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           voice: voice ?? 'none',
         });
         if (decision.kind === 'after') {
-          // The answer stands: it carries on, and the line follows it.
+          // The answer stands: the line is said at its next pause.
           pendingAfterRef.current = { added, line: decision.line };
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice',
-            message: `Said after the answer: "${added.slice(0, 80)}"`,
+            message: `Answered at the next pause: "${added.slice(0, 80)}"`,
           });
           flux.beginTurn();
           deliverAfterLineRef.current();
@@ -3165,27 +3165,70 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }
   }, [wakeWordError]);
 
-  // "after" (lib/interjection.ts): the user's words and Sage's short line go
-  // into the chat and are said once the answer being given is over. Checked
-  // when the decision arrives and whenever the stream or the voice ends.
+  // "after" (lib/interjection.ts): Sage finishes the sentence it is on, says
+  // its short line, and carries on with the rest of the answer, as a person
+  // would. One question, one answer: the user's words join their message
+  // and the line joins the reply (both the user's choice, 15 October). Its
+  // place is known only once the answer is written, so it waits for the
+  // stream to end; checked when the decision arrives and when it does.
   const deliverAfterLineRef = useRef<() => void>(() => {});
+  const afterBusyRef = useRef(false);
   deliverAfterLineRef.current = () => {
     const pending = pendingAfterRef.current;
-    if (!pending) return;
-    const { streamState: stream, audioPlaying: playing } = useAppStore.getState();
-    if (stream.isStreaming || playing) return;
+    if (!pending || afterBusyRef.current) return;
+    const store = useAppStore.getState();
+    if (store.streamState.isStreaming) return;
     pendingAfterRef.current = null;
-    voiceTrace('speak.afterLine', { chars: pending.line.length });
-    voiceOriginatedRef.current = true;
-    void releaseSpeculativeAnswer(pending.added, pending.line).then((done) => {
-      if (done) return;
-      // Something else is answering now; the line would land out of place.
-      voiceOriginatedRef.current = false;
-    });
+    const convId = store.activeId;
+    if (!convId) return;
+    afterBusyRef.current = true;
+    const playing = store.audioPlaying;
+    // Held across the switch, so the moment between the two parts does not
+    // read as the answer ending (the follow-up turn, the barge-in handoff).
+    const owner = `after-line-${generateId()}`;
+    useAppStore.getState().setAudioPlayback(owner, true);
+    void (async () => {
+      try {
+        const last = () => {
+          const messages = useAppStore.getState().messages;
+          const message = messages[messages.length - 1];
+          return message?.role === 'assistant' ? message.content.replace(INTERRUPTED_MARK, '') : '';
+        };
+        const shown = last();
+        let kept = shown.trimEnd();
+        let rest = '';
+        if (playing) {
+          const stopped = await stopAtPause();
+          kept = heardText(shown, stopped.heard, stopped.total, stopped.complete);
+          rest = shown.slice(kept.length);
+        }
+        useAppStore.getState().extendLastUserMessage(convId, pending.added);
+        const joined = kept ? `${kept} ${pending.line}` : pending.line;
+        const content = rest.trim()
+          ? `${joined}${/^\s/.test(rest) ? rest : ` ${rest}`}`
+          : joined;
+        updateLastAssistant(convId, content);
+        voiceTrace('speak.afterLine', {
+          chars: pending.line.length,
+          rest: rest.trim().length,
+          atPause: playing,
+        });
+        if (!voiceRepliesEnabled) return;
+        const spoken = speakableText(`${pending.line} ${rest.trim()}`.trim(), Infinity);
+        spokenTextRef.current = spoken;
+        lastReplyWasVoiceRef.current = true;
+        await speakStreaming(spoken, ttsVoice);
+      } catch {
+        // The answer stays as it was shown; nothing else to undo.
+      } finally {
+        useAppStore.getState().setAudioPlayback(owner, false);
+        afterBusyRef.current = false;
+      }
+    })();
   };
   useEffect(() => {
     deliverAfterLineRef.current();
-  }, [audioPlaying, streamState.isStreaming]);
+  }, [streamState.isStreaming]);
 
   // Re-arms listening once a voice-initiated reply finishes actually being
   // spoken (not just when the text/stream finishes) — matches the real
