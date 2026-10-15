@@ -2554,7 +2554,7 @@ class TestAFollowUpNotMeantForSageIsDeclined:
     turn heard in the follow-up window may be declined with a marker, which
     is never shown, spoken or remembered."""
 
-    def _stream(self, replies, *, followup, amend=False):
+    def _stream(self, replies, *, followup, amend=False, carry_on=False):
         from openjarvis.agents.orchestrator import OrchestratorAgent
         from openjarvis.core.types import ToolResult
         from openjarvis.engine._stubs import StreamChunk
@@ -2602,6 +2602,7 @@ class TestAFollowUpNotMeantForSageIsDeclined:
                 "voice": True,
                 "voice_followup": followup,
                 "voice_amend": amend,
+                "voice_continue": carry_on,
             },
         )
         assert resp.status_code == 200
@@ -2637,6 +2638,12 @@ class TestAFollowUpNotMeantForSageIsDeclined:
         # sent with the question; the model decides what it was.
         _, seen = self._stream(["Yes, Sir."], followup=False, amend=True)
         assert any("Amended question" in (m.content or "") for m in seen[0])
+
+    def test_words_that_change_a_spoken_answer_carry_it_on(self):
+        # 15 October: Sage stopped at a pause; it continues from there
+        # instead of starting the answer over.
+        _, seen = self._stream(["Yes, Sir."], followup=False, carry_on=True)
+        assert any("Carry on from where you stopped" in (m.content or "") for m in seen[0])
 
     def test_a_turn_the_user_opened_is_never_offered_the_choice(self):
         body, seen = self._stream(["Yes, Sir."], followup=False)

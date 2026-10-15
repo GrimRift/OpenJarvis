@@ -5,6 +5,12 @@ import { gainFor } from '../lib/volume';
 import { voiceTrace } from '../lib/voice-trace';
 import { DUCK_HOLD_MS, DUCK_LEVEL } from '../lib/voice-duck';
 import {
+  findPause,
+  playedSeconds,
+  STOP_FADE_S,
+  type ScheduledChunk,
+} from '../lib/interjection';
+import {
   chunkDuration,
   decodePcmF32,
   interpretTtsMessage,
@@ -83,6 +89,13 @@ function createStreamingTtsPlayer() {
   const restoreAtRef = ref(0);
   const restoreTimerRef = ref<number | null>(null);
   const stopAnalyserRef = ref<(() => void) | null>(null);
+  // This reply's voice as scheduled, and how much text went in: what was
+  // heard so far, and where the next pause is (lib/interjection.ts).
+  const chunksRef = ref<ScheduledChunk[]>([]);
+  const pushedCharsRef = ref(0);
+  const completeRef = ref(false);
+  const stopTimerRef = ref<number | null>(null);
+  const stopDoneRef = ref<(() => void) | null>(null);
 
   const teardown = () => {
     outboxRef.current?.cancel();
@@ -106,6 +119,15 @@ function createStreamingTtsPlayer() {
       }
     }
     sourcesRef.current = [];
+    chunksRef.current = [];
+    pushedCharsRef.current = 0;
+    completeRef.current = false;
+    if (stopTimerRef.current !== null) {
+      window.clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
+    const stopped = stopDoneRef.current;
+    stopDoneRef.current = null;
     stopAnalyserRef.current?.();
     stopAnalyserRef.current = null;
     inputRef.current = null;
@@ -124,6 +146,7 @@ function createStreamingTtsPlayer() {
     useAppStore
       .getState()
       .setAudioPlayback(playbackOwnerRef.current, false);
+    stopped?.();
   };
 
   const ensureContext = (): AudioContext => {
@@ -379,6 +402,7 @@ function createStreamingTtsPlayer() {
           }
         } else if (message.kind === 'done') {
           streamComplete = true;
+          completeRef.current = true;
           settlePlaying();
           settleOutcome(started ? 'spoken' : 'failed-before-audio');
         }
@@ -421,6 +445,7 @@ function createStreamingTtsPlayer() {
       startedRef.current = true;
       source.start(startAt);
       scheduledUntilRef.current = startAt + chunkDuration(samples.length, rate);
+      chunksRef.current.push({ startAt, samples, rate });
       sourcesRef.current.push(source);
       activeSources.add(source);
       source.onended = () => {
@@ -446,6 +471,7 @@ function createStreamingTtsPlayer() {
     return {
       push: (delta: string) => {
         const accepted = outbox.push(delta);
+        if (accepted) pushedCharsRef.current += delta.length;
         if (!accepted && outbox.overflowed) failStream();
         return accepted;
       },
@@ -467,6 +493,27 @@ function createStreamingTtsPlayer() {
     return result !== 'failed-before-audio' && result !== 'blocked';
   };
 
+  /** Settings → "Turn down while I talk", as a share of the reply's volume. */
+  const duckLevel = (): number => {
+    const level = useAppStore.getState().settings.bargeDuckLevel;
+    return Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : DUCK_LEVEL;
+  };
+
+  const restore = () => {
+    if (restoreTimerRef.current !== null) {
+      window.clearTimeout(restoreTimerRef.current);
+      restoreTimerRef.current = null;
+    }
+    const volume = volumeRef.current;
+    const ctx = ctxRef.current;
+    // Stopping at a pause owns the volume from then on: it fades to nothing.
+    if (!volume || !ctx || stopTimerRef.current !== null) return;
+    const param = volume.node.gain;
+    param.cancelScheduledValues(ctx.currentTime);
+    param.setValueAtTime(param.value, ctx.currentTime);
+    param.linearRampToValueAtTime(volume.level, ctx.currentTime + 0.3);
+  };
+
   /**
    * Turn the reply down while the user talks over it, and back up once they
    * stop (lib/voice-duck.ts). Called again while they talk, it only moves
@@ -475,32 +522,120 @@ function createStreamingTtsPlayer() {
   const duck = (): boolean => {
     const volume = volumeRef.current;
     const ctx = ctxRef.current;
-    if (!volume || !ctx) return false;
+    if (!volume || !ctx || stopTimerRef.current !== null) return false;
     const wasDown = restoreTimerRef.current !== null;
     restoreAtRef.current = Date.now() + DUCK_HOLD_MS;
     if (!wasDown) {
       const param = volume.node.gain;
       param.cancelScheduledValues(ctx.currentTime);
       param.setValueAtTime(param.value, ctx.currentTime);
-      param.linearRampToValueAtTime(volume.level * DUCK_LEVEL, ctx.currentTime + 0.03);
+      param.linearRampToValueAtTime(volume.level * duckLevel(), ctx.currentTime + 0.03);
       const check = () => {
         const wait = restoreAtRef.current - Date.now();
         if (wait > 0) {
           restoreTimerRef.current = window.setTimeout(check, wait);
           return;
         }
-        restoreTimerRef.current = null;
-        if (volumeRef.current !== volume) return;
-        param.cancelScheduledValues(ctx.currentTime);
-        param.setValueAtTime(param.value, ctx.currentTime);
-        param.linearRampToValueAtTime(volume.level, ctx.currentTime + 0.3);
+        if (volumeRef.current !== volume) {
+          restoreTimerRef.current = null;
+          return;
+        }
+        restore();
       };
       restoreTimerRef.current = window.setTimeout(check, DUCK_HOLD_MS);
     }
     return !wasDown;
   };
 
-  return { begin, speak, stop: teardown, unlock, duck };
+  /**
+   * Keep a dip down while Deepgram is still hearing the user's words. Only
+   * a dip the user's voice already started is held: Sage's own words that
+   * leak past echo cancellation are transcribed too, and must never turn it
+   * down.
+   */
+  const holdDuck = (): boolean => {
+    if (restoreTimerRef.current === null) return false;
+    restoreAtRef.current = Date.now() + DUCK_HOLD_MS;
+    return true;
+  };
+
+  /** The user finished: back up now, not while their words are judged. */
+  const releaseDuck = (): boolean => {
+    if (restoreTimerRef.current === null) return false;
+    restore();
+    return true;
+  };
+
+  /** Seconds of this reply heard so far, of how much was synthesised. */
+  const progress = () => {
+    const ctx = ctxRef.current;
+    const chunks = chunksRef.current;
+    const total = chunks.reduce((sum, chunk) => sum + chunk.samples.length / chunk.rate, 0);
+    return {
+      heard: ctx ? playedSeconds(chunks, ctx.currentTime) : 0,
+      total,
+      complete: completeRef.current,
+      chars: pushedCharsRef.current,
+    };
+  };
+
+  /**
+   * Finish the sentence Sage is on and stop at the pause after it: no more
+   * text or audio is taken, and the voice fades out at the first real pause
+   * in what is already queued (lib/interjection.ts findPause). Resolves with
+   * how much was heard, once it has stopped.
+   */
+  const stopAtPause = (): Promise<{ heard: number; total: number; complete: boolean }> => {
+    const ctx = ctxRef.current;
+    const volume = volumeRef.current;
+    const chunks = chunksRef.current;
+    if (!ctx || !volume || chunks.length === 0 || stopTimerRef.current !== null) {
+      const { heard, total, complete } = progress();
+      teardown();
+      return Promise.resolve({ heard, total, complete });
+    }
+    // Nothing more goes in: the rest of the answer is not wanted.
+    outboxRef.current?.cancel();
+    const now = ctx.currentTime;
+    const pause = findPause(chunks, now);
+    const fadeFrom = Math.max(now, pause ?? now);
+    const end = fadeFrom + STOP_FADE_S;
+    const { total } = progress();
+    const heard = playedSeconds(chunks, fadeFrom);
+    const complete = completeRef.current;
+    if (restoreTimerRef.current !== null) {
+      window.clearTimeout(restoreTimerRef.current);
+      restoreTimerRef.current = null;
+    }
+    const param = volume.node.gain;
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+    if (fadeFrom > now) param.setValueAtTime(param.value, fadeFrom);
+    param.linearRampToValueAtTime(0, end);
+    voiceTrace('speak.stopAtPause', {
+      waitMs: Math.round((end - now) * 1000),
+      pause: pause !== null,
+      heardS: Math.round(heard * 10) / 10,
+    });
+    return new Promise((resolve) => {
+      // Resolved by the teardown, whichever comes first: the fade ending, or
+      // a new reply starting over this one.
+      stopDoneRef.current = () => resolve({ heard, total, complete });
+      stopTimerRef.current = window.setTimeout(teardown, Math.ceil((end - now) * 1000) + 20);
+    });
+  };
+
+  return {
+    begin,
+    speak,
+    stop: teardown,
+    unlock,
+    duck,
+    holdDuck,
+    releaseDuck,
+    progress,
+    stopAtPause,
+  };
 }
 
 let player: ReturnType<typeof createStreamingTtsPlayer> | null = null;

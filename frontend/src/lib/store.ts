@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { DEFAULT_LOCAL_VOICE_PROFILE, isKnownVoiceId } from './voice-profiles';
 import { type BargeMode, BARGE_MODES, DEFAULT_BARGE_MODE } from './barge-in';
+import { DUCK_LEVEL } from './voice-duck';
 
 export type WakeWordVerify = 'local' | 'off';
 // Streaming transcription: Deepgram Flux (cloud), NVIDIA Parakeet (local),
@@ -515,6 +516,9 @@ interface Settings {
   /** "Listen while Sage speaks": the microphone stays on over a spoken
    * reply; "stop" cuts it, other speech is judged (Flux voice mode). */
   bargeInEnabled: boolean;
+  /** How far Sage turns itself down while you talk over it, as a share of
+   * its own volume (lib/voice-duck.ts). */
+  bargeDuckLevel: number;
   /** "Listen while Sage works": the microphone stays on while the answer
    * is prepared; "stop" cancels it, other speech is judged. */
   listenWhileWorking: boolean;
@@ -563,6 +567,7 @@ export function defaultSettings(): Settings {
     voiceRepliesEnabled: true,
     speakTypedReplies: false,
     bargeInEnabled: true,
+    bargeDuckLevel: DUCK_LEVEL,
     listenWhileWorking: true,
     recogniseMyVoice: true,
     bargeInMode: DEFAULT_BARGE_MODE,

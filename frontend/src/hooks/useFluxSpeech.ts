@@ -194,6 +194,9 @@ export type FluxAction =
        * tool-shaped, so it never arrives unless it is safe to use.
        */
       speculativeAnswer?: string;
+      /** The stretch of the session's audio, in seconds, this turn covers. */
+      windowStart?: number;
+      windowEnd?: number;
     } & EndOfTurnDetail;
 
 /** What a final carries besides its text: its words with Deepgram's
@@ -310,12 +313,17 @@ export function interpretFluxMessage(
       }
       const released = data.speculative_answer;
       const speaker = speakerCheck(data.speaker);
+      const windowStart = Number(data.audio_window_start ?? Number.NaN);
+      const windowEnd = Number(data.audio_window_end ?? Number.NaN);
       return {
         kind: 'endTurn',
         turnIndex,
         transcript,
         words: fluxWords(data.words),
         ...(speaker ? { speaker } : {}),
+        ...(Number.isFinite(windowStart) && Number.isFinite(windowEnd)
+          ? { windowStart, windowEnd }
+          : {}),
         ...(typeof released === 'string' && released.trim()
           ? { speculativeAnswer: released }
           : {}),
@@ -435,6 +443,8 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
   // Highest turn already finalised, so a repeated or out-of-order EndOfTurn
   // cannot send the same utterance twice.
   const lastFinalTurnRef = useRef<number | null>(null);
+  // Where the last turn's audio ended, to show what fell between two turns.
+  const lastWindowEndRef = useRef<number | null>(null);
   // See useWakeWord: start() awaits getUserMedia, and `enabled` can flip
   // during that await. Every continuation re-checks this before touching a
   // ref, otherwise a stopped session resurrects an orphaned mic.
@@ -568,7 +578,25 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
                   seconds: action.speaker.seconds,
                 }
               : {}),
+            // Where each turn sits in the audio, and how it starts: a word
+            // said just after a turn ended went missing ("I think I'm okay"
+            // came as "think I'm okay", 15 October). A gap between turns
+            // here is audio Deepgram gave to neither.
+            ...(action.windowStart !== undefined && action.windowEnd !== undefined
+              ? {
+                  window: `${action.windowStart.toFixed(2)}-${action.windowEnd.toFixed(2)}`,
+                  ...(lastWindowEndRef.current !== null
+                    ? { gapS: (action.windowStart - lastWindowEndRef.current).toFixed(2) }
+                    : {}),
+                }
+              : {}),
+            words: action.words?.length ?? 0,
+            first: (action.words ?? [])
+              .slice(0, 3)
+              .map((w) => `${w.word}:${w.confidence.toFixed(2)}`)
+              .join(' '),
           });
+          if (action.windowEnd !== undefined) lastWindowEndRef.current = action.windowEnd;
           lastFinalTurnRef.current = action.turnIndex;
           // Stop transmitting at once: anything after this is idle audio
           // or Sage's own reply.
@@ -597,6 +625,7 @@ export function useFluxSpeech(options: UseFluxSpeechOptions) {
     // across a reconnect it swallowed every turn of the new session until
     // the count caught up -- three swallowed turns, then the user refreshed.
     lastFinalTurnRef.current = null;
+    lastWindowEndRef.current = null;
     setStatus('connecting');
 
     let stream: MediaStream;

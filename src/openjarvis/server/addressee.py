@@ -45,48 +45,89 @@ AMEND_NOTE = (
 )
 
 
-#: What words said while Sage was preparing an answer turned out to be.
-ADDITION_KINDS = ("noise", "add", "new")
+#: What words heard while Sage answered turned out to be (decide_interjection).
+#: noise: let pass. after: the answer stands; a short line follows it.
+#: now: the answer changes; Sage stops at its next pause and carries on from
+#: there. new: a different request, answered instead.
+INTERJECTION_KINDS = ("noise", "after", "now", "new")
 
-ADDITION_PROMPT = (
-    "The user asked a voice assistant a question, and while it was preparing "
-    "the answer the microphone heard more words. Classify those words.\n"
-    "noise: garbled, filler (blah, um), a fragment that means nothing, "
-    "or plainly someone else talking.\n"
-    "add: adds to, corrects or narrows the question.\n"
-    "new: a different request.\n"
-    "Reply with exactly one word: noise, add or new."
+INTERJECTION_PROMPT = (
+    "You are Sage, a voice assistant. While you were answering the user, the "
+    "microphone heard them say more. Decide what to do. Start your reply "
+    "with exactly one of these markers:\n"
+    "[[noise]] -- garbled, filler (um, uh), a fragment that means nothing, or "
+    "plainly someone else talking. Write nothing after it.\n"
+    "[[after]] -- your answer still stands: they react, agree, thank you, or "
+    "tell you something that needs only a brief reply. After the marker "
+    "write that one short spoken line (under 20 words, plain words, no "
+    "markdown); it is said once your current answer ends.\n"
+    "[[now]] -- it changes what you should be saying: a correction, a detail "
+    "that matters to the answer, or a request to say it differently. Write "
+    "nothing after it: you will stop at the end of your sentence and carry on "
+    "from there.\n"
+    "[[new]] -- a different request. Write nothing after it."
 )
 
+#: When the decision cannot be made: the words are sent on, and the model
+#: is told to finish its point if they turn out to be noise (CONTINUE_NOTE).
+INTERJECTION_FALLBACK = "now"
 
-def classify_addition(engine, model: str, question: str, added: str) -> str:
-    """noise, add or new for *added*, said after *question*. When the check
-    cannot run, "add": the words then go to the model with the question,
-    which is told to ignore them if they are noise (AMEND_NOTE)."""
+def parse_interjection(reply: str) -> tuple[str, str]:
+    """The marker's kind and, for "after", the line to say."""
+    text = (reply or "").strip()
+    for kind in INTERJECTION_KINDS:
+        marker = f"[[{kind}]]"
+        if text.lower().startswith(marker):
+            line = text[len(marker) :].strip() if kind == "after" else ""
+            if kind == "after" and not line:
+                return "noise", ""
+            return kind, line
+    return INTERJECTION_FALLBACK, ""
+
+
+def decide_interjection(
+    engine, model: str, question: str, said: str, added: str
+) -> tuple[str, str]:
+    """noise, after (with its line), now or new for *added*, heard while Sage
+    answered *question* and had said *said* so far."""
     from openjarvis.core.types import Message, Role
 
+    heard = said.strip() or "(nothing yet)"
     try:
         result = engine.generate(
             [
-                Message(role=Role.SYSTEM, content=ADDITION_PROMPT),
+                Message(role=Role.SYSTEM, content=INTERJECTION_PROMPT),
                 Message(
                     role=Role.USER,
-                    content=f"Question: {question}\nThen heard: {added}",
+                    content=(
+                        f"Their question: {question}\n"
+                        f"What you have said so far: {heard}\n"
+                        f"Then they said: {added}"
+                    ),
                 ),
             ],
             model=model,
             temperature=0.0,
-            # A reasoning model spends tokens before its one word; a small
+            # A reasoning model spends tokens before its marker; a small
             # budget comes back empty (see memory: reasoning headroom).
             max_tokens=600,
         )
-    except Exception:  # noqa: BLE001 -- the check is advisory
-        return "add"
-    reply = str((result or {}).get("content") or "").strip().lower()
-    for kind in ADDITION_KINDS:
-        if reply.startswith(kind):
-            return kind
-    return "add"
+    except Exception:  # noqa: BLE001 -- the decision is advisory
+        return INTERJECTION_FALLBACK, ""
+    return parse_interjection(str((result or {}).get("content") or ""))
+
+
+#: The turn after a "now": Sage stopped at a pause and carries on.
+CONTINUE_NOTE = (
+    "Interjection: your previous message is what you had said out loud when "
+    "the user spoke over you, and you stopped there -- they did not hear "
+    "anything you had written after it. Their new message came while you "
+    "were talking. Carry on from where you stopped, taking what they said "
+    "into account: do not repeat or restart what they already heard, and do "
+    "not apologise for stopping. If their words turn out to be noise or not "
+    "meant for you, just finish the point you were making. Do not mention "
+    "this note."
+)
 
 
 class IgnoreWatch:
@@ -124,10 +165,11 @@ class IgnoreWatch:
 
 
 __all__ = [
-    "ADDITION_KINDS",
     "AMEND_NOTE",
-    "classify_addition",
     "AMEND_SEPARATOR",
+    "CONTINUE_NOTE",
+    "decide_interjection",
+    "INTERJECTION_KINDS",
     "FOLLOWUP_NOTE",
     "IGNORE_MARKER",
     "IgnoreWatch",

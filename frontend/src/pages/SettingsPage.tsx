@@ -1552,8 +1552,20 @@ export function SettingsPage() {
                 <SettingRow label="Listen while Sage works" description="Keep the microphone on while Sage prepares an answer. Say 'stop' to cancel it (and undo what it just opened or set); add to your question or ask something new and it starts over with that; noise and people talking nearby are ignored. Off: the microphone closes a few seconds after your question.">
                   <Switch on={settings.listenWhileWorking} onClick={() => { updateSettings({ listenWhileWorking: !settings.listenWhileWorking }); showSaved(); }} />
                 </SettingRow>
-                <SettingRow label="Listen while Sage speaks" description="Keep the microphone on while Sage talks. 'Stop', 'wait' or 'hold on' cuts at once; anything else is judged while Sage keeps talking: an addition or a new question stops it and is answered, noise and background talk are ignored. Sage's own voice is never taken for you.">
+                <SettingRow label="Listen while Sage speaks" description="Keep the microphone on while Sage talks. 'Stop', 'wait' or 'hold on' cuts at once; anything else is judged while Sage keeps talking: something that changes the answer makes Sage finish its sentence and carry on with it, a remark gets a short reply once the answer ends, a new question stops it and is answered, and noise and background talk are ignored. Sage's own voice is never taken for you.">
                   <Switch on={settings.bargeInEnabled} onClick={() => { updateSettings({ bargeInEnabled: !settings.bargeInEnabled }); showSaved(); }} />
+                </SettingRow>
+                <SettingRow label="Turn down while I talk" description={`${Math.round(settings.bargeDuckLevel * 100)}% of its volume — how quiet Sage goes while you speak over it, so your words reach the microphone whole. It stays down while your words are still coming in and comes back up when you finish.`}>
+                  <input
+                    type="range"
+                    min="0"
+                    max="60"
+                    step="5"
+                    value={Math.round(settings.bargeDuckLevel * 100)}
+                    disabled={!settings.bargeInEnabled}
+                    onChange={(e) => { updateSettings({ bargeDuckLevel: parseInt(e.target.value) / 100 }); showSaved(); }}
+                    className="w-32 cursor-pointer accent-[var(--color-accent)]"
+                  />
                 </SettingRow>
                 <SettingRow label="Recognise my voice" description="While Sage speaks, check each thing heard against your voice (learnt from your 'Hey Sage's) and Sage's own, so Sage's voice coming back through the speakers is not taken for you, and what you say over it is not thrown away. Sage's words mixed into your sentence are cut out either way. Needs the local voice running; short words like 'stop' are judged by the words alone.">
                   <Switch on={settings.recogniseMyVoice} onClick={() => { updateSettings({ recogniseMyVoice: !settings.recogniseMyVoice }); showSaved(); }} />

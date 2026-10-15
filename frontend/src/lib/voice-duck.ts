@@ -43,10 +43,13 @@ export const DUCK_MIN_WINDOWS = 2;
  */
 export const DUCK_SETTLE_MS = 1500;
 
-/** How far the reply drops, of its own volume (the user's choice). */
-export const DUCK_LEVEL = 0.3;
+/** How far the reply drops, of its own volume: the default of Settings ->
+ * "Turn down while I talk" (the user's choice; 30 % until 15 October, when
+ * a question said over the reply still came out garbled). */
+export const DUCK_LEVEL = 0.15;
 
-/** How long it stays down after the user's voice was last heard. */
+/** How long it stays down after the user's voice, or a word Deepgram heard
+ * from them, was last seen; it comes back at once when their turn ends. */
 export const DUCK_HOLD_MS = 1500;
 
 /**

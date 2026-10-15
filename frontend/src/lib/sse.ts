@@ -31,6 +31,7 @@ export interface ChatRequest {
   voice_followup?: boolean;
   /** Words added while Sage prepared the answer ride with the question. */
   voice_amend?: boolean;
+  voice_continue?: boolean;
   /** The user message's id: facts learned from it carry it, so a rewind
    *  past it can forget them (server/memory_routes.py forget-turns). */
   turn_id?: string;

@@ -532,25 +532,29 @@ def _page_reads_spent() -> bool:
 
 @router.post("/v1/voice/addition")
 async def voice_addition(request: Request):
-    """What words said while Sage prepared an answer are: noise, an addition
-    to the question, or a new request. Checked while the answer carries on,
-    so "blah blah blah" no longer throws it away and starts over (24
-    September)."""
-    from openjarvis.server.addressee import classify_addition
+    """What words heard while Sage answered are, decided while the answer
+    carries on (addressee.decide_interjection): noise, a short line to say
+    after it, a change that stops it at the next pause, or a new request.
+    "blah blah blah" no longer throws an answer away (24 September), and an
+    addition no longer restarts one the user had half heard (15 October)."""
+    from openjarvis.server.addressee import decide_interjection
 
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Expected a JSON object")
     question = str(body.get("question") or "").strip()
+    said = str(body.get("said") or "").strip()
     added = str(body.get("added") or "").strip()
     model = str(body.get("model") or "").strip()
     if not added:
-        return {"kind": "noise"}
+        return {"kind": "noise", "line": ""}
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
     model = model or getattr(agent, "_model", "") or ""
-    kind = await asyncio.to_thread(classify_addition, engine, model, question, added)
-    return {"kind": kind}
+    kind, line = await asyncio.to_thread(
+        decide_interjection, engine, model, question, said, added
+    )
+    return {"kind": kind, "line": line}
 
 
 @router.post("/v1/voice/media")
@@ -700,6 +704,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     from openjarvis.tools.storage.context import add_turn_context
 
                     enriched = add_turn_context(enriched, AMEND_NOTE)
+                if request_body.voice_continue:
+                    from openjarvis.server.addressee import CONTINUE_NOTE
+                    from openjarvis.tools.storage.context import add_turn_context
+
+                    enriched = add_turn_context(enriched, CONTINUE_NOTE)
                 # Rebuild after identity/context merging so downstream engine
                 # adapters always receive exactly one system message.
                 from openjarvis.server.models import ChatMessage

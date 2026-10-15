@@ -87,6 +87,12 @@ import {
 import { shouldFlushStreamRender } from '../../lib/stream-render-policy';
 import { getVoiceProfile } from '../../lib/voice-profiles';
 import { useStreamingTts } from '../../hooks/useStreamingTts';
+import {
+  heardText,
+  INTERJECTION_FALLBACK,
+  readDecision,
+  type InterjectionDecision,
+} from '../../lib/interjection';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useWakeWord } from '../../hooks/useWakeWord';
@@ -235,32 +241,35 @@ function useResearchCorpusSync(enabled: boolean): {
  * lives in this component.
  */
 /**
- * What words said while Sage prepared an answer are, asked of the server
- * while the answer carries on. Anything but a clear "noise" sends them on:
- * the model is told to ignore noise too, so a failed check costs a restart,
- * never the user's words.
+ * What words said over Sage's answer are, asked of the server while the
+ * answer carries on (lib/interjection.ts). Anything but a clear decision
+ * sends them on: the model is told to finish its point if they were noise,
+ * so a failed check costs a pause, never the user's words.
  */
-async function checkAddition(
+async function decideInterjection(
   question: string,
+  said: string,
   added: string,
   model: string,
-): Promise<'noise' | 'add' | 'new'> {
+): Promise<InterjectionDecision> {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
+    const timer = setTimeout(() => controller.abort(), 6000);
     const res = await apiFetch('/v1/voice/addition', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, added, model }),
+      body: JSON.stringify({ question, said, added, model }),
       signal: controller.signal,
     });
     clearTimeout(timer);
-    const data = (await res.json()) as { kind?: string };
-    return data.kind === 'noise' || data.kind === 'new' ? data.kind : 'add';
+    return readDecision(await res.json());
   } catch {
-    return 'add';
+    return INTERJECTION_FALLBACK;
   }
 }
+
+/** Sage has said this much of the answer aloud: what the user heard counts. */
+const SAGE_HAS_SPOKEN_S = 0.3;
 
 /** A turn ending this soon after Sage's reply finished may be Sage's tail. */
 const HANDOFF_ECHO_MS = 5000;
@@ -376,6 +385,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     stop: stopSpeaking,
     unlock: unlockSpeech,
     duck: duckSpeech,
+    holdDuck: holdSpeechDuck,
+    releaseDuck: releaseSpeechDuck,
+    progress: speechProgress,
+    stopAtPause,
   } = useStreamingTts();
   // Guards against two sends for one turn if Deepgram repeats a final event.
   const lastFluxTurnRef = useRef<number | null>(null);
@@ -397,6 +410,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     question: '',
   });
   const amendNextRef = useRef(false);
+  // The next message carries on an answer Sage stopped at a pause
+  // (server addressee.CONTINUE_NOTE).
+  const continueNextRef = useRef(false);
+  // "after": the user's words and Sage's short line, said once the answer
+  // it is giving has ended (lib/interjection.ts).
+  const pendingAfterRef = useRef<{ added: string; line: string } | null>(null);
   const continuationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The executing end-of-turn handler holds a stale sendMessage after the
   // abort re-renders; the ref always points at the current one.
@@ -769,6 +788,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     const wasFollowUp = wasVoice && voiceFollowUpRef.current;
     const wasAmend = wasVoice && amendNextRef.current;
     amendNextRef.current = false;
+    const wasContinue = wasVoice && continueNextRef.current;
+    continueNextRef.current = false;
     voiceFollowUpRef.current = false;
     let declined = false;
 
@@ -1260,6 +1281,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           voice: wasVoice,
           voice_followup: wasFollowUp || undefined,
           voice_amend: wasAmend || undefined,
+          voice_continue: wasContinue || undefined,
           turn_id: userMsg.id,
           diagrams: diagramMode(diagramsEnabled, diagramsAutomatic),
         },
@@ -1907,6 +1929,93 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // Deepgram can repeat a final event; one confirmed turn sends once.
       if (lastFluxTurnRef.current === turnIndex) return;
       lastFluxTurnRef.current = turnIndex;
+      // The user has finished: Sage comes back up now, not while their
+      // words are being judged (15 October, the user's choice).
+      if (releaseSpeechDuck()) voiceTrace('barge.duckRelease', { turn: turnIndex });
+
+      // What Sage has said of the answer so far, as shown.
+      const answerSoFar = (): string => {
+        const store = useAppStore.getState();
+        if (store.streamState.isStreaming) return store.streamState.content || '';
+        const last = store.messages[store.messages.length - 1];
+        return last?.role === 'assistant' ? last.content.replace(INTERRUPTED_MARK, '') : '';
+      };
+
+      // Words said over the answer that need more than letting pass
+      // (lib/interjection.ts). Returns false when nothing of the answer was
+      // heard after all, so the caller asks the question again instead.
+      const actOnInterjection = async (
+        decision: InterjectionDecision,
+        added: string,
+        where: 'gen' | 'speak',
+        voice?: string,
+      ): Promise<boolean> => {
+        voiceTrace(`${where}.decided`, {
+          kind: decision.kind,
+          chars: added.length,
+          voice: voice ?? 'none',
+        });
+        if (decision.kind === 'after') {
+          // The answer stands: it carries on, and the line follows it.
+          pendingAfterRef.current = { added, line: decision.line };
+          useAppStore.getState().addLogEntry({
+            timestamp: Date.now(), level: 'info', category: 'voice',
+            message: `Said after the answer: "${added.slice(0, 80)}"`,
+          });
+          flux.beginTurn();
+          deliverAfterLineRef.current();
+          return true;
+        }
+        bargeListeningRef.current = false;
+        generatingListenRef.current = { active: false, question: '' };
+        pendingAfterRef.current = null;
+        if (decision.kind === 'new') {
+          stopSpeaking();
+          const store = useAppStore.getState();
+          if (store.streamState.isStreaming) {
+            interruptedRef.current = true;
+            stopStreaming();
+          }
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          // The half-spoken answer stays: the user has heard it.
+          const now = useAppStore.getState();
+          const last = now.messages[now.messages.length - 1];
+          if (now.activeId && last?.role === 'assistant' && !last.content.endsWith(INTERRUPTED_MARK)) {
+            updateLastAssistant(now.activeId, last.content + INTERRUPTED_MARK);
+          }
+          voiceOriginatedRef.current = true;
+          void sendMessageRef.current(added).catch(() => {});
+          openContinuationWindow(added);
+          return true;
+        }
+        // "now": finish the sentence, stop at the pause after it, and carry
+        // on from there with what the user added.
+        const stopped = stopAtPause();
+        if (useAppStore.getState().streamState.isStreaming) {
+          interruptedRef.current = true;
+          stopStreaming();
+        }
+        const { heard, total, complete } = await stopped;
+        // The stopped stream writes its last text first.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const now = useAppStore.getState();
+        const last = now.messages[now.messages.length - 1];
+        const shown = last?.role === 'assistant' ? last.content.replace(INTERRUPTED_MARK, '') : '';
+        const kept = heardText(shown, heard, total, complete);
+        voiceTrace(`${where}.carryOn`, {
+          heardS: Math.round(heard * 10) / 10,
+          totalS: Math.round(total * 10) / 10,
+          kept: kept.length,
+          of: shown.length,
+        });
+        if (!kept) return false;
+        if (now.activeId) updateLastAssistant(now.activeId, kept);
+        voiceOriginatedRef.current = true;
+        continueNextRef.current = true;
+        void sendMessageRef.current(added).catch(() => {});
+        openContinuationWindow(added);
+        return true;
+      };
 
       // This turn only asked for the diagram to go away. It has gone; the
       // words are not a message, and Sage keeps talking.
@@ -2014,6 +2123,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           holdMedia('duck');
           voiceTrace('gen.stop', { chars: spoken.length });
           stoppedByVoiceAtRef.current = Date.now();
+          pendingAfterRef.current = null;
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice',
             message: `You stopped Sage: "${spoken}"`,
@@ -2036,10 +2146,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           flux.beginTurn();
           return;
         }
-        // Checked while the answer carries on: noise is let pass, and only an
-        // addition or a new question starts it over (server/addressee.py).
-        const kind = await checkAddition(question, spoken, selectedModel);
-        if (kind === 'noise') {
+        // Decided while the answer carries on (server/addressee.py): noise is
+        // let pass. Once Sage has started saying the answer, what the user
+        // heard is kept (actOnInterjection); before that, the words go with
+        // the question and it is answered once, as one.
+        const spokeFirst = speechProgress().heard > SAGE_HAS_SPOKEN_S;
+        const decision = await decideInterjection(
+          question,
+          spokeFirst ? answerSoFar() : '',
+          spoken,
+          selectedModel,
+        );
+        if (decision.kind === 'noise') {
           voiceTrace('gen.noise', { chars: spoken.length });
           useAppStore.getState().addLogEntry({
             timestamp: Date.now(), level: 'info', category: 'voice',
@@ -2048,10 +2166,16 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           flux.beginTurn();
           return;
         }
+        if (
+          speechProgress().heard > SAGE_HAS_SPOKEN_S &&
+          (await actOnInterjection(decision, spoken, 'gen'))
+        ) {
+          return;
+        }
         generatingListenRef.current = { active: false, question: '' };
         stopSpeaking();
         holdMedia('duck');
-        voiceTrace('gen.amend', { chars: spoken.length, kind });
+        voiceTrace('gen.amend', { chars: spoken.length, kind: decision.kind });
         stopStreaming();
         setFluxTurnActive(false);
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -2102,6 +2226,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         if (isStopCommand(spoken) && !isStopEcho(spoken, tail)) {
           voiceTrace('barge.stopAtEnd', { chars: spoken.length });
           stoppedByVoiceAtRef.current = Date.now();
+          pendingAfterRef.current = null;
           holdMedia('duck');
           bargeVerdictRef.current = null;
           bargeListeningRef.current = false;
@@ -2149,8 +2274,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           const messages = useAppStore.getState().messages;
           const question =
             [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
-          const kind = await checkAddition(question, spoken, selectedModel);
-          if (kind === 'noise') {
+          const decision = await decideInterjection(question, answerSoFar(), spoken, selectedModel);
+          if (decision.kind === 'noise') {
             voiceTrace('speak.noise', { chars: spoken.length });
             useAppStore.getState().addLogEntry({
               timestamp: Date.now(), level: 'info', category: 'voice',
@@ -2159,27 +2284,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             flux.beginTurn();
             return;
           }
-          voiceTrace('speak.decided', { kind, chars: spoken.length, voice: voice ?? 'none' });
-          bargeListeningRef.current = false;
-          stopSpeaking();
-          const store = useAppStore.getState();
-          if (store.streamState.isStreaming) {
-            interruptedRef.current = true;
-            stopStreaming();
+          if (!(await actOnInterjection(decision, spoken, 'speak', voice))) {
+            // Nothing of the answer was heard: it is asked again, whole.
+            await actOnInterjection({ kind: 'new', line: '' }, spoken, 'speak', voice);
           }
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          // The half-spoken answer stays, even for an addition: the user has
-          // heard it, and "explain that longer" means it. Withdrawing it and
-          // re-asking the merged question got a different fact altogether
-          // (25 September).
-          const now = useAppStore.getState();
-          const last = now.messages[now.messages.length - 1];
-          if (now.activeId && last?.role === 'assistant' && !last.content.endsWith(INTERRUPTED_MARK)) {
-            updateLastAssistant(now.activeId, last.content + INTERRUPTED_MARK);
-          }
-          voiceOriginatedRef.current = true;
-          void sendMessageRef.current(spoken).catch(() => {});
-          openContinuationWindow(spoken);
           return;
         }
         voiceTrace('barge.echoDropped', {
@@ -2282,6 +2390,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       if (wasBargeIn && isStopCommand(spoken)) {
         voiceTrace('barge.stopOnly', { chars: spoken.length });
         stoppedByVoiceAtRef.current = Date.now();
+        pendingAfterRef.current = null;
         setFluxTurnActive(false);
         return;
       }
@@ -2525,6 +2634,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // A partial for a turn already finalised is stale; it belongs to the
       // normal path that handled it.
       if (lastFluxTurnRef.current !== null && turnIndex <= lastFluxTurnRef.current) return;
+      // Deepgram is still hearing the user: Sage stays turned down until
+      // they finish (lib/voice-duck.ts), not a fixed 1.5 s.
+      if (transcript.trim()) holdSpeechDuck();
       const { settings, audioPlaying: sageSpeaking } = useAppStore.getState();
       if (
         !settings.bargeInEnabled ||
@@ -2547,6 +2659,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // they are saying arrives through the normal path.
       bargeTriggeredRef.current = true;
       interruptedRef.current = true;
+      pendingAfterRef.current = null;
       voiceTrace('barge.interrupt', {
         chars: transcript.length,
         reason: verdict.reason,
@@ -3051,6 +3164,28 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       toast.error(`Wake word: ${wakeWordError}`, { duration: 8000 });
     }
   }, [wakeWordError]);
+
+  // "after" (lib/interjection.ts): the user's words and Sage's short line go
+  // into the chat and are said once the answer being given is over. Checked
+  // when the decision arrives and whenever the stream or the voice ends.
+  const deliverAfterLineRef = useRef<() => void>(() => {});
+  deliverAfterLineRef.current = () => {
+    const pending = pendingAfterRef.current;
+    if (!pending) return;
+    const { streamState: stream, audioPlaying: playing } = useAppStore.getState();
+    if (stream.isStreaming || playing) return;
+    pendingAfterRef.current = null;
+    voiceTrace('speak.afterLine', { chars: pending.line.length });
+    voiceOriginatedRef.current = true;
+    void releaseSpeculativeAnswer(pending.added, pending.line).then((done) => {
+      if (done) return;
+      // Something else is answering now; the line would land out of place.
+      voiceOriginatedRef.current = false;
+    });
+  };
+  useEffect(() => {
+    deliverAfterLineRef.current();
+  }, [audioPlaying, streamState.isStreaming]);
 
   // Re-arms listening once a voice-initiated reply finishes actually being
   // spoken (not just when the text/stream finishes) — matches the real
