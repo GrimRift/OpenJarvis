@@ -15,6 +15,7 @@ from openjarvis.speech.wake_word_verify import (
     AudioRing,
     Verdict,
     WakeWordVerifier,
+    from_onset,
     heard_only_lead,
     heard_wake_phrase,
     make_verifier,
@@ -518,3 +519,85 @@ def test_only_the_phrase_s_first_word_was_heard(text):
 def test_anything_more_or_else_is_not_only_the_first_word(text):
     # "Thank you." is what the recogniser writes for noise: no extra look.
     assert not heard_only_lead(text)
+
+
+class _Sequence(_Backend):
+    """Answers each call with the next transcript, recording clip lengths."""
+
+    def __init__(self, *texts, muffled=()):
+        super().__init__()
+        self.texts, self.lengths = list(texts), []
+        self.muffled = list(muffled)
+
+    def transcribe(self, audio, **kwargs):
+        self.lengths.append(len(audio))
+        self.text = self.texts.pop(0) if self.texts else ""
+        doubt = self.muffled.pop(0) if self.muffled else None
+        self.no_speech = 0.9 if doubt else (0.01 if doubt is False else None)
+        return super().transcribe(audio, **kwargs)
+
+
+def _hiss_then_voice(voice: float = 0.05) -> bytes:
+    """07:59's shape: 0.6 s of the PD100X's floor, then the phrase."""
+    return _voice(0.006, 0.6) + _voice(voice, 1.0)
+
+
+class TestReadFromOnset:
+    """15 October 07:59: a clear "Hey Sage" read as "That's an easy..." -- the
+    room's hiss ahead of it, brought up with the clip, became words -- and
+    the lead rule dropped it. From where the sound starts it reads "Peace
+    Sage."."""
+
+    def test_onset_skips_the_floor_but_keeps_the_h(self):
+        pcm = _hiss_then_voice()
+        clip = from_onset(pcm)
+        # Starts 0.4 s in: two 100 ms windows before the voice at 0.6 s.
+        assert len(pcm) - len(clip) == int(0.4 * 16000) * 2
+        assert from_onset(bytes(32000)) == bytes(32000)
+
+    def test_a_phrase_stopped_by_the_lead_is_kept(self):
+        backend = _Sequence("That's an easy...", "Peace Sage.")
+        verdict = asyncio.run(WakeWordVerifier(backend).verify(_hiss_then_voice()))
+        assert verdict.confirmed and verdict.heard == "Peace Sage."
+        assert verdict.note == ""  # verified, so the greeting is unchanged
+        assert len(backend.lengths) == 2
+        assert backend.lengths[1] < backend.lengths[0]
+
+    def test_it_must_end_on_the_name(self):
+        # A labelled negative: "Let's move. Peace in." -> "Peace in.".
+        backend = _Sequence("Let's move. Peace in.", "Peace in.")
+        verdict = asyncio.run(WakeWordVerifier(backend).verify(_hiss_then_voice()))
+        assert not verdict.confirmed and verdict.heard == "Let's move. Peace in."
+
+    def test_muffled_keeps_its_own_floor(self):
+        # Muffled and under QUIET_MUFFLED_RMS: as dropped as a first read.
+        backend = _Sequence("That's an easy...", "Hey Sage.", muffled=(False, True))
+        quiet = asyncio.run(WakeWordVerifier(backend).verify(_hiss_then_voice(0.04)))
+        assert not quiet.confirmed
+        backend = _Sequence("That's an easy...", "Hey Sage.", muffled=(False, True))
+        loud = asyncio.run(WakeWordVerifier(backend).verify(_hiss_then_voice(0.2)))
+        assert loud.confirmed and loud.note == "muffled"
+
+    def test_a_passing_phrase_is_read_once(self):
+        # The greeting waits on no second run when the first one passes.
+        backend = _Sequence("Hey Sage.", "never asked")
+        verdict = asyncio.run(WakeWordVerifier(backend).verify(_hiss_then_voice()))
+        assert verdict.confirmed and len(backend.lengths) == 1
+
+    @pytest.mark.parametrize("heard", ["It's going to rain.", "Thank you.", ""])
+    def test_other_rejections_are_read_once(self, heard):
+        backend = _Sequence(heard, "Hey Sage.")
+        verdict = asyncio.run(WakeWordVerifier(backend).verify(_hiss_then_voice()))
+        assert not verdict.confirmed and len(backend.lengths) == 1
+
+    def test_not_while_media_plays(self):
+        backend = _Sequence("That's an easy...", "Peace Sage.")
+        verdict = asyncio.run(
+            WakeWordVerifier(backend).verify(_hiss_then_voice(), strict=True)
+        )
+        assert not verdict.confirmed and len(backend.lengths) == 1
+
+    def test_not_when_the_sound_starts_the_clip(self):
+        backend = _Sequence("That's an easy...", "Peace Sage.")
+        verdict = asyncio.run(WakeWordVerifier(backend).verify(_voice(0.05, 1.6)))
+        assert not verdict.confirmed and len(backend.lengths) == 1

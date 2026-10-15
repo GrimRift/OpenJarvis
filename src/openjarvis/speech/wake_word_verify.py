@@ -266,6 +266,69 @@ def heard_wake_phrase(
     return True
 
 
+#: A clip only the lead rule stopped is read again from where its sound
+#: rises out of the room. The PD100X's hiss ahead of the phrase, brought up
+#: with the clip, gets written as words: 15 October 07:59, a clear "Hey
+#: Sage" (detector 0.88) read as "That's an easy..." -- its first 0.6 s was
+#: the room floor (0.005-0.009, as in every clip) -- and from the onset as
+#: "Peace Sage.". On the 540 labelled clips with the live model: both 07:59
+#: checks recovered, no negative let through, no positive changed (only
+#: rejections are re-read). A fixed last second recovered them too, but what
+#: it heard swung with where the cut fell ("Hey Sage." muffled, "He's
+#: Sage.", "Peace Sage.").
+#: Onset: the first 100 ms louder than this many times the clip's floor (its
+#: quietest fifth), less ``ONSET_LEAD_WINDOWS`` of 100 ms for the "h".
+ONSET_OVER_FLOOR = 2.5
+ONSET_LEAD_WINDOWS = 2
+
+
+def from_onset(pcm: bytes, window: int = SAMPLE_RATE // 10) -> bytes:
+    """*pcm* from just before its sound rises out of the floor, or as it is."""
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) - len(pcm) % 2])
+    levels = []
+    for start in range(0, len(samples) - window + 1, window):
+        chunk = samples[start : start + window]
+        levels.append(math.sqrt(sum(v * v for v in chunk) / len(chunk)))
+    live = sorted(level for level in levels if level > 0)
+    if not live:
+        return pcm
+    floor = live[len(live) // 5]
+    first = next(
+        (i for i, level in enumerate(levels) if level > ONSET_OVER_FLOOR * floor), 0
+    )
+    return pcm[max(0, first - ONSET_LEAD_WINDOWS) * window * 2 :]
+
+
+def stopped_only_by_lead(text: str) -> bool:
+    """Whether the sound rule matched *text* but too much came before it.
+
+    The lead rule is right for whole sentences -- over a month of trace it
+    stopped 36 firings, nearly all a video or the room -- so this only says
+    the end of the clip is worth a second look, never that it passes.
+    """
+    if heard_wake_phrase(text):
+        return False
+    letters = re.sub(r"[^a-z]", "", text.lower())[-_PHONETIC_LETTERS:]
+    match = _PHONETIC_TAIL.search(letters)
+    if not match:
+        return False
+    if re.search(r"[scz][aeiy]+(?:you)?$", match.group(0)):
+        return bool(_BARE_END.search(letters))
+    return True
+
+
+def ends_in_name(text: str, *, muffled: bool = False) -> bool:
+    """The re-read clip passes only when the name ends it: "Peace Sage."
+    does, "Peace in." (a labelled negative) does not."""
+    words = [w.rstrip("'s") if w.endswith("'s") else w for w in _tokens(text)]
+    return (
+        bool(words)
+        and words[-1] in _SAGE
+        and heard_wake_phrase(text, muffled=muffled)
+    )
+
+
 #: Peak the clip is brought to before transcription. Whisper's VAD hears
 #: nothing in a quiet recording -- two of the recorded sessions, at peaks
 #: of 223 and 2,549 against ~22,000 for speech at the desk, transcribed as
@@ -657,6 +720,13 @@ class WakeWordVerifier:
             strict,
             wait_ms,
         )
+        if (
+            not verdict.confirmed
+            and not verdict.note
+            and not strict
+            and stopped_only_by_lead(heard)
+        ):
+            verdict = await self._recheck_from_onset(pcm, verdict, started)
         kept = keep_clip(pcm, verdict)
         if verdict.confirmed:
             # The checks before this one ran while the phrase was still being
@@ -669,6 +739,55 @@ class WakeWordVerifier:
         elif kept is not None:
             self._firing_clips.append(kept)
         return verdict
+
+
+    async def _recheck_from_onset(
+        self, pcm: bytes, verdict: Verdict, started: float
+    ) -> Verdict:
+        """Read a rejected clip again from its onset (see ``from_onset``),
+        under the same loudness and muffled rules, and keep it only when the
+        name ends what it heard.
+
+        Only ever on the way to a rejection, so a "Hey Sage" that passes as
+        it is reaches the greeting no later than before; this costs one more
+        ~110 ms run, and only on a firing that would otherwise be dropped.
+        """
+        clip = from_onset(pcm)
+        if len(clip) == len(pcm):
+            return verdict
+        with _verifier_state_lock:
+            _verifier_state["running"] += 1
+        try:
+            heard, muffled, _wait_ms, _run_ms = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    _VERIFY_POOL, self._transcribe_timed, clip, time.perf_counter()
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 -- the rejection stands
+            logger.debug("Wake-word onset check failed: %s", exc)
+            return verdict
+        finally:
+            with _verifier_state_lock:
+                _verifier_state["running"] -= 1
+                _verifier_state["last_used"] = time.monotonic()
+        ms = int((time.perf_counter() - started) * 1000)
+        floor = QUIET_MUFFLED_RMS if muffled else QUIET_CLEAR_RMS
+        if loudest_rms(clip) < floor or not ends_in_name(heard, muffled=muffled):
+            return replace(verdict, ms=ms)
+        logger.info(
+            "Wake word kept from its onset (%.1f s in): %r, then %r",
+            (len(pcm) - len(clip)) / 2 / SAMPLE_RATE,
+            verdict.heard,
+            heard,
+        )
+        return replace(
+            verdict,
+            confirmed=True,
+            heard=heard,
+            ms=ms,
+            note="muffled" if muffled else "",
+        )
 
 
 #: Where the last few judged clips go when OPENJARVIS_WAKE_WORD_KEEP_CLIPS
