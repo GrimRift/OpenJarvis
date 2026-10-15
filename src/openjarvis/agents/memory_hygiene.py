@@ -8,6 +8,7 @@ hour, and a boot-time catch-up because Sage is rarely on at 23:00.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Optional
 
@@ -145,9 +146,26 @@ def catch_up_hygiene(system: Any) -> bool:
         return False
 
 
+def start_catch_up_hygiene(system: Any) -> threading.Thread:
+    """The boot catch-up on its own thread.
+
+    It is a whole-memory model pass (about 40 s on 15 October), and run
+    inline in the moments startup hook it held the first greeting back by
+    that long: Sage said "Welcome back" a minute and a half after it was
+    opened. Nothing spoken at boot needs it; the greeting needs only the
+    episode, which the hook still writes first.
+    """
+    thread = threading.Thread(
+        target=catch_up_hygiene, args=(system,), name="hygiene-catch-up", daemon=True
+    )
+    thread.start()
+    return thread
+
+
 __all__ = [
     "HYGIENE_CRON_PROMPT",
     "MemoryHygieneAgent",
     "catch_up_hygiene",
     "register_hygiene_cron",
+    "start_catch_up_hygiene",
 ]

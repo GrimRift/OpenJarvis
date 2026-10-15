@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 from openjarvis.memory.hygiene import apply_plan, load_runs, parse_plan, run_hygiene
 from openjarvis.memory.store import LocalFactStore
@@ -105,3 +106,36 @@ class TestRunHygiene:
 
         run = run_hygiene(store, _Broken(), "gpt-5.6-luna", config_dir=tmp_path)
         assert run.error == "cloud down" and run.facts_after == 6
+
+
+class TestBootCatchUp:
+    def test_the_catch_up_does_not_hold_the_caller(self, monkeypatch) -> None:
+        # Run inline in the moments startup hook, it held the first greeting
+        # back by the whole model pass (15 October: about 40 s).
+        from types import SimpleNamespace
+
+        import openjarvis.agents.memory_hygiene as agent_module
+        import openjarvis.memory.hygiene as hygiene_module
+
+        monkeypatch.setattr(
+            agent_module,
+            "load_memory_settings",
+            lambda: SimpleNamespace(hygiene_enabled=True),
+        )
+        monkeypatch.setattr(hygiene_module, "last_run_at", lambda: None)
+        release = threading.Event()
+        asked = threading.Event()
+
+        class _System:
+            def ask(self, prompt, **kwargs):
+                asked.set()
+                release.wait(5)
+
+        thread = agent_module.start_catch_up_hygiene(_System())
+        try:
+            assert asked.wait(5)
+            assert thread.is_alive()
+        finally:
+            release.set()
+            thread.join(5)
+        assert not thread.is_alive()

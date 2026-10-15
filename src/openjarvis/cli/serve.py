@@ -1042,13 +1042,15 @@ def serve(
             _catch_up = None
             if scheduler_system is not None:
                 from openjarvis.agents.episode_writer import write_missing_episodes
-                from openjarvis.agents.memory_hygiene import catch_up_hygiene
+                from openjarvis.agents.memory_hygiene import start_catch_up_hygiene
 
                 def _catch_up(system=scheduler_system):
                     # Episodes first: the day's diary is written from the
                     # facts as they were; the clean-up then sees today's.
+                    # The clean-up runs beside the first tick, not before it,
+                    # so it no longer delays the greeting.
                     write_missing_episodes(system)
-                    catch_up_hygiene(system)
+                    start_catch_up_hygiene(system)
 
             moment_engine = MomentEngine(presence_monitor, startup_hook=_catch_up)
             moment_engine.start()
