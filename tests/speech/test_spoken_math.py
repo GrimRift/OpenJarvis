@@ -36,10 +36,10 @@ def test_every_delimiter_style_the_model_uses():
     assert speak_math(r"\[ M = F d_\perp \]").strip() == "M equals F d perpendicular"
 
 
-def test_money_and_prose_are_untouched():
+def test_money_is_not_math_and_prose_is_untouched():
     assert (
         to_spoken_text("Set $200 aside; a - b is fine.")
-        == "Set $200 aside; a - b is fine."
+        == "Set two hundred dollars aside; a - b is fine."
     )
     assert (
         speak_math("see [the docs] and (maybe) more")
@@ -50,3 +50,35 @@ def test_money_and_prose_are_untouched():
 def test_it_runs_before_the_identifier_rules():
     # Without the ordering, "\sum F_x" was hidden as "an identifier".
     assert "identifier" not in to_spoken_text(r"Balance: \(\sum F_x = 0\)")
+
+
+def test_money_is_said_in_words():
+    # 15 October: the local voice could not read "$83,402".
+    assert (
+        to_spoken_text("The price is $83,402.")
+        == "The price is eighty-three thousand four hundred two dollars."
+    )
+    assert to_spoken_text("Up to $83,402.50 today") == (
+        "Up to eighty-three thousand four hundred two dollars and fifty cents today"
+    )
+    assert to_spoken_text("It costs $1.") == "It costs one dollar."
+    assert to_spoken_text("Only $0.99") == "Only ninety-nine cents"
+    assert to_spoken_text("Raised $3.5 million") == (
+        "Raised three point five million dollars"
+    )
+    assert to_spoken_text("Revenue hit $12M") == "Revenue hit twelve million dollars"
+
+
+def test_pesos_euros_and_pounds():
+    assert to_spoken_text("₱1,250.75") == (
+        "one thousand two hundred fifty pesos and seventy-five centavos"
+    )
+    assert to_spoken_text("€20 or £1.01") == "twenty euros or one pound and one penny"
+
+
+def test_money_in_a_streamed_reply_and_in_bold():
+    from openjarvis.speech.spoken_text import SpokenTextStream
+
+    stream = SpokenTextStream()
+    said = stream.push("It is **$83,402** now.") + stream.finish()
+    assert " ".join(said) == "It is eighty-three thousand four hundred two dollars now."

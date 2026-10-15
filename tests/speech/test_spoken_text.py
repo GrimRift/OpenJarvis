@@ -111,7 +111,10 @@ class TestSpokenComparisons:
 
     def test_each_value_is_said_with_its_option(self):
         spoken = to_spoken_text(_AIRPODS)
-        assert "Price: AirPods 4, 10,990 pesos; AirPods 5, 9,490 pesos." in spoken
+        assert (
+            "Price: AirPods 4, ten thousand nine hundred ninety pesos; "
+            "AirPods 5, nine thousand four hundred ninety pesos."
+        ) in spoken
         assert "Case: AirPods 4, Wireless charging; AirPods 5, USB-C only." in spoken
 
     def test_rows_that_match_are_folded_into_one_sentence(self):
@@ -136,7 +139,10 @@ class TestSpokenComparisons:
         )
         spoken = to_spoken_text(reply)
         assert "All three are the same on fit, open fit." in spoken
-        assert "Price: AirPods 4, 10,990 pesos; AirPods 5, 9,490 pesos; " in spoken
+        assert (
+            "Price: AirPods 4, ten thousand nine hundred ninety pesos; "
+            "AirPods 5, nine thousand four hundred ninety pesos; "
+        ) in spoken
         assert "shape" not in spoken and spoken.endswith("That is all.")
 
     def test_other_diagrams_stay_silent(self):

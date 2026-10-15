@@ -344,7 +344,52 @@ def _unit(match: re.Match) -> str:
     return f"{spoken} {words}"
 
 
+#: Currency sign -> (one, many, one cent, many cents).
+_CURRENCIES = {
+    "$": ("dollar", "dollars", "cent", "cents"),
+    "₱": ("peso", "pesos", "centavo", "centavos"),
+    "€": ("euro", "euros", "cent", "cents"),
+    "£": ("pound", "pounds", "penny", "pence"),
+}
+_SCALES = {"thousand": "thousand", "k": "thousand", "K": "thousand",
+           "million": "million", "M": "million", "m": "million",
+           "billion": "billion", "B": "billion", "bn": "billion",
+           "trillion": "trillion"}
+_MONEY = re.compile(
+    r"(?<![\w$₱€£])(?P<sign>[$₱€£])\s?(?P<n>\d{1,3}(?:,\d{3})+|\d+)(?:\.(?P<f>\d+))?"
+    r"(?:\s?(?P<scale>thousand|million|billion|trillion|bn|[kKmMB])(?![\w]))?"
+)
+
+
+def _money(match: re.Match) -> str:
+    """"$83,402" -> "eighty-three thousand four hundred two dollars". The
+    local voice read the sign and the comma-grouped digits as noise (15
+    October); words leave it nothing to guess."""
+    one, many, cent, cents = _CURRENCIES[match.group("sign")]
+    whole = match.group("n").replace(",", "")
+    fraction = match.group("f") or ""
+    scale = _SCALES.get(match.group("scale") or "")
+    if len(whole) > 12:
+        return match.group(0)
+    if scale:
+        # "$3.5 million": the number as said, then the scale and the unit.
+        number = (
+            decimal_words(f"{whole}.{fraction}") if fraction else _int_words(int(whole))
+        )
+        return f"{number} {scale} {many}"
+    amount = int(whole)
+    if fraction and len(fraction) != 2:
+        return f"{decimal_words(f'{whole}.{fraction}')} {many}"
+    small = int(fraction) if fraction else 0
+    change = f"{_int_words(small)} {cent if small == 1 else cents}" if small else ""
+    if amount == 0 and change:
+        return change
+    words = f"{_int_words(amount)} {one if amount == 1 else many}"
+    return f"{words} and {change}" if change else words
+
+
 def _speak_line(line: str) -> str:
+    line = _MONEY.sub(_money, line)
     calc = bool(_CALC.search(line))
     equation = "=" in line
     if calc or re.search(r"^\s*=|(?<=\S) = (?=\S)", line):
