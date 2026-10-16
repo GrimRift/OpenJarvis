@@ -268,7 +268,8 @@ class NavigateTool(BaseTool):
                 "Returns briefing and Waze link; it DOES NOT open Waze. Ask the user "
                 "to choose when candidates are returned. Never invent coordinates "
                 "or a place ID. Origin must be supplied by the user/phone; "
-                "no PC fallback."
+                "no PC fallback. When the user names where they start ('from "
+                "Calamba'), pass it as origin_name; otherwise leave origin out."
             ),
             parameters={
                 "type": "object",
@@ -277,6 +278,15 @@ class NavigateTool(BaseTool):
                     "origin": {
                         **point,
                         "description": "Current phone/user coordinates.",
+                    },
+                    "origin_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "description": (
+                            "A starting place the user named, e.g. 'Calamba'. "
+                            "Never fill in a guess."
+                        ),
                     },
                     "destination_coordinates": point,
                     "place_id": {
@@ -315,12 +325,17 @@ class NavigateTool(BaseTool):
         query = query.strip()
         origin = coordinates(params["origin"]) if "origin" in params else None
         config = self._config if self._config is not None else load_config().navigation
+        key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+        origin_reason = ""
+        if origin is None and params.get("origin_name"):
+            origin, origin_reason = self._named_origin(
+                params["origin_name"], config, key
+            )
         point = None
         if "destination_coordinates" in params:
             point = coordinates(params["destination_coordinates"])
         else:
             point = _saved_places(self._root).get(query.casefold())
-        key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
         if point is None:
             if (
                 config.places_enabled is not True
@@ -367,7 +382,9 @@ class NavigateTool(BaseTool):
             query = selected[0]["name"]
 
         route = None
-        if origin is None:
+        if origin_reason:
+            reason = origin_reason
+        elif origin is None:
             reason = "ETA unavailable: provide your current location."
         elif (
             config.routes_enabled is not True
@@ -444,6 +461,36 @@ class NavigateTool(BaseTool):
                 "navigation_started": False,
             },
         )
+
+    def _named_origin(
+        self, name: Any, config: NavigationConfig, key: str
+    ) -> tuple[dict | None, str]:
+        """``(coordinates, reason)`` for a start the user named, e.g. "Calamba".
+
+        Only ever what the user said: the no-PC-fallback rule above is about
+        an *unnamed* origin, and "how long from Calamba to Lucban?" names one
+        (wide test, 16 October). Saved places first, then the same Places
+        lookup the destination uses, taking the top result as it does.
+        """
+        if not isinstance(name, str) or not name.strip() or len(name) > 300:
+            raise NavigationError("Name the starting place (1–300 characters).")
+        name = name.strip()
+        point = _saved_places(self._root).get(name.casefold())
+        if point is not None:
+            return point, ""
+        if (
+            config.places_enabled is not True
+            or config.places_quota_confirmed is not True
+            or not key
+        ):
+            return None, "ETA unavailable: place lookup is off for the start."
+        try:
+            candidates = search_places(name, key, None)
+        except NavigationError as exc:
+            return None, f"ETA unavailable: {exc}"
+        if not candidates:
+            return None, f"ETA unavailable: could not find the start '{name}'."
+        return candidates[0]["coordinates"], ""
 
     def _selection(self, query: str, candidates: list, reason: str) -> ToolResult:
         link = waze_link(query)

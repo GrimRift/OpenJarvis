@@ -53,7 +53,9 @@ class MediaPauseTool(BaseTool):
                 "the video' / 'play it again' -> action='resume'. Media is "
                 "only turned down while the user talks to Sage, never "
                 "paused on its own. Use spotify_control for "
-                "changing the song or playlist, close_media to close it."
+                "changing the song or playlist. 'Close'/'quit'/'exit' is "
+                "close_media, never a pause. A bare 'stop' or 'pause' is this "
+                "tool, not audiobook_play, unless the user names the book."
             ),
             parameters={
                 "type": "object",

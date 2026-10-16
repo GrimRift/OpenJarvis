@@ -72,3 +72,18 @@ def test_no_port_is_reported_not_raised(monkeypatch):
 
 def test_rejects_an_unknown_target():
     assert not CloseMediaTool().execute(what="tv").success
+
+
+def test_close_pause_and_audiobook_descriptions_keep_to_their_own_words():
+    """'Close the video' paused it and a bare 'Stop.' paused the audiobook
+    (wide test s30, x11): each description says whose word it is."""
+    from openjarvis.tools.audiobook_tool import AudiobookPlayTool
+    from openjarvis.tools.media_pause import MediaPauseTool
+
+    close = CloseMediaTool().spec.description
+    pause = MediaPauseTool().spec.description
+    book = AudiobookPlayTool().spec.description
+    assert "close, quit or exit" in close
+    assert "'Close'/'quit'/'exit' is close_media" in pause
+    assert "bare 'stop'" in pause and "bare 'stop'" in book
+    assert "media_pause" in book

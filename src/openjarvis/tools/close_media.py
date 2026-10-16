@@ -96,8 +96,9 @@ class CloseMediaTool(BaseTool):
                 "what='youtube' (every YouTube tab in the browser); 'close "
                 "Netflix' → 'netflix'; 'close Spotify' / 'quit Spotify' → "
                 "'spotify' (quits the app and closes its web player); 'close "
-                "everything' / 'close the media' → 'all'. Closing is "
-                "immediate; do not ask for confirmation first."
+                "everything' / 'close the media' → 'all'. Whenever the user "
+                "says close, quit or exit, use this -- pausing is not closing. "
+                "Closing is immediate; do not ask for confirmation first."
             ),
             parameters={
                 "type": "object",

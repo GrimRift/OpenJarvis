@@ -34,7 +34,7 @@ from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 #: Both mailboxes must agree on what "recent" means, or "anything new?" gets
 #: two different answers depending on which one is asked.
-from openjarvis.tools.opera_control import RECENT_DAYS
+from openjarvis.tools.opera_control import RECENT_DAYS, _day_label
 
 _API = "https://gmail.googleapis.com/gmail/v1/users/me"
 _TOKEN_PATH = str(DEFAULT_CONFIG_DIR / "connectors" / "gmail.json")
@@ -85,6 +85,19 @@ def _sender(raw: str) -> str:
     return text or (raw or "").strip()
 
 
+def _received(when: datetime) -> str:
+    """The "[received Fri Oct 16, today at 9:12 AM] " label, in local time.
+
+    The same label ``outlook_read`` puts on its rows: without it "anything new
+    today?" could not be answered from Gmail at all (wide test, 16 October).
+    """
+    local = when.astimezone()
+    hour = local.hour % 12 or 12
+    half = "AM" if local.hour < 12 else "PM"
+    clock = f"{hour}:{local.minute:02d} {half}"
+    return f"[received {_day_label(local.date())} at {clock}] "
+
+
 def summarise(message: Dict[str, Any]) -> Tuple[str, Optional[datetime]]:
     """``(one-line summary, when)`` for one message."""
     headers = (message.get("payload") or {}).get("headers") or []
@@ -100,7 +113,8 @@ def summarise(message: Dict[str, Any]) -> Tuple[str, Optional[datetime]]:
             when = datetime.fromtimestamp(int(stamp) / 1000, tz=timezone.utc)
         except (TypeError, ValueError, OSError):
             when = None
-    return " | ".join(part for part in parts if part), when
+    text = " | ".join(part for part in parts if part)
+    return (_received(when) + text if when else text), when
 
 
 def _ids(listing: Dict[str, Any], count: int) -> List[str]:

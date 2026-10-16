@@ -620,7 +620,15 @@ def _netflix_id(href: str) -> str:
 #: restart.
 NETFLIX_PROFILE_FILE = "netflix_profile.txt"
 
-_PROFILE_GATE = "document.querySelectorAll('.profile-link').length > 0"
+#: The profile tiles at "Who's watching?". Netflix moved them from
+#: ``.profile-link`` to ``button[data-uia="profile-selector+tile-..."]`` by
+#: 16 October; the old class matched nothing, so the gate looked passed and
+#: every search read as "Netflix has nothing called 'Stranger Things'".
+_PROFILE_TILES = (
+    "document.querySelectorAll("
+    "'.profile-link, button[data-uia^=\"profile-selector+tile-\"]')"
+)
+_PROFILE_GATE = f"{_PROFILE_TILES}.length > 0"
 
 
 def netflix_profile() -> str:
@@ -649,7 +657,7 @@ def netflix_profiles(page) -> List[str]:
             " ".join(str(name).split())
             for name in (
                 page.evaluate(
-                    "Array.from(document.querySelectorAll('.profile-name'))"
+                    f"Array.from({_PROFILE_TILES})"
                     ".map(e => e.textContent.trim())"
                 )
                 or []
@@ -688,7 +696,7 @@ def _pass_profile_gate(page):
         return False, profiles
     with contextlib.suppress(Exception):
         page.evaluate(
-            f"document.querySelectorAll('.profile-link')[{index}].click()"
+            f"{_PROFILE_TILES}[{index}].click()"
         )
     page.wait_for(f"!({_PROFILE_GATE})", timeout=_SELECTOR_TIMEOUT)
     return not page.evaluate(_PROFILE_GATE), profiles

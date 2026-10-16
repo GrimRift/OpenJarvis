@@ -287,6 +287,7 @@ try:
     import openjarvis.tools.media_pause  # noqa: F401
     import openjarvis.tools.memory_tools  # noqa: F401
     import openjarvis.tools.play_game  # noqa: F401
+    import openjarvis.tools.volume  # noqa: F401
 except ImportError:
     pass
 

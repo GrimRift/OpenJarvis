@@ -178,6 +178,17 @@ class TestTools:
         # A job watch cannot be a reminder: it is said at the desk.
         assert not tool.execute(what="x", task_id="abc", anywhere=True).success
 
+    def test_a_time_already_past_is_refused_not_set(self, engine) -> None:
+        """'Remind me yesterday at 3pm' was accepted (wide test x08)."""
+        from openjarvis.tools.moments import TellMeWhenTool
+
+        result = TellMeWhenTool().execute(
+            what="pay the bill", at="2020-01-01T15:00", anywhere=True
+        )
+        assert not result.success
+        assert "already passed" in result.content
+        assert engine.list_watches() == []
+
     def test_a_relative_time_is_a_reminder_wherever_the_user_is(self, engine) -> None:
         """ "Tell me five minutes from now that I have to eat" was refused
         because only an absolute datetime was accepted."""

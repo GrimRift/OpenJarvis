@@ -316,6 +316,90 @@ def test_an_ambiguous_search_takes_the_top_result(nav, monkeypatch):
     assert "Mall 0" in result.metadata["briefing"]
 
 
+class TestNamedOrigin:
+    """"How long from Calamba to Lucban?" names its start (wide test s17)."""
+
+    def test_a_named_start_is_looked_up_and_routed_from(self, nav, monkeypatch):
+        module, tool = nav
+        enable(tool, monkeypatch)
+        calls = []
+
+        def post(url, **kwargs):
+            calls.append((url, kwargs["json"]))
+            if url == module.PLACES_URL:
+                return httpx.Response(200, json=places())
+            return httpx.Response(200, json=routes())
+
+        monkeypatch.setattr(httpx, "post", post)
+        result = tool.execute(
+            destination="Lucban", destination_coordinates=DEST, origin_name="Calamba"
+        )
+        assert calls[0][0] == module.PLACES_URL
+        assert calls[0][1]["textQuery"] == "Calamba"
+        # The top place (DEST, by the places() fixture) is the start.
+        assert calls[1][1]["origin"]["location"]["latLng"] == DEST
+        assert "16 minutes" in result.content
+
+    def test_a_saved_place_names_the_start_without_a_lookup(
+        self, nav, monkeypatch, tmp_path
+    ):
+        module, tool = nav
+        enable(tool, monkeypatch)
+        (tmp_path / "saved_places.json").write_text(json.dumps({"home": ORIGIN}))
+        seen = []
+
+        def post(url, **kwargs):
+            seen.append(url)
+            return httpx.Response(200, json=routes())
+
+        monkeypatch.setattr(httpx, "post", post)
+        result = tool.execute(
+            destination="there", destination_coordinates=DEST, origin_name="Home"
+        )
+        assert seen == [module.ROUTES_URL]
+        assert "16 minutes" in result.content
+
+    def test_an_unfound_start_says_so_and_still_briefs(self, nav, monkeypatch):
+        _, tool = nav
+        enable(tool, monkeypatch)
+        monkeypatch.setattr(
+            httpx, "post", lambda *a, **k: httpx.Response(200, json={"places": []})
+        )
+        result = tool.execute(
+            destination="there", destination_coordinates=DEST, origin_name="Nowhere"
+        )
+        assert result.success
+        assert "could not find the start 'Nowhere'" in result.content
+        assert result.metadata["route"] is None
+
+    def test_lookup_off_never_falls_back_to_the_pc(self, nav):
+        _, tool = nav
+        result = tool.execute(
+            destination="there", destination_coordinates=DEST, origin_name="Calamba"
+        )
+        assert "place lookup is off" in result.content
+        assert result.metadata["route"] is None
+
+    def test_coordinates_win_over_a_name(self, nav, monkeypatch):
+        module, tool = nav
+        enable(tool, monkeypatch)
+        seen = []
+
+        def post(url, **kwargs):
+            seen.append((url, kwargs["json"]))
+            return httpx.Response(200, json=routes())
+
+        monkeypatch.setattr(httpx, "post", post)
+        tool.execute(
+            destination="there",
+            destination_coordinates=DEST,
+            origin=ORIGIN,
+            origin_name="Calamba",
+        )
+        assert [u for u, _ in seen] == [module.ROUTES_URL]
+        assert seen[0][1]["origin"]["location"]["latLng"] == ORIGIN
+
+
 def test_chosen_place_id_must_match_returned_candidates(nav, monkeypatch):
     module, tool = nav
     enable(tool, monkeypatch)

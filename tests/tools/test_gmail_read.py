@@ -68,6 +68,21 @@ class TestSummarising:
         _, when = summarise(_message("A", "S"))
         assert when is None
 
+    def test_each_line_says_when_it_arrived_in_local_time(self):
+        """"Any new emails today?" needs the date on every line (wide test s07)."""
+        moment = datetime.now(timezone.utc).replace(microsecond=0)
+        text, _ = summarise(_message("Bank", "Statement", when=moment))
+        local = moment.astimezone()
+        hour = local.hour % 12 or 12
+        assert text.startswith("[received ")
+        assert ", today at " in text
+        assert f"{hour}:{local.minute:02d} " in text
+        assert text.endswith("Bank | Statement")
+
+    def test_an_undated_message_has_no_received_label(self):
+        text, _ = summarise(_message("A", "S"))
+        assert not text.startswith("[received")
+
 
 class TestRecency:
     """Recency is asked of Gmail, not inferred — "nothing new this week" is

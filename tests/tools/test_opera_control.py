@@ -262,8 +262,17 @@ class TestTheNetflixProfileGate:
 
     def _page(self, gated, names=("Kenji", "Loki")):
         return _FakePage(
-            evaluations={".profile-link').length": gated, ".profile-name": list(names)}
+            evaluations={
+                "length > 0": gated,
+                "e.textContent.trim()": list(names),
+            }
         )
+
+    def test_the_current_markup_is_recognised(self):
+        """Netflix's tiles are now data-uia buttons; the old class matched
+        nothing and the gate looked passed (wide test a17, 16 October)."""
+        assert 'data-uia^="profile-selector+tile-"' in opera_control._PROFILE_GATE
+        assert ".profile-link" in opera_control._PROFILE_GATE
 
     def test_no_gate_means_nothing_to_do(self):
         passed, profiles = opera_control._pass_profile_gate(self._page(False))

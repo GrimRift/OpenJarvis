@@ -402,7 +402,9 @@ class AudiobookPlayTool(_BookTool):
             description=(
                 "LISTEN to an audiobook on this PC, in the Sage app: 'read me "
                 "chapter 4', 'continue the book', 'play the next chapter', 'pause "
-                "the audiobook', 'resume it'. Plays chapters that are already made."
+                "the audiobook', 'resume it'. Plays chapters that are already made. "
+                "Only when the user means the book: a bare 'stop' / 'pause' is "
+                "media_pause."
             ),
             parameters={
                 "type": "object",
