@@ -77,6 +77,14 @@ def test_play_needs_a_made_chapter_and_hands_the_app_what_to_play(lib):
     }
 
 
+def test_pause_with_no_book_playing_says_so(lib):
+    """A bare "Stop." with nothing on answered "Audiobook paused" (x11)."""
+    r = tools.AudiobookPlayTool(lib).execute(action="pause")
+    assert not r.success
+    assert "No audiobook is playing" in r.content
+    assert "audiobook_play" not in (r.metadata or {})
+
+
 def test_import_only_books_from_the_users_folders(lib, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "_import_roots", lambda: [tmp_path / "ok"])
     (tmp_path / "ok").mkdir()

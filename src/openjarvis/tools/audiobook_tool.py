@@ -11,6 +11,7 @@ tool call ends, the route the picture and weather panels already take.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,11 @@ _BOOK_PARAM = {
     "type": "string",
     "description": "Which book: part of its title. Empty if only one book exists.",
 }
+
+
+#: The app saves a playing book's position every 15 s of listening
+#: (frontend book-player.ts SAVE_EVERY_SECONDS); three saves of slack.
+_PLAYING_WINDOW_SECONDS = 45.0
 
 
 def _fail(tool: str, text: str) -> ToolResult:
@@ -425,8 +431,25 @@ class AudiobookPlayTool(_BookTool):
             category="media",
         )
 
+    def _playing_now(self) -> bool:
+        cutoff = time.time() - _PLAYING_WINDOW_SECONDS
+        try:
+            books = self.library.store.list()
+        except Exception:
+            return True
+        return any((book.get("position_at") or 0) >= cutoff for book in books)
+
     def execute(self, **params: Any) -> ToolResult:
         action = str(params.get("action") or "play").lower()
+        if action == "pause" and not self._playing_now():
+            # A bare "Stop." with nothing on took this and answered "Audiobook
+            # paused" (wide test x11, twice). The app saves the position every
+            # 15 s while a book plays, so no recent save means no book is on.
+            return _fail(
+                "audiobook_play",
+                "No audiobook is playing, so nothing was paused. A bare "
+                "'stop' or 'pause' is for other media: media_pause.",
+            )
         if action in ("pause", "resume"):
             return ToolResult(
                 tool_name="audiobook_play",
