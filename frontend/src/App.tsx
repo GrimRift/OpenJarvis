@@ -77,6 +77,21 @@ export default function App() {
     }).catch(() => undefined);
   }, [settings.preferCloudModel, settings.cloudModel, settings.defaultModel]);
 
+  // The rest of the Settings page lives only here too, so asked "what's my
+  // dip set to?" Sage could only guess. Sent (debounced: sliders fire on
+  // every step) for its about_sage tool. Never the key or the server URL.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const { apiKey: _key, apiUrl: _url, ...shareable } = settings;
+      void apiFetch('/v1/settings/app-snapshot', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(shareable),
+      }).catch(() => undefined);
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [settings]);
+
   // The orb reads each local voice through that voice's own shaping (its
   // meta.json): fetched on load and whenever the voice changes. Anything
   // else -- the cloud voice, a voice the server has not listed -- is neutral.

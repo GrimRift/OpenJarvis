@@ -131,6 +131,26 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             re.IGNORECASE,
         ),
     },
+    # Questions about Sage itself. Not plain "can you ..." -- that is almost
+    # always a request ("can you open spotify"), and the tool would cost a
+    # round on every one.
+    "self": {
+        "tools": {"about_sage"},
+        "pattern": re.compile(
+            r"\b(yourself|sage'?s|about\s+sage|who\s+are\s+you|what\s+are\s+you|"
+            r"what\s+(else\s+)?can\s+you\s+do|what\s+do\s+you\s+do|"
+            r"are\s+you\s+able|do\s+you\s+(have|support|know\s+how)|"
+            r"your\s+(own\s+)?(settings?|features?|abilit\w*|capabilit\w*|"
+            r"tools?|skills?|code|source|version|model|voice|mic\w*|"
+            r"wake\s*word|memory|config\w*|options?|limits?)|"
+            r"features?|capabilit\w*|settings?|changelog|what'?s\s+new|"
+            r"what\s+(has\s+)?changed|new\s+in\s+sage|which\s+model|"
+            r"what\s+model|version|how\s+do\s+i\s+(use|turn|enable|disable|"
+            r"switch|set|change|get)|how\s+does\s+(your|the|sage)|"
+            r"dip|duck\w*)\b",
+            re.IGNORECASE,
+        ),
+    },
     # Asking for a game, not mentioning one: "games on sale" offered it and
     # the model started chess (10 October). Moves mid-game come in through
     # `_game_in_progress` in `route_tools`.

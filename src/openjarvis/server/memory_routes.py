@@ -350,6 +350,21 @@ async def put_model_preference(request: Request):
     return asdict(pref)
 
 
+@model_preference_router.put("/app-snapshot")
+async def put_app_snapshot(request: Request):
+    """The app's own settings, so ``about_sage`` can answer about them.
+
+    They live only in the page (localStorage); the app sends them on load
+    and on every change. Secret-named keys are dropped again here.
+    """
+    from openjarvis.tools.about_sage import save_app_settings
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object")
+    return {"saved": save_app_settings(body)}
+
+
 @router.get("/hygiene")
 async def hygiene_runs():
     from openjarvis.memory.hygiene import load_runs

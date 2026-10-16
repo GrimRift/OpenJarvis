@@ -261,6 +261,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.about_sage  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.system_status  # noqa: F401
 except ImportError:
     pass

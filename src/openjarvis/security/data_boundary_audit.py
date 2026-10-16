@@ -260,6 +260,11 @@ LOCAL_ACCESS_TOOLS = {
     # scheduled jobs. The live probes reach providers already audited above.
     "system_health",
     "apply_health_fix",
+    # Reads config.toml (secret-named keys hidden), the app's settings
+    # snapshot, git history and git-tracked source files that are not
+    # sensitive. Whatever it returns reaches the answering model, which may
+    # be a cloud one.
+    "about_sage",
     # Write the moments state file (today's quiet, pending watches). The
     # engine that later speaks a watch goes through Cartesia, which is the
     # text_to_speech surface, not these tools.
