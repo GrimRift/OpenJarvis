@@ -186,7 +186,11 @@ class TestGenerate:
         result = ImageGenerateTool(rig.service).execute(prompt="a cafe")
         assert result.metadata["image"]["id"] in result.content
         assert base64.b64encode(PNG).decode() not in result.content
-        assert "b64" not in json.dumps(result.metadata)
+        # No image data and no b64 field; a plain substring check failed CI
+        # whenever the random hex image id happened to contain "b64".
+        metadata = json.dumps(result.metadata)
+        assert base64.b64encode(PNG).decode() not in metadata
+        assert '"b64' not in metadata
         assert len(result.content) < 500  # survives the replay cut
 
     def test_a_refusal_is_reported_once_not_retried(self, rig):
