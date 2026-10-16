@@ -103,6 +103,29 @@ class TestCaptureFlag:
         assert panel["capture"] is False
 
 
+class TestPlayAgain:
+    """16 October: "Let's play again." was refused as not asking to play,
+    though the game's own ending tells the user to say it."""
+
+    @pytest.mark.parametrize(
+        "text", ["Let's play again.", "play again", "can we play it again?"]
+    )
+    def test_play_again_asks_to_play_and_is_routed(self, text):
+        from openjarvis.agents.tool_routing import selected_tool_names
+
+        assert games.asks_to_play(text)
+        assert "play_game" in selected_tool_names(text)
+
+    def test_play_again_starts_the_game_just_played(self):
+        _start("let's play chess", game="chess")
+        result = _start("Let's play again.")
+        assert result.success
+        assert result.metadata["game_panel"]["game"] == "chess"
+
+    def test_again_alone_is_not_asking(self):
+        assert not games.asks_to_play("say that again")
+
+
 class TestUndo:
     def test_undo_takes_back_the_users_move_and_sages_reply(self):
         _start("let's play chess", game="chess")

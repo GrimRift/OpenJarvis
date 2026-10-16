@@ -208,7 +208,9 @@ class PlayGameTool(BaseTool):
                 ),
                 success=False,
             )
-        name = str(params.get("game") or "tic-tac-toe")
+        # "Play again" with no game named: the one just played.
+        last = load()
+        name = str(params.get("game") or (last.game if last else "") or "tic-tac-toe")
         game = find_game(name)
         if game is None:
             known = ", ".join(GAMES)

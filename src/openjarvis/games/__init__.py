@@ -106,7 +106,9 @@ ASKS_TO_PLAY = re.compile(
     rf"|\b{_PLAY_WORD}\b(?:\W+\w+){{0,4}}?\W+{_GAME_NAME}\b"
     r"|\bplay\w*\b(?:\W+\w+){0,4}?\W+(?:game|round|match)\b"
     r"|\banother\s+(?:game|round|match)\b"
-    r"|\brematch\b",
+    r"|\brematch\b"
+    # The game's own ending says 'Say "play again"' (16 October: refused).
+    r"|\bplay\w*\s+(?:it\s+|that\s+)?again\b",
     re.IGNORECASE,
 )
 _ONLY_A_GAME_NAME = re.compile(

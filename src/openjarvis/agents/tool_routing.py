@@ -164,7 +164,9 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
         "pattern": re.compile(
             r"\b(tic|tac|toe|tik|tak|tictactoe|chess|xo|resign|rematch"
             r"|ping[\s-]?pong|pong|table\s+tennis)\b"
-            r"|\bplay\w*\b(?:\W+\w+){0,4}?\W+(game|round|match)\b",
+            r"|\bplay\w*\b(?:\W+\w+){0,4}?\W+(game|round|match)\b"
+            # What the game itself tells the user to say at the end.
+            r"|\bplay\w*\s+(?:it\s+|that\s+)?again\b",
             re.IGNORECASE,
         ),
     },
