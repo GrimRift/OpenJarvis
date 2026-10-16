@@ -10,6 +10,28 @@ import {
   stripWakePhrase,
 } from './wake-follow';
 
+describe('after the pause greeting (16 October)', () => {
+  // The 12:24 trace: "Hey Sage", 800 ms quiet, "Yes, Sir?", then the question.
+  const heard = 'this age. Will it green later? What exact time will it green?';
+
+  it('drops the phrase misheard as a short sentence', () => {
+    expect(stripWakePhrase(heard, true)).toBe('Will it green later? What exact time will it green?');
+    expect(stripWakePhrase('his ages. What time is it?', true)).toBe('What time is it?');
+    expect(stripWakePhrase('Hey stage. Play some music.', true)).toBe('Play some music.');
+  });
+
+  it('was kept before the fix, and still is without a greeting', () => {
+    expect(stripWakePhrase(heard)).toBe(heard);
+  });
+
+  it('keeps a real short first sentence', () => {
+    expect(stripWakePhrase('Play music. Loud.', true)).toBe('Play music. Loud.');
+    expect(stripWakePhrase('Stop. Close YouTube.', true)).toBe('Stop. Close YouTube.');
+    expect(stripWakePhrase("I'll do that. Thanks.", true)).toBe("I'll do that. Thanks.");
+    expect(stripWakePhrase('This page. What does it say?', true)).toBe('This page. What does it say?');
+  });
+});
+
 describe('first words the user keeps (14 October)', () => {
   it('keeps a short first word that begins a sentence', () => {
     expect(stripWakePhrase("I'll do that. Thanks.")).toBe("I'll do that. Thanks.");

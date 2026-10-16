@@ -119,10 +119,18 @@ function isDebris(token: string): boolean {
  * "Hey Sage, any news on AI?" -> "any news on AI?"; "Hey Sage." -> "".
  * A transcript that does not start with the phrase is returned as it is.
  */
-export function stripWakePhrase(transcript: string): string {
+export function stripWakePhrase(transcript: string, greeted = false): string {
   const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
   let text = transcript.trim();
   let tokens = text.split(/\s+/);
+  // After the pause greeting the user was quiet for a second past the
+  // phrase, so a short first sentence ending in the name's sound is the
+  // phrase, starter word or not: "this age. Will it rain later?" (16
+  // October) kept "this age." because "this" begins real requests.
+  if (greeted) {
+    const lead = leadingPhraseSentence(tokens);
+    if (lead > 0) return tokens.slice(lead).join(' ').replace(/^[\s,.;:!?—-]+/, '').trim();
+  }
   // Sound from before the phrase: the turn carries up to PRE_ROLL_MS of
   // audio from before the wake word fired, so with a video playing it began
   // with the commentary -- "We're on the way and racing almost -- Hey, Sage.
@@ -189,6 +197,25 @@ export function stripLeadingWakePhrase(transcript: string): string {
   else if (NAME.has(norm(tokens[0]))) i = 1;
   if (i === 0) return text;
   return tokens.slice(i).join(' ').replace(/^[\s,.;:!?—-]+/, '').trim();
+}
+
+/** The end of the name with its s-sound carried onto the word before:
+ * "this age", "his ages", "is edge". */
+const NAME_TAIL = /^[aeiy][gjdz]+e?s?$/;
+
+/**
+ * How many leading tokens form a sentence of at most two words, ended by a
+ * full stop, whose last word is the name or its tail -- or 0. For turns where
+ * the pause greeting has played, so the phrase stood alone.
+ */
+function leadingPhraseSentence(tokens: readonly string[]): number {
+  const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  for (let n = 1; n <= 2 && n < tokens.length; n++) {
+    if (!/[.!?,]$/.test(tokens[n - 1])) continue;
+    const last = norm(tokens[n - 1]);
+    return isNameToken(last) || NAME_TAIL.test(last) ? n : 0;
+  }
+  return 0;
 }
 
 /**

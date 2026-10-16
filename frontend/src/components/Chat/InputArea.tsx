@@ -2112,11 +2112,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           return;
         }
         const phraseDone = fastFollowRef.current.phraseDone === true;
+        const greeted = fastFollowRef.current.greeted;
         fastFollowRef.current = { active: false, greeted: false, startedAt: 0 };
         // After a phrase-only turn the guesswork of stripWakePhrase ate the
         // user's own first word: "I'll do that. Thanks." was sent as "do
         // that. Thanks." (14 October). Only a said-again "hey sage" goes.
-        spoken = phraseDone ? stripLeadingWakePhrase(spoken) : stripWakePhrase(spoken);
+        spoken = phraseDone ? stripLeadingWakePhrase(spoken) : stripWakePhrase(spoken, greeted);
       }
 
       // The rest of a sentence that was cut off. The half-answer was stopped
