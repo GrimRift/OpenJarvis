@@ -129,10 +129,26 @@ def test_tool_dispatches_parts():
         "tell me about yourself",
         "how do I rewind a chat?",
         "which mic do you use for the wake word?",
+        # 10-16: answered "I can't see a change log", without the tool.
+        "Uh, can you look at the latest ones that we added or fixed about you?",
+        "what did we fix today?",
+        "any recent updates to you?",
     ],
 )
 def test_self_questions_route_the_tool(message):
     assert "about_sage" in selected_tool_names(message)
+
+
+def test_a_follow_up_keeps_the_tool():
+    from openjarvis.agents.tool_routing import TURN_SEPARATOR
+
+    turns = TURN_SEPARATOR.join(
+        [
+            "Uh, can you look at the latest ones that we added or fixed about you?",
+            "I'm asking about that.",
+        ]
+    )
+    assert "about_sage" in selected_tool_names(turns)
 
 
 @pytest.mark.parametrize(

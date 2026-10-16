@@ -152,7 +152,14 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             # "which mic for the wake word?" missed without them (10-16).
             r"rewind\w*|wake\s*word|mic|microphone|orb|memory\s+(page|brain)|"
             r"brain\s+tab|health\s+page|tray|shortcut|quiet\s+hours|"
-            r"speak\s+replies|dip|duck\w*)\b",
+            r"speak\s+replies|dip|duck\w*|"
+            # "the latest ones that we added or fixed about you?" missed
+            # (10-16): Sage said it had no change log.
+            r"about\s+you|(added|fixed|changed|updated|improved|new)\s+"
+            r"(about|on|in|to|for|with)\s+(you|sage)|"
+            r"(latest|recent|last)\s+(changes?|updates?|fix\w*|features?|"
+            r"additions?|improvements?)|"
+            r"what\s+(did|have)\s+(we|you)\s+(add|fix|change|update|improv)\w*)\b",
             re.IGNORECASE,
         ),
     },
