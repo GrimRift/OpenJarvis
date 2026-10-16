@@ -49,12 +49,24 @@ _NARROW_GROUPS: Dict[str, Dict[str, Any]] = {
             r"hot|cold|humid|humidity|storm|storms|typhoon|sunny|cloudy|windy|"
             r"degrees|celsius|uv|sunrise|sunset|bagyo|ulan|uulan|umuulan|init|"
             r"mainit|lamig|malamig|panahon|time|clock|timezone|o'clock|oras|"
-            r"date|day\s+is\s+it|what\s+day)\b",
+            r"date|day\s+is\s+it|what\s+day|"
+            # Asked without the word "weather" (10-16 wide test): "how warm is
+            # it outside?", "do I need a jacket tonight?", "wether in lucban
+            # tmrw?" went to web_search. Not bare "cool" or "warm" -- "that's
+            # cool" and the wake word's warm-up are everyday chat.
+            r"wether|weathr|wheather|weahter|wather|forcast|temprature|"
+            r"(how|is\s+it|will\s+it\s+be|it'?s)\s+(warm|cool|chilly)|"
+            r"chilly|freezing|jacket|sweater|hoodie|coat|outside|outdoors|"
+            r"will\s+it\s+(still\s+)?(be|stay|get|keep)\b[^.?!\n]*\b"
+            r"(tonight|later|tomorrow|tmrw|morning|afternoon|evening|weekend))\b",
             re.IGNORECASE,
         ),
     },
 }
 _NARROW_MESSAGES = 2
+# A narrow group also stays while the answer just given came from one of its
+# tools: "What about tomorrow there?", the third turn of a weather chat, has
+# no weather word in it or in the message before (10-16).
 #: Joins the turns in ``routing_text`` so the narrow groups can tell the
 #: newest messages from the older ones.
 TURN_SEPARATOR = "\n\x1e\n"
@@ -113,7 +125,11 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
         "pattern": re.compile(
             r"\b(class|classes|schedule|subject|subjects|lecture|lectures|"
             r"course|courses|room|professor|instructor|semester|campus|"
-            r"school|university|today|tomorrow|next)\b",
+            r"school|university|today|tomorrow|tmrw|next|"
+            # "What's my first period on Monday?" searched notes twice and
+            # gave up (10-16).
+            r"period|periods|timetable|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)\b",
             re.IGNORECASE,
         ),
     },
@@ -145,7 +161,10 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             r"wake\s*word|memory|config\w*|options?|limits?)|"
             r"features?|capabilit\w*|settings?|changelog|what'?s\s+new|"
             r"what\s+(has\s+)?changed|new\s+in\s+sage|which\s+model|"
-            r"what\s+model|version|how\s+do\s+i\s+(use|turn|enable|disable|"
+            r"what\s+model|(which|what)\s+(ai|llm|language)\s+model|"
+            # "Which AI model are you running on right now?" -> web_search
+            # (10-16).
+            r"which\s+llm|running\s+on|powered\s+by|version|how\s+do\s+i\s+(use|turn|enable|disable|"
             r"switch|set|change|get)|how\s+does\s+(your|the|sage)|"
             r"(do|are)\s+you\s+(use|using)|you'?re\s+using|"
             # The app's own feature words: "how do I rewind a chat?" and
@@ -184,7 +203,12 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             r"playlist|play|playing|pause|resume|skip|next|previous|"
             r"volume|listen|listening|open|launch|start|run|app|apps|"
             r"close|quit|youtube|netflix|video|"
-            r"application|notepad|obsidian|browser|window)\b",
+            r"application|notepad|obsidian|browser|window|"
+            # "Put on some Taylor Swift." went to YouTube in 24 s and "Turn
+            # it up." found no tool (10-16).
+            r"put\s+on|throw\s+on|queue|turn\s+(it|this|that)\s+(up|down)|"
+            r"turn\s+(up|down)|turn\s+(the\s+)?(music|volume|sound)\s+(up|down)|"
+            r"louder|quieter|softer|mute|unmute)\b",
             re.IGNORECASE,
         ),
     },
@@ -218,8 +242,12 @@ def selected_tool_names(text: str) -> Set[str]:
 def route_tools(
     openai_tools: Sequence[Dict[str, Any]],
     text: str,
+    called: Iterable[str] = (),
 ) -> List[Dict[str, Any]]:
     """Filter OpenAI-format tool schemas down to those *text* may need.
+
+    *called* is what the previous answer used (``last_called_tools``); a
+    narrow group it belongs to is kept for the follow-up.
 
     Unrecognised tools are kept, so this can never hide a capability that was
     not explicitly assigned to a group. Input order is preserved.
@@ -229,6 +257,10 @@ def route_tools(
 
     grouped = _grouped_tools()
     allowed = selected_tool_names(text)
+    used = set(called)
+    for group in _NARROW_GROUPS.values():
+        if used & group["tools"]:
+            allowed |= group["tools"]
     newest = text.split(TURN_SEPARATOR)[-1]
     playing = _game_in_progress()
     if playing:
@@ -270,6 +302,38 @@ def _content_of(item: Any) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _tool_names_of(item: Any) -> List[str]:
+    calls = getattr(item, "tool_calls", None)
+    if calls is None and isinstance(item, dict):
+        calls = item.get("tool_calls")
+    names: List[str] = []
+    for call in calls or ():
+        name = getattr(call, "name", None)
+        if name is None and isinstance(call, dict):
+            name = call.get("name") or (call.get("function") or {}).get("name")
+        if name:
+            names.append(str(name))
+    return names
+
+
+def last_called_tools(prior: Iterable[Any] = ()) -> Set[str]:
+    """Tools the answer to the latest user turn called, as the app replays it.
+
+    That answer only: an older weather call must not bring the weather back
+    four questions later (9 October).
+    """
+    from openjarvis.tools.storage.context import TURN_CONTEXT_HEADER
+
+    names: Set[str] = set()
+    for item in prior:
+        role = _role_of(item)
+        if role == "user" and not _content_of(item).startswith(TURN_CONTEXT_HEADER):
+            names = set()
+        elif role == "assistant":
+            names.update(_tool_names_of(item))
+    return names
+
+
 def routing_text(message: str, prior: Iterable[Any] = ()) -> str:
     """Join the newest message with recent *user* turns for matching.
 
@@ -299,4 +363,9 @@ def routing_text(message: str, prior: Iterable[Any] = ()) -> str:
     return TURN_SEPARATOR.join(parts)
 
 
-__all__ = ["route_tools", "routing_text", "selected_tool_names"]
+__all__ = [
+    "last_called_tools",
+    "route_tools",
+    "routing_text",
+    "selected_tool_names",
+]

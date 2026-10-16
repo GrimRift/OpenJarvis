@@ -1609,11 +1609,16 @@ async def _handle_streaming_orchestrator(
 
     openai_tools = agent._executor.get_openai_tools() if agent._tools else []
     if openai_tools and agent._route_tools:
-        from openjarvis.agents.tool_routing import route_tools, routing_text
+        from openjarvis.agents.tool_routing import (
+            last_called_tools,
+            route_tools,
+            routing_text,
+        )
 
         openai_tools = route_tools(
             openai_tools,
             routing_text(input_text, context.conversation.messages),
+            last_called_tools(context.conversation.messages),
         )
 
     telemetry_engine = _engine_key_for_model(agent._engine, model) or getattr(

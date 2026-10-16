@@ -392,3 +392,119 @@ class TestGamesOnlyWhenAskedToPlay:
     )
     def test_not_for_other_messages(self, text):
         assert "play_game" not in self._kept(text)
+
+
+class TestWideTestMisses:
+    """10-16 wide tool test: wording that hid the tool the user wanted, and
+    the model fell back to web_search (10-24 s, weather for Ghana)."""
+
+    EXTRA = ["weather", "about_sage"]
+
+    def _kept(self, message, prior=(), called=()):
+        schemas = ALL_SCHEMAS + [_schema(n) for n in self.EXTRA]
+        return {
+            s["function"]["name"]
+            for s in route_tools(schemas, routing_text(message, prior), called)
+        }
+
+    @pytest.mark.parametrize(
+        "text,required",
+        [
+            ("How warm is it outside?", "weather"),
+            ("Do I need a jacket tonight?", "weather"),
+            ("wether in lucban tmrw?", "weather"),
+            ("is it chilly out?", "weather"),
+            ("Put on some Taylor Swift.", "spotify_control"),
+            ("Turn it up.", "spotify_control"),
+            ("turn the volume down", "spotify_control"),
+            ("a bit louder", "spotify_control"),
+            ("What's my first period on Monday?", "check_class_schedule"),
+            ("show me my timetable", "check_class_schedule"),
+            ("Which AI model are you running on right now?", "about_sage"),
+            ("what llm are you powered by?", "about_sage"),
+        ],
+    )
+    def test_the_tool_is_offered(self, text, required):
+        assert required in self._kept(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "that's cool, thanks",
+            "how fast is the rtx 5060 ti in tokens/s",
+            "who won the 2022 world cup?",
+            "what's 2 to the 20th?",
+            "the wake word warm-up works now",
+        ],
+    )
+    def test_everyday_chat_still_gets_no_weather(self, text):
+        assert "weather" not in self._kept(text)
+
+    def test_a_follow_up_to_a_weather_answer_keeps_it(self):
+        """Tokyo -> "And in Seoul?" -> "What about tomorrow there?": turn 3
+        had no weather word in the two-message window."""
+        prior = [
+            {"role": "user", "content": "What's the weather in Tokyo?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "1", "function": {"name": "weather"}}],
+            },
+            {"role": "tool", "content": "22 C", "tool_call_id": "1"},
+            {"role": "assistant", "content": "22 C and clear."},
+            {"role": "user", "content": "And in Seoul?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "2", "function": {"name": "weather"}}],
+            },
+            {"role": "assistant", "content": "18 C."},
+        ]
+        from openjarvis.agents.tool_routing import last_called_tools
+
+        called = last_called_tools(prior)
+        assert called == {"weather"}
+        assert "weather" in self._kept("What about tomorrow there?", prior, called)
+
+    def test_message_shaped_tool_calls_count(self):
+        from openjarvis.agents.tool_routing import last_called_tools
+        from openjarvis.core.types import Message, Role, ToolCall
+
+        prior = [
+            Message(role=Role.USER, content="weather in Lucban?"),
+            Message(
+                role=Role.ASSISTANT,
+                content="",
+                tool_calls=[ToolCall(id="1", name="weather", arguments="{}")],
+            ),
+        ]
+        assert last_called_tools(prior) == {"weather"}
+
+    def test_an_older_weather_call_does_not_come_back(self):
+        """Only the last answer counts, or the 9 October GPU chat returns."""
+        from openjarvis.agents.tool_routing import last_called_tools
+
+        prior = [
+            {"role": "user", "content": "will it rain later?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "1", "function": {"name": "weather"}}],
+            },
+            {"role": "user", "content": "best value rtx gpu with 16gb vram?"},
+            {"role": "assistant", "content": "The 5060 Ti."},
+        ]
+        called = last_called_tools(prior)
+        assert called == set()
+        kept = self._kept("how fast is it in tokens/s", prior, called)
+        assert "weather" not in kept
+
+    def test_will_it_still_be_like_that_tonight(self):
+        """Two unrelated turns after a weather answer (f04)."""
+        prior = [
+            {"role": "user", "content": "What's the weather in Lucban?"},
+            {"role": "user", "content": "Who won the 2022 World Cup?"},
+            {"role": "user", "content": "What's 2 to the 20th?"},
+        ]
+        kept = self._kept("And will it still be like that tonight?", prior)
+        assert "weather" in kept

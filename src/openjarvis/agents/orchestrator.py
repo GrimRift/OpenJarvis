@@ -370,14 +370,17 @@ class OrchestratorAgent(ToolUsingAgent):
         # loop and a provider's prompt cache keeps hitting.
         openai_tools = self._executor.get_openai_tools() if self._tools else []
         if openai_tools and self._route_tools:
-            from openjarvis.agents.tool_routing import route_tools, routing_text
+            from openjarvis.agents.tool_routing import (
+                last_called_tools,
+                route_tools,
+                routing_text,
+            )
 
+            prior = getattr(getattr(context, "conversation", None), "messages", ())
             openai_tools = route_tools(
                 openai_tools,
-                routing_text(
-                    input,
-                    getattr(getattr(context, "conversation", None), "messages", ()),
-                ),
+                routing_text(input, prior),
+                last_called_tools(prior),
             )
 
         all_tool_results: list[ToolResult] = []
