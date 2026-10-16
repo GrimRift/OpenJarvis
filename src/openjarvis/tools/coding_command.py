@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any, List, Optional
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
-from openjarvis.tools._stubs import BaseTool, ToolSpec
+from openjarvis.tools._stubs import BaseTool, ToolSpec, confirmation_required
 
 _ALLOWED_EXECUTABLES = frozenset(
     {"python", "pytest", "uv", "git", "node", "npm", "npx"}
@@ -32,6 +33,73 @@ def _truncate(text: str) -> str:
     if len(text.encode("utf-8", errors="replace")) <= _MAX_OUTPUT_BYTES:
         return text
     return text[:_MAX_OUTPUT_BYTES] + "\n... (output truncated)"
+
+
+# What makes a command destructive, for the user's yes (16 October: "run a
+# terminal command to delete <file>" became `python -c "...p.unlink()"` and
+# ran at once). A word list, not a sandbox: it catches the ordinary ways a
+# file is deleted, moved or overwritten, and a script file run by name is
+# not read. Inline code that starts a shell is counted too, since the shell
+# could do any of it.
+_INLINE_CODE_FLAGS = frozenset({"-c", "-e", "-p", "--eval", "--print"})
+_DESTRUCTIVE_CODE = re.compile(
+    r"unlink|rmtree|rmdir|removedirs|\bremove\s*\(|\brename\s*\(|os\.replace|"
+    r"shutil\.(?:move|copy\w*)|write_text|write_bytes|truncate|"
+    r"open\s*\([^)]*['\"][wax]b?\+?['\"]|"
+    r"\.(?:rm|rename|writeFile|appendFile|copyFile|cp)(?:Sync)?\s*\(|"
+    r"rimraf|subprocess|os\.system|os\.popen|child_process|execSync|spawn|"
+    r"\b(?:del|erase|rm|rd|mv|move|Remove-Item|Move-Item|Set-Content|"
+    r"Clear-Content)\b",
+    re.IGNORECASE,
+)
+_GIT_DESTRUCTIVE = frozenset({"rm", "clean", "restore", "filter-branch"})
+_PACKAGE_REMOVE = frozenset(
+    {"uninstall", "remove", "rm", "un", "unlink", "prune", "rimraf", "del-cli"}
+)
+
+
+def destructive_reason(executable: str, args: List[str]) -> str:
+    """Why this command could delete, move or overwrite something; "" if not."""
+    lowered = [arg.lower() for arg in args]
+    # Anywhere in the line, not only after `python`: `uv run python -c ...`
+    # and `npx node -e ...` carry the same code.
+    for flag, code in zip(lowered, args[1:]):
+        if flag in _INLINE_CODE_FLAGS and _DESTRUCTIVE_CODE.search(code):
+            return "inline code that deletes, moves or overwrites files"
+    if executable in ("python", "node"):
+        return ""
+    if executable == "git" and lowered:
+        sub, rest = lowered[0], lowered[1:]
+        if sub in _GIT_DESTRUCTIVE:
+            return f"git {sub} removes or discards files"
+        if sub == "reset" and any(f in rest for f in ("--hard", "--merge", "--keep")):
+            return "git reset discards uncommitted work"
+        if sub in ("checkout", "switch") and any(
+            f in rest for f in ("--", ".", "-f", "--force", "--discard-changes")
+        ):
+            return f"git {sub} overwrites uncommitted changes"
+        if sub == "push" and any(
+            f in ("-f", "--delete", "-d")
+            or f.startswith("--force")
+            or f.startswith("+")
+            for f in rest
+        ):
+            return "git push rewrites or deletes remote history"
+        if sub in ("branch", "tag") and any(
+            f in ("-d", "--delete", "-f", "--force") for f in rest
+        ):
+            return f"git {sub} deletes or overwrites a ref"
+        if sub == "stash" and rest[:1] and rest[0] in ("drop", "clear"):
+            return "git stash drop/clear discards saved work"
+        if sub == "worktree" and rest[:1] and rest[0] in ("remove", "prune"):
+            return "git worktree remove deletes a checkout"
+        return ""
+    if executable in ("npm", "npx", "uv"):
+        if any(arg in _PACKAGE_REMOVE for arg in lowered):
+            return f"{executable} removes packages or files"
+        if executable == "uv" and lowered[:2] == ["cache", "clean"]:
+            return "uv cache clean deletes the cache"
+    return ""
 
 
 @ToolRegistry.register("coding_command")
@@ -152,6 +220,16 @@ class CodingCommandTool(BaseTool):
             return self._error("timeout_seconds must be an integer.")
         if timeout_seconds < 1 or timeout_seconds > _MAX_TIMEOUT_SECONDS:
             return self._error("timeout_seconds must be between 1 and 120.")
+
+        reason = destructive_reason(executable_name, args)
+        if reason:
+            from openjarvis.security import confirmations
+
+            asked = {"executable": executable_name, "args": args, "cwd": raw_cwd}
+            if not confirmations.decide(self.tool_id, asked):
+                return confirmation_required(
+                    self.tool_id, asked, f"run {executable_name} — {reason}"
+                )
 
         executable_path = shutil.which(executable_name)
         if executable_path is None:

@@ -43,9 +43,10 @@ import json
 import re
 import threading
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 #: A pending request expires rather than waiting forever for an answer.
 PENDING_TTL_SECONDS = 300.0
@@ -236,6 +237,59 @@ def reset_turn(token) -> None:
         pass
 
 
+@contextmanager
+def scope(messages: Any) -> Iterator[None]:
+    """Bind the turn in the task that actually runs its tools.
+
+    A streamed reply runs in Starlette's streaming task, not the endpoint's,
+    and ``BaseHTTPMiddleware`` loses what the endpoint set on the way. Without
+    this the gate saw no turn, failed closed, and a "yes" could never
+    redeem anything.
+    """
+    token = set_turn(messages)
+    try:
+        yield
+    finally:
+        reset_turn(token)
+
+
+#: Words that make a request sweep rather than name one thing: "delete all
+#: my reminders", "forget everything".
+_SWEEPING = re.compile(r"\b(?:all|every|everything|entire|whole)\b", re.IGNORECASE)
+
+
+def user_swept() -> bool:
+    """Whether the user's own message this turn asked for everything at once."""
+    context = _current_turn.get()
+    return bool(context and _SWEEPING.search(context.user_text or ""))
+
+
+# (turn, kind) -> how many destructive calls of that kind this turn ran.
+_turn_counts: dict[tuple[str, str], tuple[int, float]] = {}
+
+
+def count_this_turn(kind: str, n: int = 1) -> int:
+    """Add *n* to this turn's tally for *kind*; return the tally before it.
+
+    The fingerprint gate guards one call at a time, so "cancel all" sent as
+    nine separate calls would each look like a lone request. A tool counts
+    its own removals here and asks once the turn has already removed one.
+    Without a turn (a scheduled job) nothing is counted and 0 is returned.
+    """
+    context = _current_turn.get()
+    if context is None:
+        return 0
+    key = (context.turn_key, kind)
+    now = time.monotonic()
+    with _pending_lock:
+        for stale, (_, at) in list(_turn_counts.items()):
+            if now - at > PENDING_TTL_SECONDS:
+                _turn_counts.pop(stale, None)
+        before = _turn_counts.get(key, (0, now))[0]
+        _turn_counts[key] = (before + n, now)
+    return before
+
+
 def _purge_expired(now: float) -> None:
     for key, (_, issued_at) in list(_pending.items()):
         if now - issued_at > PENDING_TTL_SECONDS:
@@ -274,18 +328,22 @@ def clear() -> None:
     """Drop every pending request. For tests."""
     with _pending_lock:
         _pending.clear()
+        _turn_counts.clear()
 
 
 __all__ = [
     "PENDING_TTL_SECONDS",
     "TurnContext",
     "clear",
+    "count_this_turn",
     "decide",
     "fingerprint",
     "is_affirmative",
     "last_user_text",
     "reset_turn",
+    "scope",
     "set_turn",
     "turn_key",
     "user_requested",
+    "user_swept",
 ]

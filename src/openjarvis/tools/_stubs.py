@@ -41,6 +41,35 @@ class ToolSpec:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+def confirmation_required(
+    tool_name: str, arguments: Any, what: str = ""
+) -> ToolResult:
+    """The answer to a call that must wait for the user's "yes".
+
+    Used by the executor for ``requires_confirmation`` tools, and by tools
+    that only sometimes need it (a broad ``forget``, a recurring task's
+    cancel) after ``confirmations.decide`` said not yet. *what* is the
+    plain account of what would happen, for the model to put to the user.
+    """
+    described = f" It would: {what}." if what else ""
+    return ToolResult(
+        tool_name=tool_name,
+        content=(
+            f"Confirmation required before running '{tool_name}'.{described} "
+            f"Tell the user exactly what it would do, with these arguments: "
+            f"{arguments}. Do not claim it has happened. If they agree, call "
+            f"it again with identical arguments — their reply is what "
+            f"authorises it."
+        ),
+        success=False,
+        metadata={
+            "requires_confirmation": True,
+            "tool": tool_name,
+            "arguments": arguments,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # BaseTool ABC
 # ---------------------------------------------------------------------------
@@ -299,23 +328,7 @@ class ToolExecutor:
 
                 approved = confirmations.decide(tool_call.name, params)
             if not approved:
-                return ToolResult(
-                    tool_name=tool_call.name,
-                    content=(
-                        f"Confirmation required before running "
-                        f"'{tool_call.name}'. Tell the user exactly what it "
-                        f"would do, with these arguments: {params}. Do not "
-                        f"claim it has happened. If they agree, call it again "
-                        f"with identical arguments — their reply is what "
-                        f"authorises it."
-                    ),
-                    success=False,
-                    metadata={
-                        "requires_confirmation": True,
-                        "tool": tool_call.name,
-                        "arguments": params,
-                    },
-                )
+                return confirmation_required(tool_call.name, params)
 
         # Emit start event. ``agent`` carries the managed-agent UUID so the
         # AgentExecutor's trace subscriber (which filters by agent_id) can

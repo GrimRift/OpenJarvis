@@ -873,7 +873,7 @@ class ResumeScheduledTaskTool(BaseTool):
 
 @ToolRegistry.register("cancel_scheduled_task")
 class CancelScheduledTaskTool(BaseTool):
-    """Cancel a scheduled task."""
+    """Cancel one or more scheduled tasks."""
 
     tool_id = "cancel_scheduled_task"
     _scheduler: Optional[Any] = None
@@ -882,7 +882,15 @@ class CancelScheduledTaskTool(BaseTool):
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name="cancel_scheduled_task",
-            description="Cancel a scheduled task.",
+            description=(
+                "Cancel scheduled tasks for good. To cancel several, list them "
+                "all in `task_ids` in ONE call. Cancelling a recurring task "
+                "(Sage's diary, memory clean-up, digest, class check...) or "
+                "more than one at once comes back as a confirmation request "
+                "for the user; one call means one question. A one-off task "
+                "the user named goes at once. To stop something for a while, "
+                "pause_scheduled_task instead."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -890,8 +898,13 @@ class CancelScheduledTaskTool(BaseTool):
                         "type": "string",
                         "description": "ID of the task to cancel.",
                     },
+                    "task_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Several task IDs, cancelled together.",
+                    },
                 },
-                "required": ["task_id"],
+                "required": [],
             },
             category="scheduler",
         )
@@ -903,32 +916,81 @@ class CancelScheduledTaskTool(BaseTool):
                 content="Scheduler not available.",
                 success=False,
             )
-        task_id = params.get("task_id", "")
-        if not task_id:
+        ids: List[str] = []
+        raw = [params.get("task_id")]
+        listed = params.get("task_ids")
+        if isinstance(listed, list):
+            raw.extend(listed)
+        for value in raw:
+            task_id = str(value or "").strip()
+            if task_id and task_id not in ids:
+                ids.append(task_id)
+        if not ids:
             return ToolResult(
                 tool_name="cancel_scheduled_task",
                 content="Missing required parameter: task_id.",
                 success=False,
             )
+        from openjarvis.security import confirmations
+        from openjarvis.tools._stubs import confirmation_required
+
         try:
-            self._scheduler.cancel_task(task_id)
-            return ToolResult(
-                tool_name="cancel_scheduled_task",
-                content=f"Task {task_id} cancelled.",
-                success=True,
-            )
-        except KeyError:
-            return ToolResult(
-                tool_name="cancel_scheduled_task",
-                content=f"Task not found: {task_id}",
-                success=False,
-            )
+            known = {t.id: t for t in self._scheduler.list_tasks()}
         except Exception as exc:
             return ToolResult(
                 tool_name="cancel_scheduled_task",
                 content=f"Failed to cancel task: {exc}",
                 success=False,
             )
+        found = [known[i] for i in ids if i in known]
+        missing = [i for i in ids if i not in known]
+        live = [t for t in found if t.status not in ("cancelled", "completed")]
+        # 16 October: "delete all my reminders" cancelled Sage's diary,
+        # memory clean-up, digest and class check, six calls, nobody asked.
+        # A recurring job is rarely what a user means by a reminder, and
+        # Sage's own jobs (managed_by / task key) keep it working.
+        weighty = len(live) > 1 or any(
+            t.schedule_type != "once"
+            or (t.metadata or {}).get("managed_by")
+            or (t.metadata or {}).get("openjarvis_task_key")
+            for t in live
+        )
+        if live and not weighty:
+            weighty = confirmations.count_this_turn(self.tool_id, 0) > 0
+        if weighty:
+            asked = {"task_ids": sorted(t.id for t in live)}
+            if not confirmations.decide(self.tool_id, asked):
+                what = "cancel " + "; ".join(
+                    f"{t.id} ({_describe_schedule(t.schedule_type, t.schedule_value)}"
+                    f": {t.prompt[:80]})"
+                    for t in live
+                )
+                return confirmation_required(self.tool_id, asked, what)
+        cancelled: List[str] = []
+        lines: List[str] = []
+        for task in live:
+            try:
+                self._scheduler.cancel_task(task.id)
+            except KeyError:
+                missing.append(task.id)
+                continue
+            except Exception as exc:
+                lines.append(f"Failed to cancel {task.id}: {exc}")
+                continue
+            cancelled.append(task.id)
+            lines.append(f"Task {task.id} cancelled.")
+        confirmations.count_this_turn(self.tool_id, len(cancelled))
+        for task in found:
+            if task not in live:
+                lines.append(f"Task {task.id} was already {task.status}.")
+        for task_id in missing:
+            lines.append(f"Task not found: {task_id}")
+        return ToolResult(
+            tool_name="cancel_scheduled_task",
+            content="\n".join(lines),
+            success=bool(cancelled) or (not missing and bool(found)),
+            metadata={"cancelled": cancelled, "missing": missing},
+        )
 
 
 __all__ = [

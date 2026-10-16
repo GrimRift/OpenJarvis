@@ -2,11 +2,11 @@
 
 ``remember`` stores what the user said, verbatim, as a pinned curated fact:
 the user decided it was worth keeping, so the model does not judge that.
-``forget`` removes every fact matching a phrase at once -- the user's
-choice -- and says what went, since each removal is restorable for a week
-by ``restore_memory``. ``recall`` searches facts, episodes and documents on
-demand, with provenance, for the questions the turn's own injection did
-not cover.
+``forget`` removes the facts that clearly match a phrase -- asking first
+when that is more than two, or everything -- and says what went, since
+each removal is restorable for a week by ``restore_memory``. ``recall``
+searches facts, episodes and documents on demand, with provenance, for
+the questions the turn's own injection did not cover.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any, List, Optional
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
-from openjarvis.tools._stubs import BaseTool, ToolSpec
+from openjarvis.tools._stubs import BaseTool, ToolSpec, confirmation_required
 
 
 def _store() -> Any:
@@ -104,6 +104,66 @@ class RememberTool(BaseTool):
         )
 
 
+#: More clear matches than this and the user is shown them before they go.
+_FORGET_WITHOUT_ASKING = 2
+
+#: Words that say how much to forget, not what: "forget everything you know
+#: about me" names no subject at all.
+_SWEEP_WORDS = frozenset(
+    """about all anything data else every everything fact facts info
+    information know knew learned mine myself remember remembered said stuff
+    thing things told""".split()
+)
+
+
+def _subject_words(about: str) -> List[str]:
+    """The words of *about* that name a subject; empty for "everything"."""
+    from openjarvis.memory.recall import tokens
+
+    return [t for t in tokens(about) if t not in _SWEEP_WORDS]
+
+
+def _same_word(a: str, b: str) -> bool:
+    # "locker"/"lockers", "address"/"addresses"; short words must be exact,
+    # or "code" would be part of "coder" and "cod".
+    if a == b:
+        return True
+    return min(len(a), len(b)) >= 4 and (a.startswith(b) or b.startswith(a))
+
+
+def _clear_matches(facts: List[Any], about: str, subject: List[str]) -> List[Any]:
+    """Facts that are plainly about *subject*, best first.
+
+    A fact counts when it has every subject word ("gym locker code" needs
+    gym, locker and code). With none like that, the facts sharing the most
+    words -- at least half of them -- that score near the best. Any shared
+    word was the old rule, and "gym locker code" also took the facts about
+    Claude Code (16 October).
+    """
+    from openjarvis.memory.recall import score_facts, tokens
+
+    scores = score_facts(facts, about)
+    wanted = set(subject)
+    rows = []
+    for fact, score in zip(facts, scores):
+        words = set(tokens(fact.text))
+        hits = sum(1 for w in wanted if any(_same_word(w, t) for t in words))
+        if hits:
+            rows.append((hits, score, fact))
+    if not rows:
+        return []
+    full = [r for r in rows if r[0] == len(wanted)]
+    if not full:
+        most = max(r[0] for r in rows)
+        if most * 2 < len(wanted):
+            return []
+        top = [r for r in rows if r[0] == most]
+        best = max(r[1] for r in top)
+        full = [r for r in top if r[1] >= 0.75 * best]
+    full.sort(key=lambda r: r[1], reverse=True)
+    return [r[2] for r in full]
+
+
 @ToolRegistry.register("forget")
 class ForgetTool(BaseTool):
     """Remove what matches a phrase, at once, restorably."""
@@ -120,7 +180,11 @@ class ForgetTool(BaseTool):
                 "about the k-drama', 'forget my old address'. Removes every "
                 "remembered fact matching the phrase and reports each one so "
                 "the user can ask to restore any of them (restore_memory). "
-                "Removal is immediate; do not ask for confirmation first."
+                "Only facts that clearly match are removed, so name the "
+                "subject the way the user did. One or two clear matches go "
+                "at once; more, or a sweeping subject ('everything', 'all "
+                "about me'), come back as a confirmation request for the "
+                "user. Do not ask before calling: the tool asks when it must."
             ),
             parameters={
                 "type": "object",
@@ -144,17 +208,18 @@ class ForgetTool(BaseTool):
             return ToolResult(
                 tool_name=self.tool_id, content="Forget what?", success=False
             )
-        from openjarvis.memory.recall import score_facts
+        from openjarvis.security import confirmations
 
         store = _store()
         facts = store.list()
-        scores = score_facts(facts, about)
-        limit = max(1, min(int(params.get("limit") or 5), 20))
-        matched = [
-            f
-            for f, s in sorted(zip(facts, scores), key=lambda p: p[1], reverse=True)
-            if s > 0
-        ][:limit]
+        subject = _subject_words(about)
+        if subject:
+            limit = max(1, min(int(params.get("limit") or 5), 20))
+            matched = _clear_matches(facts, about, subject)[:limit]
+        else:
+            # "everything", "all about me": the whole memory, never on a
+            # guess -- 16 October, one sentence took 53 facts unasked.
+            matched = list(facts)
         if not matched:
             return ToolResult(
                 tool_name=self.tool_id,
@@ -162,6 +227,22 @@ class ForgetTool(BaseTool):
                 success=True,
                 metadata={"removed": []},
             )
+        if not subject or len(matched) > _FORGET_WITHOUT_ASKING:
+            # Fingerprinted on the subject alone: the facts themselves can
+            # change between the ask and the "yes" (the turn learns some).
+            asked = {"about": " ".join(about.lower().split())}
+            if not confirmations.decide(self.tool_id, asked):
+                if subject:
+                    what = (
+                        f"forget these {len(matched)} facts: "
+                        + "; ".join(f.text for f in matched)
+                    )
+                else:
+                    what = (
+                        f"forget ALL {len(matched)} remembered facts about the "
+                        "user (restorable for seven days)"
+                    )
+                return confirmation_required(self.tool_id, asked, what)
         removed = []
         for fact in matched:
             if store.remove(fact.id, f"forgotten on request: {about}"):

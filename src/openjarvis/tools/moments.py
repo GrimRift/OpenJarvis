@@ -194,7 +194,9 @@ class TellMeWhenTool(BaseTool):
                 "user is. An absolute time or a job is a watch: said when due "
                 "and the user is at the desk (pass anywhere=true to make it a "
                 "reminder too). action='list' shows pending ones; "
-                "action='cancel' with watch_id removes one."
+                "action='cancel' with watch_id removes one; to remove "
+                "several, list them all in watch_ids in ONE call -- that "
+                "comes back as one confirmation request for the user."
             ),
             parameters={
                 "type": "object",
@@ -238,9 +240,76 @@ class TellMeWhenTool(BaseTool):
                         "type": "string",
                         "description": "Watch id to cancel.",
                     },
+                    "watch_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Several watch ids, cancelled together.",
+                    },
                 },
                 "required": [],
             },
+        )
+
+    def _cancel(
+        self, engine: Optional[MomentEngine], params: dict[str, Any]
+    ) -> ToolResult:
+        from openjarvis.security import confirmations
+        from openjarvis.tools._stubs import confirmation_required
+
+        ids: list[str] = []
+        raw = [params.get("watch_id")]
+        if isinstance(params.get("watch_ids"), list):
+            raw.extend(params["watch_ids"])
+        for value in raw:
+            watch_id = str(value or "").strip()
+            if watch_id and watch_id not in ids:
+                ids.append(watch_id)
+        if not ids:
+            return ToolResult(
+                tool_name=self.tool_id,
+                content="A watch_id is needed to cancel; call with action='list'.",
+                success=False,
+            )
+        watches = engine.list_watches() if engine else load_state().watches
+        by_id = {w.id: w for w in watches}
+        # 16 October: "delete all my reminders" went as nine separate cancels,
+        # each a lone request to the fingerprint gate. More than one removal
+        # in a turn -- or the first of a sweep -- waits for the user's yes.
+        weighty = (
+            len(ids) > 1
+            or confirmations.count_this_turn(self.tool_id, 0) > 0
+            or (confirmations.user_swept() and len(watches) > 1)
+        )
+        if weighty:
+            asked = {"action": "cancel", "watch_ids": sorted(ids)}
+            if not confirmations.decide(self.tool_id, asked):
+                what = "cancel " + "; ".join(
+                    f"{i} ({by_id[i].what})" if i in by_id else i for i in ids
+                )
+                return confirmation_required(self.tool_id, asked, what)
+        cancelled: list[str] = []
+        for watch_id in ids:
+            if engine is not None:
+                removed = engine.cancel_watch(watch_id)
+            else:
+                state = load_state()
+                before = len(state.watches)
+                state.watches = [w for w in state.watches if w.id != watch_id]
+                removed = len(state.watches) != before
+                if removed:
+                    save_state(state)
+            if removed:
+                cancelled.append(watch_id)
+        confirmations.count_this_turn(self.tool_id, len(cancelled))
+        lines = [
+            f"Cancelled watch {i}." if i in cancelled else f"No watch called {i}."
+            for i in ids
+        ]
+        return ToolResult(
+            tool_name=self.tool_id,
+            content="\n".join(lines),
+            success=bool(cancelled),
+            metadata={"cancelled": cancelled},
         )
 
     def execute(self, **params: Any) -> ToolResult:
@@ -255,31 +324,7 @@ class TellMeWhenTool(BaseTool):
                 metadata={"watches": [w.to_dict() for w in watches]},
             )
         if action == "cancel":
-            watch_id = str(params.get("watch_id") or "").strip()
-            if not watch_id:
-                return ToolResult(
-                    tool_name=self.tool_id,
-                    content="A watch_id is needed to cancel; call with action='list'.",
-                    success=False,
-                )
-            if engine is not None:
-                removed = engine.cancel_watch(watch_id)
-            else:
-                state = load_state()
-                before = len(state.watches)
-                state.watches = [w for w in state.watches if w.id != watch_id]
-                removed = len(state.watches) != before
-                if removed:
-                    save_state(state)
-            return ToolResult(
-                tool_name=self.tool_id,
-                content=(
-                    f"Cancelled watch {watch_id}."
-                    if removed
-                    else f"No watch called {watch_id}."
-                ),
-                success=removed,
-            )
+            return self._cancel(engine, params)
 
         what = str(params.get("what") or "").strip()
         if not what:
@@ -327,6 +372,20 @@ class TellMeWhenTool(BaseTool):
                 return ToolResult(
                     tool_name=self.tool_id,
                     content=f"Could not read {at!r} as a local ISO datetime.",
+                    success=False,
+                )
+            # "Remind me yesterday at 3pm" was accepted and would have gone
+            # off at once (wide test x08). A minute's grace for "at 3" said
+            # at 3:00:20.
+            if due_at < now - 60:
+                past = to_local(due_at, configured_timezone())
+                return ToolResult(
+                    tool_name=self.tool_id,
+                    content=(
+                        f"{past.strftime('%H:%M on %A %d %B')} has already "
+                        "passed, so nothing was set. Ask the user for a time "
+                        "that is still ahead."
+                    ),
                     success=False,
                 )
         anywhere = in_minutes is not None or bool(params.get("anywhere", False))

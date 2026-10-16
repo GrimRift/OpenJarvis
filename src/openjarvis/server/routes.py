@@ -2337,6 +2337,7 @@ async def _handle_streaming_orchestrator(
         # This body runs in Starlette's streaming task. Binding only in the
         # endpoint/response factory loses context across BaseHTTPMiddleware.
         with (
+            confirmations.scope(req.messages),
             page_access.scope(
                 query_text, page_access.previous_user_text(req.messages)
             ),
@@ -2405,6 +2406,7 @@ async def _handle_agent_stream(
         from openjarvis.security import confirmations as _confirmations
         from openjarvis.security import page_access as _page_access
 
+        _confirmations.set_turn(req.messages)
         _page_access.set_turn(
             _confirmations.last_user_text(req.messages),
             _page_access.previous_user_text(req.messages),
