@@ -108,7 +108,10 @@ class VolumeTool(BaseTool):
                 "target='auto' (default) changes Spotify while Spotify is "
                 "playing and the PC's master volume otherwise; 'pc' when they "
                 "say the PC, computer, laptop or speakers; 'spotify' when they "
-                "name Spotify. Never pause instead of changing the volume."
+                "name Spotify, or when the same request also plays something "
+                "on Spotify ('play Ben&Ben and set the volume to 40%'). Never "
+                "pause instead of changing the volume. Only for a volume "
+                "request: a bare 'stop' or 'pause' is media_pause, never mute."
             ),
             parameters={
                 "type": "object",

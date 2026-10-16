@@ -144,3 +144,7 @@ def test_the_description_steers_away_from_pausing():
     description = VolumeTool().spec.description
     assert "turn it down a bit" in description
     assert "Never pause" in description
+    # Live probe, 16 October: a bare "Stop." muted the PC (x11), and "play
+    # Ben&Ben and set the volume to 40%" set the PC, not Spotify (m09).
+    assert "a bare 'stop' or 'pause' is media_pause, never mute" in description
+    assert "also plays something on Spotify" in description
