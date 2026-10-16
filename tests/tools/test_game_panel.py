@@ -73,6 +73,36 @@ class TestChessPanel:
         assert len(panel["last"]) == 2  # Sage, White, has moved
 
 
+class TestCaptureFlag:
+    """A clicked move is spoken only when a piece is taken, or at the end."""
+
+    def test_a_quiet_move_is_not_a_capture(self):
+        _start("let's play chess", game="chess")
+        panel = _play(action="move", move="a3").metadata["game_panel"]
+        assert panel["capture"] is (
+            "takes" in panel["line"]
+        )  # Sage's reply may itself take
+
+    def test_taking_a_piece_is_flagged(self):
+        _start("let's play chess", game="chess")
+        session = games.load()
+        # White to move, Black's knight hanging on d5 to the pawn on e4.
+        session.state["fen"] = (
+            "rnbqkb1r/pppppppp/8/3n4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3"
+        )
+        games.save(session)
+        panel = _play(action="move", move="exd5").metadata["game_panel"]
+        assert panel["capture"] is True
+
+    def test_other_actions_are_not_captures(self):
+        _start("let's play chess", game="chess")
+        _play(action="move", move="e4")
+        panel = _play(action="difficulty", difficulty="hard").metadata[
+            "game_panel"
+        ]
+        assert panel["capture"] is False
+
+
 class TestUndo:
     def test_undo_takes_back_the_users_move_and_sages_reply(self):
         _start("let's play chess", game="chess")

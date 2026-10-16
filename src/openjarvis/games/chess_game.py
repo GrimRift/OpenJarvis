@@ -94,6 +94,7 @@ class ChessGame(Game):
         played = chess.Move.from_uci(move)
         state["last"] = _in_words(board, played)
         state["last_move"] = move
+        state["last_capture"] = board.is_capture(played)
         board.push(played)
         state["fen"] = board.fen()
         state["turn"] = "sage" if by == "user" else "user"

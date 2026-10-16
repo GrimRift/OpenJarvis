@@ -31,6 +31,8 @@ interface GameBase {
   /** What Sage said about it. */
   line: string;
   can_undo: boolean;
+  /** This move took a piece (chess): a clicked move is spoken only then, or at the end. */
+  capture?: boolean;
   /** Set when the user ended the game (the board is cleared on the server). */
   ended?: boolean;
 }

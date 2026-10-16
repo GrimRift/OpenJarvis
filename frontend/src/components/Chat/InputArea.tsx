@@ -21,7 +21,7 @@ import { useImagePresenter } from '../../lib/image-presenter';
 import { useWeatherPresenter } from '../../lib/weather-presenter';
 import { weatherFromToolCall } from '../../lib/weather-report';
 import { gameFromToolCall } from '../../lib/game-panel';
-import { setGameChat, useGamePresenter } from '../../lib/game-presenter';
+import { sayLine, setGameChat, useGamePresenter } from '../../lib/game-presenter';
 import { applyPlayCommand, playCommandFromToolCall } from '../../lib/book-player';
 import { useSystemPresenter } from '../../lib/system-presenter';
 import { systemFromToolCall } from '../../lib/system-report';
@@ -792,6 +792,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     voiceOriginatedRef.current = false;
     const wasGame = gameTurnRef.current;
     gameTurnRef.current = false;
+    // A click in the game panel is not read aloud move by move: Sage speaks
+    // only when a piece is taken or the game ends (the user's choice, 16
+    // October), from the tool event below. Typed and spoken moves are as before.
+    const typedSpoken = speakTypedReplies && !wasGame;
     lastReplyWasVoiceRef.current = wasVoice;
     mediaTurnRef.current = false;
     const wasFollowUp = wasVoice && voiceFollowUpRef.current;
@@ -951,7 +955,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // being spoken at the spoken limit; a voice reply is read in full.
     const incrementalSpeech =
       voiceRepliesEnabled &&
-      shouldStreamReplySpeech(wasVoice, content, speakTypedReplies || wasGame)
+      shouldStreamReplySpeech(wasVoice, content, typedSpoken)
         ? beginStreamingSpeech(ttsVoice, { steps: asksForSteps(content) })
         : null;
     // A typed question whose answer is read aloud is a spoken exchange too:
@@ -1408,6 +1412,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               // The game panel: opens on a new game, moves on every later result.
               const game = gameFromToolCall(tc);
               if (game) useGamePresenter.getState().showNew(tc.id, game);
+              if (game && wasGame && (game.over || game.capture)) {
+                sayLine(game.line.split('```')[0].trim());
+              }
               const machine = systemFromToolCall(tc);
               if (machine) {
                 useSystemPresenter
@@ -1603,7 +1610,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             content,
             Boolean(audio),
             accumulatedContent,
-            speakTypedReplies,
+            typedSpoken,
           ));
       if (replyWillBeSpoken) {
         openDiagramFromAnswer(assistantMsg.id, accumulatedContent);
@@ -1666,7 +1673,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           content,
           Boolean(audio),
           accumulatedContent,
-          speakTypedReplies,
+          typedSpoken,
         )
       ) {
         const playbackOwner = `reply-request-${generateId()}`;

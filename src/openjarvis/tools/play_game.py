@@ -145,6 +145,9 @@ class PlayGameTool(BaseTool):
 
     def execute(self, **params: Any) -> ToolResult:
         action = str(params.get("action") or "").lower()
+        # Set by a move that took a piece; the app speaks a clicked move only
+        # then, or at the end (the user's choice, 16 October).
+        self._captured = False
         try:
             if action == "start":
                 return self._start(params)
@@ -290,6 +293,7 @@ class PlayGameTool(BaseTool):
         move = game.parse_move(state, text)
         before = copy.deepcopy(state)
         game.apply(state, move, "user")
+        self._captured = bool(state.get("last_capture"))
         session.history = [*(session.history or []), before][-HISTORY_LIMIT:]
         session.moves = [*(session.moves or []), f"user:{move}"]
         lines = [f"The user played: {game.describe_move(move, state)}."]
@@ -298,6 +302,7 @@ class PlayGameTool(BaseTool):
         if not result.over:
             reply = game.choose_move(state, session.difficulty)
             game.apply(state, reply, "sage")
+            self._captured = self._captured or bool(state.get("last_capture"))
             session.moves.append(f"sage:{reply}")
             lines.append(f"You (Sage) played: {game.describe_move(reply, state)}.")
             spoken += f" I {game.verb} {game.describe_move(reply, state)}."
@@ -443,6 +448,7 @@ class PlayGameTool(BaseTool):
             "note": game.status_note(state) if not result.over else "",
             "line": spoken,
             "can_undo": bool(session.history) and not result.over,
+            "capture": bool(getattr(self, "_captured", False)),
             **game.snapshot(state),
         }
 
