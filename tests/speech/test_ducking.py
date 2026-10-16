@@ -617,3 +617,33 @@ class TestOneRecordForEveryHolder:
             ducking._reset()  # the server stopped; memory is gone, the file is not
             assert ducking.restore_leftover() == ["opera.exe"]
         assert opera.SimpleAudioVolume.level == 0.8
+
+
+def test_a_dead_apps_expired_session_is_never_a_candidate(monkeypatch) -> None:
+    # It "took" the restore meant for the app's next session (16 October).
+    import sys
+
+    from pycaw import pycaw
+
+    class _P:
+        def __init__(self, pid, name):
+            self.pid, self._name = pid, name
+
+        def name(self):
+            return self._name
+
+        def parents(self):
+            return []
+
+    class _S:
+        def __init__(self, pid, state):
+            self.Process, self.State = _P(pid, "opera.exe"), state
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        pycaw.AudioUtilities,
+        "GetAllSessions",
+        staticmethod(lambda: [_S(11, ducking._STATE_EXPIRED), _S(12, 0)]),
+    )
+    found = ducking._sessions(active_only=False)
+    assert [s.Process.pid for _, s in found] == [12]

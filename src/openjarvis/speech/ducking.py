@@ -38,6 +38,10 @@ _OWN_PLAYERS = {"ffplay.exe", "powershell.exe", "pwsh.exe"}
 #: media down while the app speaks).
 _OWN_APP = "sage-desktop.exe"
 _STATE_ACTIVE = 1
+#: A session whose process has gone. Windows still lists it for a moment, and
+#: a restore that "fixed" it counted as done while the app's new session,
+#: started at the lowered level, was left there (16 October).
+_STATE_EXPIRED = 2
 # The levels a duck in progress will put back, on disk: a process killed
 # mid-sentence (Stop Sage during a moment, a test run interrupted) never
 # reached its restore, and each such kill left the browser at 35% of the
@@ -80,6 +84,8 @@ def _sessions(active_only: bool = True) -> List[Tuple[str, Any]]:
         except Exception:
             continue
         if name.lower() in _OWN_PLAYERS or _is_sage_app(process):
+            continue
+        if session.State == _STATE_EXPIRED:
             continue
         if active_only and session.State != _STATE_ACTIVE:
             continue
