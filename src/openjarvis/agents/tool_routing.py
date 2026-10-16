@@ -147,7 +147,12 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             r"what\s+(has\s+)?changed|new\s+in\s+sage|which\s+model|"
             r"what\s+model|version|how\s+do\s+i\s+(use|turn|enable|disable|"
             r"switch|set|change|get)|how\s+does\s+(your|the|sage)|"
-            r"dip|duck\w*)\b",
+            r"(do|are)\s+you\s+(use|using)|you'?re\s+using|"
+            # The app's own feature words: "how do I rewind a chat?" and
+            # "which mic for the wake word?" missed without them (10-16).
+            r"rewind\w*|wake\s*word|mic|microphone|orb|memory\s+(page|brain)|"
+            r"brain\s+tab|health\s+page|tray|shortcut|quiet\s+hours|"
+            r"speak\s+replies|dip|duck\w*)\b",
             re.IGNORECASE,
         ),
     },

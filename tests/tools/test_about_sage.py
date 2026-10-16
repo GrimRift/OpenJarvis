@@ -90,6 +90,16 @@ def test_code_search_and_read_stay_inside_tracked_source():
     assert "not one of" in mod.code(path="C:/AI/OpenJarvis-Data/config.toml")
 
 
+def test_code_folder_path_narrows_the_search_and_long_queries_rank_words():
+    narrowed = mod.code("def route_tools", path="agents/")
+    assert "src/openjarvis/agents/tool_routing.py:" in narrowed
+    assert "frontend/" not in narrowed
+    listing = mod.code(path="agents")
+    assert listing.startswith("Files under 'agents':")
+    ranked = mod.code("narrow groups routing pattern tokens")
+    assert "Matches for" in ranked
+
+
 def test_tool_dispatches_parts():
     result = AboutSageTool().execute(part="how_to", query="microphone")
     assert result.success and "Wake word microphone" in result.content
@@ -105,6 +115,8 @@ def test_tool_dispatches_parts():
         "what changed this week in sage",
         "how does your wake word work",
         "tell me about yourself",
+        "how do I rewind a chat?",
+        "which mic do you use for the wake word?",
     ],
 )
 def test_self_questions_route_the_tool(message):

@@ -59,8 +59,8 @@ _SECRET_KEY = re.compile(r"key|token|secret|password|credential|chat_id", re.I)
 #: and the tool list is what ``abilities`` reports.
 _SKIP_CONFIG_KEYS = {"system_prompt", "tools"}
 
-MAX_SEARCH_HITS = 40
-MAX_READ_LINES = 300
+MAX_SEARCH_HITS = 25
+MAX_READ_LINES = 200
 MAX_CHANGES = 40
 
 _files_lock = threading.Lock()
@@ -376,14 +376,20 @@ def whats_new(days: int = 14) -> str:
 
 def code(query: str = "", path: str = "", start_line: int = 1) -> str:
     files = source_files()
-    if path:
-        wanted = path.replace("\\", "/").strip().lstrip("./")
-        matches = [f for f in files if f == wanted or f.endswith("/" + wanted)]
-        if not matches:
+    wanted = path.replace("\\", "/").strip().lstrip("./").rstrip("/")
+    matches = [f for f in files if f == wanted or f.endswith("/" + wanted)]
+    if wanted and not matches:
+        # A folder ("server/") narrows the search instead of failing: the
+        # model passed one as a path four times in a row (10-16).
+        files = [f for f in files if f"/{wanted}/" in f"/{f}"]
+        if not files:
             return (
-                f"'{path}' is not one of Sage's readable source files. "
-                "Search with a query first to find the path."
+                f"'{path}' is not one of Sage's readable source files or "
+                "folders. Search with a query to find the path."
             )
+        if not query.strip():
+            return f"Files under '{path}':\n" + "\n".join(files[:60])
+    if matches:
         rel = matches[0]
         lines = (
             (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace").splitlines()
@@ -402,33 +408,40 @@ def code(query: str = "", path: str = "", start_line: int = 1) -> str:
     if not query.strip():
         return "Give a query to search Sage's code, or a path to read."
     needle = query.strip().lower()
-    words = _words(query)
+    words = sorted(set(_words(query)))
     hits: List[str] = []
-    word_hits: List[str] = []
+    scored: List[Tuple[int, str]] = []
     for rel in files:
         try:
             text = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         low = text.lower()
-        if needle not in low and not (words and all(w in low for w in words)):
+        if needle not in low and sum(w in low for w in words) < 2:
             continue
         for number, line in enumerate(text.splitlines(), 1):
             ll = line.lower()
+            row = f"{rel}:{number}: {line.strip()[:160]}"
             if needle in ll:
-                hits.append(f"{rel}:{number}: {line.strip()[:200]}")
-            elif words and len(words) > 1 and sum(w in ll for w in words) >= 2:
-                word_hits.append(f"{rel}:{number}: {line.strip()[:200]}")
-            if len(hits) >= MAX_SEARCH_HITS:
-                break
+                hits.append(row)
+            elif len(words) > 1:
+                # Long queries ("wake word detection threshold") rarely
+                # appear verbatim: rank lines by how many words they share.
+                score = sum(w in ll for w in words)
+                if score >= 2:
+                    scored.append((score, row))
         if len(hits) >= MAX_SEARCH_HITS:
             break
-    found = (hits or word_hits)[:MAX_SEARCH_HITS]
+    if not hits:
+        scored.sort(key=lambda s: -s[0])
+        hits = [row for _, row in scored]
+    found = hits[:MAX_SEARCH_HITS]
     if not found:
-        return f"Nothing in Sage's code matches '{query}'."
+        return f"Nothing in Sage's code matches '{query}'. Try one or two words."
     return (
-        f"Matches for '{query}' ({len(found)} shown). Read one with "
-        "part='code' and its path:\n" + "\n".join(found)
+        f"Matches for '{query}' ({len(found)} shown). Read the most likely "
+        "file with part='code' and its path; one or two reads are usually "
+        "enough to answer:\n" + "\n".join(found)
     )
 
 
