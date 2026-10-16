@@ -25,6 +25,16 @@ def _nobody_speaking(monkeypatch):
     monkeypatch.setattr(player, "_last_spoke_at", 0.0)
 
 
+@pytest.fixture(autouse=True)
+def _clean_record(monkeypatch):
+    """Every test starts with nobody holding, and no watcher for a returning
+    app is left polling the real data directory afterwards."""
+    monkeypatch.setattr(ducking, "_PENDING_WATCH_SECONDS", 0.0)
+    ducking._reset()
+    yield
+    ducking._reset()
+
+
 class _Volume:
     def __init__(self, level: float) -> None:
         self.level = level
@@ -478,3 +488,132 @@ def time_now() -> float:
     import time
 
     return time.time()
+
+
+class _Proc:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+
+
+class _AppSession(_Session):
+    def __init__(self, pid: int, level: float) -> None:
+        super().__init__(level)
+        self.Process = _Proc(pid)
+
+
+def _only(session):
+    return lambda active_only=True: [("opera.exe", session)]
+
+
+def _these(sessions):
+    return lambda active_only=True: list(sessions)
+
+
+class TestOneRecordForEveryHolder:
+    """16 October: Opera was found at 10%. The spoken announcement's duck
+    and the media hold each saved "the level before"; one starting while the
+    other was in force saved a lowered level as the app's own."""
+
+    def _state(self, tmp_path):
+        return patch.object(ducking, "_state_path", return_value=tmp_path / "duck.json")
+
+    def test_a_hold_starting_during_an_announcement_goes_back_to_the_real_level(
+        self, tmp_path
+    ) -> None:
+        opera = _AppSession(7, 0.8)
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", _only(opera)),
+            _no_sleep(),
+        ):
+            ducking.hold("speak", 0.35, fade_ms=0)
+            ducking.hold("talk", 0.10, fade_ms=0)
+            assert opera.SimpleAudioVolume.level == pytest.approx(0.08)
+            ducking.unhold("speak", fade_ms=0)
+            assert opera.SimpleAudioVolume.level == pytest.approx(0.08)
+            assert ducking.unhold("talk", fade_ms=0) == ["opera.exe"]
+        assert opera.SimpleAudioVolume.level == 0.8
+        assert not (tmp_path / "duck.json").exists()
+
+    def test_an_announcement_during_a_hold_neither_raises_nor_saves_the_low_level(
+        self, tmp_path
+    ) -> None:
+        opera = _AppSession(7, 0.8)
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", _only(opera)),
+            _no_sleep(),
+        ):
+            ducking.hold("talk", 0.10, fade_ms=0)
+            with ducking.ducked(level=0.35, fade_ms=0):
+                assert opera.SimpleAudioVolume.level == pytest.approx(0.08)
+            assert opera.SimpleAudioVolume.level == pytest.approx(0.08)
+            ducking.unhold("talk", fade_ms=0)
+        assert opera.SimpleAudioVolume.level == 0.8
+
+    def test_the_lower_holder_leaving_lifts_to_the_other_share(self, tmp_path) -> None:
+        opera = _AppSession(7, 1.0)
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", _only(opera)),
+            _no_sleep(),
+        ):
+            ducking.hold("speak", 0.35, fade_ms=0)
+            ducking.hold("talk", 0.10, fade_ms=0)
+            ducking.unhold("talk", fade_ms=0)
+            assert opera.SimpleAudioVolume.level == pytest.approx(0.35)
+            ducking.unhold("speak", fade_ms=0)
+        assert opera.SimpleAudioVolume.level == 1.0
+
+    def test_an_app_whose_audio_ended_mid_hold_is_put_back_when_it_returns(
+        self, tmp_path
+    ) -> None:
+        # Windows starts the app's next session at the level its last one
+        # had: the video ended at 10%, the next one played at 10%.
+        old = _AppSession(7, 0.8)
+        sessions = [("opera.exe", old)]
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", _these(sessions)),
+            _no_sleep(),
+        ):
+            ducking.hold("talk", 0.10, fade_ms=0)
+            sessions.clear()  # the tab's audio went away
+            assert ducking.unhold("talk", fade_ms=0) == []
+            assert (tmp_path / "duck.json").exists()
+            returned = _AppSession(9, 0.08)
+            sessions.append(("opera.exe", returned))
+            assert ducking.restore_leftover() == ["opera.exe"]
+        assert returned.SimpleAudioVolume.level == 0.8
+        assert not (tmp_path / "duck.json").exists()
+
+    def test_a_returning_app_the_user_set_themselves_is_left_alone(
+        self, tmp_path
+    ) -> None:
+        sessions = [("opera.exe", _AppSession(7, 0.8))]
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", _these(sessions)),
+            _no_sleep(),
+        ):
+            ducking.hold("talk", 0.10, fade_ms=0)
+            sessions.clear()
+            ducking.unhold("talk", fade_ms=0)
+            mine = _AppSession(9, 0.5)
+            sessions.append(("opera.exe", mine))
+            assert ducking.restore_leftover() == []
+        assert mine.SimpleAudioVolume.level == 0.5
+
+    def test_a_hold_cut_off_by_a_server_restart_is_restored_at_start(
+        self, tmp_path
+    ) -> None:
+        opera = _AppSession(7, 0.8)
+        with (
+            self._state(tmp_path),
+            patch.object(ducking, "_sessions", _only(opera)),
+            _no_sleep(),
+        ):
+            ducking.hold("talk", 0.10, fade_ms=0)
+            ducking._reset()  # the server stopped; memory is gone, the file is not
+            assert ducking.restore_leftover() == ["opera.exe"]
+        assert opera.SimpleAudioVolume.level == 0.8

@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -134,11 +134,67 @@ def _state_path():
     return get_config_dir() / _STATE_FILE
 
 
-def _remember(names_and_levels: List[Tuple[str, float]]) -> None:
+# -- one record of every app's own volume, shared by every holder ----------
+#
+# Two things turn other apps down: the spoken announcements (``ducked``, to
+# 35%) and the media hold while the user talks (``speech.media_hold``, to
+# 10%). Each used to remember "the level before" on its own, so when one
+# started while the other was in force it saved the already-lowered level as
+# the app's own, and Opera was left at 10% (16 October) or 4% (three ducks
+# deep). Now there is one record: an app's level is taken once, when the
+# first holder turns it down, held at its own level times the lowest holder's
+# share, and put back when the last holder lets go.
+
+_reg_lock = threading.RLock()
+#: key -> [app name, its own level]; key = "pid:<n>", or "name:<app>" when
+#: the session has no process.
+_held: Dict[str, List[Any]] = {}
+#: holder -> the share of its own volume each app keeps for it.
+_holders: Dict[str, float] = {}
+#: How near a level must be to where a hold put it to count as still ours.
+_NEAR = 0.02
+#: A record of an app whose audio went away mid-hold is kept this long for
+#: its return: Windows starts that app's next session at the level it last
+#: had, so the next video in Opera came back at 10%.
+_PENDING_SECONDS = 24 * 3600.0
+_PENDING_WATCH_SECONDS = 600.0
+_PENDING_POLL_SECONDS = 5.0
+_pending_watch: Any = None
+
+
+def _key(name: str, session: Any) -> str:
+    process = getattr(session, "Process", None)
+    pid = getattr(process, "pid", None)
+    return f"pid:{pid}" if pid is not None else f"name:{name}"
+
+
+def _level(session: Any) -> float:
+    return float(session.SimpleAudioVolume.GetMasterVolume())
+
+
+def _share() -> float:
+    return min(_holders.values()) if _holders else 1.0
+
+
+def _entries(share: float) -> List[Dict[str, Any]]:
+    now = time.time()
+    return [
+        {
+            "key": key,
+            "name": name,
+            "original": original,
+            "low": original * share,
+            "at": now,
+        }
+        for key, (name, original) in _held.items()
+    ]
+
+
+def _remember(entries: List[Dict[str, Any]]) -> None:
     import json
 
     try:
-        _state_path().write_text(json.dumps(dict(names_and_levels)), encoding="utf-8")
+        _state_path().write_text(json.dumps({"entries": entries}), encoding="utf-8")
     except Exception:
         logger.debug("could not record ducking state", exc_info=True)
 
@@ -152,13 +208,7 @@ def _forget() -> None:
         logger.debug("could not clear ducking state", exc_info=True)
 
 
-def restore_leftover() -> List[str]:
-    """Put back the levels a duck that never finished had lowered.
-
-    Run at server start and before every duck. Only a session still
-    *below* its recorded level is touched: one the user has since turned
-    up or down themselves is theirs.
-    """
+def _load_entries() -> List[Dict[str, Any]]:
     import json
 
     try:
@@ -168,23 +218,199 @@ def restore_leftover() -> List[str]:
         recorded = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
-    restored: List[str] = []
-    if isinstance(recorded, dict):
-        for name, session in _sessions(active_only=False):
-            original = recorded.get(name)
-            if not isinstance(original, (int, float)):
-                continue
+    if isinstance(recorded, dict) and isinstance(recorded.get("entries"), list):
+        return [e for e in recorded["entries"] if isinstance(e, dict)]
+    if isinstance(recorded, dict):  # the old {name: level} file
+        return [
+            {"key": f"name:{name}", "name": name, "original": level, "low": None}
+            for name, level in recorded.items()
+            if isinstance(level, (int, float))
+        ]
+    return []
+
+
+def hold(holder: str, level: float, fade_ms: int = DEFAULT_FADE_MS) -> List[str]:
+    """Turn every other app playing now down to *level* of its own volume
+    for *holder*; returns the apps newly turned down. With several holders
+    the lowest share wins; an app is never taken lower twice."""
+    with _reg_lock:
+        if not _holders:
+            restore_leftover()
+        before = _share()
+        _holders[holder] = level
+        share = _share()
+        moves: List[Tuple[Any, float, float]] = []
+        names: List[str] = []
+        for name, session in _sessions():
+            key = _key(name, session)
             try:
-                current = float(session.SimpleAudioVolume.GetMasterVolume())
-                if 0 < current < float(original) - 1e-6:
-                    _set(session, float(original))
-                    restored.append(name)
+                current = _level(session)
             except Exception:
                 continue
-    _forget()
+            if key in _held:
+                original = float(_held[key][1])
+                # The user turned it themselves since: theirs now.
+                if abs(current - original * before) > _NEAR:
+                    continue
+            else:
+                if current <= 0:
+                    continue
+                original = current
+                _held[key] = [name, original]
+                names.append(name)
+            target = original * share
+            if abs(current - target) > 1e-9:
+                moves.append((session, current, target))
+        if _held:
+            _remember(_entries(share))
+        _fade(moves, fade_ms)
+        for session, _, target in moves:
+            try:
+                _set(session, target)
+            except Exception:
+                pass
+        return names
+
+
+def unhold(holder: str, fade_ms: int = DEFAULT_FADE_MS) -> List[str]:
+    """Let go for *holder*. The last holder out puts every app back to its
+    own level; returns the apps put back."""
+    with _reg_lock:
+        if holder not in _holders:
+            return []
+        before = _share()
+        del _holders[holder]
+        present = {_key(name, s): s for name, s in _sessions(active_only=False)}
+        if _holders:
+            # Another holder still wants them down, perhaps less far.
+            share = _share()
+            moves = []
+            for key, (_name, original) in _held.items():
+                session = present.get(key)
+                if session is None:
+                    continue
+                try:
+                    current = _level(session)
+                except Exception:
+                    continue
+                if abs(current - original * before) <= _NEAR:
+                    moves.append((session, current, original * share))
+            _fade(moves, fade_ms)
+            _remember(_entries(share))
+            return []
+        back: List[Tuple[Any, float, float]] = []
+        restored: List[str] = []
+        gone: List[Dict[str, Any]] = []
+        for entry in _entries(before):
+            session = present.get(entry["key"])
+            if session is None:
+                gone.append(entry)
+                continue
+            try:
+                back.append((session, _level(session), float(entry["original"])))
+                restored.append(entry["name"])
+            except Exception:
+                continue
+        _fade(back, fade_ms)
+        for session, _, original in back:
+            try:
+                _set(session, original)
+            except Exception:
+                pass
+        _held.clear()
+        if gone:
+            # Its audio stopped while it was down; put it back when it returns.
+            _remember(gone)
+            _watch_pending()
+        else:
+            _forget()
+        return restored
+
+
+def restore_leftover() -> List[str]:
+    """Put back the levels a hold that never finished had lowered.
+
+    Run at server start, before the first hold, and for a while after a
+    hold whose app's audio had gone away. Only an app still *below* its
+    recorded level (the same session), or one back at exactly the level the
+    hold left it at (a new session of that app), is touched: one the user
+    has since turned up or down themselves is theirs.
+    """
+    with _reg_lock:
+        entries = _load_entries()
+        if not entries:
+            return []
+        now = time.time()
+        sessions = _sessions(active_only=False)
+        restored: List[str] = []
+        left: List[Dict[str, Any]] = []
+        for entry in entries:
+            try:
+                original = float(entry.get("original"))
+            except (TypeError, ValueError):
+                continue
+            name = entry.get("name")
+            key = entry.get("key")
+            low = entry.get("low")
+            fixed = seen = False
+            for sname, session in sessions:
+                try:
+                    current = _level(session)
+                except Exception:
+                    continue
+                skey = _key(sname, session)
+                if skey == key:
+                    seen = True
+                    if 0 < current < original - 1e-6:
+                        _set(session, original)
+                        fixed = True
+                elif (
+                    sname == name
+                    and isinstance(low, (int, float))
+                    and skey not in _held
+                    and abs(current - float(low)) <= _NEAR
+                ):
+                    _set(session, original)
+                    fixed = True
+            if fixed:
+                restored.append(str(name))
+            elif not seen and now - float(entry.get("at") or now) < _PENDING_SECONDS:
+                left.append(entry)
+        if left:
+            _remember(left)
+        else:
+            _forget()
     if restored:
         logger.info("restored volume after an interrupted duck: %s", restored)
     return restored
+
+
+def _watch_pending() -> None:
+    """Look for a returning app at the hold's level for a few minutes."""
+    global _pending_watch
+    if _pending_watch is not None and _pending_watch.is_alive():
+        return
+
+    def watch() -> None:
+        end = time.time() + _PENDING_WATCH_SECONDS
+        while time.time() < end:
+            time.sleep(_PENDING_POLL_SECONDS)
+            with _reg_lock:
+                if _holders:
+                    continue
+                restore_leftover()
+                if not _load_entries():
+                    return
+
+    _pending_watch = threading.Thread(target=watch, name="duck-pending", daemon=True)
+    _pending_watch.start()
+
+
+def _reset() -> None:
+    """Forget every holder and record (tests)."""
+    with _reg_lock:
+        _held.clear()
+        _holders.clear()
 
 
 #: Ducks already held by this thread. The chime plays inside the spoken
@@ -192,6 +418,7 @@ def restore_leftover() -> List[str]:
 #: "leftover" volumes -- the outer duck's own -- bringing the film back up
 #: under the voice for a moment before lowering it again.
 _depth = threading.local()
+_counter = 0
 
 
 @contextmanager
@@ -222,34 +449,20 @@ def ducked(
 
 @contextmanager
 def _duck(level: float, fade_ms: int) -> Iterator[List[str]]:
-    lowered: List[Tuple[Any, float, float]] = []
+    global _counter
+    with _reg_lock:
+        _counter += 1
+        holder = f"speak-{_counter}"
     names: List[str] = []
     try:
-        restore_leftover()
-        for name, session in _sessions():
-            try:
-                original = float(session.SimpleAudioVolume.GetMasterVolume())
-            except Exception:
-                continue
-            if original <= 0:
-                continue
-            lowered.append((session, original, original * level))
-            names.append(name)
-        _remember([(name, orig) for name, (_, orig, _) in zip(names, lowered)])
-        _fade(lowered, fade_ms)
+        names = hold(holder, level, fade_ms)
     except Exception:
         logger.debug("Audio ducking unavailable", exc_info=True)
     try:
         yield names
     finally:
         try:
-            _fade([(s, low, orig) for s, orig, low in lowered], fade_ms)
-            for session, original, _ in lowered:
-                try:
-                    _set(session, original)
-                except Exception:
-                    pass
-            _forget()
+            unhold(holder, fade_ms)
         except Exception:
             logger.debug("Audio un-ducking failed", exc_info=True)
 
@@ -258,6 +471,8 @@ __all__ = [
     "DEFAULT_FADE_MS",
     "DEFAULT_LEVEL",
     "ducked",
+    "hold",
     "media_peak",
     "restore_leftover",
+    "unhold",
 ]

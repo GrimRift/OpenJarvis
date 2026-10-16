@@ -40,6 +40,8 @@ def apps(monkeypatch):
     monkeypatch.setattr(ducking, "_forget", lambda: None)
     monkeypatch.setattr(ducking, "_FADE_STEPS", 1)
     monkeypatch.setattr(media_hold, "_arm_timer", lambda: None)
+    monkeypatch.setattr(ducking, "_PENDING_WATCH_SECONDS", 0.0)
+    ducking._reset()
     media_hold.release()
     yield opera, spotify
     media_hold.release()

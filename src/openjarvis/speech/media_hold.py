@@ -24,7 +24,7 @@ import asyncio
 import logging
 import sys
 import threading
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,10 @@ HOLD_MAX_SECONDS = 600.0
 _PLAYING = 4
 
 _lock = threading.RLock()
-#: (pid, app name, original volume) for each app this hold turned down.
-_ducked: List[Tuple[int, str, float]] = []
+#: The holder name in ``ducking``'s shared record.
+HOLDER = "media-hold"
+#: The apps this hold turned down, for ``state``.
+_ducked: List[str] = []
 #: What the user's own "pause the video" paused, for a later "resume".
 _user_paused: List[str] = []
 _timer: Any = None
@@ -124,25 +126,16 @@ def _duck(level: float, *, arm: bool) -> List[str]:
     from openjarvis.speech import ducking
 
     with _lock:
-        lowered: List[Tuple[Any, float, float]] = []
         names: List[str] = []
         try:
-            held = {pid for pid, _, _ in _ducked}
-            for name, session in ducking._sessions():
-                pid = int(session.Process.pid)
-                if pid in held:
-                    continue
-                original = float(session.SimpleAudioVolume.GetMasterVolume())
-                if original <= 0:
-                    continue
-                lowered.append((session, original, original * level))
-                _ducked.append((pid, name, original))
-                names.append(name)
-            if lowered:
-                # On disk too: a server killed mid-hold puts them back at
-                # its next start (ducking.restore_leftover).
-                ducking._remember([(n, o) for _, n, o in _ducked])
-                ducking._fade(lowered, ducking.DEFAULT_FADE_MS)
+            # One record with the spoken announcements' duck (ducking.hold):
+            # each kept its own "level before", so one starting during the
+            # other saved a lowered level and Opera stayed at 10% (16 October).
+            names = ducking.hold(HOLDER, level)
+            for name in names:
+                if name not in _ducked:
+                    _ducked.append(name)
+            if names:
                 logger.info("Media turned down for the user: %s", names)
             if _ducked and (arm or names):
                 _arm_timer()
@@ -170,30 +163,19 @@ def release() -> List[str]:
                 logger.debug("Video resume after the hold failed", exc_info=True)
         _hold_paused.clear()
         restored: List[str] = []
-        if _ducked:
-            try:
-                by_pid = {pid: original for pid, _, original in _ducked}
-                back: List[Tuple[Any, float, float]] = []
-                for name, session in ducking._sessions(active_only=False):
-                    pid = int(session.Process.pid)
-                    if pid not in by_pid:
-                        continue
-                    current = float(session.SimpleAudioVolume.GetMasterVolume())
-                    back.append((session, current, by_pid[pid]))
-                    restored.append(name)
-                ducking._fade(back, ducking.DEFAULT_FADE_MS)
-                ducking._forget()
-            except Exception:  # noqa: BLE001
-                logger.debug("Media un-duck failed", exc_info=True)
-            if restored:
-                logger.info("Media volume back: %s", restored)
+        try:
+            restored = ducking.unhold(HOLDER)
+        except Exception:  # noqa: BLE001
+            logger.debug("Media un-duck failed", exc_info=True)
+        if restored:
+            logger.info("Media volume back: %s", restored)
         _ducked.clear()
         return restored
 
 
 def state() -> Dict[str, Any]:
     with _lock:
-        return {"ducked": [name for _, name, _ in _ducked]}
+        return {"ducked": list(_ducked)}
 
 
 # ------------------------------------------------- the user's own pause
@@ -214,7 +196,7 @@ async def _manager() -> Any:
 
 
 def kind_of(app_id: str) -> str:
-    """"music" for Spotify, "video" for a browser, "other" otherwise."""
+    """ "music" for Spotify, "video" for a browser, "other" otherwise."""
     app = app_id.lower()
     if "spotify" in app:
         return "music"
