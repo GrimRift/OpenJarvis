@@ -9,6 +9,11 @@ from openjarvis.tools import about_sage as mod
 from openjarvis.tools.about_sage import AboutSageTool
 
 
+@pytest.fixture(autouse=True)
+def _fresh_code_budget(monkeypatch):
+    monkeypatch.setattr(mod, "_code_calls", [])
+
+
 @pytest.fixture
 def data_dir(tmp_path):
     (tmp_path / "config.toml").write_text(
@@ -98,6 +103,13 @@ def test_code_folder_path_narrows_the_search_and_long_queries_rank_words():
     assert listing.startswith("Files under 'agents':")
     ranked = mod.code("narrow groups routing pattern tokens")
     assert "Matches for" in ranked
+
+
+def test_code_reads_stop_after_the_budget(monkeypatch):
+    monkeypatch.setattr(mod, "_code_calls", [])
+    for _ in range(mod.CODE_BUDGET):
+        assert not mod.code("def route_tools").startswith("Enough code")
+    assert mod.code("def route_tools").startswith("Enough code read")
 
 
 def test_tool_dispatches_parts():

@@ -374,7 +374,30 @@ def whats_new(days: int = 14) -> str:
     )
 
 
+#: Code calls allowed per ``CODE_WINDOW`` seconds. "How does your wake word
+#: work? look at your code" made 13 of them (288k prompt tokens, 38 s) on
+#: 10-16; the answer after six would have been as good.
+CODE_BUDGET = 6
+CODE_WINDOW = 120.0
+_code_calls: List[float] = []
+
+
+def _over_code_budget() -> bool:
+    now = time.monotonic()
+    with _files_lock:
+        _code_calls[:] = [t for t in _code_calls if now - t < CODE_WINDOW]
+        if len(_code_calls) >= CODE_BUDGET:
+            return True
+        _code_calls.append(now)
+        return False
+
+
 def code(query: str = "", path: str = "", start_line: int = 1) -> str:
+    if _over_code_budget():
+        return (
+            "Enough code read for this question. Answer now from what you "
+            "have, and offer to look deeper at one specific part."
+        )
     files = source_files()
     wanted = path.replace("\\", "/").strip().lstrip("./").rstrip("/")
     matches = [f for f in files if f == wanted or f.endswith("/" + wanted)]
