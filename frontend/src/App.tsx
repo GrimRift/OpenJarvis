@@ -24,6 +24,7 @@ import { DiagramLayer } from './components/Diagram/DiagramLayer';
 import { ImageLayer } from './components/Image/ImageLayer';
 import { PhotoViewer } from './components/Image/PhotoViewer';
 import { WeatherLayer } from './components/Weather/WeatherLayer';
+import { GameLayer } from './components/Games/GameLayer';
 import { BookPlayerHost } from './components/Books/BookPlayerHost';
 import { SystemLayer } from './components/System/SystemLayer';
 import { track, hashId } from './lib/analytics';
@@ -250,6 +251,7 @@ export default function App() {
       <ImageLayer />
       <PhotoViewer />
       <WeatherLayer />
+      <GameLayer />
       <BookPlayerHost />
       <SystemLayer />
       {commandPaletteOpen && <CommandPalette />}

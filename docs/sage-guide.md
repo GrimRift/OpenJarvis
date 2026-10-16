@@ -88,7 +88,12 @@ Settings page unless another page is given.
 ## Media, apps and the PC
 - Spotify: play, pause, skip, volume. YouTube and Netflix can be opened and
   played; YouTube ads are skipped.
-- Opens apps and games only when asked. Games: tic-tac-toe, chess.
+- Opens apps and games only when asked. Games: tic-tac-toe, chess, ping pong.
+  A game opens in a panel over the chat: click or drag chess pieces, click
+  tic-tac-toe squares, or say/type the move. Undo, flip the board, difficulty,
+  new game as White/Black/Random. Ping pong: mouse moves the paddle, click to
+  serve; first to 11 (win by 2) or unlimited (best rally and score kept);
+  easy/normal/hard/adapt; say "pause", "resume", "what's the score", "stop".
 - Windows: move a window, list monitors, look at what is on screen.
 - "How's my PC": CPU, RAM, GPU, disk, opens the live system panel.
 

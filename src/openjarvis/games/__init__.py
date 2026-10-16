@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from openjarvis.games.base import DIFFICULTIES, Game, MoveError, Outcome, Session
+from openjarvis.games.ping_pong import PingPong
 from openjarvis.games.tictactoe import TicTacToe
 
 _ALL: list = [TicTacToe()]
@@ -24,6 +25,7 @@ try:
     _ALL.append(ChessGame())
 except ImportError:  # python-chess not installed: chess is simply not offered
     pass
+_ALL.append(PingPong())
 
 GAMES: Dict[str, Game] = {game.name: game for game in _ALL}
 
@@ -91,7 +93,7 @@ def in_progress() -> bool:
 
 _GAME_NAME = (
     r"(?:chess|tic[\s-]?tac[\s-]?toe|tik[\s-]?tak[\s-]?toe|tictactoe|xo"
-    r"|x\s+and\s+o)"
+    r"|x\s+and\s+o|ping[\s-]?pong|pong|table\s+tennis)"
 )
 _PLAY_WORD = (
     r"(?:play\w*|game|games|match|round|again|start|vs|versus|against"
@@ -118,6 +120,80 @@ def asks_to_play(text: str) -> bool:
     return bool(ASKS_TO_PLAY.search(text) or _ONLY_A_GAME_NAME.search(text))
 
 
+# -- messages that need no model round ------------------------------------------
+#
+# The game panel sends what a click did as an ordinary chat message ("Nc3",
+# "5", "Undo"), so the conversation, the voice and the board stay one game.
+# Read here, whole-message only, it goes straight to the tool: a model round
+# added 1-2 s a move and could misread a bare "Nc3". Anything looser ("what
+# about e4?") still goes to the model.
+
+_CHESS_MOVE = re.compile(
+    r"^(?:O-O(?:-O)?|0-0(?:-0)?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=?[QRBNqrbn])?"
+    r"|[a-h][1-8][a-h][1-8][qrbn]?)[+#]?$"
+)
+_SQUARE = re.compile(r"^[1-9]$")
+_UNDO = re.compile(r"^(?:undo|take\s+(?:that|it|my\s+move)\s+back|takeback)$", re.I)
+_END = re.compile(r"^(?:end\s+(?:the\s+)?game|stop\s+the\s+game|i\s+quit)$", re.I)
+#: A bare "stop" ends only ping pong: mid-chess it is more likely meant for
+#: the music or for Sage's voice.
+_STOP = re.compile(r"^(?:stop|quit)$", re.I)
+_LEVEL = re.compile(r"^(?:play|go|difficulty:?)\s+(easy|normal|hard|adapt\w*)$", re.I)
+_NEW_GAME = re.compile(
+    rf"^new\s+game\s+of\s+({_GAME_NAME})"
+    r"(?:\s+as\s+(white|black|random|x|o))?"
+    r"(?:,?\s+(first\s+to\s+11|unlimited))?$",
+    re.I,
+)
+_PONG_COMMAND = re.compile(
+    r"^(?:pause|resume|continue|unpause|what'?s\s+the\s+score|score)$", re.I
+)
+
+
+def quick_command(text: str) -> Optional[Dict[str, object]]:
+    """play_game's arguments for a panel click or a bare move, else None.
+
+    Only while a game is on (``in_progress``), except a "new game of ..."
+    from the panel, which starts one."""
+    said = " ".join(str(text or "").split()).strip().rstrip(".!?").strip()
+    if not said or len(said) > 60:
+        return None
+    started = _NEW_GAME.match(said)
+    if started:
+        colour = (started.group(2) or "").lower()
+        params: Dict[str, object] = {"action": "start", "game": started.group(1)}
+        if colour:
+            params["colour"] = colour
+        if started.group(3):
+            params["mode"] = (
+                "unlimited" if "unlimited" in started.group(3).lower() else "eleven"
+            )
+        return params
+    if not in_progress():
+        return None
+    session = load()
+    if session is None:
+        return None
+    game = GAMES[session.game]
+    realtime = bool(getattr(game, "realtime", False))
+    if _END.match(said) or (realtime and _STOP.match(said)):
+        return {"action": "end"}
+    level = _LEVEL.match(said)
+    if level:
+        wanted = level.group(1).lower()
+        wanted = "adapt" if wanted.startswith("adapt") else wanted
+        return {"action": "difficulty", "difficulty": wanted}
+    if realtime:
+        return {"action": "move", "move": said} if _PONG_COMMAND.match(said) else None
+    if _UNDO.match(said):
+        return {"action": "undo"}
+    if game.name == "chess" and _CHESS_MOVE.match(said):
+        return {"action": "move", "move": said}
+    if game.name == "tic-tac-toe" and _SQUARE.match(said):
+        return {"action": "move", "move": said}
+    return None
+
+
 def use_path_for_tests(path: Optional[Path]) -> None:
     global _path_override
     _path_override = path
@@ -135,5 +211,6 @@ __all__ = [
     "find_game",
     "in_progress",
     "load",
+    "quick_command",
     "save",
 ]

@@ -33,6 +33,8 @@ import { comparisonTablesToGrids } from '../../lib/comparison-table';
 import { markdownPhotos, usePhotoViewer, type ViewerPhoto } from '../../lib/photo-viewer';
 import { hastText, keepOnOneLine } from '../../lib/table-cell';
 import type { ChatMessage } from '../../types';
+import { gameIn } from '../../lib/game-panel';
+import { GameCard } from '../Games/GameCard';
 
 function stripThinkTags(text: string): string {
   let cleaned = cleanCitations(text).replace(/<think>[\s\S]*?<\/think>\s*/gi, '');
@@ -155,12 +157,20 @@ function MessageBubbleComponent({ message, isLive = false, onRewind }: Props) {
 
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
   // Escaped only for rendering. Copy must still yield "$200", not "\$200".
+  // A game turn's board is drawn in the game panel; its card stands in for
+  // the text board play_game writes under the move.
+  const gamePanel = useMemo(() => gameIn(message.toolCalls), [message.toolCalls]);
   const markdownContent = useMemo(
     () =>
       normaliseMathDelimiters(
-        protectCurrencyFromMath(comparisonTablesToGrids(cleanContent, !isLive)),
+        protectCurrencyFromMath(
+          comparisonTablesToGrids(
+            gamePanel ? cleanContent.replace(/\n*```text\n[\s\S]*?(```|$)/g, '') : cleanContent,
+            !isLive,
+          ),
+        ),
       ),
-    [cleanContent, isLive],
+    [cleanContent, isLive, gamePanel],
   );
   const linkPreview = useMemo(() => selectLinkPreview(message), [message]);
   const otherSources = useMemo(
@@ -383,6 +393,8 @@ function MessageBubbleComponent({ message, isLive = false, onRewind }: Props) {
       ))}
 
       {weatherReport && <WeatherCard report={weatherReport} />}
+
+      {gamePanel && <GameCard panel={gamePanel} />}
 
       {systemReport && <SystemCard report={systemReport} />}
 

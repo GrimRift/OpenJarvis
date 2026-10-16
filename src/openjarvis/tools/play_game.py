@@ -8,8 +8,11 @@ board shown is always the real one.
 
 from __future__ import annotations
 
+import copy
+import random
 import re
-from typing import Any, List, Optional
+import uuid
+from typing import Any, Dict, List, Optional
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
@@ -23,12 +26,16 @@ from openjarvis.games import (
     load,
     save,
 )
+from openjarvis.games.ping_pong import asked_mode
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
-ACTIONS = ("start", "move", "show", "difficulty", "end")
+ACTIONS = ("start", "move", "show", "difficulty", "undo", "end")
+#: Positions kept for "undo"; a long chess game is ~100 of the user's moves.
+HISTORY_LIMIT = 300
 
 _ASKED_DIFFICULTY = re.compile(
-    r"\b(easy|easier|simple|hard|harder|unbeatable|perfect|expert|normal|medium)\b",
+    r"\b(easy|easier|simple|hard|harder|unbeatable|perfect|expert|normal|medium"
+    r"|adapt\w*)\b",
     re.IGNORECASE,
 )
 _DIFFICULTY_WORDS = {
@@ -42,6 +49,8 @@ _DIFFICULTY_WORDS = {
     "expert": "hard",
     "normal": "normal",
     "medium": "normal",
+    "adapt": "adapt",
+    "adaptive": "adapt",
 }
 
 _HOW_TO_REPLY = (
@@ -56,7 +65,13 @@ def _asked_difficulty() -> str:
     from openjarvis.security import page_access
 
     found = _ASKED_DIFFICULTY.search(page_access.turn_text() or "")
-    return _DIFFICULTY_WORDS[found.group(1).lower()] if found else ""
+    if not found:
+        return ""
+    return _DIFFICULTY_WORDS.get(found.group(1).lower(), "adapt")
+
+
+def _levels(game) -> tuple:
+    return tuple(getattr(game, "difficulties", DIFFICULTIES))
 
 
 @ToolRegistry.register("play_game")
@@ -84,8 +99,12 @@ class PlayGameTool(BaseTool):
                 " with their words in `move`. The tool writes the reply; do"
                 " not restate or change the moves it reports."
                 " 'show the board' -> 'show'; 'play hard' / 'go easy' ->"
-                " 'difficulty'; 'stop' / 'I quit' -> 'end'. Difficulty is"
-                " normal unless the user asks for easy or hard."
+                " 'difficulty'; 'take that back' -> 'undo'; 'stop' / 'I quit'"
+                " -> 'end'. Difficulty is normal unless the user asks for easy"
+                " or hard. Ping pong is played in the app's panel: 'start'"
+                " opens it (mode 'eleven' = first to 11, 'unlimited' = no"
+                " end); mid-game 'pause' / 'resume' / 'what's the score' ->"
+                " action='move' with those words."
             ),
             parameters={
                 "type": "object",
@@ -99,7 +118,20 @@ class PlayGameTool(BaseTool):
                         "type": "string",
                         "description": "For 'move': the user's move, as they said it.",
                     },
-                    "difficulty": {"type": "string", "enum": list(DIFFICULTIES)},
+                    "difficulty": {
+                        "type": "string",
+                        "enum": [*DIFFICULTIES, "adapt"],
+                    },
+                    "colour": {
+                        "type": "string",
+                        "enum": ["white", "black", "random", "x", "o"],
+                        "description": "For 'start': the side the user plays.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["eleven", "unlimited"],
+                        "description": "For 'start' of ping pong.",
+                    },
                     "user_first": {
                         "type": "boolean",
                         "description": (
@@ -128,7 +160,7 @@ class PlayGameTool(BaseTool):
                 return self._move(session, str(params.get("move") or ""))
             if action == "difficulty":
                 wanted = str(params.get("difficulty") or _asked_difficulty() or "")
-                if wanted not in DIFFICULTIES:
+                if wanted not in _levels(GAMES[session.game]):
                     return self._board(
                         session,
                         "Say easy, normal or hard.",
@@ -142,12 +174,10 @@ class PlayGameTool(BaseTool):
                     f"Difficulty is now {wanted}.",
                     f"Playing {wanted} from now on, Sir.",
                 )
+            if action == "undo":
+                return self._undo(session)
             if action == "end":
-                save(None)
-                return self._say(
-                    "The game is over; the board is cleared.",
-                    "Game over, Sir. I've cleared the board.",
-                )
+                return self._end(session)
             return self._board(session, "", "Here's the board, Sir.")
         except MoveError as error:
             # Raised before anything is saved: the board on disk is unchanged.
@@ -185,12 +215,45 @@ class PlayGameTool(BaseTool):
                 ok=False,
             )
         difficulty = str(params.get("difficulty") or _asked_difficulty() or "normal")
-        if difficulty not in DIFFICULTIES:
+        if difficulty not in _levels(game):
             difficulty = "normal"
+        session_id = uuid.uuid4().hex[:12]
+        if getattr(game, "realtime", False):
+            mode = str(params.get("mode") or asked_mode(asked or "") or "eleven")
+            state = game.new_state(True, mode)
+            session = Session(
+                game=game.name,
+                state=state,
+                difficulty=difficulty,
+                moves=[],
+                id=session_id,
+            )
+            rules = (
+                "first to 11, win by two"
+                if state["mode"] == "eleven"
+                else "no limit, stop when you like"
+            )
+            save(session)
+            return self._board(
+                session,
+                f"New game of {game.name} ({state['mode']}, {difficulty}) is open"
+                " in the app's game panel.",
+                f"Ping pong, Sir: {rules}, on {difficulty}. Mouse moves your"
+                " paddle; click to serve.",
+            )
         user_first = params.get("user_first")
+        colour = str(params.get("colour") or "").lower()
+        if colour == "random":
+            user_first = random.random() < 0.5
+        elif colour in ("white", "x"):
+            user_first = True
+        elif colour in ("black", "o"):
+            user_first = False
         user_first = True if user_first is None else bool(user_first)
         state = game.new_state(user_first)
-        session = Session(game=game.name, state=state, difficulty=difficulty, moves=[])
+        session = Session(
+            game=game.name, state=state, difficulty=difficulty, moves=[], id=session_id
+        )
         lines = [f"New game of {game.name} ({difficulty})."]
         spoken = f"New game of {game.name}, Sir, on {difficulty}."
         if user_first:
@@ -210,6 +273,10 @@ class PlayGameTool(BaseTool):
     def _move(self, session: Session, text: str) -> ToolResult:
         game = GAMES[session.game]
         state = session.state
+        if getattr(game, "realtime", False) and not game.outcome(state).over:
+            spoken = game.command(state, text)
+            save(session)
+            return self._board(session, "", spoken)
         if game.outcome(state).over:
             return self._board(
                 session,
@@ -221,7 +288,9 @@ class PlayGameTool(BaseTool):
                 session, "It is not the user's turn.", "It's my move, Sir.", ok=False
             )
         move = game.parse_move(state, text)
+        before = copy.deepcopy(state)
         game.apply(state, move, "user")
+        session.history = [*(session.history or []), before][-HISTORY_LIMIT:]
         session.moves = [*(session.moves or []), f"user:{move}"]
         lines = [f"The user played: {game.describe_move(move, state)}."]
         spoken = f"You {game.verb} {game.describe_move(move, state)}."
@@ -245,6 +314,60 @@ class PlayGameTool(BaseTool):
             spoken += f" {check} Your move." if check else " Your move."
         save(session)
         return self._board(session, " ".join(lines), spoken)
+
+    def _undo(self, session: Session) -> ToolResult:
+        """Back to before the user's last move (Sage's reply goes too)."""
+        if not session.history:
+            return self._board(
+                session,
+                "Nothing to take back.",
+                "There's nothing to take back, Sir.",
+                ok=False,
+            )
+        session.state = session.history.pop()
+        moves = list(session.moves or [])
+        while moves and not moves[-1].startswith("user:"):
+            moves.pop()
+        session.moves = moves[:-1]
+        save(session)
+        return self._board(
+            session,
+            "The user's last move (and your reply) were taken back.",
+            "Taken back, Sir. Your move.",
+        )
+
+    def _end(self, session: Session) -> ToolResult:
+        game = GAMES[session.game]
+        if getattr(game, "realtime", False):
+            session.state["stopped"] = True
+            words = game.final_words(session.state)
+            save(None)
+            return self._board(session, f"Stopped. {words}", f"Good game, Sir. {words}")
+        save(None)
+        return self._say(
+            "The game is over; the board is cleared.",
+            "Game over, Sir. I've cleared the board.",
+            ended=session,
+        )
+
+    def point(self, winner: str, rally: int) -> Dict[str, Any]:
+        """A ping pong point from the app's panel: the panel data and Sage's line.
+
+        Not a model tool action: the panel calls it (server ``/v1/games``)."""
+        session = load()
+        if session is None or not getattr(GAMES.get(session.game), "realtime", False):
+            raise MoveError("No ping pong game is on.")
+        game = GAMES[session.game]
+        line = game.point(session.state, winner, rally)
+        save(session)
+        return {"game_panel": self._panel(session, line), "line": line}
+
+    def current(self) -> Optional[Dict[str, Any]]:
+        """The game on now, as the panel shows it, or None."""
+        session = load()
+        if session is None or session.game not in GAMES:
+            return None
+        return self._panel(session, "")
 
     # -- output -------------------------------------------------------------
 
@@ -297,15 +420,46 @@ class PlayGameTool(BaseTool):
                 "over": result.over,
                 "winner": result.winner,
                 "say": f"{spoken}\n\n```text\n{board}\n```",
+                "game_panel": self._panel(session, spoken),
             },
         )
 
-    def _say(self, text: str, spoken: str, ok: bool = True) -> ToolResult:
+    def _panel(self, session: Session, spoken: str) -> Dict[str, Any]:
+        """What the app's game panel shows (``components/Games``)."""
+        game = GAMES[session.game]
+        state = session.state
+        result = game.outcome(state)
+        return {
+            "id": session.id,
+            "game": game.name,
+            "difficulty": session.difficulty,
+            "levels": list(_levels(game)),
+            "user": state.get("user", ""),
+            "sage": state.get("sage", ""),
+            "turn": state.get("turn", ""),
+            "over": result.over,
+            "winner": result.winner,
+            "detail": result.detail,
+            "note": game.status_note(state) if not result.over else "",
+            "line": spoken,
+            "can_undo": bool(session.history) and not result.over,
+            **game.snapshot(state),
+        }
+
+    def _say(
+        self, text: str, spoken: str, ok: bool = True, ended: Optional[Session] = None
+    ) -> ToolResult:
+        metadata: Dict[str, Any] = {"say": spoken}
+        if ended is not None:
+            # The panel shows the game as ended, not as still waiting for a move.
+            panel = self._panel(ended, spoken)
+            panel.update(over=True, ended=True, can_undo=False, legal={})
+            metadata["game_panel"] = panel
         return ToolResult(
             tool_name="play_game",
             content=text,
             success=ok,
-            metadata={"say": spoken},
+            metadata=metadata,
         )
 
 

@@ -162,7 +162,8 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
     "games": {
         "tools": {"play_game"},
         "pattern": re.compile(
-            r"\b(tic|tac|toe|tik|tak|tictactoe|chess|xo|resign|rematch)\b"
+            r"\b(tic|tac|toe|tik|tak|tictactoe|chess|xo|resign|rematch"
+            r"|ping[\s-]?pong|pong|table\s+tennis)\b"
             r"|\bplay\w*\b(?:\W+\w+){0,4}?\W+(game|round|match)\b",
             re.IGNORECASE,
         ),

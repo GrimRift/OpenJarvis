@@ -76,6 +76,12 @@ class Game:
         """The moves open to the user, briefly ("2, 4, 6, 7, 8")."""
         return ""
 
+    def snapshot(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """What the app's game panel draws (pieces, last move, legal moves).
+
+        Plain JSON; the panel never works the rules out for itself."""
+        return {}
+
 
 @dataclass
 class Session:
@@ -86,6 +92,11 @@ class Session:
     difficulty: str = "normal"
     user_symbol: str = ""
     moves: Optional[List[str]] = None
+    #: Which game this is, so the app's panel can tell a new game from the
+    #: one it is showing.
+    id: str = ""
+    #: The state before each of the user's moves, newest last ("undo").
+    history: Optional[List[Dict[str, Any]]] = None
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -94,6 +105,8 @@ class Session:
             "difficulty": self.difficulty,
             "user_symbol": self.user_symbol,
             "moves": self.moves or [],
+            "id": self.id,
+            "history": self.history or [],
         }
 
     @classmethod
@@ -104,6 +117,8 @@ class Session:
             difficulty=str(data.get("difficulty") or "normal"),
             user_symbol=str(data.get("user_symbol") or ""),
             moves=list(data.get("moves") or []),
+            id=str(data.get("id") or ""),
+            history=list(data.get("history") or []),
         )
 
 

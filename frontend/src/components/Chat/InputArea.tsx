@@ -20,6 +20,8 @@ import { imageFromToolCall, imageToolPhase } from '../../lib/generated-image';
 import { useImagePresenter } from '../../lib/image-presenter';
 import { useWeatherPresenter } from '../../lib/weather-presenter';
 import { weatherFromToolCall } from '../../lib/weather-report';
+import { gameFromToolCall } from '../../lib/game-panel';
+import { setGameChat, useGamePresenter } from '../../lib/game-presenter';
 import { applyPlayCommand, playCommandFromToolCall } from '../../lib/book-player';
 import { useSystemPresenter } from '../../lib/system-presenter';
 import { systemFromToolCall } from '../../lib/system-report';
@@ -122,7 +124,8 @@ function overlayOpen(): boolean {
     useDiagramPresenter.getState().current ||
       useImagePresenter.getState().current ||
       useWeatherPresenter.getState().current ||
-      useSystemPresenter.getState().current,
+      useSystemPresenter.getState().current ||
+      useGamePresenter.getState().visible,
   );
 }
 
@@ -131,6 +134,7 @@ function closeOverlays(): void {
   useImagePresenter.getState().close();
   useWeatherPresenter.getState().close();
   useSystemPresenter.getState().close();
+  useGamePresenter.getState().close();
 }
 
 /**
@@ -417,6 +421,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // it is giving has ended (lib/interjection.ts).
   const pendingAfterRef = useRef<{ added: string; line: string } | null>(null);
   const continuationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The next message is a click in the game panel: its reply is spoken like
+  // a voice turn's, since the user is playing, not reading the chat.
+  const gameTurnRef = useRef(false);
   // The executing end-of-turn handler holds a stale sendMessage after the
   // abort re-renders; the ref always points at the current one.
   const sendMessageRef = useRef<(overrideContent?: string) => Promise<void>>(
@@ -783,6 +790,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     finalizePendingRewind();
     const wasVoice = voiceOriginatedRef.current;
     voiceOriginatedRef.current = false;
+    const wasGame = gameTurnRef.current;
+    gameTurnRef.current = false;
     lastReplyWasVoiceRef.current = wasVoice;
     mediaTurnRef.current = false;
     const wasFollowUp = wasVoice && voiceFollowUpRef.current;
@@ -942,7 +951,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // being spoken at the spoken limit; a voice reply is read in full.
     const incrementalSpeech =
       voiceRepliesEnabled &&
-      shouldStreamReplySpeech(wasVoice, content, speakTypedReplies)
+      shouldStreamReplySpeech(wasVoice, content, speakTypedReplies || wasGame)
         ? beginStreamingSpeech(ttsVoice, { steps: asksForSteps(content) })
         : null;
     // A typed question whose answer is read aloud is a spoken exchange too:
@@ -1396,6 +1405,9 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                   .getState()
                   .showNew(forecast, useAppStore.getState().settings.weatherOpenAutomatically);
               }
+              // The game panel: opens on a new game, moves on every later result.
+              const game = gameFromToolCall(tc);
+              if (game) useGamePresenter.getState().showNew(tc.id, game);
               const machine = systemFromToolCall(tc);
               if (machine) {
                 useSystemPresenter
@@ -1857,6 +1869,24 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   );
 
   sendMessageRef.current = sendMessage;
+
+  // The game panel's clicks and ping pong's lines go through here
+  // (lib/game-presenter).
+  useEffect(() => {
+    setGameChat(
+      (text) => {
+        gameTurnRef.current = true;
+        void sendMessageRef.current(text).catch(() => {});
+      },
+      (line) => {
+        if (!voiceRepliesEnabled) return;
+        const spoken = speakableText(line, Infinity);
+        spokenTextRef.current = spoken;
+        void speakStreaming(spoken, ttsVoice);
+      },
+    );
+    return () => setGameChat(null, null);
+  }, [voiceRepliesEnabled, speakStreaming, ttsVoice]);
 
   const clearContinuationWindow = useCallback(() => {
     if (continuationTimerRef.current) {

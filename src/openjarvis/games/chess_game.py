@@ -93,6 +93,7 @@ class ChessGame(Game):
         board = chess.Board(state["fen"])
         played = chess.Move.from_uci(move)
         state["last"] = _in_words(board, played)
+        state["last_move"] = move
         board.push(played)
         state["fen"] = board.fen()
         state["turn"] = "sage" if by == "user" else "user"
@@ -153,6 +154,35 @@ class ChessGame(Game):
     def status_note(self, state: Dict[str, Any]) -> str:
         board = chess.Board(state["fen"])
         return "Check!" if board.is_check() and not board.is_checkmate() else ""
+
+    def snapshot(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """FEN, the last move's squares, the checked king, the user's moves.
+
+        `legal` maps a square to where its piece may go ("b1": ["a3", "c3",
+        "d2"]); a pawn reaching the last rank is sent as a queen ("e7e8q")."""
+        board = chess.Board(state["fen"])
+        last = str(state.get("last_move") or "")
+        check = ""
+        if board.is_check():
+            king = board.king(board.turn)
+            check = chess.square_name(king) if king is not None else ""
+        legal: Dict[str, List[str]] = {}
+        #: "b1c3" -> "Nc3": what a click sends, as the user would type it.
+        san: Dict[str, str] = {}
+        if state.get("turn") == "user":
+            for move in _without_minor_promotions(list(board.legal_moves)):
+                source = chess.square_name(move.from_square)
+                target = chess.square_name(move.to_square)
+                if target not in legal.setdefault(source, []):
+                    legal[source].append(target)
+                san[source + target] = board.san(move)
+        return {
+            "fen": state["fen"],
+            "last": [last[:2], last[2:4]] if len(last) >= 4 else [],
+            "check": check,
+            "legal": legal,
+            "san": san,
+        }
 
 
 # -- reading a move ----------------------------------------------------------

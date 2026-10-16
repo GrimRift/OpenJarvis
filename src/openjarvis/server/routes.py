@@ -819,6 +819,22 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         if digest_agent is not None:
             agent = digest_agent
 
+    # A game move or a panel click ("Nc3", "5", "Undo", "New game of chess as
+    # black") goes straight to play_game: the tool writes the reply anyway
+    # (_direct_reply), and the model round only added 1-2 s a move.
+    # Ahead of the Spotify words below: mid ping pong, "pause" and "stop"
+    # are the game's.
+    if not request_body.tools and request_body.stream and query_text_for_complexity:
+        game_params = _game_quick_command(query_text_for_complexity)
+        if game_params is not None:
+            game_result = await asyncio.to_thread(_run_game_command, game_params)
+            if game_result is not None:
+                return StreamingResponse(
+                    _game_reply_stream(model, game_params, game_result),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+                )
+
     # Same reasoning as the digest block above, for a different unreliable
     # spot: a bare "next"/"skip"/"pause" reliably gets hallucinated by the
     # model instead of an actual spotify_control call (see
@@ -1456,6 +1472,72 @@ _LEAKED_TOOL_TEXT = re.compile(
 )
 
 
+def _game_quick_command(text: str) -> Optional[dict]:
+    try:
+        from openjarvis.games import quick_command
+
+        return quick_command(text)
+    except Exception:  # noqa: BLE001 -- the model path still handles it
+        logging.getLogger("openjarvis.server").debug(
+            "game quick command check failed", exc_info=True
+        )
+        return None
+
+
+def _run_game_command(params: dict):
+    """play_game run directly; None if it is not registered (model path)."""
+    try:
+        from openjarvis.tools.play_game import PlayGameTool
+
+        return PlayGameTool().execute(**params)
+    except Exception:  # noqa: BLE001
+        logging.getLogger("openjarvis.server").warning(
+            "game quick command failed", exc_info=True
+        )
+        return None
+
+
+async def _game_reply_stream(model: str, params: dict, result):
+    """The tool events and the reply, as a model-driven game turn sends them,
+    so the app's history, voice and game panel cannot tell the difference."""
+    import json as _json
+
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    call_id = f"{chunk_id}-game"
+    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+    first = ChatCompletionChunk(
+        id=chunk_id,
+        model=model,
+        choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+    )
+    yield f"data: {first.model_dump_json()}\n\n"
+    arguments = _json.dumps(params)
+    start = _json.dumps({"id": call_id, "tool": "play_game", "arguments": arguments})
+    yield f"event: tool_call_start\ndata: {start}\n\n"
+    end = _json.dumps(
+        {
+            "id": call_id,
+            "tool": "play_game",
+            "success": bool(result.success),
+            "result": str(result.content or "")[:500],
+            "metadata": {"game_panel": metadata.get("game_panel")},
+        }
+    )
+    yield f"event: tool_call_end\ndata: {end}\n\n"
+    body = ChatCompletionChunk(
+        id=chunk_id,
+        model=model,
+        choices=[
+            StreamChoice(
+                delta=DeltaMessage(content=str(metadata.get("say") or result.content)),
+                finish_reason="stop",
+            )
+        ],
+    )
+    yield f"data: {body.model_dump_json()}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 def _direct_reply(results: list) -> str:
     """The reply a round's tools wrote themselves, when every tool did.
 
@@ -1894,6 +1976,10 @@ async def _handle_streaming_orchestrator(
                                         # should play ("read me chapter 4").
                                         "audiobook_play": tool_result.metadata.get(
                                             "audiobook_play"
+                                        ),
+                                        # The app's game panel (play_game).
+                                        "game_panel": tool_result.metadata.get(
+                                            "game_panel"
                                         ),
                                     }
                                     if isinstance(tool_result.metadata, dict)
@@ -2423,6 +2509,9 @@ async def _handle_agent_stream(
                             "audiobook_play": getattr(
                                 tool_result, "metadata", {}
                             ).get("audiobook_play"),
+                            "game_panel": getattr(tool_result, "metadata", {}).get(
+                                "game_panel"
+                            ),
                         }
                         if isinstance(getattr(tool_result, "metadata", {}), dict)
                         else {}

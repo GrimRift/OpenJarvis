@@ -153,6 +153,7 @@ class TicTacToe(Game):
 
     def apply(self, state: Dict[str, Any], move: int, by: str) -> None:
         state["board"][move] = state[by]
+        state["last_square"] = move
         state["turn"] = "sage" if by == "user" else "user"
 
     def choose_move(self, state: Dict[str, Any], difficulty: str) -> int:
@@ -200,6 +201,20 @@ class TicTacToe(Game):
 
     def legal_moves_text(self, state: Dict[str, Any]) -> str:
         return ", ".join(str(i + 1) for i, v in enumerate(state["board"]) if not v)
+
+    def snapshot(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """The nine cells ("X", "O" or ""), the winning line, the last square."""
+        board = state["board"]
+        line = next(
+            (
+                list(each)
+                for each in LINES
+                if board[each[0]] and board[each[0]] == board[each[1]] == board[each[2]]
+            ),
+            [],
+        )
+        last = state.get("last_square")
+        return {"cells": list(board), "win_line": line, "last": last}
 
 
 def _winner(board: List[str]) -> str:
