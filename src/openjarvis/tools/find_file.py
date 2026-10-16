@@ -84,8 +84,10 @@ _NEVER_OPEN = frozenset(
 )
 
 #: A walk that runs longer than this is worse than one that reports what it
-#: found so far and says it did not finish.
-_DEFAULT_BUDGET_SECONDS = 25.0
+#: found so far and says it did not finish. 45, not 25: a full pass over C:
+#: takes ~27 s here, so "resume pdf" ran out of time and said "time limit"
+#: rather than "not on this PC" (10-16, s12; the user asked to raise it).
+_DEFAULT_BUDGET_SECONDS = 45.0
 
 #: Cap on the first phase so the full-drive walk always gets a turn.
 _PRIORITY_BUDGET_SECONDS = 8.0
@@ -330,6 +332,9 @@ class FindFileTool(BaseTool):
                 },
                 "required": ["query"],
             },
+            # Above the walk's own budget, so it reports what it found rather
+            # than being cut off by the executor's 30 s default.
+            timeout_seconds=_DEFAULT_BUDGET_SECONDS + 15.0,
         )
 
     def execute(self, **params: Any) -> ToolResult:

@@ -398,7 +398,7 @@ class TestWideTestMisses:
     """10-16 wide tool test: wording that hid the tool the user wanted, and
     the model fell back to web_search (10-24 s, weather for Ghana)."""
 
-    EXTRA = ["weather", "about_sage"]
+    EXTRA = ["weather", "about_sage", "media_pause"]
 
     def _kept(self, message, prior=(), called=()):
         schemas = ALL_SCHEMAS + [_schema(n) for n in self.EXTRA]
@@ -418,6 +418,8 @@ class TestWideTestMisses:
             ("Turn it up.", "spotify_control"),
             ("turn the volume down", "spotify_control"),
             ("a bit louder", "spotify_control"),
+            ("Stop.", "media_pause"),
+            ("stop the video", "media_pause"),
             ("What's my first period on Monday?", "check_class_schedule"),
             ("show me my timetable", "check_class_schedule"),
             ("Which AI model are you running on right now?", "about_sage"),

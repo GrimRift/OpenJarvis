@@ -244,3 +244,13 @@ class TestRevealSurvivesSpacesInTheName:
     def test_no_shell_is_involved(self, monkeypatch):
         seen = self._command(monkeypatch, r"C:\a b\c.png")
         assert seen["kwargs"]["shell"] is False
+
+
+def test_the_budget_covers_a_full_pass_and_the_executor_waits_for_it():
+    """A full pass over C: takes ~27 s here; 25 s reported "time limit" for a
+    file that does not exist (10-16, s12)."""
+    from openjarvis.tools import find_file
+
+    assert find_file._DEFAULT_BUDGET_SECONDS >= 40
+    tool = find_file.FindFileTool()
+    assert tool.spec.timeout_seconds > find_file._DEFAULT_BUDGET_SECONDS

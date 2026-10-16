@@ -208,7 +208,10 @@ _GROUPS: Dict[str, Dict[str, Any]] = {
             # it up." found no tool (10-16).
             r"put\s+on|throw\s+on|queue|turn\s+(it|this|that)\s+(up|down)|"
             r"turn\s+(up|down)|turn\s+(the\s+)?(music|volume|sound)\s+(up|down)|"
-            r"louder|quieter|softer|mute|unmute)\b",
+            r"louder|quieter|softer|mute|unmute|"
+            # A bare "Stop." hid media_pause, so nothing could be paused
+            # (10-16, x11).
+            r"stop)\b",
             re.IGNORECASE,
         ),
     },
