@@ -622,8 +622,7 @@ class TestOneRecordForEveryHolder:
 def test_a_dead_apps_expired_session_is_never_a_candidate(monkeypatch) -> None:
     # It "took" the restore meant for the app's next session (16 October).
     import sys
-
-    from pycaw import pycaw
+    import types
 
     class _P:
         def __init__(self, pid, name):
@@ -639,11 +638,16 @@ def test_a_dead_apps_expired_session_is_never_a_candidate(monkeypatch) -> None:
         def __init__(self, pid, state):
             self.Process, self.State = _P(pid, "opera.exe"), state
 
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(
-        pycaw.AudioUtilities,
-        "GetAllSessions",
-        staticmethod(lambda: [_S(11, ducking._STATE_EXPIRED), _S(12, 0)]),
+    # Stand-in comtypes/pycaw: CI runs on Linux, where neither installs.
+    utilities = types.SimpleNamespace(
+        GetAllSessions=lambda: [_S(11, ducking._STATE_EXPIRED), _S(12, 0)]
     )
+    pycaw = types.ModuleType("pycaw")
+    pycaw.pycaw = types.SimpleNamespace(AudioUtilities=utilities)
+    comtypes = types.SimpleNamespace(CoInitialize=lambda: None)
+    monkeypatch.setitem(sys.modules, "comtypes", comtypes)
+    monkeypatch.setitem(sys.modules, "pycaw", pycaw)
+    monkeypatch.setitem(sys.modules, "pycaw.pycaw", pycaw.pycaw)
+    monkeypatch.setattr(sys, "platform", "win32")
     found = ducking._sessions(active_only=False)
     assert [s.Process.pid for _, s in found] == [12]
