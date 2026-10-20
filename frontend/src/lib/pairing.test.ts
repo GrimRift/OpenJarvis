@@ -32,12 +32,22 @@ describe('settingsForPhone', () => {
       micDeviceId: 'pd100x',
       micBoost: 2,
       noiseSuppression: 'strong',
+      touchWakeWord: 'always',
+      continuousConversationEnabled: true,
+      listenWhileWorking: true,
     });
     expect(phone).toEqual({
       speechEnabled: true,
       ttsVoiceId: 'frieren',
       sttProvider: 'flux',
       speakTypedReplies: true,
+      // Always-on modes start off on a phone.
+      continuousConversationEnabled: false,
+      listenWhileWorking: false,
     });
+  });
+
+  it('adds nothing when the PC sent nothing', () => {
+    expect(settingsForPhone({})).toEqual({});
   });
 });

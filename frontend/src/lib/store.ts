@@ -426,6 +426,9 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type OrbDesign = 'constellation' | 'cloud';
 
+export type TouchWakeWord = 'off' | 'voice' | 'always';
+export const TOUCH_WAKE_WORD: readonly TouchWakeWord[] = ['off', 'voice', 'always'];
+
 interface Settings {
   theme: ThemeMode;
   apiUrl: string;
@@ -490,6 +493,14 @@ interface Settings {
   /** Where the browser strips steady background noise:
    * 'conversation' (default), 'all' (also the wake word) or 'off'. */
   noiseSuppression: 'conversation' | 'all' | 'off';
+  /** A phone or iPad only (M29): where "Hey Sage" listens -- never, on the
+   * Voice tab only (default), or on every tab -- and only while the page
+   * is on screen. Elsewhere the mic opens when the talk button is used. */
+  touchWakeWord: TouchWakeWord;
+  /** A phone or iPad only: keep the mic open through Sage's answer and a
+   * few seconds after it, for a follow-up or talking over her. Off by
+   * default: the mic closes when the user's turn ends. */
+  touchFollowUp: boolean;
   diagramsEnabled: boolean;
   /** Sage decides when a diagram helps. Off means it draws one only when
    * asked ("show me how", "illustrate that"). */
@@ -581,6 +592,8 @@ export function defaultSettings(): Settings {
     wakeMicDeviceId: '',
     wakeMicDeviceLabel: '',
     noiseSuppression: 'conversation',
+    touchWakeWord: 'voice',
+    touchFollowUp: false,
     diagramsEnabled: true,
     diagramsAutomatic: true,
     imagesOpenAutomatically: true,
@@ -655,6 +668,8 @@ function loadSettings(): Settings {
       merged.orbDesign = defaults.orbDesign;
     }
     if (typeof merged.orbSpikes !== 'boolean') merged.orbSpikes = defaults.orbSpikes;
+    if (!TOUCH_WAKE_WORD.includes(merged.touchWakeWord)) merged.touchWakeWord = defaults.touchWakeWord;
+    if (typeof merged.touchFollowUp !== 'boolean') merged.touchFollowUp = defaults.touchFollowUp;
     // Settings saved before providers existed carry only fluxEnabled.
     if (!STT_PROVIDERS.includes(parsed.sttProvider)) {
       merged.sttProvider = parsed.fluxEnabled ? 'flux' : 'whisper';

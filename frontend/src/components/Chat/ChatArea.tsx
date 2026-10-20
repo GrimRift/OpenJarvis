@@ -12,6 +12,8 @@ import { useTouchLayout } from '../../lib/touch-layout';
 
 /** 20% over the old 394. The full size; smaller windows scale it down. */
 const CHAT_ORB_SIZE = 473;
+/** The empty chat's orb on a phone: about 200 px. */
+const TOUCH_HERO_SCALE = 0.42;
 
 /** The orb drawn at full size and scaled as a picture: a resize never
  *  restarts its animation, and the layout gets the scaled size. */
@@ -152,7 +154,8 @@ export function ChatArea() {
             >
               {orbStateLabel}
             </div>
-            <ScaledOrb state={orbState} scale={orbScale} />
+            {/* About 200 px on a phone (M29): the full one filled the screen. */}
+            <ScaledOrb state={orbState} scale={touch ? Math.min(orbScale, TOUCH_HERO_SCALE) : orbScale} />
             <h2
               className="font-semibold mt-1"
               style={{ color: 'var(--color-text)', fontFamily: 'var(--font-display)', fontSize: 26 }}

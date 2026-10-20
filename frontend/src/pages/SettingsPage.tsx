@@ -10,7 +10,7 @@ import {
   Brain,
   RotateCcw,
 } from 'lucide-react';
-import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, exportConversationsJson, replaceConversations, type OrbDesign, type ThemeMode, type WakeWordVerify } from '../lib/store';
+import { useAppStore, LISTEN_SECONDS_MAX, LISTEN_SECONDS_MIN, resetAllSettings, exportConversationsJson, replaceConversations, type OrbDesign, type ThemeMode, type TouchWakeWord, type WakeWordVerify } from '../lib/store';
 import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import { MicrophonePicker } from '../components/Settings/MicrophonePicker';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
@@ -42,6 +42,7 @@ import {
 } from '../lib/local-models-api';
 import { formatShortcut, getStartupSettings, setStartupSettings, shortcutFromKey, type StartupSettings } from '../lib/desktop-app';
 import { cancelPairingCode, countdown, newPairingCode, spacedCode } from '../lib/pairing';
+import { useTouchLayout } from '../lib/touch-layout';
 import {
   checkHealth,
   inDesktopShell,
@@ -724,6 +725,7 @@ export function SettingsPage() {
   const cloudModelAvailable = useAppStore((s) => s.cloudModelAvailable);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const updateSettings = useAppStore((s) => s.updateSettings);
+  const touch = useTouchLayout();
   const conversations = useAppStore((s) => s.conversations);
   const serverInfo = useAppStore((s) => s.serverInfo);
   const [healthy, setHealthy] = useState<boolean | null>(null);
@@ -1156,6 +1158,27 @@ export function SettingsPage() {
           </Section>
 
           {/* Connection */}
+          {touch && (
+            // A phone or iPad only (M29): how its microphone behaves.
+            <Section title="This phone">
+              <SettingRow label="Hey Sage on this phone" description="Where the phone listens for the wake word, and only while Sage is on screen. Anywhere else, tap or hold the talk button. Listening all the time drains the battery and warms the phone.">
+                <select
+                  value={settings.touchWakeWord}
+                  onChange={(e) => { updateSettings({ touchWakeWord: e.target.value as TouchWakeWord }); showSaved(); }}
+                  className="text-sm px-3 py-1.5 rounded-lg outline-none"
+                  style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text)', border: '1px solid var(--color-border)' }}
+                >
+                  <option value="voice">Voice tab only</option>
+                  <option value="always">Every tab</option>
+                  <option value="off">Off</option>
+                </select>
+              </SettingRow>
+              <SettingRow label="Keep listening after replies" description="Leave the mic open while Sage answers and a few seconds after, so you can follow up or talk over her without tapping. Off: the mic closes when you finish speaking.">
+                <Switch on={settings.touchFollowUp} onClick={() => { updateSettings({ touchFollowUp: !settings.touchFollowUp }); showSaved(); }} />
+              </SettingRow>
+            </Section>
+          )}
+
           <Section title="Connection">
             <SettingRow label="Server status" description={serverInfo ? `${serverInfo.engine} / ${serverInfo.model}` : 'Not connected'}>
               <div className="flex items-center gap-2">

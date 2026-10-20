@@ -129,8 +129,18 @@ export const apiFetch = (
   const headers = authHeaders(
     (init.headers as Record<string, string> | undefined) ?? {},
   );
-  return fetch(`${getBase()}${path}`, { ...init, headers });
+  return fetch(`${getBase()}${path}`, { ...init, headers }).then((res) => {
+    // A refused key is announced once per answer: a phone shows its pairing
+    // screen rather than polling on with 401s (M29, components/Layout.tsx).
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(KEY_REFUSED_EVENT));
+    }
+    return res;
+  });
 };
+
+/** Dispatched on window whenever the server refuses this device's key. */
+export const KEY_REFUSED_EVENT = 'sage-key-refused';
 
 async function tauriInvoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core');

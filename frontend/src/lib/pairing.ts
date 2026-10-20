@@ -2,7 +2,7 @@
  * Pairing a phone or iPad (M29, server/pairing.py): the PC asks for a
  * six-digit code, the phone sends it back and receives Sage's key.
  */
-import { apiFetch, getBase } from './api';
+import { apiFetch, getApiKey, getBase } from './api';
 
 export interface PairingCode {
   code: string;
@@ -23,11 +23,19 @@ const PC_ONLY = new Set([
   'wakeMicDeviceLabel',
   'noiseSuppression',
   'fontSize',
+  // The phone's own (M29): the PC has no say in them.
+  'touchWakeWord',
+  'touchFollowUp',
 ]);
+
+/** Modes that suit a PC left listening on a desk, not a phone in a pocket:
+ * a phone starts with them off, whatever the PC has. */
+const PHONE_OFF = { continuousConversationEnabled: false, listenWhileWorking: false };
 
 /** What a paired phone takes over from the PC: everything else. */
 export function settingsForPhone(settings: object): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(settings).filter(([key]) => !PC_ONLY.has(key)));
+  const kept = Object.fromEntries(Object.entries(settings).filter(([key]) => !PC_ONLY.has(key)));
+  return Object.keys(kept).length ? { ...kept, ...PHONE_OFF } : kept;
 }
 
 /** Marks a phone as paired with the PC's settings, not just its key. A phone
@@ -107,12 +115,42 @@ export function countdown(seconds: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Whether this device's key is refused: the API answers 401. */
-export async function keyRefused(): Promise<boolean> {
+const LAST_CHECK = 'sage-last-key-check';
+
+/** The last start-up check's result, kept for the next pairing's trace. */
+export function lastKeyCheck(): string {
   try {
-    const res = await apiFetch('/v1/models');
-    return res.status === 401;
+    return localStorage.getItem(LAST_CHECK) || 'none';
   } catch {
-    return false;
+    return 'unknown';
+  }
+}
+
+function rememberKeyCheck(result: string): void {
+  try {
+    localStorage.setItem(LAST_CHECK, `${result}@${new Date().toISOString().slice(11, 19)} key=${getApiKey() ? 'yes' : 'no'}`);
+  } catch {
+    // Diagnostics only.
+  }
+}
+
+/** How long a phone waits for Sage before saying it cannot reach it. */
+export const KEY_CHECK_TIMEOUT_MS = 5000;
+
+/** Whether this device can talk to Sage: 'ok', 'refused' (401: no key or a
+ * wrong one), or 'unreachable' (no answer within KEY_CHECK_TIMEOUT_MS). */
+export async function keyCheck(): Promise<'ok' | 'refused' | 'unreachable'> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KEY_CHECK_TIMEOUT_MS);
+  try {
+    const res = await apiFetch('/v1/models', { signal: controller.signal });
+    const result = res.status === 401 ? 'refused' : res.ok ? 'ok' : 'unreachable';
+    rememberKeyCheck(result);
+    return result;
+  } catch {
+    rememberKeyCheck('unreachable');
+    return 'unreachable';
+  } finally {
+    clearTimeout(timer);
   }
 }

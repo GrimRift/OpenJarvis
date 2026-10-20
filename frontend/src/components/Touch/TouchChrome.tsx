@@ -23,6 +23,7 @@ import {
   SquarePen,
 } from 'lucide-react';
 import { ConversationList } from '../Sidebar/ConversationList';
+import { OrbVisual, useOrbState } from '../Chat/OrbVisual';
 import { useAppStore } from '../../lib/store';
 
 const TABS = [
@@ -114,6 +115,10 @@ export function TouchTopBar({ onOpenChats }: { onOpenChats: () => void }) {
   const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
   const isChat = pathname === '/';
   const isVoice = pathname === '/voice';
+  // Once a chat has begun the big orb steps aside, and a small one sits
+  // beside the name in its place (M29, the user's request).
+  const chatting = useAppStore((s) => s.messages.length > 0);
+  const orbState = useOrbState();
   const title = TITLES[pathname] ?? 'More';
 
   return (
@@ -131,7 +136,10 @@ export function TouchTopBar({ onOpenChats }: { onOpenChats: () => void }) {
       )}
       <div className="flex-1 min-w-0 flex flex-col items-center">
         {isChat || isVoice ? (
-          <span className="sage-wordmark select-none" aria-label="Sage">SAGE</span>
+          <span className="flex items-center gap-2">
+            {isChat && chatting && <OrbVisual state={orbState} size={30} />}
+            <span className="sage-wordmark select-none" aria-label="Sage">SAGE</span>
+          </span>
         ) : (
           <span className="text-[15px] font-semibold truncate" style={{ color: 'var(--color-text)' }}>{title}</span>
         )}

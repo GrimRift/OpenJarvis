@@ -108,7 +108,7 @@ import {
 } from '../../lib/turn-continuation';
 import { setVoiceTraceSink, voiceTrace } from '../../lib/voice-trace';
 import { joinHeld, RELEASE_GRACE_MS } from '../../lib/hold-to-talk';
-import { useTouchLayout } from '../../lib/touch-layout';
+import { touchMicOpen, usePageVisible, useTouchLayout } from '../../lib/touch-layout';
 import { useLocation } from 'react-router';
 import { TalkButton } from './TalkButton';
 import { holdMedia, MEDIA_RELEASE_IDLE_MS } from '../../lib/media-hold';
@@ -505,7 +505,29 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   // Only the Sage page used last listens; another open one would hear the
   // same microphone and answer every turn a second time.
   const voiceOwner = useVoiceOwner();
-  const fluxActive = speechEnabled && fluxEnabled && voiceOwner;
+  // On a phone the microphone opens only when needed (M29): Flux ran for
+  // the life of the page, as on the PC, and the iPhone heated up within
+  // minutes. A tap or hold asks for a turn (touchTurnWanted); "Hey Sage"
+  // listens where this phone's setting allows; nothing while out of sight.
+  const { pathname } = useLocation();
+  const pageVisible = usePageVisible();
+  const touchWakeWord = useAppStore((s) => s.settings.touchWakeWord);
+  const touchFollowUp = useAppStore((s) => s.settings.touchFollowUp);
+  const wakeWordSetting = useAppStore((s) => s.settings.wakeWordEnabled);
+  const [touchTurnWanted, setTouchTurnWanted] = useState(false);
+  /** A turn asked for before the Flux session was ready: begun from
+   * onSessionReady, with the audio heard since the press as pre-roll. */
+  const touchBeginRef = useRef<{ kind: 'tap' | 'hold'; at: number; released?: 'send' | 'cancel' } | null>(null);
+  const touchMic = touchMicOpen({
+    visible: pageVisible,
+    turnWanted: touchTurnWanted,
+    wakeWord: touchWakeWord,
+    wakeWordOn: wakeWordSetting,
+    onVoiceTab: pathname === '/voice',
+  });
+  const fluxActive = speechEnabled && fluxEnabled && voiceOwner && (!touch || touchMic.mic);
+  /** Flux could serve a turn here, open or not: a phone opens it on demand. */
+  const fluxUsable = speechEnabled && fluxEnabled && voiceOwner && (!touch || pageVisible);
   const maxTokens = useAppStore((s) => s.settings.maxTokens);
   const temperature = useAppStore((s) => s.settings.temperature);
   const createConversation = useAppStore((s) => s.createConversation);
@@ -580,6 +602,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     timer: ReturnType<typeof setTimeout> | null;
   }>({ active: false, parts: [], timer: null });
 
+  /** Flux has said FluxReady on the socket now open (touch: on demand). */
+  const touchFluxReadyRef = useRef(false);
+  const requestTouchTurn = useCallback((kind: 'tap' | 'hold') => {
+    touchBeginRef.current = { kind, at: Date.now() };
+    voiceTrace('mic.touchOpen', { kind });
+    setTouchTurnWanted(true);
+  }, []);
+
   const handleMicClick = useCallback(async () => {
     // A Flux turn leaves speechState 'idle', so checking it directly sent
     // every press down the "start" branch: the wake word was un-suspended
@@ -611,18 +641,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
         // Error is captured in useSpeech
       }
     } else {
-      if (fluxActive) {
+      if (fluxActive && (!touch || touchFluxReadyRef.current)) {
         clearContinuationWindow();
         setFluxTurnActive(true);
         listenKindRef.current = 'mic';
         flux.beginTurn();
         return;
       }
+      if (touch && fluxUsable) {
+        // The phone's mic opens now; the turn begins when Flux is ready.
+        requestTouchTurn('tap');
+        return;
+      }
       await startRecording();
     }
     // flux is stable across renders; fluxActive/fluxTurnActive drive it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [speechState, fluxActive, fluxTurnActive, startRecording, stopRecording]);
+  }, [speechState, fluxActive, fluxUsable, touch, fluxTurnActive, startRecording, stopRecording, requestTouchTurn]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -2525,6 +2560,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       voiceTrace('flux.unavailable', { reason, bufferedSamples: audio?.length ?? 0 });
       clearFluxSilenceTimer();
       setFluxTurnActive(false);
+      // A phone's on-demand mic that failed (permission refused, no socket)
+      // closes again rather than retrying for as long as the page is open.
+      if (touch) {
+        touchBeginRef.current = null;
+        setTouchTurnWanted(false);
+      }
       toast.error(`Cloud transcription unavailable — using local. ${reason}`, {
         duration: 6000,
       });
@@ -2545,7 +2586,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     },
     // clearFluxSilenceTimer is declared just below; it only clears a ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sendMessage],
+    [sendMessage, touch],
   );
 
   const clearFluxSilenceTimer = useCallback(() => {
@@ -2619,6 +2660,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // Turn indices restart with the session; a stale index here would
       // drop the first turn after a reconnect as a repeat.
       lastFluxTurnRef.current = null;
+      touchFluxReadyRef.current = true;
+      runTouchBeginRef.current();
     },
     onTurnStarted: () => {
       turnStartedAtRef.current = Date.now();
@@ -2781,6 +2824,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     if (hold.timer) clearTimeout(hold.timer);
     holdRef.current = { active: true, parts: [], timer: null };
     voiceTrace('mic.holdStart', { flux: fluxActive, turn: fluxTurnActive });
+    if (touch && fluxUsable && !fluxTurnActive && !(fluxActive && touchFluxReadyRef.current)) {
+      requestTouchTurn('hold');
+      return;
+    }
     if (fluxActive) {
       if (!fluxTurnActive) {
         clearContinuationWindow();
@@ -2794,7 +2841,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     if (speechState !== 'recording') void startRecording();
     // flux is stable across renders; fluxActive/fluxTurnActive drive it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fluxActive, fluxTurnActive, speechState, startRecording, clearContinuationWindow]);
+  }, [fluxActive, fluxUsable, touch, fluxTurnActive, speechState, startRecording, clearContinuationWindow, requestTouchTurn]);
 
   // The finger lifted: send what was heard, or drop it when slid away.
   const endHold = useCallback(
@@ -2802,6 +2849,18 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       const hold = holdRef.current;
       hold.active = false;
       voiceTrace('mic.holdEnd', { cancel, pieces: hold.parts.length });
+      const pending = touchBeginRef.current;
+      if (pending) {
+        // Let go before Flux was ready: a cancel drops it; otherwise what was
+        // said rides as pre-roll into an ordinary turn Deepgram ends itself.
+        if (cancel) {
+          touchBeginRef.current = null;
+          setTouchTurnWanted(false);
+        } else {
+          pending.released = 'send';
+        }
+        return;
+      }
       if (fluxActive) {
         if (cancel) {
           hold.parts = [];
@@ -2847,6 +2906,47 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fluxActive, speechState, stopRecording, openContinuationWindow],
   );
+
+  // A phone's turn asked for before Flux was ready begins here, with what
+  // was said since the press as pre-roll so the first words are not lost.
+  const runTouchBeginRef = useRef<() => void>(() => {});
+  runTouchBeginRef.current = () => {
+    const pending = touchBeginRef.current;
+    if (!pending) return;
+    touchBeginRef.current = null;
+    clearContinuationWindow();
+    setFluxTurnActive(true);
+    listenKindRef.current = 'mic';
+    const preRollMs = Math.min(4000, Date.now() - pending.at + 300);
+    flux.beginTurn(flux.takeRecentAudio(preRollMs));
+    voiceTrace('mic.touchBegin', { kind: pending.kind, preRollMs, released: pending.released ?? 'no' });
+    if (pending.kind === 'hold' && !pending.released) {
+      holdRef.current.active = true;
+      clearFluxSilenceTimer();
+    }
+  };
+
+  // Flux is not ready once its socket is gone.
+  useEffect(() => {
+    if (!fluxActive) touchFluxReadyRef.current = false;
+  }, [fluxActive]);
+
+  // The phone's mic closes again when the turn is over: at once (after the
+  // hold's release grace), or with "keep listening after replies" on, once
+  // Sage has finished answering and a few seconds more.
+  const audioPlayingNow = useAppStore((s) => s.audioPlaying);
+  const continuousListenSeconds = useAppStore((s) => s.settings.continuousListenSeconds);
+  useEffect(() => {
+    if (!touch || !touchTurnWanted) return;
+    if (touchBeginRef.current || fluxTurnActive || holdRef.current.active || holdRef.current.timer) return;
+    if (touchFollowUp && (streamState.isStreaming || audioPlayingNow)) return;
+    const linger = touchFollowUp ? continuousListenSeconds * 1000 : RELEASE_GRACE_MS + 500;
+    const timer = setTimeout(() => {
+      voiceTrace('mic.touchClose', { followUp: touchFollowUp });
+      setTouchTurnWanted(false);
+    }, linger);
+    return () => clearTimeout(timer);
+  }, [touch, touchTurnWanted, fluxTurnActive, touchFollowUp, streamState.isStreaming, audioPlayingNow, continuousListenSeconds]);
 
   // A turn cannot outlive the socket that owns it.
   //
@@ -3068,12 +3168,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }
   }, [speechState]);
 
-  // On a phone, "Hey Sage" listens only on the Voice tab (M29, the user's
-  // choice): elsewhere the mic is tapped or held, and a phone left open on
-  // Chat beside the PC does not answer the PC's "Hey Sage" too.
-  const { pathname } = useLocation();
-  const wakeWordEnabled =
-    useAppStore((s) => s.settings.wakeWordEnabled) && voiceOwner && (!touch || pathname === '/voice');
+  // On a phone, "Hey Sage" listens only where its setting allows (Voice tab
+  // by default, M29) and only on screen: a phone left open on Chat beside
+  // the PC does not answer the PC's "Hey Sage" too.
+  const wakeWordEnabled = wakeWordSetting && voiceOwner && (!touch || touchMic.wake);
 
   // A spoken moment that invites an answer (M37): open the microphone for
   // it, so "yes, actually" needs no wake word. Only in Flux mode with the
@@ -3529,7 +3627,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             ) : (
               <TalkButton
                 variant="big"
-                listening={effectiveSpeechState === 'recording'}
+                listening={effectiveSpeechState === 'recording' || touchTurnWanted}
                 disabled={micDisabled}
                 onTap={handleMicClick}
                 onHoldStart={beginHold}
@@ -3819,7 +3917,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             touch && !input.trim() ? (
               <TalkButton
                 variant="inline"
-                listening={effectiveSpeechState === 'recording'}
+                listening={effectiveSpeechState === 'recording' || touchTurnWanted}
                 disabled={micDisabled}
                 onTap={handleMicClick}
                 onHoldStart={beginHold}

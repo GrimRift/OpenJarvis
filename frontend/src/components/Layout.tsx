@@ -9,7 +9,8 @@ import { checkHealth, getApiKey } from '../lib/api';
 import { useKeyboardOpen, useTouchLayout } from '../lib/touch-layout';
 import { ChatsDrawer, TouchTabBar, TouchTopBar } from './Touch/TouchChrome';
 import { PairScreen } from './Touch/PairScreen';
-import { devicePaired, keyRefused } from '../lib/pairing';
+import { devicePaired, keyCheck } from '../lib/pairing';
+import { KEY_REFUSED_EVENT } from '../lib/api';
 
 export function Layout() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
@@ -33,16 +34,30 @@ export function Layout() {
   const keyboardUp = useKeyboardOpen();
   // A phone or iPad without a working key pairs first (M29). Until the check
   // answers, nothing that opens the microphone is mounted.
-  const [pairing, setPairing] = useState<'checking' | 'needed' | 'ok'>(touch ? 'checking' : 'ok');
+  const [pairing, setPairing] = useState<'checking' | 'needed' | 'unreachable' | 'ok'>(
+    touch ? 'checking' : 'ok',
+  );
+  const [checkRun, setCheckRun] = useState(0);
   useEffect(() => {
     if (!touch) return;
     let live = true;
-    void keyRefused().then((refused) => {
-      if (live) setPairing(refused || !devicePaired() ? 'needed' : 'ok');
+    setPairing('checking');
+    void keyCheck().then((result) => {
+      if (!live) return;
+      if (result === 'unreachable') setPairing('unreachable');
+      else setPairing(result === 'refused' || !devicePaired() ? 'needed' : 'ok');
     });
     return () => {
       live = false;
     };
+  }, [touch, checkRun]);
+  // A key refused later (revoked, or lost) goes back to pairing, which
+  // unmounts the app and its polling instead of 401ing on.
+  useEffect(() => {
+    if (!touch) return;
+    const refused = () => setPairing((now) => (now === 'ok' ? 'needed' : now));
+    window.addEventListener(KEY_REFUSED_EVENT, refused);
+    return () => window.removeEventListener(KEY_REFUSED_EVENT, refused);
   }, [touch]);
 
   const healthBanner = apiReachable === false && (
@@ -70,7 +85,19 @@ export function Layout() {
   );
 
   if (touch && pairing !== 'ok') {
-    if (pairing === 'checking') return <div className="h-full w-full" />;
+    if (pairing === 'checking' || pairing === 'unreachable') {
+      return (
+        <TouchNotice
+          title={pairing === 'checking' ? 'Connecting to Sage…' : "Can't reach Sage's PC"}
+          detail={
+            pairing === 'checking'
+              ? ''
+              : 'Check that the PC is on with Sage running, and that Tailscale is connected on this phone.'
+          }
+          onRetry={pairing === 'unreachable' ? () => setCheckRun((n) => n + 1) : undefined}
+        />
+      );
+    }
     // Reloaded once paired, so every socket opens with the key.
     return <PairScreen again={Boolean(getApiKey())} onPaired={() => window.location.reload()} />;
   }
@@ -125,6 +152,32 @@ export function Layout() {
           <PersistentComposer />
         </main>
       </div>
+    </div>
+  );
+}
+
+/** A phone's start-up screen while Sage is checked or cannot be reached. */
+function TouchNotice({ title, detail, onRetry }: { title: string; detail: string; onRetry?: () => void }) {
+  return (
+    <div className="touch-shell relative flex h-full w-full flex-col items-center justify-center gap-4 px-8 text-center">
+      <div className="hud-backdrop" aria-hidden="true" />
+      <span className="sage-wordmark relative select-none" style={{ fontSize: 20 }}>SAGE</span>
+      <div className="relative text-[17px] font-semibold" style={{ color: 'var(--color-text)' }}>{title}</div>
+      {detail && (
+        <p className="relative text-[14px] leading-relaxed max-w-[320px]" style={{ color: 'var(--color-text-secondary)' }}>
+          {detail}
+        </p>
+      )}
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="relative px-5 py-2.5 rounded-full text-[15px] cursor-pointer"
+          style={{ border: '1px solid var(--color-accent)', color: 'var(--color-accent)' }}
+        >
+          Try again
+        </button>
+      )}
     </div>
   );
 }

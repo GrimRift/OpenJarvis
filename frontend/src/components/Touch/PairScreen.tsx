@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { digitsOf, markDevicePaired, redeemPairingCode } from '../../lib/pairing';
+import { devicePaired, digitsOf, lastKeyCheck, markDevicePaired, redeemPairingCode } from '../../lib/pairing';
+import { getApiKey } from '../../lib/api';
+import { voiceTrace } from '../../lib/voice-trace';
 import { useAppStore } from '../../lib/store';
 
 /**
@@ -25,6 +27,21 @@ export function PairScreen({ onPaired, again }: { onPaired: () => void; again: b
     // The PC's settings first (voice, wake word, speech engine), then the key.
     useAppStore.getState().updateSettings({ ...result.settings, apiKey: result.apiKey });
     markDevicePaired();
+    // Read back before reloading: on the first iPhone re-pair the key was
+    // gone after the reload and the page sat blank, 401ing (M29).
+    const kept = getApiKey() === result.apiKey && devicePaired();
+    // Sent with the key just saved (the page's unload flushes it), so the
+    // PC's voice trace shows how pairing went on the phone.
+    voiceTrace('pair.saved', {
+      kept,
+      keyChars: result.apiKey.length,
+      settings: Object.keys(result.settings).length,
+      before: lastKeyCheck(),
+    });
+    if (!kept) {
+      setMessage("This phone didn't keep the pairing. Turn off Private Browsing (or allow website data for this site) and try again.");
+      return;
+    }
     onPaired();
   };
 

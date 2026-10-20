@@ -169,3 +169,33 @@ export function useKeyboardOpen(): boolean {
   }, []);
   return open;
 }
+
+/** Whether the page is on screen: false once Safari is in the background or
+ * the phone is locked, when nothing should keep listening (M29). */
+export function usePageVisible(): boolean {
+  const read = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+  const [visible, setVisible] = useState(read);
+  useEffect(() => {
+    const onChange = () => setVisible(read());
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+  return visible;
+}
+
+/** On a phone the microphone opens only when it is needed (M29): for a turn
+ * the user asked for, or for "Hey Sage" where this phone's setting lets it
+ * listen -- never while the page is out of sight. */
+export function touchMicOpen(state: {
+  visible: boolean;
+  turnWanted: boolean;
+  wakeWord: 'off' | 'voice' | 'always';
+  wakeWordOn: boolean;
+  onVoiceTab: boolean;
+}): { mic: boolean; wake: boolean } {
+  if (!state.visible) return { mic: false, wake: false };
+  const wake =
+    state.wakeWordOn &&
+    (state.wakeWord === 'always' || (state.wakeWord === 'voice' && state.onVoiceTab));
+  return { mic: state.turnWanted || wake, wake };
+}

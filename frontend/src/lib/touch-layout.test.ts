@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isTouchLayout, keyboardOpen, touchOrbSize, touchZoomFor } from './touch-layout';
+import { isTouchLayout, keyboardOpen, touchMicOpen, touchOrbSize, touchZoomFor } from './touch-layout';
 
 const phone = { coarse: true, width: 393, height: 852, desktopShell: false };
 
@@ -49,5 +49,28 @@ describe('touchOrbSize', () => {
     expect(touchOrbSize(631, 908)).toBe(360);
     // A short screen (landscape phone) still gets a usable orb.
     expect(touchOrbSize(844, 390)).toBe(180);
+  });
+});
+
+describe('touchMicOpen', () => {
+  const base = { visible: true, turnWanted: false, wakeWord: 'voice' as const, wakeWordOn: true, onVoiceTab: false };
+
+  it('keeps the mic shut on Chat until a turn is asked for', () => {
+    expect(touchMicOpen(base)).toEqual({ mic: false, wake: false });
+    expect(touchMicOpen({ ...base, turnWanted: true })).toEqual({ mic: true, wake: false });
+  });
+
+  it('listens for "Hey Sage" on the Voice tab only, by default', () => {
+    expect(touchMicOpen({ ...base, onVoiceTab: true })).toEqual({ mic: true, wake: true });
+    expect(touchMicOpen({ ...base, wakeWord: 'always' })).toEqual({ mic: true, wake: true });
+    expect(touchMicOpen({ ...base, wakeWord: 'off', onVoiceTab: true })).toEqual({ mic: false, wake: false });
+    expect(touchMicOpen({ ...base, wakeWordOn: false, onVoiceTab: true })).toEqual({ mic: false, wake: false });
+  });
+
+  it('shuts everything when the page is out of sight', () => {
+    expect(touchMicOpen({ ...base, visible: false, turnWanted: true, onVoiceTab: true })).toEqual({
+      mic: false,
+      wake: false,
+    });
   });
 });
