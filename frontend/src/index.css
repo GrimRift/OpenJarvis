@@ -926,3 +926,21 @@ html[data-touch] .memory-tabs > button {
   padding: 8px 12px;
   font-size: 15px;
 }
+
+/* Page changes on a phone ease in rather than snap (M29). Opacity and a
+   short rise; ends at transform: none, so nothing fixed inside is affected
+   once it has played. */
+@keyframes touch-page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+html[data-touch] .touch-page,
+html[data-touch] .touch-fade-in {
+  animation: touch-page-in 220ms cubic-bezier(.2, .7, .2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-touch] .touch-page,
+  html[data-touch] .touch-fade-in {
+    animation: none;
+  }
+}

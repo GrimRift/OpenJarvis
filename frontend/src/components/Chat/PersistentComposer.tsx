@@ -6,6 +6,7 @@ import {
 } from '../../lib/composer-slot';
 import { InputArea } from './InputArea';
 import { appWindowHidden, whenAppWindowShown } from '../../lib/app-window';
+import { touchLayoutNow } from '../../lib/touch-layout';
 
 interface Box {
   left: number;
@@ -18,6 +19,9 @@ interface Box {
  * Drawn over the current page's <ComposerSlot>; with none, hidden but still
  * running, so the microphone and the wake word never stop on a page change.
  */
+/** Decided once: a device does not stop being a phone (lib/touch-layout.ts). */
+const TOUCH = touchLayoutNow();
+
 export function PersistentComposer() {
   const slot = useSyncExternalStore(subscribeComposerSlot, getComposerSlot, getComposerSlot);
   const ref = useRef<HTMLDivElement>(null);
@@ -42,10 +46,17 @@ export function PersistentComposer() {
         return;
       }
       const rect = slot.el.getBoundingClientRect();
-      const key = `${rect.left}|${rect.top}|${rect.width}`;
+      // On a phone the box is placed inside the page, not on the screen
+      // (M29): with the iOS keyboard up, screen coordinates and fixed
+      // positioning disagree by the page's scroll, and the box jumped to the
+      // top. Both rects below share one frame, whatever iOS has scrolled.
+      const origin = TOUCH ? ref.current?.parentElement?.getBoundingClientRect() : undefined;
+      const left = rect.left - (origin?.left ?? 0);
+      const top = rect.top - (origin?.top ?? 0);
+      const key = `${left}|${top}|${rect.width}`;
       if (key !== last) {
         last = key;
-        setBox({ left: rect.left, top: rect.top, width: rect.width });
+        setBox({ left, top, width: rect.width });
       }
       frame = requestAnimationFrame(follow);
     };
@@ -68,10 +79,25 @@ export function PersistentComposer() {
   }, []);
 
   const voice = slot?.voice ?? false;
+  // Chat's box and Voice's controls swap in place: on a phone the swap
+  // fades rather than snaps. Animated, never remounted -- the box owns the
+  // microphone.
+  const firstVoice = useRef(true);
+  useEffect(() => {
+    if (firstVoice.current) {
+      firstVoice.current = false;
+      return;
+    }
+    if (!TOUCH) return;
+    ref.current?.animate?.(
+      [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)' },
+    );
+  }, [voice]);
   const style: React.CSSProperties =
     slot && box
       ? {
-          position: 'fixed',
+          position: TOUCH ? 'absolute' : 'fixed',
           left: box.left,
           top: box.top,
           width: voice ? undefined : box.width,

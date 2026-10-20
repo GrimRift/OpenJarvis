@@ -17,7 +17,6 @@ import {
 } from '../../lib/orb-plexus';
 import { isGenerating, resolveOrbState, type OrbInputs, type OrbState } from '../../lib/orb-state';
 import { appWindowHidden, whenAppWindowShown } from '../../lib/app-window';
-import { touchLayoutNow } from '../../lib/touch-layout';
 import { useAppStore } from '../../lib/store';
 
 export type { OrbState } from '../../lib/orb-state';
@@ -103,11 +102,18 @@ const BRIGHT_MAP: Record<OrbState, number> = {
   away: 0.5,
 };
 
-/** Decided once: a device does not stop being a phone (lib/touch-layout.ts). */
-const TOUCH_ORB = touchLayoutNow();
-const TOUCH_DRAW_GAP_MS = 1000 / 30 - 1;
-
-export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: number }) {
+/** `pixelRatio`: canvas pixels per CSS pixel. A small orb (the phone's
+ * 30 px header one, M29) drawn at 1x was a dim smudge on a 3x screen. */
+export function OrbVisual({
+  state,
+  size = 394,
+  pixelRatio = 1,
+}: {
+  state: OrbState;
+  size?: number;
+  pixelRatio?: number;
+}) {
+  const px = Math.round(size * pixelRatio);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
   const particlesRef = useRef<Particle[] | undefined>(undefined);
@@ -139,7 +145,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    particlesRef.current = makeParticles(particleCountFor(size));
+    particlesRef.current = makeParticles(particleCountFor(px));
     plexusRef.current = createPlexusState();
 
     // Every motion term below is expressed per 60Hz frame, so without this
@@ -162,16 +168,6 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
       lastFrameRef.current = now;
       const dt = frameDelta(now, previous);
       tRef.current += dt;
-      if (TOUCH_ORB) {
-        // A phone draws at 30 a second (M29): at 60, with the microphone
-        // open, the iPhone heated up within minutes. The motion still runs
-        // at the same speed, from the time since the last draw.
-        sinceDrawRef.current += dt;
-        if (now - lastDrawRef.current < TOUCH_DRAW_GAP_MS) {
-          rafRef.current = requestAnimationFrame(draw);
-          return;
-        }
-      }
       if (designRef.current === 'cloud') {
         drawOrb(
           ctx,
@@ -182,17 +178,13 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
           angleRef,
           scaleRef,
           speedRef,
-          TOUCH_ORB ? sinceDrawRef.current : dt,
+          dt,
         );
-        if (TOUCH_ORB) {
-          sinceDrawRef.current = 0;
-          lastDrawRef.current = now;
-        }
       } else {
         // Drawn at 60 a second or better, whatever the display's rate. The
         // time since the last draw is handed over, so the motion runs at the
         // same speed however often it is drawn.
-        if (!TOUCH_ORB) sinceDrawRef.current += dt;
+        sinceDrawRef.current += dt;
         if (now - lastDrawRef.current >= MIN_DRAW_GAP_MS) {
           plexusRef.current!.spikes = spikesRef.current;
           if (wakeCount() !== wakesRef.current) {
@@ -222,7 +214,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       stopWaiting();
     };
-  }, [size]);
+  }, [px]);
 
   return (
     <div style={{ position: 'relative', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -243,7 +235,7 @@ export function OrbVisual({ state, size = 394 }: { state: OrbState; size?: numbe
           }}
         />
       )}
-      <canvas ref={canvasRef} width={size} height={size} style={{ position: 'absolute', inset: 0 }} />
+      <canvas ref={canvasRef} width={px} height={px} style={{ position: 'absolute', inset: 0, width: size, height: size }} />
     </div>
   );
 }

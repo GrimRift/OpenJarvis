@@ -32,6 +32,7 @@ import { fetchVolumes } from './lib/volume';
 import { apiFetch, fetchSpeechVoices } from './lib/api';
 import { ORB_NEUTRAL, setOrbShaping } from './lib/audio-level';
 import { MorePage } from './components/Touch/TouchChrome';
+import { touchLayoutNow } from './lib/touch-layout';
 import { retryUntilAnswered } from './lib/retry';
 
 export default function App() {
@@ -248,7 +249,8 @@ export default function App() {
           <Route path="more" element={<MorePage />} />
         </Route>
       </Routes>
-      <Toaster position="bottom-right" />
+      {/* On a phone, at the top: at the bottom they covered the talk button (M29). */}
+      <Toaster position={touchLayoutNow() ? 'top-center' : 'bottom-right'} offset={touchLayoutNow() ? 'calc(env(safe-area-inset-top) + 56px)' : undefined} />
       <DiagramLayer />
       <ImageLayer />
       <PhotoViewer />

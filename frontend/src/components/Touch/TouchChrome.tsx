@@ -136,8 +136,13 @@ export function TouchTopBar({ onOpenChats }: { onOpenChats: () => void }) {
       )}
       <div className="flex-1 min-w-0 flex flex-col items-center">
         {isChat || isVoice ? (
-          <span className="flex items-center gap-2">
-            {isChat && chatting && <OrbVisual state={orbState} size={30} />}
+          // SAGE stays centred (the user's ask); the orb hangs off its left.
+          <span className="relative inline-flex items-center">
+            {isChat && chatting && (
+              <span className="absolute right-full mr-2.5 top-1/2 -translate-y-1/2" aria-hidden="true">
+                <OrbVisual state={orbState} size={34} pixelRatio={3} />
+              </span>
+            )}
             <span className="sage-wordmark select-none" aria-label="Sage">SAGE</span>
           </span>
         ) : (

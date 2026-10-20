@@ -132,15 +132,22 @@ function TouchVoice({
   const live = orbState === 'listening' || orbState === 'speaking';
   return (
     <div className="relative h-full w-full overflow-hidden flex flex-col">
-      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4">
+      {/* With the transcript open the orb shrinks above it, and the
+          controls stay in view below (it covered them as a sheet). */}
+      <div
+        className={`${showTranscript ? 'shrink-0 py-3' : 'flex-1 min-h-0'} flex flex-col items-center justify-center gap-3 px-4`}
+      >
         <div
           className="text-[11px] tracking-[0.28em] select-none"
           style={{ color: live ? 'var(--color-accent)' : 'var(--color-text-tertiary)' }}
         >
           {status}
         </div>
-        <OrbVisual state={orbState} size={size} />
+        <OrbVisual state={orbState} size={showTranscript ? 110 : size} />
       </div>
+      {showTranscript && (
+        <VoiceTranscript messages={messages} onClose={() => setShowTranscript(false)} />
+      )}
       <div className="shrink-0 flex items-start justify-center gap-6 pb-2">
         <ComposerSlot voice />
         <div className="flex flex-col items-center">
@@ -173,9 +180,6 @@ function TouchVoice({
             Hey Sage on · while this screen is open
           </span>
         </div>
-      )}
-      {showTranscript && (
-        <VoiceTranscript messages={messages} onClose={() => setShowTranscript(false)} />
       )}
     </div>
   );

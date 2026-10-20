@@ -157,6 +157,16 @@ function createStreamingTtsPlayer() {
       (window as unknown as { webkitAudioContext: typeof AudioContext })
         .webkitAudioContext;
     const created = new Ctor({ sampleRate: 24000 });
+    // iOS "interrupts" a context when the microphone or another app takes
+    // the audio session (M29: Sage's voice went silent on the iPhone); it is
+    // resumed as soon as the interruption lets go, not at the next tap.
+    created.addEventListener?.('statechange', () => {
+      const state = created.state as string;
+      if (state === 'interrupted' || state === 'suspended') {
+        voiceTrace('tts.ctxState', { state });
+        void created.resume().catch(() => {});
+      }
+    });
     ctxRef.current = created;
     return created;
   };

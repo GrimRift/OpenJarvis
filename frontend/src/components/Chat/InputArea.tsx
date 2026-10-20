@@ -2939,7 +2939,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   useEffect(() => {
     if (!touch || !touchTurnWanted) return;
     if (touchBeginRef.current || fluxTurnActive || holdRef.current.active || holdRef.current.timer) return;
-    if (touchFollowUp && (streamState.isStreaming || audioPlayingNow)) return;
+    // Never while Sage is answering: on iOS, closing the mic mid-reply
+    // interrupted the page's audio and the voice went silent on Chat (it
+    // came back on Voice, where "Hey Sage" keeps the mic open). It closes
+    // once she has finished.
+    if (streamState.isStreaming || audioPlayingNow) return;
     const linger = touchFollowUp ? continuousListenSeconds * 1000 : RELEASE_GRACE_MS + 500;
     const timer = setTimeout(() => {
       voiceTrace('mic.touchClose', { followUp: touchFollowUp });

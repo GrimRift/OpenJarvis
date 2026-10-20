@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useNavigate } from 'react-router';
+import { Outlet, useLocation, useNavigate } from 'react-router';
 import { ApprovalBell } from './ApprovalBell';
 import { Sidebar } from './Sidebar/Sidebar';
 import { SystemPulse } from './SystemPulse';
@@ -29,6 +29,7 @@ export function Layout() {
   }, []);
 
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const touch = useTouchLayout();
   const [chatsOpen, setChatsOpen] = useState(false);
   const keyboardUp = useKeyboardOpen();
@@ -114,7 +115,9 @@ export function Layout() {
           <TouchTopBar onOpenChats={() => setChatsOpen(true)} />
           {healthBanner}
           <main className="flex-1 flex flex-col min-w-0 min-h-0 relative overflow-hidden">
-            <div className="flex-1 flex flex-col min-w-0 min-h-0 relative z-[2]">
+            {/* Keyed by page: each one eases in (M29: switching tabs
+                looked glitchy, the new page snapping in at once). */}
+            <div key={pathname} className="touch-page flex-1 flex flex-col min-w-0 min-h-0 relative z-[2]">
               <Outlet />
             </div>
             <PersistentComposer />

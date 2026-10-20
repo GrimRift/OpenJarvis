@@ -38,7 +38,7 @@ export function VoiceTranscript({
       aria-label="Conversation transcript"
       className={
         sheet
-          ? 'absolute left-0 right-0 bottom-0 top-[34%] z-20 flex flex-col rounded-t-[22px] overflow-hidden'
+          ? 'touch-fade-in relative flex-1 min-h-0 mx-3 mb-3 flex flex-col rounded-2xl overflow-hidden'
           : 'absolute right-4 top-4 bottom-4 z-20 flex w-[340px] flex-col rounded-xl overflow-hidden'
       }
       style={{

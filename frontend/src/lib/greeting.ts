@@ -4,7 +4,7 @@
 // scripts/generate_greetings.py — synthesizing per trigger would put a
 // network call at exactly the moment latency is most obvious.
 
-import { outputRoute, setBoostedVolume } from './audio-out';
+import { boostedChain, outputContext, outputRoute, setBoostedVolume } from './audio-out';
 import { voiceTrace } from './voice-trace';
 
 const MANIFEST_URL = 'greetings/manifest.json';
@@ -186,9 +186,53 @@ function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
         audio.play().catch((err: unknown) => {
           const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
           if (!settled) outcome('refused', { reason });
+          // iOS refuses an <audio> started without a tap -- every greeting on
+          // the iPhone (M29). The page's Web Audio output, unlocked by the
+          // user's last tap, may still play it.
+          const notAllowed = err instanceof Error && err.name === 'NotAllowedError';
+          if (notAllowed && !settled) {
+            void playThroughWebAudio(clip).then((played) => {
+              voiceTrace('clip.webAudio', { kind, played });
+              if (!played) options.onFailure?.(reason);
+              finish();
+            });
+            return;
+          }
           options.onFailure?.(reason);
           finish();
         });
       }),
   );
+}
+
+const decoded = new Map<string, Promise<AudioBuffer>>();
+
+/** Plays a clip through the page's shared Web Audio output; resolves true
+ * when it played to the end, false when the output is locked or fails. */
+async function playThroughWebAudio(clip: string): Promise<boolean> {
+  const ctx = outputContext();
+  if (!ctx) return false;
+  try {
+    if (ctx.state !== 'running') await ctx.resume();
+    if (ctx.state !== 'running') return false;
+    let buffer = decoded.get(clip);
+    if (!buffer) {
+      buffer = fetch(clip)
+        .then((res) => res.arrayBuffer())
+        .then((bytes) => ctx.decodeAudioData(bytes));
+      decoded.set(clip, buffer);
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = await buffer;
+    source.connect(boostedChain(ctx, 'ack'));
+    await new Promise<void>((resolve) => {
+      source.onended = () => resolve();
+      source.start();
+      setTimeout(resolve, GREETING_TIMEOUT_MS);
+    });
+    return true;
+  } catch {
+    decoded.delete(clip);
+    return false;
+  }
 }
