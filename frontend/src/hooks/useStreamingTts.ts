@@ -646,7 +646,10 @@ export function streamingTtsPlayer(): ReturnType<typeof createStreamingTtsPlayer
     const built = createStreamingTtsPlayer();
     player = built;
     if (typeof window !== 'undefined') {
-      for (const type of ['pointerdown', 'keydown', 'touchstart'] as const) {
+      // iOS lets a page start sound only from the END of a tap (touchend,
+      // pointerup, click), not its start: an iPhone never got unlocked by
+      // pointerdown/touchstart, and replies came as text only (M29).
+      for (const type of ['pointerdown', 'keydown', 'touchstart', 'pointerup', 'touchend', 'click'] as const) {
         window.addEventListener(type, built.unlock, { capture: true, passive: true });
       }
     }

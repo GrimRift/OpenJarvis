@@ -9,7 +9,7 @@ import { checkHealth, getApiKey } from '../lib/api';
 import { useKeyboardOpen, useTouchLayout } from '../lib/touch-layout';
 import { ChatsDrawer, TouchTabBar, TouchTopBar } from './Touch/TouchChrome';
 import { PairScreen } from './Touch/PairScreen';
-import { keyRefused } from '../lib/pairing';
+import { devicePaired, keyRefused } from '../lib/pairing';
 
 export function Layout() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
@@ -38,7 +38,7 @@ export function Layout() {
     if (!touch) return;
     let live = true;
     void keyRefused().then((refused) => {
-      if (live) setPairing(refused ? 'needed' : 'ok');
+      if (live) setPairing(refused || !devicePaired() ? 'needed' : 'ok');
     });
     return () => {
       live = false;
@@ -72,7 +72,7 @@ export function Layout() {
   if (touch && pairing !== 'ok') {
     if (pairing === 'checking') return <div className="h-full w-full" />;
     // Reloaded once paired, so every socket opens with the key.
-    return <PairScreen refused={Boolean(getApiKey())} onPaired={() => window.location.reload()} />;
+    return <PairScreen again={Boolean(getApiKey())} onPaired={() => window.location.reload()} />;
   }
 
   if (touch) {

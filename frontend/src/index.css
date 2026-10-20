@@ -835,6 +835,12 @@ html[data-app-hidden] *::after {
 /* The notch and the home bar: the page runs under both (viewport-fit=cover). */
 html[data-touch] .touch-shell {
   padding-top: env(safe-area-inset-top);
+  /* Pinned to what the keyboard leaves visible (lib/touch-layout.ts). */
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--vv-top, 0px);
+  height: var(--vv-height, 100%);
 }
 html[data-touch] .touch-tabbar {
   padding-bottom: max(6px, env(safe-area-inset-bottom));
@@ -869,4 +875,54 @@ html[data-touch] .touch-drawer [data-row-action] {
   user-select: none;
   -webkit-touch-callout: none;
   touch-action: none;
+}
+
+/* Quick phone fit for pages not yet redesigned (M29; mockups come later). */
+html[data-touch] .books-layout {
+  grid-template-columns: 1fr !important;
+  padding: 12px 14px 24px;
+}
+html[data-touch] .books-hero {
+  grid-template-columns: 88px 1fr !important;
+  gap: 14px;
+  align-items: start;
+}
+html[data-touch] .books-hero > :first-child {
+  width: 88px !important;
+  height: 114px !important;
+}
+html[data-touch] .books-hero > :first-child img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+html[data-touch] .books-hero .text-\[28px\] {
+  font-size: 20px;
+}
+/* Chapter rows: play, read, title, status -- the number and length go. */
+html[data-touch] .books-row {
+  grid-template-columns: 28px 28px 1fr 84px !important;
+}
+html[data-touch] .books-row > :nth-child(3),
+html[data-touch] .books-row > :nth-child(5) {
+  display: none;
+}
+/* Memory: the top bar already says "Memory"; the tabs scroll sideways. */
+html[data-touch] .memory-page {
+  padding: 12px 12px 16px;
+  overflow-x: hidden;
+}
+html[data-touch] .memory-head {
+  display: none;
+}
+html[data-touch] .memory-tabs {
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+  margin-bottom: 12px;
+}
+html[data-touch] .memory-tabs > button {
+  flex: none;
+  padding: 8px 12px;
+  font-size: 15px;
 }

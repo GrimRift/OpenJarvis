@@ -171,7 +171,7 @@ export function BooksPage() {
 
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto" style={{ background: 'var(--color-bg)' }}>
-      <div className="max-w-6xl mx-auto px-6 py-6 grid gap-6" style={{ gridTemplateColumns: 'minmax(180px, 230px) 1fr' }}>
+      <div className="books-layout max-w-6xl mx-auto px-6 py-6 grid gap-6" style={{ gridTemplateColumns: 'minmax(180px, 230px) 1fr' }}>
         <aside>
           <div className="flex items-center mb-3">
             <h1 className="text-lg font-semibold" style={{ color: 'var(--color-text)' }}>Books</h1>
@@ -380,7 +380,7 @@ function BookView({
   return (
     <div>
       {/* now listening */}
-      <div ref={heroRef} className="grid gap-6 items-end" style={{ gridTemplateColumns: '150px 1fr' }}>
+      <div ref={heroRef} className="books-hero grid gap-6 items-end" style={{ gridTemplateColumns: '150px 1fr' }}>
         <Cover book={book} size={[150, 194]} />
         <div className="min-w-0">
           <div className="text-[11.5px] uppercase tracking-wider" style={{ color: 'var(--color-text-tertiary)' }}>
@@ -600,7 +600,7 @@ function BookView({
             act={act}
           />
         )}
-        <div className="grid text-[11.5px] px-2 py-1" style={{ gridTemplateColumns: '30px 30px 60px 1fr 80px 110px', color: 'var(--color-text-tertiary)' }}>
+        <div className="books-row grid text-[11.5px] px-2 py-1" style={{ gridTemplateColumns: '30px 30px 60px 1fr 80px 110px', color: 'var(--color-text-tertiary)' }}>
           <span /><span /><span>#</span><span>Title</span><span>Length</span><span>Status</span>
         </div>
         {book.chapters.map((c) => {
@@ -609,7 +609,7 @@ function BookView({
           return (
             <Fragment key={c.index}>
             <div
-              className="grid items-center gap-2 px-2 py-1.5 rounded-lg text-[13px]"
+              className="books-row grid items-center gap-2 px-2 py-1.5 rounded-lg text-[13px]"
               style={{
                 gridTemplateColumns: '30px 30px 60px 1fr 80px 110px',
                 background: isHere ? 'var(--color-accent-subtle)' : undefined,

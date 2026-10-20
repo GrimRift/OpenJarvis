@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countdown, digitsOf, spacedCode } from './pairing';
+import { countdown, digitsOf, settingsForPhone, spacedCode } from './pairing';
 
 describe('pairing helpers', () => {
   it('keeps only the six digits typed', () => {
@@ -17,5 +17,27 @@ describe('pairing helpers', () => {
     expect(countdown(300)).toBe('5:00');
     expect(countdown(65.2)).toBe('1:06');
     expect(countdown(-3)).toBe('0:00');
+  });
+});
+
+describe('settingsForPhone', () => {
+  it("takes the PC's voice setup and leaves its mics, key and address", () => {
+    const phone = settingsForPhone({
+      speechEnabled: true,
+      ttsVoiceId: 'frieren',
+      sttProvider: 'flux',
+      speakTypedReplies: true,
+      apiKey: 'secret',
+      apiUrl: 'http://localhost:8000',
+      micDeviceId: 'pd100x',
+      micBoost: 2,
+      noiseSuppression: 'strong',
+    });
+    expect(phone).toEqual({
+      speechEnabled: true,
+      ttsVoiceId: 'frieren',
+      sttProvider: 'flux',
+      speakTypedReplies: true,
+    });
   });
 });

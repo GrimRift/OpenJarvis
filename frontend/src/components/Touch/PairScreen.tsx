@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { digitsOf, redeemPairingCode } from '../../lib/pairing';
+import { digitsOf, markDevicePaired, redeemPairingCode } from '../../lib/pairing';
 import { useAppStore } from '../../lib/store';
 
 /**
  * A phone or iPad without Sage's key (M29): type the six-digit code shown in
  * Settings on the PC. Shown instead of the app until it works.
  */
-export function PairScreen({ onPaired, refused }: { onPaired: () => void; refused: boolean }) {
+export function PairScreen({ onPaired, again }: { onPaired: () => void; again: boolean }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -22,7 +22,9 @@ export function PairScreen({ onPaired, refused }: { onPaired: () => void; refuse
       setCode('');
       return;
     }
-    useAppStore.getState().updateSettings({ apiKey: result.apiKey });
+    // The PC's settings first (voice, wake word, speech engine), then the key.
+    useAppStore.getState().updateSettings({ ...result.settings, apiKey: result.apiKey });
+    markDevicePaired();
     onPaired();
   };
 
@@ -31,8 +33,13 @@ export function PairScreen({ onPaired, refused }: { onPaired: () => void; refuse
       <div className="hud-backdrop" aria-hidden="true" />
       <span className="sage-wordmark relative select-none" style={{ fontSize: 20 }}>SAGE</span>
       <div className="relative text-[19px] font-semibold" style={{ color: 'var(--color-text)' }}>
-        {refused ? 'Pair this device again' : 'Pair this device'}
+        {again ? 'Pair this device again' : 'Pair this device'}
       </div>
+      {again && (
+        <p className="relative text-[13px] max-w-[320px]" style={{ color: 'var(--color-text-tertiary)' }}>
+          Once more, to bring over the PC's voice and settings.
+        </p>
+      )}
       <p className="relative text-[14px] leading-relaxed max-w-[320px]" style={{ color: 'var(--color-text-secondary)' }}>
         On the PC, open Sage's <b style={{ color: 'var(--color-text)' }}>Settings</b> and press{' '}
         <b style={{ color: 'var(--color-text)' }}>Pair a phone or iPad</b>. Type the six digits it shows.

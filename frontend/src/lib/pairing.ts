@@ -11,8 +11,51 @@ export interface PairingCode {
   address: string;
 }
 
-export async function newPairingCode(): Promise<PairingCode> {
-  const res = await apiFetch('/v1/pairing/code', { method: 'POST' });
+/** Settings that belong to this PC alone: its address and key, its
+ * microphones and their gain and filtering, its screen's font size. */
+const PC_ONLY = new Set([
+  'apiUrl',
+  'apiKey',
+  'micBoost',
+  'micDeviceId',
+  'micDeviceLabel',
+  'wakeMicDeviceId',
+  'wakeMicDeviceLabel',
+  'noiseSuppression',
+  'fontSize',
+]);
+
+/** What a paired phone takes over from the PC: everything else. */
+export function settingsForPhone(settings: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(settings).filter(([key]) => !PC_ONLY.has(key)));
+}
+
+/** Marks a phone as paired with the PC's settings, not just its key. A phone
+ * paired before the settings came along pairs once more. */
+const PAIRED_FLAG = 'sage-device-paired';
+
+export function devicePaired(): boolean {
+  try {
+    return localStorage.getItem(PAIRED_FLAG) === '2';
+  } catch {
+    return true;
+  }
+}
+
+export function markDevicePaired(): void {
+  try {
+    localStorage.setItem(PAIRED_FLAG, '2');
+  } catch {
+    // Private mode: it pairs again next time.
+  }
+}
+
+export async function newPairingCode(settings: object): Promise<PairingCode> {
+  const res = await apiFetch('/v1/pairing/code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings: settingsForPhone(settings) }),
+  });
   if (!res.ok) throw new Error(`Could not make a code (${res.status})`);
   const body = await res.json();
   return { code: String(body.code), expiresIn: Number(body.expires_in) || 300, address: String(body.address || '') };
@@ -22,7 +65,9 @@ export async function cancelPairingCode(): Promise<void> {
   await apiFetch('/v1/pairing/code', { method: 'DELETE' }).catch(() => {});
 }
 
-export type RedeemResult = { ok: true; apiKey: string } | { ok: false; message: string };
+export type RedeemResult =
+  | { ok: true; apiKey: string; settings: Record<string, unknown> }
+  | { ok: false; message: string };
 
 /** Sends the code typed on this device; no key yet, so a plain fetch. */
 export async function redeemPairingCode(code: string): Promise<RedeemResult> {
@@ -38,7 +83,8 @@ export async function redeemPairingCode(code: string): Promise<RedeemResult> {
   }
   if (res.ok) {
     const body = await res.json();
-    return { ok: true, apiKey: String(body.api_key || '') };
+    const settings = body.settings && typeof body.settings === 'object' ? body.settings : {};
+    return { ok: true, apiKey: String(body.api_key || ''), settings: settingsForPhone(settings) };
   }
   if (res.status === 403) return { ok: false, message: 'That code is not right. Check it and try again.' };
   return { ok: false, message: 'That code has run out. Make a new one in Settings on the PC.' };

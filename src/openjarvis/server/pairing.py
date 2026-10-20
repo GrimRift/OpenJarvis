@@ -22,7 +22,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 CODE_TTL_S = 300.0
 MAX_WRONG = 5
@@ -34,6 +34,10 @@ class _Live:
     code: str
     expires: float
     wrong: int = 0
+    # The PC app's settings, handed to the phone with the key so it starts
+    # set up like the PC (voice, wake word, speech engine) rather than with
+    # speech off. The app leaves out what belongs to the PC alone.
+    settings: Optional[Dict[str, Any]] = None
 
 
 class PairingCodes:
@@ -44,12 +48,19 @@ class PairingCodes:
         self._live: Optional[_Live] = None
         self._lock = threading.Lock()
 
-    def issue(self) -> tuple[str, float]:
+    def issue(self, settings: Optional[Dict[str, Any]] = None) -> tuple[str, float]:
         """A new code, replacing any live one; returns it and seconds to live."""
         code = "".join(secrets.choice("0123456789") for _ in range(CODE_DIGITS))
         with self._lock:
-            self._live = _Live(code, self._clock() + CODE_TTL_S)
+            self._live = _Live(code, self._clock() + CODE_TTL_S, settings=settings)
         return code, CODE_TTL_S
+
+    def redeem_with_settings(self, guess: str) -> tuple[str, Optional[Dict[str, Any]]]:
+        """As ``redeem``, with the settings the code carried when it is "ok"."""
+        with self._lock:
+            settings = self._live.settings if self._live else None
+        result = self.redeem(guess)
+        return result, (settings if result == "ok" else None)
 
     def redeem(self, guess: str) -> str:
         """``"ok"`` (the code is now spent), ``"wrong"``, or ``"none"`` when no

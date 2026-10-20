@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict
 
@@ -12,15 +13,27 @@ from openjarvis.server import pairing
 
 logger = logging.getLogger(__name__)
 
+# The app's settings are a few KB; anything far larger is not them.
+MAX_SETTINGS_BYTES = 64_000
+
 
 def create_pairing_router() -> APIRouter:
     router = APIRouter(prefix="/v1/pairing", tags=["pairing"])
 
     @router.post("/code")
-    async def new_code() -> Dict[str, Any]:
+    async def new_code(request: Request) -> Dict[str, Any]:
         # Behind the API key (AuthMiddleware): only an app that already has
         # the key can make a code that hands it out.
-        code, ttl = pairing.codes.issue()
+        settings = None
+        try:
+            raw = await request.body()
+            if raw and len(raw) <= MAX_SETTINGS_BYTES:
+                body = json.loads(raw)
+                if isinstance(body, dict) and isinstance(body.get("settings"), dict):
+                    settings = body["settings"]
+        except ValueError:
+            settings = None
+        code, ttl = pairing.codes.issue(settings)
         address = await asyncio.to_thread(pairing.tailnet_address)
         logger.info("Pairing code issued (%ds)", int(ttl))
         return {"code": code, "expires_in": int(ttl), "address": address}
@@ -34,11 +47,14 @@ def create_pairing_router() -> APIRouter:
     async def redeem(request: Request, body: Dict[str, Any]) -> Dict[str, Any]:
         # Exempt from the API key (auth_middleware): the device asking has no
         # key yet. The code is the credential.
-        result = pairing.codes.redeem(str(body.get("code", "")))
+        result, settings = pairing.codes.redeem_with_settings(str(body.get("code", "")))
         client = request.client.host if request.client else "?"
         if result == "ok":
             logger.info("Pairing code redeemed by %s", client)
-            return {"api_key": getattr(request.app.state, "api_key", "") or ""}
+            return {
+                "api_key": getattr(request.app.state, "api_key", "") or "",
+                "settings": settings or {},
+            }
         logger.warning("Pairing code refused (%s) from %s", result, client)
         if result == "wrong":
             raise HTTPException(status_code=403, detail="That code is not right.")

@@ -105,7 +105,7 @@ class TestRoutes:
         code = client.post("/v1/pairing/code", headers=_auth()).json()["code"]
         res = client.post("/v1/pairing/redeem", json={"code": code})
         assert res.status_code == 200
-        assert res.json() == {"api_key": KEY}
+        assert res.json() == {"api_key": KEY, "settings": {}}
         # Spent.
         assert client.post("/v1/pairing/redeem", json={"code": code}).status_code == 410
 
@@ -134,3 +134,28 @@ class TestAddress:
         assert tailnet_address(boom) == ""
         assert tailnet_address(lambda: "") == ""
         assert tailnet_address(lambda: '{"Self": {"DNSName": "grim.local."}}') == ""
+
+
+class TestSettings:
+    def test_the_pcs_settings_ride_the_code_to_the_phone(self):
+        client = _client()
+        sent = {"speechEnabled": True, "ttsVoiceId": "frieren"}
+        code = client.post(
+            "/v1/pairing/code", headers=_auth(), json={"settings": sent}
+        ).json()["code"]
+        res = client.post("/v1/pairing/redeem", json={"code": code})
+        assert res.json()["settings"] == sent
+
+    def test_a_wrong_guess_gets_no_settings(self):
+        codes = PairingCodes()
+        code, _ = codes.issue({"speechEnabled": True})
+        wrong = "000000" if code != "000000" else "111111"
+        assert codes.redeem_with_settings(wrong) == ("wrong", None)
+
+    def test_an_oversized_body_is_ignored_not_stored(self):
+        client = _client()
+        huge = {"settings": {"x": "y" * 70_000}}
+        made = client.post("/v1/pairing/code", headers=_auth(), json=huge)
+        code = made.json()["code"]
+        res = client.post("/v1/pairing/redeem", json={"code": code})
+        assert res.json()["settings"] == {}

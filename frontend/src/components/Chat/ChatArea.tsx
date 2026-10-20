@@ -8,6 +8,7 @@ import { StreamingDots } from './StreamingDots';
 import { OrbVisual, useOrbGenerating, useOrbState } from './OrbVisual';
 import type { OrbState } from '../../lib/orb-state';
 import { useOrbScale } from '../../lib/orb-scale';
+import { useTouchLayout } from '../../lib/touch-layout';
 
 /** 20% over the old 394. The full size; smaller windows scale it down. */
 const CHAT_ORB_SIZE = 473;
@@ -41,6 +42,7 @@ export function ChatArea() {
   const streamState = useAppStore((s) => s.streamState);
   const orbState = useOrbState();
   const orbScale = useOrbScale();
+  const touch = useTouchLayout();
   const generating = useOrbGenerating();
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
@@ -231,7 +233,9 @@ export function ChatArea() {
         )}
       </div>
       </div>
-      {!isEmpty && (
+      {/* The corner orb is the desktop's; on a phone it sat behind the
+          message box (M29), and the Voice tab has the orb. */}
+      {!isEmpty && !touch && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, pointerEvents: 'none', zIndex: 5 }}>
           <ScaledOrb state={orbState} scale={orbScale} />
         </div>

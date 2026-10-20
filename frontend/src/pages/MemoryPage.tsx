@@ -81,17 +81,17 @@ export function MemoryPage() {
   const viewInBrain = useCallback((id: string) => { setFocusId(id); setTab('brain'); }, []);
 
   return (
-    <div className={brain ? 'flex-1 flex flex-col overflow-hidden px-6 pt-10 pb-6' : 'flex-1 overflow-y-auto px-6 py-10'}>
+    <div className={`memory-page ${brain ? 'flex-1 flex flex-col overflow-hidden px-6 pt-10 pb-6' : 'flex-1 overflow-y-auto px-6 py-10'}`}>
       <div className={brain ? 'w-full max-w-[1400px] mx-auto flex-1 flex flex-col min-h-0' : 'max-w-4xl mx-auto'}>
-        <div className="flex items-center gap-3 mb-1">
+        <div className="memory-head flex items-center gap-3 mb-1">
           <Brain size={22} style={{ color: 'var(--color-accent)' }} />
           <h1 className="text-xl font-semibold" style={{ color: 'var(--color-text)' }}>Memory</h1>
         </div>
-        <p className="text-sm mb-6" style={{ color: 'var(--color-text-secondary)' }}>
+        <p className="memory-head text-sm mb-6" style={{ color: 'var(--color-text-secondary)' }}>
           What Sage remembers about you, and how it gets it back. Facts are chosen for each reply by relevance; pinned ones always go.
         </p>
 
-        <div className="flex gap-1 mb-6 border-b" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="memory-tabs flex gap-1 mb-6 border-b" style={{ borderColor: 'var(--color-border)' }}>
           {(['brain', 'facts', 'episodes', 'documents', 'profile'] as Tab[]).map((t) => (
             <button
               key={t}

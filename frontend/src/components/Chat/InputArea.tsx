@@ -109,6 +109,7 @@ import {
 import { setVoiceTraceSink, voiceTrace } from '../../lib/voice-trace';
 import { joinHeld, RELEASE_GRACE_MS } from '../../lib/hold-to-talk';
 import { useTouchLayout } from '../../lib/touch-layout';
+import { useLocation } from 'react-router';
 import { TalkButton } from './TalkButton';
 import { holdMedia, MEDIA_RELEASE_IDLE_MS } from '../../lib/media-hold';
 import { replayedToolResult } from '../../lib/link-preview';
@@ -3067,7 +3068,12 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     }
   }, [speechState]);
 
-  const wakeWordEnabled = useAppStore((s) => s.settings.wakeWordEnabled) && voiceOwner;
+  // On a phone, "Hey Sage" listens only on the Voice tab (M29, the user's
+  // choice): elsewhere the mic is tapped or held, and a phone left open on
+  // Chat beside the PC does not answer the PC's "Hey Sage" too.
+  const { pathname } = useLocation();
+  const wakeWordEnabled =
+    useAppStore((s) => s.settings.wakeWordEnabled) && voiceOwner && (!touch || pathname === '/voice');
 
   // A spoken moment that invites an answer (M37): open the microphone for
   // it, so "yes, actually" needs no wake word. Only in Flux mode with the

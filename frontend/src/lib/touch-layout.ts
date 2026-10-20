@@ -112,6 +112,27 @@ export function applyTouchLayout(): void {
   fit();
   window.addEventListener('orientationchange', fit);
   window.matchMedia?.('(orientation: landscape)').addEventListener?.('change', fit);
+  followVisibleArea();
+}
+
+/**
+ * Keeps the app inside the part of the screen the keyboard leaves. iOS does
+ * not shrink the page for its keyboard: it scrolls the whole page up to show
+ * the focused box, which carried the header off the top and left the message
+ * box out of sight (M29, first iPhone test). The touch shell is pinned to the
+ * visual viewport instead, through --vv-top and --vv-height (index.css).
+ */
+function followVisibleArea(): void {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.documentElement;
+  const update = () => {
+    root.style.setProperty('--vv-top', `${Math.round(vv.offsetTop)}px`);
+    root.style.setProperty('--vv-height', `${Math.round(vv.height)}px`);
+  };
+  update();
+  vv.addEventListener('resize', update);
+  vv.addEventListener('scroll', update);
 }
 
 /** The Voice orb on a phone or iPad: as big as the screen allows under the
@@ -133,9 +154,18 @@ export function useKeyboardOpen(): boolean {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    const check = () => setOpen(keyboardOpen(window.innerHeight, vv.height));
+    // The layout viewport's height, not window.innerHeight: on iOS
+    // innerHeight follows the keyboard too, so the two never differed and
+    // the tab bar stayed up over the keys.
+    const check = () => setOpen(keyboardOpen(document.documentElement.clientHeight, vv.height));
     vv.addEventListener('resize', check);
-    return () => vv.removeEventListener('resize', check);
+    window.addEventListener('focusin', check);
+    window.addEventListener('focusout', check);
+    return () => {
+      vv.removeEventListener('resize', check);
+      window.removeEventListener('focusin', check);
+      window.removeEventListener('focusout', check);
+    };
   }, []);
   return open;
 }

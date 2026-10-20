@@ -233,7 +233,7 @@ function PairDeviceButton() {
           onClick={async () => {
             setError('');
             try {
-              const made = await newPairingCode();
+              const made = await newPairingCode(useAppStore.getState().settings);
               setNow(Date.now());
               setPair({ code: made.code, address: made.address, until: Date.now() + made.expiresIn * 1000 });
             } catch (e) {
