@@ -49,11 +49,17 @@ def test_browser_meta_group():
     assert "browser_navigate" not in names
 
 
-def test_web_search_requires_tavily_key_no_fallback(monkeypatch):
-    """No DuckDuckGo fallback: web search is unconfigured without a Tavily key."""
+def test_web_search_requires_a_search_key_no_fallback(monkeypatch):
+    """No DuckDuckGo fallback: web search is unconfigured without any engine key."""
     from openjarvis.server.agent_manager_routes import build_tools_list
 
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    for name in (
+        "TAVILY_API_KEY",
+        "TAVILY_API_KEY_BACKUP",
+        "SERPER_API_KEY",
+        "EXA_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
     tools = build_tools_list()
     web_search = next(t for t in tools if t["name"] == "web_search")
 
@@ -71,6 +77,18 @@ def test_web_search_configured_with_tavily_key(monkeypatch):
     assert web_search["configured"] is True
 
 
+def test_web_search_configured_with_only_a_serper_key(monkeypatch):
+    from openjarvis.server.agent_manager_routes import build_tools_list
+
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    tools = build_tools_list()
+    web_search = next(t for t in tools if t["name"] == "web_search")
+
+    assert web_search["configured"] is True
+
+
 def test_tool_credentials_browser_lifecycle(tmp_path, monkeypatch):
     """The browser API can save, report, and remove a Tavily key."""
     from fastapi import FastAPI
@@ -79,7 +97,13 @@ def test_tool_credentials_browser_lifecycle(tmp_path, monkeypatch):
     from openjarvis.server.agent_manager_routes import create_agent_manager_router
 
     monkeypatch.setenv("OPENJARVIS_HOME", str(tmp_path / "openjarvis-home"))
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    for name in (
+        "TAVILY_API_KEY",
+        "TAVILY_API_KEY_BACKUP",
+        "SERPER_API_KEY",
+        "EXA_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
     app = FastAPI()
     tools_router = create_agent_manager_router(MagicMock())[3]
     app.include_router(tools_router)
@@ -92,7 +116,10 @@ def test_tool_credentials_browser_lifecycle(tmp_path, monkeypatch):
     assert saved.status_code == 200
     assert saved.json() == {"saved": ["TAVILY_API_KEY"]}
     assert client.get("/v1/tools/web_search/credentials/status").json() == {
-        "TAVILY_API_KEY": True
+        "TAVILY_API_KEY": True,
+        "TAVILY_API_KEY_BACKUP": False,
+        "SERPER_API_KEY": False,
+        "EXA_API_KEY": False,
     }
 
     deleted = client.delete(
@@ -101,5 +128,8 @@ def test_tool_credentials_browser_lifecycle(tmp_path, monkeypatch):
     assert deleted.status_code == 200
     assert deleted.json() == {"deleted": "TAVILY_API_KEY"}
     assert client.get("/v1/tools/web_search/credentials/status").json() == {
-        "TAVILY_API_KEY": False
+        "TAVILY_API_KEY": False,
+        "TAVILY_API_KEY_BACKUP": False,
+        "SERPER_API_KEY": False,
+        "EXA_API_KEY": False,
     }

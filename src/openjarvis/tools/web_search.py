@@ -1,4 +1,8 @@
-"""Web search tool — Tavily API with bounded internal routing."""
+"""Web search tool — Tavily, Serper or Exa with bounded internal routing.
+
+The engine is the user's choice in Settings (``search_engines``); each
+answers in Tavily's shape, so the routing below is the same for all three.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.security import page_access
 from openjarvis.security.ssrf import check_ssrf
-from openjarvis.tools import unreadable_hosts
+from openjarvis.tools import search_engines, unreadable_hosts
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -611,7 +615,7 @@ def _is_timeout(exc: BaseException | None) -> bool:
     return isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError"
 
 
-def _timed_out(provider_calls: int) -> ToolResult:
+def _timed_out(provider_calls: int, engine: str) -> ToolResult:
     return ToolResult(
         tool_name="web_search",
         content=(
@@ -621,7 +625,7 @@ def _timed_out(provider_calls: int) -> ToolResult:
         ),
         success=False,
         metadata={
-            "engine": "tavily",
+            "engine": engine,
             "provider_calls": provider_calls,
             "bounded_search_complete": True,
             "timed_out": True,
@@ -923,7 +927,7 @@ def clear_cache() -> None:
 
 @ToolRegistry.register("web_search")
 class WebSearchTool(BaseTool):
-    """Search the web via Tavily with at most one internal escalation."""
+    """Search the web via the chosen engine with at most one escalation."""
 
     tool_id = "web_search"
     is_local = False
@@ -970,7 +974,10 @@ class WebSearchTool(BaseTool):
                 "required": ["query"],
             },
             category="search",
-            metadata={"requires_api_key": "TAVILY_API_KEY"},
+            metadata={
+                "requires_api_key": "TAVILY_API_KEY, SERPER_API_KEY or EXA_API_KEY",
+                "credentials_any": True,
+            },
         )
 
     @staticmethod
@@ -1028,13 +1035,15 @@ class WebSearchTool(BaseTool):
         return text
 
     @staticmethod
-    def _error(content: str, *, provider_calls: int = 0) -> ToolResult:
+    def _error(
+        content: str, *, provider_calls: int = 0, engine: str | None = None
+    ) -> ToolResult:
         return ToolResult(
             tool_name="web_search",
             content=content,
             success=False,
             metadata={
-                "engine": "tavily",
+                "engine": engine or search_engines.load_engine(),
                 "provider_calls": provider_calls,
                 "bounded_search_complete": True,
             },
@@ -1184,20 +1193,23 @@ class WebSearchTool(BaseTool):
         # nothing said why -- measured before this changed.
         provider_max_results = max_results
 
-        try:
-            from tavily import TavilyClient
-        except ImportError:
+        client = search_engines.chain(self._api_key)
+        if client is None:
+            if self._api_key or os.environ.get("TAVILY_API_KEY"):
+                return self._error(
+                    "tavily-python not installed. Install with: "
+                    "pip install tavily-python"
+                )
             return self._error(
-                "tavily-python not installed. Install with: pip install tavily-python"
+                "No web search key is configured (TAVILY_API_KEY, SERPER_API_KEY "
+                "or EXA_API_KEY). Tell the user web search is not set up."
             )
-        if not self._api_key:
-            return self._error("TAVILY_API_KEY is not configured.")
+        engine_label = search_engines.LABELS[client.names[0]]
 
         # The one retry is the chance to do better, so it asks for more than
         # the first attempt did -- and never fewer than the caller wanted.
         retry_max_results = min(max(max_results, ESCALATED_MAX_RESULTS), 10)
 
-        client = TavilyClient(api_key=self._api_key)
         deadline = time.monotonic() + SEARCH_BUDGET_SECONDS
 
         def left() -> float:
@@ -1264,7 +1276,8 @@ class WebSearchTool(BaseTool):
         if response is None:
             # One plain search: no quotes, no filler, basic depth, any topic.
             logger.info(
-                "Tavily search %s; trying a plain fallback",
+                "%s search %s; trying a plain fallback",
+                engine_label,
                 "timed out" if _is_timeout(failure) else f"failed ({failure})",
             )
             fell_back = True
@@ -1280,7 +1293,7 @@ class WebSearchTool(BaseTool):
                     include_usage=True,
                 )
             except Exception as fallback_exc:
-                logger.info("Tavily fallback failed too (%s)", fallback_exc)
+                logger.info("%s fallback failed too (%s)", engine_label, fallback_exc)
                 failure = fallback_exc
 
         recent_results, recent_credits = self._recent_results(
@@ -1291,11 +1304,13 @@ class WebSearchTool(BaseTool):
         if response is None:
             if not recent_results:
                 if _is_timeout(failure):
-                    return _timed_out(provider_calls)
+                    return _timed_out(provider_calls, client.names[0])
+                tried = " / ".join(search_engines.LABELS[n] for n in client.names)
                 return self._error(
-                    f"Tavily search error: {failure}. Tell the user the search "
+                    f"{tried} search error: {failure}. Tell the user the search "
                     "service failed; do not try to open a search engine's page.",
                     provider_calls=provider_calls,
+                    engine=client.names[0],
                 )
             response = {"results": []}
 
@@ -1337,12 +1352,14 @@ class WebSearchTool(BaseTool):
                     )
             except _RetryCut:
                 logger.info(
-                    "Tavily retry cut: the other searches of the batch were done; "
-                    "keeping the first results"
+                    "%s retry cut: the other searches of the batch were done; "
+                    "keeping the first results",
+                    engine_label,
                 )
             except Exception as exc:
                 logger.info(
-                    "Tavily retry %s; keeping the first results",
+                    "%s retry %s; keeping the first results",
+                    engine_label,
                     "timed out" if _is_timeout(exc) else f"failed ({exc})",
                 )
             if retry is not None:
@@ -1473,13 +1490,26 @@ class WebSearchTool(BaseTool):
         if hint:
             formatted = f"{formatted}\n\n{hint}" if formatted else hint
 
+        # The user's choice (20 October): when the chosen engine failed and
+        # another answered, say so, so a used-up key is noticed.
+        answered = str(response.get("engine") or client.names[0])
+        passed_over = list(response.get("passed_over") or [])
+        if passed_over:
+            note = (
+                f"Search engine note: {', '.join(passed_over)} could not search, "
+                f"so these results are from {search_engines.LABELS[answered]}. "
+                "Mention this to the user in one short sentence."
+            )
+            formatted = f"{note}\n\n{formatted}" if formatted else note
+
         return ToolResult(
             tool_name="web_search",
             content=formatted or "No results found.",
             success=True,
             metadata={
                 "num_results": len(sources),
-                "engine": "tavily",
+                "engine": answered,
+                "engine_passed_over": passed_over,
                 "credits": credits or None,
                 "initial_depth": initial_depth,
                 "final_depth": final_depth,

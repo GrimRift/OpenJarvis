@@ -26,7 +26,12 @@ def _default_path() -> Path:
 
 
 TOOL_CREDENTIALS: dict[str, list[str]] = {
-    "web_search": ["TAVILY_API_KEY"],
+    "web_search": [
+        "TAVILY_API_KEY",
+        "TAVILY_API_KEY_BACKUP",
+        "SERPER_API_KEY",
+        "EXA_API_KEY",
+    ],
     "image_generate": ["OPENAI_API_KEY"],
     # Direct cloud chat-model providers (see server/cloud_router.py). Kept
     # distinct from "image_generate" despite the shared OPENAI_API_KEY —

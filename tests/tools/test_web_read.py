@@ -338,8 +338,50 @@ class TestProviderRead:
     ARTICLE = "The LTO revoked the driver's license for life. " * 60
 
     @pytest.fixture(autouse=True)
-    def _key(self, monkeypatch):
+    def _key(self, monkeypatch, tmp_path):
+        from openjarvis.tools import search_engines
+
         monkeypatch.setenv("TAVILY_API_KEY", "key")
+        monkeypatch.delenv("SERPER_API_KEY", raising=False)
+        monkeypatch.delenv("EXA_API_KEY", raising=False)
+        monkeypatch.setattr(
+            search_engines, "settings_path", lambda: tmp_path / "search.json"
+        )
+        search_engines.reset_skips()
+
+    def test_serper_chosen_and_tavily_out_of_credits_reads_with_exa(self, monkeypatch):
+        """Serper has no reader; a used-up Tavily passes the read to Exa."""
+        import sys
+        from types import ModuleType, SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from openjarvis.tools import search_engines
+
+        monkeypatch.setenv("SERPER_API_KEY", "s")
+        monkeypatch.setenv("EXA_API_KEY", "e")
+        search_engines.save_engine("serper")
+        module = ModuleType("tavily")
+        client = MagicMock()
+        client.extract.side_effect = RuntimeError("exceeds your plan's usage limit")
+        module.TavilyClient = MagicMock(return_value=client)
+        exa_body = {"results": [{"url": PAGE, "title": "A", "text": self.ARTICLE}]}
+        page_access.set_turn("pasig suv news")
+        page_access.allow_search_results([PAGE])
+        with (
+            patch.dict(sys.modules, {"tavily": module}),
+            patch(
+                "httpx.post",
+                return_value=SimpleNamespace(
+                    status_code=200, json=lambda: exa_body, text=""
+                ),
+            ) as post,
+            patch.object(WebReadTool, "_render") as render,
+        ):
+            result = _tool().execute(url=PAGE)
+        assert result.metadata["mode"] == "extract"
+        assert "revoked" in result.content
+        assert post.call_args.args[0].endswith("/contents")
+        render.assert_not_called()
 
     def test_a_search_result_is_read_by_the_provider(self):
         page_access.set_turn("pasig suv news")

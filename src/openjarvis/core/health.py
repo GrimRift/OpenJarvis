@@ -2144,54 +2144,80 @@ def _check_cartesia(live: bool) -> List[CheckResult]:
     ]
 
 
-def _check_tavily(live: bool) -> List[CheckResult]:
-    """Validate the search key. There is no fallback search engine."""
-    key = _provider_key("TAVILY_API_KEY")
-    if not key:
-        return []
+def _check_search_engines(live: bool) -> List[CheckResult]:
+    """Validate each search engine that has a key; name the chosen one.
 
-    if not live:
-        return [
-            CheckResult(
-                "Tavily", "ok", "Key present (not called)", section=SECTION_PROVIDERS
+    The chosen engine failing is a warning, not a failure, while another
+    engine with a key still works: web search falls over to it.
+    """
+    from openjarvis.tools import search_engines
+
+    chosen = search_engines.load_engine()
+    keyed = []
+    for engine in search_engines.ENGINES:
+        names = [(search_engines.KEY_NAMES[engine], "")]
+        if engine in search_engines.BACKUP_KEY_NAMES:
+            names.append((search_engines.BACKUP_KEY_NAMES[engine], " backup key"))
+        for key_name, suffix in names:
+            if key := _provider_key(key_name):
+                keyed.append((engine, suffix, key))
+    checks: List[CheckResult] = []
+    working: List[str] = []
+    for engine, suffix, key in keyed:
+        name = search_engines.LABELS[engine] + suffix
+        if engine == chosen:
+            name += " (chosen)"
+        if not live:
+            checks.append(
+                CheckResult(
+                    name, "ok", "Key present (not called)", section=SECTION_PROVIDERS
+                )
             )
-        ]
-
-    try:
-        import httpx
-
-        response = httpx.post(
-            "https://api.tavily.com/search",
-            json={"api_key": key, "query": "ping", "max_results": 1},
-            timeout=_PROVIDER_TIMEOUT,
-        )
-    except Exception as exc:
-        return [
-            CheckResult(
-                "Tavily",
-                "fail",
-                f"Unreachable: {exc}",
-                section=SECTION_PROVIDERS,
-                live=True,
+            continue
+        try:
+            status_code = search_engines.ping(engine, key, _PROVIDER_TIMEOUT)
+        except Exception as exc:
+            checks.append(
+                CheckResult(
+                    name,
+                    "fail",
+                    f"Unreachable: {exc}",
+                    section=SECTION_PROVIDERS,
+                    live=True,
+                )
             )
-        ]
-
-    if response.status_code == 200:
-        return [
-            CheckResult(
-                "Tavily", "ok", "Search returned", section=SECTION_PROVIDERS, live=True
+            continue
+        if status_code == 200:
+            working.append(search_engines.LABELS[engine] + suffix)
+            checks.append(
+                CheckResult(
+                    name, "ok", "Search returned", section=SECTION_PROVIDERS, live=True
+                )
             )
-        ]
-    return [
-        CheckResult(
-            "Tavily",
-            "fail",
-            f"Search failed ({response.status_code})",
-            details="Web search has no fallback engine; it simply stops working.",
-            section=SECTION_PROVIDERS,
-            live=True,
-        )
-    ]
+        else:
+            checks.append(
+                CheckResult(
+                    name,
+                    "fail",
+                    f"Search failed ({status_code})",
+                    section=SECTION_PROVIDERS,
+                    live=True,
+                )
+            )
+    for check in checks:
+        if check.status != "fail":
+            continue
+        if working:
+            others = ", ".join(working)
+            check.details = f"Web search falls over to {others}."
+            if check.name.endswith("(chosen)"):
+                check.status = "warn"
+        else:
+            check.details = (
+                "No search engine works: web search stops. Add or top up a "
+                "Tavily, Serper or Exa key."
+            )
+    return checks
 
 
 # -- Tools -------------------------------------------------------------------
@@ -2463,7 +2489,7 @@ def run_health_checks(*, live: bool = False, app_state: Any = None) -> HealthRep
     checks.extend(_check_google_maps(live))
     checks.extend(_check_deepgram(live))
     checks.extend(_check_cartesia(live))
-    checks.extend(_check_tavily(live))
+    checks.extend(_check_search_engines(live))
 
     return HealthReport(checks=checks, live=live)
 

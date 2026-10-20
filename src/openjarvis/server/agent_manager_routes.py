@@ -399,6 +399,9 @@ def build_tools_list() -> List[Dict[str, Any]]:
             spec = None
         cred_keys = TOOL_CREDENTIALS.get(name, [])
         has_fallback = bool(spec and spec.metadata.get("fallback"))
+        # web_search needs any one engine's key, not all three.
+        any_key = bool(spec and spec.metadata.get("credentials_any"))
+        keys_set = [bool(os.environ.get(k)) for k in cred_keys]
         items.append(
             {
                 "name": name,
@@ -408,7 +411,7 @@ def build_tools_list() -> List[Dict[str, Any]]:
                 "requires_credentials": len(cred_keys) > 0 and not has_fallback,
                 "credential_keys": cred_keys,
                 "configured": (
-                    has_fallback or all(bool(os.environ.get(k)) for k in cred_keys)
+                    has_fallback or (any(keys_set) if any_key else all(keys_set))
                     if cred_keys
                     else True
                 ),

@@ -9,7 +9,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from openjarvis.core.registry import ToolRegistry
+from openjarvis.tools import search_engines
 from openjarvis.tools.web_search import WebSearchTool, _build_plan
+
+
+@pytest.fixture(autouse=True)
+def _tavily_only(monkeypatch, tmp_path):
+    """These tests drive Tavily: no other engine's key, no saved choice."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY_BACKUP", raising=False)
+    monkeypatch.setattr(
+        search_engines, "settings_path", lambda: tmp_path / "search.json"
+    )
+    search_engines.reset_skips()
 
 
 def _fake_tavily_module(search_return=None, search_side_effect=None):
@@ -39,7 +52,10 @@ class TestWebSearchTool:
         tool = WebSearchTool(api_key="key")
         assert tool.spec.name == "web_search"
         assert tool.spec.category == "search"
-        assert tool.spec.metadata == {"requires_api_key": "TAVILY_API_KEY"}
+        assert tool.spec.metadata == {
+            "requires_api_key": "TAVILY_API_KEY, SERPER_API_KEY or EXA_API_KEY",
+            "credentials_any": True,
+        }
         assert set(tool.spec.parameters["properties"]) == {"query", "max_results"}
         assert tool.spec.parameters["required"] == ["query"]
         assert "one call is enough" in tool.spec.description
@@ -54,12 +70,13 @@ class TestWebSearchTool:
         assert result.metadata["bounded_search_complete"] is True
 
     def test_missing_api_key(self, monkeypatch):
-        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+        for name in ("TAVILY_API_KEY", "SERPER_API_KEY", "EXA_API_KEY"):
+            monkeypatch.delenv(name, raising=False)
         fake_module, _ = _fake_tavily_module()
         with patch.dict(sys.modules, {"tavily": fake_module}):
             result = WebSearchTool(api_key=None).execute(query="OpenJarvis")
         assert result.success is False
-        assert "TAVILY_API_KEY is not configured" in result.content
+        assert "No web search key is configured" in result.content
 
     def test_tavily_not_installed(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "tavily", None)

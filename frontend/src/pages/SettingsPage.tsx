@@ -15,6 +15,7 @@ import { VoiceProviders } from '../components/Settings/VoiceProviders';
 import { MicrophonePicker } from '../components/Settings/MicrophonePicker';
 import { fetchVolumes, updateVolumes, type Volumes } from '../lib/volume';
 import { fetchImageSettings, saveImageSettings, type ImageSettings } from '../lib/images-api';
+import { fetchSearchSettings, saveSearchEngine, type SearchSettings } from '../lib/search-api';
 import {
   fetchWeatherSettings,
   saveWeatherSettings,
@@ -269,6 +270,111 @@ const SIZE_LABELS: Record<string, string> = {
   '1024x1536': 'Portrait 1024×1536',
   auto: 'Let OpenAI decide',
 };
+
+const SEARCH_ENGINE_NOTES: Record<string, string> = {
+  tavily: 'Made for AI: summaries and page text. About $8 per 1,000 searches.',
+  serper: "Google's results: freshest for news, prices and local places. About $1 per 1,000.",
+  exa: 'Its own index: best for finding articles and research, page text included. About $7 per 1,000.',
+};
+
+const SEARCH_KEY_PLACEHOLDERS: Record<string, string> = {
+  tavily: 'tvly-...',
+  serper: 'Serper key',
+  exa: 'Exa key',
+};
+
+/**
+ * Settings > Tools: which engine web search uses, and each engine's key. When
+ * the chosen engine fails or is out of credits, the next one with a key
+ * answers and Sage says so (the user's choice, 20 October).
+ */
+function SearchSection({ onSaved }: { onSaved: () => void }) {
+  const [server, setServer] = useState<SearchSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    fetchSearchSettings().then(setServer, (e: Error) => setError(e.message));
+  }, []);
+
+  useEffect(() => {
+    load();
+    window.addEventListener(CLOUD_KEY_STATUS_CHANGED, load);
+    return () => window.removeEventListener(CLOUD_KEY_STATUS_CHANGED, load);
+  }, [load]);
+
+  const choose = (engine: string) => {
+    saveSearchEngine(engine).then(
+      (saved) => {
+        setServer(saved);
+        setError(null);
+        onSaved();
+      },
+      (e: Error) => setError(e.message),
+    );
+  };
+
+  const chosen = server?.engines.find((e) => e.id === server.engine);
+  const others = (server?.engines ?? []).filter((e) => e.id !== server?.engine && e.key_set);
+  let status = '';
+  if (chosen && !chosen.key_set) {
+    status = others.length
+      ? `${chosen.label} has no key yet, so ${others[0].label} answers.`
+      : `${chosen.label} has no key yet: web search is off until one is added.`;
+  } else if (chosen?.passed_over) {
+    status = others.length
+      ? `${chosen.label} is out of credits or its key was refused; ${others[0].label} answers for now.`
+      : `${chosen.label} is out of credits or its key was refused.`;
+  }
+
+  return (
+    <Section title="Tools">
+      {error ? (
+        <div className="text-xs py-2" style={{ color: 'var(--color-error)' }}>
+          {server ? `Not saved: ${error}` : `Could not load search settings: ${error}`}
+        </div>
+      ) : null}
+      <SettingRow
+        label="Search engine"
+        description={`${SEARCH_ENGINE_NOTES[server?.engine ?? ''] ?? ''} If it fails, the next engine with a key answers and Sage says so.`}
+      >
+        <select
+          value={server?.engine ?? ''}
+          disabled={!server}
+          onChange={(e) => choose(e.target.value)}
+          className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+          style={selectStyle}
+        >
+          {(server?.engines ?? []).map((engine) => (
+            <option key={engine.id} value={engine.id}>
+              {engine.label}{engine.key_set ? '' : ' (no key)'}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+      {status ? (
+        <div className="text-xs pb-2" style={{ color: 'var(--color-warning, var(--color-text-secondary))' }}>
+          {status}
+        </div>
+      ) : null}
+      {(server?.engines ?? []).flatMap((engine) => [
+        <SettingRow key={engine.id} label={`${engine.label} key`} description={`Saved as ${engine.key_name}`}>
+          <ApiKeyInput keyName={engine.key_name} placeholder={SEARCH_KEY_PLACEHOLDERS[engine.id] ?? ''} toolName="web_search" />
+        </SettingRow>,
+        ...(engine.backup_key_name
+          ? [
+              <SettingRow
+                key={`${engine.id}-backup`}
+                label={`${engine.label} backup key`}
+                description={`Used only when the key above is out of credits. Saved as ${engine.backup_key_name}`}
+              >
+                <ApiKeyInput keyName={engine.backup_key_name} placeholder={SEARCH_KEY_PLACEHOLDERS[engine.id] ?? ''} toolName="web_search" />
+              </SettingRow>,
+            ]
+          : []),
+      ])}
+    </Section>
+  );
+}
 
 /**
  * Settings > Images (M40). Kept on the server, because the tools run there and
@@ -1168,11 +1274,7 @@ export function SettingsPage() {
           </Section>
 
           {/* Tools */}
-          <Section title="Tools">
-            <SettingRow label="Web Search" description="Tavily key for web search tool">
-              <ApiKeyInput keyName="TAVILY_API_KEY" placeholder="tvly-..." toolName="web_search" />
-            </SettingRow>
-          </Section>
+          <SearchSection onSaved={showSaved} />
 
           {/* Memory */}
           <Section title="Memory">

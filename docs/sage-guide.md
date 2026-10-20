@@ -98,8 +98,13 @@ Settings page unless another page is given.
 - "How's my PC": CPU, RAM, GPU, disk, opens the live system panel.
 
 ## Web and research
-- Searches the web (Tavily) for anything current, reads pages, and does Deep
-  Research for longer questions. Weather and time by voice; weather opens a
+- Searches the web for anything current, reads pages, and does Deep
+  Research for longer questions. The search engine is chosen in Settings >
+  Tools > Search engine: Exa (the default), Tavily or Serper (Google results),
+  each with its own key there; Tavily also takes a backup key, used once the
+  first is out of credits. If the chosen engine fails or runs out of credits,
+  the next one with a key answers (Exa, then Tavily, then Serper) and Sage says
+  which. Weather and time by voice; weather opens a
   panel (Use this PC's location).
 - Car navigation: briefing and Waze from a phone shortcut.
 

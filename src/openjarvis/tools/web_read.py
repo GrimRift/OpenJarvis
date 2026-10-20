@@ -31,7 +31,6 @@ import contextvars
 import html as _html
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -44,7 +43,7 @@ from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.security import page_access
 from openjarvis.security.ssrf import check_ssrf
-from openjarvis.tools import unreadable_hosts
+from openjarvis.tools import search_engines, unreadable_hosts
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.opera_control import (
     _NAV_TIMEOUT,
@@ -135,6 +134,7 @@ _BOT_CHECK_RE = re.compile(
 
 class _ReadProblem(Exception):
     """Opera cannot be used; the message says why."""
+
 
 #: Read the meaningful part of the page when it says which part that is.
 _EXTRACT_JS = (
@@ -470,23 +470,29 @@ class WebReadTool(BaseTool):
         and once 51 s for the NYT before failing. Only for a URL a search
         returned: one the user typed may be private and is never sent out.
         """
-        api_key = os.environ.get("TAVILY_API_KEY")
-        if not api_key or not page_access.from_search(url):
+        if not page_access.from_search(url):
             return None
-        try:
-            from tavily import TavilyClient
-
-            response = TavilyClient(api_key=api_key).extract(
-                urls=[url],
-                extract_depth="basic",
-                format="text",
-                timeout=EXTRACT_TIMEOUT_SECONDS,
-            )
-        except Exception as error:  # noqa: BLE001
-            logger.info("web_read: provider read of %s failed (%s)", url, error)
-            return None
-        for result in response.get("results") or []:
-            text = re.sub(r"[ \t]+", " ", str(result.get("raw_content") or ""))
+        # The chosen engine's reader (Tavily extract or Exa contents); Serper
+        # has none, so with Serper chosen another engine's key is used, and
+        # with no reader at all the browser reads it (20 October).
+        # A reader out of credits is passed over, and the next one tried --
+        # at most two, so a dead pair still leaves time for the browser.
+        results: list = []
+        for _ in range(2):
+            reader = search_engines.extractor()
+            if reader is None:
+                return None
+            try:
+                results = reader.extract(url, EXTRACT_TIMEOUT_SECONDS)
+                break
+            except Exception as error:  # noqa: BLE001
+                logger.info(
+                    "web_read: %s read of %s failed (%s)", reader.name, url, error
+                )
+                if not search_engines.note_failure(reader.name, error):
+                    return None
+        for result in results:
+            text = re.sub(r"[ \t]+", " ", str(result.get("text") or ""))
             text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
             if len(text) < EXTRACT_MIN_CHARS:
                 continue
@@ -694,7 +700,7 @@ def youtube_text(url: str, markup: str) -> Optional[Tuple[str, str]]:
 
 _DESCRIPTION_JS = (
     "(() => { const m = document.querySelector("
-    "'meta[name=\"description\"], meta[property=\"og:description\"]'); "
+    '\'meta[name="description"], meta[property="og:description"]\'); '
     "return m ? m.content : ''; })()"
 )
 

@@ -15,8 +15,13 @@ from openjarvis.core.health import (
     _check_cartesia,
     _check_deepgram,
     _check_google_apis,
-    _check_tavily,
+    _check_search_engines,
 )
+
+
+def _keys(**present):
+    """``_provider_key`` with only the named keys set."""
+    return lambda name: present.get(name, "")
 
 
 def _response(status: int):
@@ -133,22 +138,52 @@ class TestSimpleProviders:
     def test_an_absent_key_produces_no_check(self) -> None:
         with patch("openjarvis.core.health._provider_key", return_value=""):
             assert _check_cartesia(live=True) == []
-            assert _check_tavily(live=True) == []
+            assert _check_search_engines(live=True) == []
 
-    def test_tavily_local_run_makes_no_call(self) -> None:
+    def test_search_local_run_makes_no_call(self) -> None:
         with (
             patch("openjarvis.core.health._provider_key", return_value="k"),
+            patch("openjarvis.tools.search_engines.load_engine", return_value="exa"),
             patch("httpx.post") as post,
         ):
-            results = _check_tavily(live=False)
+            results = _check_search_engines(live=False)
         assert not post.called
-        assert results[0].status == "ok"
+        assert [r.status for r in results] == ["ok", "ok", "ok", "ok"]
+        assert [r.name for r in results] == [
+            "Tavily",
+            "Tavily backup key",
+            "Serper",
+            "Exa (chosen)",
+        ]
 
-    def test_tavily_failure_says_there_is_no_fallback(self) -> None:
+    def test_only_search_engine_failing_says_search_stops(self) -> None:
         with (
-            patch("openjarvis.core.health._provider_key", return_value="k"),
+            patch(
+                "openjarvis.core.health._provider_key",
+                side_effect=_keys(TAVILY_API_KEY="k"),
+            ),
+            patch("openjarvis.tools.search_engines.load_engine", return_value="tavily"),
             patch("httpx.post", return_value=_response(432)),
         ):
-            results = _check_tavily(live=True)
+            results = _check_search_engines(live=True)
+        assert [r.name for r in results] == ["Tavily (chosen)"]
         assert results[0].status == "fail"
-        assert "fallback" in (results[0].details or "")
+        assert "search stops" in (results[0].details or "")
+
+    def test_chosen_engine_failing_warns_when_another_works(self) -> None:
+        def post(url, **kwargs):
+            return _response(432 if "tavily" in url else 200)
+
+        with (
+            patch(
+                "openjarvis.core.health._provider_key",
+                side_effect=_keys(TAVILY_API_KEY="k", SERPER_API_KEY="s"),
+            ),
+            patch("openjarvis.tools.search_engines.load_engine", return_value="tavily"),
+            patch("httpx.post", side_effect=post),
+        ):
+            results = _check_search_engines(live=True)
+        by_name = {r.name: r for r in results}
+        assert by_name["Tavily (chosen)"].status == "warn"
+        assert "falls over to Serper" in (by_name["Tavily (chosen)"].details or "")
+        assert by_name["Serper"].status == "ok"
