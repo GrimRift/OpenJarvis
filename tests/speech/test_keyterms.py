@@ -71,6 +71,19 @@ class TestReadingTheClassSchedule:
     def test_a_missing_schedule_is_not_an_error(self, tmp_path):
         assert keyterms.from_class_schedule(tmp_path / "nope.md") == []
 
+    def test_a_break_boosts_none_of_last_terms_names(self, tmp_path):
+        schedule = tmp_path / "Class Schedule.md"
+        schedule.write_text(
+            "**Status:** On break\n\n"
+            "| Subject Code | Subject Description | Section | Day | Time | "
+            "Room | Mode | Instructor |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            "| CECMPM1D | Construction Methods and Drafting | BSCE231E | "
+            "Tuesday | 05:00PM | Mezz 6 | In-person | Dana Q. Arkwright, MS |\n",
+            encoding="utf-8",
+        )
+        assert keyterms.from_class_schedule(schedule) == []
+
 
 class TestTheStoredList:
     def test_it_round_trips_and_is_cleaned_on_the_way_in(self, tmp_path):

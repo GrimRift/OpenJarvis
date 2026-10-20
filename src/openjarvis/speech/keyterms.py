@@ -135,11 +135,17 @@ def from_class_schedule(path: Optional[Path] = None) -> List[str]:
     speech socket opens, and it must not wait on anything.
     """
     try:
-        from openjarvis.tools.check_class_schedule import _default_schedule_path
+        from openjarvis.tools.check_class_schedule import (
+            _default_schedule_path,
+            break_status,
+        )
 
         source = Path(path or _default_schedule_path())
         text = source.read_text(encoding="utf-8")
     except Exception:
+        return []
+    # Last term's instructors are not who the user talks about on a break.
+    if break_status(text) is not None:
         return []
 
     found: List[str] = []

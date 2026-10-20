@@ -317,3 +317,63 @@ def test_a_future_day_reports_its_classes_as_upcoming(tmp_path):
 
     assert result.metadata["classes"][0]["status"] == "upcoming"
     assert len(result.metadata["upcoming"]) == 1
+
+
+def _put_on_break(path, line="**Status:** On break until November"):
+    path.write_text(line + "\n" + path.read_text(encoding="utf-8"), encoding="utf-8")
+    return path
+
+
+def test_a_break_hides_every_class_in_both_modes(tmp_path):
+    # Between terms the old timetable stays in the note for the next one to
+    # replace; nothing may read classes from it in the meantime.
+    now = datetime(2026, 3, 10, 9, 50)
+    schedule = _put_on_break(_write_schedule(tmp_path, now.strftime("%A")))
+    tool = _make_tool(tmp_path, schedule)
+
+    soon = tool.execute(now=now, lookahead_minutes=15)
+    day = tool.execute(now=now, full_day=True)
+
+    for result in (soon, day):
+        assert result.success is True
+        assert result.metadata["on_break"] is True
+        assert result.metadata["upcoming"] == []
+        assert result.metadata["classes"] == []
+        assert "semester break (until November)" in result.content
+        assert "CS101" not in result.content
+
+
+def test_the_break_line_is_read_however_it_is_written():
+    from openjarvis.tools.check_class_schedule import break_status
+
+    assert break_status("Status: break") == ""
+    assert break_status("status: on break until 2026-11-09") == "until 2026-11-09"
+    assert break_status("**Status:** On break.") == ""
+    assert break_status("Status: in session") is None
+    # A word in the prose is not the switch.
+    assert break_status("- Break between Wednesday classes: 1 hour") is None
+
+
+def test_removing_the_break_line_brings_the_schedule_back(tmp_path):
+    now = datetime(2026, 3, 10, 9, 50)
+    schedule = _write_schedule(tmp_path, now.strftime("%A"))
+    tool = _make_tool(tmp_path, schedule)
+    _put_on_break(schedule)
+    assert tool.execute(now=now).metadata["on_break"] is True
+
+    schedule.write_text(
+        schedule.read_text(encoding="utf-8").split("\n", 1)[1], encoding="utf-8"
+    )
+
+    assert len(tool.execute(now=now).metadata["upcoming"]) == 1
+
+
+def test_the_greeting_says_nothing_about_a_break(tmp_path, monkeypatch):
+    from openjarvis.core import moments
+
+    now = datetime(2026, 3, 10, 14, 0)
+    schedule = _put_on_break(_write_schedule(tmp_path, now.strftime("%A")))
+    monkeypatch.setenv("OPENJARVIS_CLASS_SCHEDULE_PATH", str(schedule))
+
+    assert moments._today_classes(now.timestamp()) == ""
+    assert moments._still_ahead_today(now.timestamp(), "Asia/Manila") == ""

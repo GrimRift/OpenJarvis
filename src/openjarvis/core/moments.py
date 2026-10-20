@@ -667,6 +667,9 @@ def _today_classes(now: Optional[float] = None) -> str:
             skip_starting_within=CLASS_REMINDER_LEAD_MINUTES,
             now=datetime.fromtimestamp(now) if now is not None else None,
         )
+        # A break is not news every morning; the greeting says nothing.
+        if (result.metadata or {}).get("on_break"):
+            return ""
         return result.content if result.success else ""
     except Exception:
         return ""

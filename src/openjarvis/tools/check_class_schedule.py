@@ -39,6 +39,32 @@ def _default_schedule_path() -> str:
     return os.environ.get("OPENJARVIS_CLASS_SCHEDULE_PATH", _DEFAULT_SCHEDULE_PATH)
 
 
+#: "**Status:** On break until November" -- a line the user writes in the
+#: note between terms. Bold markers and the "on" are optional.
+_BREAK_LINE = re.compile(
+    r"^\s*[*_]*\s*status\s*[*_]*\s*:\s*[*_]*\s*(?:on\s+)?break\b[*_]*(.*)$",
+    re.IGNORECASE,
+)
+
+
+def break_status(text: str) -> Optional[str]:
+    """What the note says about a semester break, or None if classes are on.
+
+    Between terms the old timetable stays in the note, so the next one can
+    replace it, but nothing may read classes from it: a reminder for a class
+    that no longer meets is worse than none. The break lasts until the user
+    removes the line -- a date in it is only what they expect, since the new
+    term's dates are rarely announced in advance.
+
+    Returns the rest of the line ("until November"), "" when there is none.
+    """
+    for line in text.splitlines():
+        match = _BREAK_LINE.match(line)
+        if match:
+            return match.group(1).strip(" *_.:-–—")
+    return None
+
+
 def _parse_clock_time(raw: str) -> dt_time:
     return datetime.strptime(raw.strip().upper(), "%I:%M%p").time()
 
@@ -186,6 +212,8 @@ class CheckClassScheduleTool(BaseTool):
                 "today. For any question about another day — 'tomorrow', "
                 "'Monday', 'this Friday' — pass it; the tool cannot infer "
                 "it, and left out it silently answers about today instead.\n"
+                "Between terms the note can mark a semester break; then "
+                "every mode answers that there are no classes (on_break).\n"
                 "Read-only: calling this never suppresses a later reminder."
             ),
             parameters={
@@ -239,6 +267,27 @@ class CheckClassScheduleTool(BaseTool):
                 tool_name="check_class_schedule",
                 content=f"Could not read schedule file: {exc}",
                 success=False,
+            )
+
+        on_break = break_status(text)
+        if on_break is not None:
+            until = f" ({on_break})" if on_break else ""
+            return ToolResult(
+                tool_name="check_class_schedule",
+                content=(
+                    f"No classes: the user is on a semester break{until}. "
+                    "The timetable in their note is the old term's and is not "
+                    "in effect, so do not read classes from it or from the "
+                    "note itself. The new schedule has not been set yet; the "
+                    "user will update the Class Schedule note when it is."
+                ),
+                success=True,
+                metadata={
+                    "on_break": True,
+                    "break_note": on_break,
+                    "classes": [],
+                    "upcoming": [],
+                },
             )
 
         try:

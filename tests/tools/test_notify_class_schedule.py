@@ -205,3 +205,19 @@ def test_the_lookahead_is_still_forwarded(tmp_path):
         tool.execute(now=now, lookahead_minutes=45)
 
     assert spy.call_args.kwargs["lookahead_minutes"] == 45
+
+
+def test_no_reminder_fires_on_a_break(tmp_path):
+    now = datetime(2026, 3, 10, 9, 50)  # 10 minutes before CS101
+    tool = _make_tool(tmp_path, now.strftime("%A"))
+    path = tmp_path / "Class Schedule.md"
+    path.write_text(
+        "Status: on break\n" + path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    with patch("openjarvis.tools.notify_class_schedule.deliver") as deliver:
+        result = tool.execute(now=now)
+
+    assert result.success is True
+    assert result.metadata["notified"] is False
+    deliver.assert_not_called()
