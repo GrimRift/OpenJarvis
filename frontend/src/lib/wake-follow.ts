@@ -123,6 +123,13 @@ export function stripWakePhrase(transcript: string, greeted = false): string {
   const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
   let text = transcript.trim();
   let tokens = text.split(/\s+/);
+  // The whole turn is the name with its s-sound carried onto a short word
+  // before it: "is age" was sent as the request (20 October) -- "is" begins
+  // real requests, and with no full stop the greeted rule below missed it.
+  // Two words and nothing else is never a question about age.
+  if (tokens.length === 2 && CARRIED_S.test(norm(tokens[0])) && NAME_TAIL.test(norm(tokens[1]))) {
+    return '';
+  }
   // After the pause greeting the user was quiet for a second past the
   // phrase, so a short first sentence ending in the name's sound is the
   // phrase, starter word or not: "this age. Will it rain later?" (16
@@ -202,6 +209,8 @@ export function stripLeadingWakePhrase(transcript: string): string {
 /** The end of the name with its s-sound carried onto the word before:
  * "this age", "his ages", "is edge". */
 const NAME_TAIL = /^[aeiy][gjdz]+e?s?$/;
+/** A short word ending in the s-sound the name lost: "is", "his", "this". */
+const CARRIED_S = /^[a-z]{0,3}[scz]$/;
 
 /**
  * How many leading tokens form a sentence of at most two words, ended by a

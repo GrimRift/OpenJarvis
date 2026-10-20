@@ -32,6 +32,28 @@ describe('after the pause greeting (16 October)', () => {
   });
 });
 
+describe('the phrase heard as "is age" (20 October)', () => {
+  // 11:01 trace: wake fired, greeting played, turn 0 = "is age" (2 words, no
+  // full stop), sent as a request; Sage searched Avengers: Age of Ultron.
+  it('is the phrase alone, greeted or not', () => {
+    expect(isOnlyWakePhrase('is age', 1865, true)).toBe(true);
+    expect(isOnlyWakePhrase('is age', 1865, false)).toBe(true);
+    expect(isOnlyWakePhrase('this age', 900)).toBe(true);
+    expect(isOnlyWakePhrase('His edge.', 900)).toBe(true);
+    expect(stripWakePhrase('is age')).toBe('');
+  });
+
+  it('keeps real two-word requests', () => {
+    expect(isOnlyWakePhrase("What's up?", 1000, true)).toBe(false);
+    expect(isOnlyWakePhrase('is it?', 1000, true)).toBe(false);
+    expect(stripWakePhrase('is it')).toBe('is it');
+  });
+
+  it('keeps a longer question about age', () => {
+    expect(stripWakePhrase('is age a factor in this')).toBe('is age a factor in this');
+  });
+});
+
 describe('first words the user keeps (14 October)', () => {
   it('keeps a short first word that begins a sentence', () => {
     expect(stripWakePhrase("I'll do that. Thanks.")).toBe("I'll do that. Thanks.");
