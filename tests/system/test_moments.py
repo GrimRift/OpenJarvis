@@ -28,12 +28,14 @@ from openjarvis.core.moments import (
     MOMENT_TOLD,
     MOMENT_WELCOME_BACK,
     MomentEngine,
+    day_start_hour,
     fallback_text,
     in_quiet_hours,
     last_fallback,
     load_state,
     local_to_timestamp,
     recent_openings,
+    sage_day,
     time_of_day,
 )
 from openjarvis.core.presence import (
@@ -59,7 +61,7 @@ def _no_live_lookups(monkeypatch):
     """A welcome back reads Gmail, the class schedule and agents.db; a test
     must never reach the user's real mailbox or data."""
     monkeypatch.setattr(_moments_module, "_mail_since", lambda since, limit=15: "")
-    monkeypatch.setattr(_moments_module, "_still_ahead_today", lambda now, tz: "")
+    monkeypatch.setattr(_moments_module, "_still_ahead_today", lambda now, tz, **kw: "")
     monkeypatch.setattr(
         _moments_module, "_operator_reports_since", lambda since, config_dir=None: ""
     )
@@ -245,6 +247,101 @@ class TestGreeting:
         assert [r.kind for r in said] == [MOMENT_GREETING]
         assert again.spoken == ["[greeting] 9 hours"]
         assert again.last_context["time_of_day"] == "morning"
+
+
+class TestTheDayStartsWhenQuietHoursEnd:
+    """20 October: a greeting at 20:25, then a return at 00:02 was greeted as
+    "a fresh morning". Until quiet hours end it is still the evening before."""
+
+    @staticmethod
+    def _settings() -> PresenceSettings:
+        # The user's own quiet hours.
+        return PresenceSettings(
+            enabled=True, quiet_hours_start_local=2, quiet_hours_end_local=4
+        )
+
+    def test_the_day_starts_at_the_end_of_quiet_hours(self) -> None:
+        settings = self._settings()
+        assert day_start_hour(settings) == 4
+        local = datetime(2026, 10, 20, 0, 2, tzinfo=ZoneInfo(TZ))
+        assert sage_day(local, 4).isoformat() == "2026-10-19"
+        assert sage_day(local.replace(hour=5), 4).isoformat() == "2026-10-20"
+        assert time_of_day(0, 4) == "late night"
+        assert time_of_day(3, 4) == "late night"
+        assert time_of_day(4, 4) == "morning"
+        # Quiet hours off: the small hours still belong to the night before.
+        assert (
+            day_start_hour(
+                PresenceSettings(quiet_hours_start_local=0, quiet_hours_end_local=0)
+            )
+            == 4
+        )
+
+    def test_a_return_after_midnight_is_a_welcome_back(self, tmp_path) -> None:
+        rig = _Rig(tmp_path, self._settings())
+        said = rig.tick(_at(20, 25), idle=1.0)
+        assert [r.kind for r in said] == [MOMENT_GREETING]
+        rig.leave_and_return(_at(21), _at(0, 2, day=16))
+        kinds = [r.kind for r in rig.engine.history() if r.spoken]
+        assert kinds == [MOMENT_GREETING, MOMENT_WELCOME_BACK]
+        assert rig.last_context["time_of_day"] == "late night"
+        note = rig.last_context["late_night"]
+        assert "not a new day" in note and "Tuesday night" in note
+        assert "Wednesday's classes" in note and "tomorrow" in note
+
+    def test_after_sleep_it_is_a_morning_greeting(self, tmp_path) -> None:
+        rig = _Rig(tmp_path, self._settings())
+        rig.tick(_at(20, 25), idle=1.0)
+        rig.leave_and_return(_at(21), _at(0, 2, day=16))
+        rig.leave_and_return(_at(1, day=16), _at(5, day=16))
+        kinds = [r.kind for r in rig.engine.history() if r.spoken]
+        assert kinds == [MOMENT_GREETING, MOMENT_WELCOME_BACK, MOMENT_GREETING]
+        assert rig.last_context["time_of_day"] == "morning"
+        assert "late_night" not in rig.last_context
+
+    def test_not_now_lasts_through_midnight(self, tmp_path) -> None:
+        rig = _Rig(tmp_path, self._settings())
+        rig.tick(_at(20, 25), idle=1.0)
+        rig.engine.snooze_today()
+        rig.leave_and_return(_at(21), _at(0, 30, day=16))
+        assert rig.engine.snapshot()["snoozed_today"] is True
+        assert len(rig.spoken) == 1
+        rig.leave_and_return(_at(1, day=16), _at(5, day=16))
+        assert rig.engine.snapshot()["snoozed_today"] is False
+        assert len(rig.spoken) == 2
+
+    def test_a_late_night_fallback_is_not_good_late_night(self) -> None:
+        for _ in range(20):
+            line = fallback_text(MOMENT_GREETING, {"time_of_day": "late night"})
+            assert "late night" not in line.lower()
+
+    def test_tomorrows_classes_are_said_as_tomorrow(self, monkeypatch) -> None:
+        from openjarvis.core.types import ToolResult
+        from openjarvis.tools import check_class_schedule
+
+        classes = [
+            {
+                "subject_description": "Construction Methods",
+                "start_time": "1:00PM",
+                "status": "upcoming",
+            }
+        ]
+        monkeypatch.setattr(
+            check_class_schedule.CheckClassScheduleTool,
+            "execute",
+            lambda self, **kw: ToolResult(
+                tool_name="check_class_schedule",
+                content="",
+                success=True,
+                metadata={"classes": classes},
+            ),
+        )
+        monkeypatch.setattr(
+            _moments_module, "_today_calendar", lambda tz, now: "09:00 Site visit"
+        )
+        ahead = _REAL_STILL_AHEAD(_at(0, 2, day=16), TZ, late_night=True)
+        assert "Construction Methods tomorrow (Wednesday) at 1:00PM" in ahead
+        assert "event tomorrow (Wednesday) 09:00 Site visit" in ahead
 
 
 class TestWelcomeBack:
@@ -1180,7 +1277,7 @@ class TestWelcomeBackContent:
         monkeypatch.setattr(
             _moments_module,
             "_still_ahead_today",
-            lambda now, tz: "class Physics at 3:00PM",
+            lambda now, tz, **kw: "class Physics at 3:00PM",
         )
         monkeypatch.setattr(
             _moments_module,

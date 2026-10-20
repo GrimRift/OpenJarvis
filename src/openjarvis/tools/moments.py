@@ -27,8 +27,10 @@ from openjarvis.core.moments import (
     Watch,
     configured_timezone,
     current_engine,
+    day_start_hour,
     load_state,
     local_to_timestamp,
+    sage_day,
     save_state,
     to_local,
 )
@@ -151,9 +153,12 @@ class NotNowTool(BaseTool):
             if engine is not None:
                 engine.snooze_today(True)
             else:
+                from openjarvis.core.presence import load_settings
+
                 state = load_state()
-                today = to_local(time.time(), configured_timezone()).date().isoformat()
-                state.snoozed_day = today
+                local = to_local(time.time(), configured_timezone())
+                start = day_start_hour(load_settings())
+                state.snoozed_day = sage_day(local, start).isoformat()
                 save_state(state)
             notes.append("Understood. No unprompted moments for the rest of today.")
 

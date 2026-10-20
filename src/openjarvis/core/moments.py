@@ -14,7 +14,8 @@ Three kinds, each its own switch beneath the presence master switch:
 Four guards apply to every moment and none is optional: the presence gate
 (never while ``away``; talking to an empty room is the failure this
 milestone exists to avoid), a daily cap per kind, quiet hours, and "not now",
-which silences everything for the rest of the local day.
+which silences everything for the rest of the user's day -- a day that
+starts when quiet hours end, not at midnight (see ``sage_day``).
 
 The decision is a pure function over the presence snapshot, the settings and
 this module's own small state, so the whole policy can be tested with a fake
@@ -35,7 +36,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -331,7 +332,40 @@ def in_quiet_hours(hour: int, start: int, end: int) -> bool:
     return hour >= start or hour < end
 
 
-def time_of_day(hour: int) -> str:
+#: Where the user's day starts when quiet hours are off (or end at an odd
+#: hour): the small hours belong to the evening before.
+DEFAULT_DAY_START_HOUR = 4
+
+
+def day_start_hour(settings: PresenceSettings) -> int:
+    """The hour the user's day starts: the end of quiet hours.
+
+    Not midnight. On 20 October a return at 00:02 after an evening at the
+    desk counted as the new day's first appearance and was greeted with "a
+    fresh morning, Sir". The user had not slept; until quiet hours end it is
+    still the evening before.
+    """
+    start = settings.quiet_hours_start_local
+    end = settings.quiet_hours_end_local
+    if start != end and 1 <= end <= 10:
+        return end
+    return DEFAULT_DAY_START_HOUR
+
+
+def sage_day(local: datetime, start_hour: int = DEFAULT_DAY_START_HOUR) -> date:
+    """The day *local* belongs to: before *start_hour*, the day before."""
+    day = local.date()
+    return day - timedelta(days=1) if local.hour < start_hour else day
+
+
+def is_late_night(local: datetime, start_hour: int = DEFAULT_DAY_START_HOUR) -> bool:
+    """Past midnight, before the user's day starts."""
+    return local.hour < start_hour
+
+
+def time_of_day(hour: int, start_hour: int = DEFAULT_DAY_START_HOUR) -> str:
+    if hour < start_hour:
+        return "late night"
     if hour < 12:
         return "morning"
     if hour < 18:
@@ -367,17 +401,23 @@ class Decision:
     initiative_reason: str = ""
 
 
-def fired_today(state: MomentsState, kind: str, local: datetime) -> int:
-    """How often *kind* was spoken on the local calendar day of *local*.
+def fired_today(
+    state: MomentsState,
+    kind: str,
+    local: datetime,
+    start_hour: int = DEFAULT_DAY_START_HOUR,
+) -> int:
+    """How often *kind* was spoken on the user's day of *local*.
 
-    A calendar day, not the last 24 hours: a greeting at 22:40 must not use
-    up the next morning's.
+    A day, not the last 24 hours: a greeting at 22:40 must not use up the
+    next morning's. The day starts at *start_hour* (see ``sage_day``), not
+    midnight: a greeting at 20:25 still covers a return at 00:02.
     """
-    day = local.date()
+    day = sage_day(local, start_hour)
     return sum(
         1
         for t in state.fired.get(kind, [])
-        if datetime.fromtimestamp(t, local.tzinfo).date() == day
+        if sage_day(datetime.fromtimestamp(t, local.tzinfo), start_hour) == day
     )
 
 
@@ -406,7 +446,8 @@ def decide(
     if snapshot.state != STATE_PRESENT:
         decision.reason = f"presence is {snapshot.state}"
         return decision
-    today = local.date().isoformat()
+    start_hour = day_start_hour(settings)
+    today = sage_day(local, start_hour).isoformat()
     if state.snoozed_day == today:
         decision.reason = "not now, until tomorrow"
         return decision
@@ -456,7 +497,8 @@ def decide(
     if (
         settings.greeting_enabled
         and returned
-        and fired_today(state, MOMENT_GREETING, local) < DAILY_CAPS[MOMENT_GREETING]
+        and fired_today(state, MOMENT_GREETING, local, start_hour)
+        < DAILY_CAPS[MOMENT_GREETING]
     ):
         decision.kinds.append(MOMENT_GREETING)
         decision.absence_end = return_at
@@ -464,7 +506,7 @@ def decide(
     elif (
         settings.welcome_back_enabled
         and (observed_return or long_gap)
-        and fired_today(state, MOMENT_WELCOME_BACK, local)
+        and fired_today(state, MOMENT_WELCOME_BACK, local, start_hour)
         < DAILY_CAPS[MOMENT_WELCOME_BACK]
     ):
         decision.kinds.append(MOMENT_WELCOME_BACK)
@@ -485,7 +527,8 @@ def decide(
             if now - due_since > WATCH_STALE_SECONDS:
                 decision.stale_watches.append(watch)
             elif (
-                fired_today(state, MOMENT_TOLD, local) + len(decision.watches)
+                fired_today(state, MOMENT_TOLD, local, start_hour)
+                + len(decision.watches)
                 < DAILY_CAPS[MOMENT_TOLD]
             ):
                 decision.watches.append(watch)
@@ -550,7 +593,11 @@ def initiative_holdback(
         return "a line is waiting for a lull"
     if busy:
         return "busy: " + "; ".join(busy)
-    if fired_today(state, MOMENT_INITIATIVE, local) >= DAILY_CAPS[MOMENT_INITIATIVE]:
+    start_hour = day_start_hour(settings)
+    if (
+        fired_today(state, MOMENT_INITIATIVE, local, start_hour)
+        >= DAILY_CAPS[MOMENT_INITIATIVE]
+    ):
         return "daily cap"
     last_user = getattr(activity, "last_user_turn_at", None) if activity else None
     last_reply = getattr(activity, "last_reply_end_at", None) if activity else None
@@ -658,13 +705,20 @@ def _today_calendar(timezone_name: str, now: float) -> str:
         return ""
 
 
-def _still_ahead_today(now: float, timezone_name: str) -> str:
+def _still_ahead_today(
+    now: float, timezone_name: str, *, late_night: bool = False
+) -> str:
     """Classes and calendar events not yet over today, for a welcome back.
 
     Only what is still ahead: a return in the evening said "nothing upcoming
-    on your class schedule" every time, which is noise, not news.
+    on your class schedule" every time, which is noise, not news. Late at
+    night the calendar day is already the next one, which the user has not
+    slept into yet: its classes are said to be tomorrow, not "later today".
     """
     lines: List[str] = []
+    when = ""
+    if late_night:
+        when = " tomorrow (" + to_local(now, timezone_name).strftime("%A") + ")"
     try:
         from datetime import datetime
 
@@ -677,7 +731,7 @@ def _still_ahead_today(now: float, timezone_name: str) -> str:
         for c in classes:
             name = c.get("subject_description")
             if c.get("status") == "upcoming":
-                lines.append(f"class {name} at {c.get('start_time')}")
+                lines.append(f"class {name}{when} at {c.get('start_time')}")
             elif c.get("status") == "in_progress":
                 lines.append(f"class {name} in progress now")
     except Exception:
@@ -685,7 +739,7 @@ def _still_ahead_today(now: float, timezone_name: str) -> str:
     local_now = to_local(now, timezone_name).strftime("%H:%M")
     for event in (_today_calendar(timezone_name, now) or "").splitlines():
         if event[:5] >= local_now:
-            lines.append(f"event {event}")
+            lines.append(f"event{when} {event}")
     return "\n".join(lines)
 
 
@@ -866,14 +920,28 @@ def build_context(
     config_dir: Optional[Path],
     scheduler: Any,
     state: MomentsState,
+    start_hour: Optional[int] = None,
 ) -> Dict[str, str]:
     local = to_local(now, timezone_name)
+    if start_hour is None:
+        start_hour = day_start_hour(load_settings(config_dir))
+    late_night = is_late_night(local, start_hour)
+    today = sage_day(local, start_hour)
     context: Dict[str, str] = {
         "now": local.strftime("%A %d %B %Y, %H:%M"),
-        "time_of_day": time_of_day(local.hour),
+        "time_of_day": time_of_day(local.hour, start_hour),
         "profile": _profile_excerpt(config_dir),
         "recent_openings": recent_openings(state.history, kind),
     }
+    if late_night:
+        # The writer once read 00:02 as "a fresh morning" (20 October).
+        context["late_night"] = (
+            f"It is past midnight but before the user's day starts at "
+            f"{start_hour:02d}:00: for them this is still "
+            f"{today.strftime('%A')} night, not a new day. Do not greet it "
+            f"as a morning or a fresh day. {local.strftime('%A')}'s classes "
+            f"and events are tomorrow, never 'today' or 'this afternoon'."
+        )
     if decision.absence_seconds:
         context["away_for"] = describe_duration(decision.absence_seconds)
     if kind == MOMENT_GREETING:
@@ -881,13 +949,15 @@ def build_context(
             from openjarvis.memory.episodes import format_recent_days, recent_episodes
 
             context["recent_days"] = format_recent_days(
-                recent_episodes(2, today=local.date(), config_dir=config_dir),
-                today=local.date(),
+                recent_episodes(2, today=today, config_dir=config_dir),
+                today=today,
             )
         except Exception:
             context["recent_days"] = ""
-        context["classes_today"] = _today_classes(now)
-        context["calendar_today"] = _today_calendar(timezone_name, now)
+        # Late at night the calendar day's schedule is tomorrow's.
+        suffix = "tomorrow" if late_night else "today"
+        context[f"classes_{suffix}"] = _today_classes(now)
+        context[f"calendar_{suffix}"] = _today_calendar(timezone_name, now)
     if kind in (MOMENT_GREETING, MOMENT_WELCOME_BACK):
         since = decision.absence_end
         if since is not None and decision.absence_seconds:
@@ -905,7 +975,9 @@ def build_context(
             from concurrent.futures import ThreadPoolExecutor
 
             with ThreadPoolExecutor(max_workers=3) as pool:
-                ahead = pool.submit(_still_ahead_today, now, timezone_name)
+                ahead = pool.submit(
+                    _still_ahead_today, now, timezone_name, late_night=late_night
+                )
                 mail = pool.submit(_mail_since, since) if since is not None else None
                 reports = (
                     pool.submit(_operator_reports_since, since, config_dir)
@@ -918,7 +990,11 @@ def build_context(
                 if reports is not None:
                     context["reports_sent_while_away"] = reports.result()
     if kind == MOMENT_INITIATIVE:
-        context.update(initiative_context(now, timezone_name, config_dir, state))
+        context.update(
+            initiative_context(
+                now, timezone_name, config_dir, state, start_hour=start_hour
+            )
+        )
     if kind == MOMENT_TOLD:
         lines = []
         for watch in decision.watches:
@@ -961,6 +1037,14 @@ FALLBACK_LINES = {
 _NO_AWAY = {
     MOMENT_WELCOME_BACK: ["Welcome back, sir.", "Good to have you back, sir."],
 }
+# "Good late night" is not English: past midnight the greeting has its own.
+_LATE_NIGHT = {
+    MOMENT_GREETING: [
+        "Still up, sir. I'm here when you need me.",
+        "A late one, sir. Ready when you are.",
+        "Evening still, sir. I'm here.",
+    ],
+}
 
 
 def recent_openings(history: Sequence[MomentRecord], kind: str, count: int = 3) -> str:
@@ -983,12 +1067,21 @@ def last_fallback(history: Sequence[MomentRecord], kind: str) -> Optional[str]:
     return None
 
 
-def _todays_turns(local_now: datetime, limit: int = 12) -> str:
-    """The day's conversation so far, most recent last, for the writer."""
+def _todays_turns(
+    local_now: datetime, today: Optional[date] = None, limit: int = 12
+) -> str:
+    """The day's conversation so far, most recent last, for the writer.
+
+    *today* is the user's day (``sage_day``): late at night the evening
+    before the calendar day's turns still counts.
+    """
     try:
         from openjarvis.memory.episodes import collect_turns
 
-        turns = collect_turns(local_now.date())[-limit:]
+        days = [today] if today is not None else []
+        if local_now.date() not in days:
+            days.append(local_now.date())
+        turns = [t for day in days for t in collect_turns(day)][-limit:]
         lines = []
         for turn in turns:
             when = to_local(turn.at, str(local_now.tzinfo)).strftime("%H:%M")
@@ -1024,23 +1117,27 @@ def initiative_context(
     timezone_name: str,
     config_dir: Optional[Path],
     state: MomentsState,
+    start_hour: Optional[int] = None,
 ) -> Dict[str, str]:
     settings = load_settings(config_dir)
     local = to_local(now, timezone_name)
+    if start_hour is None:
+        start_hour = day_start_hour(settings)
+    today = sage_day(local, start_hour)
     context: Dict[str, str] = {
         "mode": settings.initiative_mode,
         "allowed_categories": ", ".join(
             INITIATIVE_CATEGORIES.get(settings.initiative_mode, ())
         ),
-        "conversation_today": _todays_turns(local),
+        "conversation_today": _todays_turns(local, today),
         "long_term_facts": _facts_for_initiative(settings.initiative_excluded_facts),
     }
     try:
         from openjarvis.memory.episodes import format_recent_days, recent_episodes
 
         context["recent_days"] = format_recent_days(
-            recent_episodes(2, today=local.date(), config_dir=config_dir),
-            today=local.date(),
+            recent_episodes(2, today=today, config_dir=config_dir),
+            today=today,
         )
     except Exception:
         context["recent_days"] = ""
@@ -1181,6 +1278,8 @@ def fallback_text(
         away = context.get("away_for", "")
         tod = context.get("time_of_day") or "day"
         pool = FALLBACK_LINES[kind]
+        if tod == "late night" and kind in _LATE_NIGHT:
+            pool = _LATE_NIGHT[kind]
         if kind == MOMENT_WELCOME_BACK and not away:
             pool = _NO_AWAY[kind]
         lines = [
@@ -1222,12 +1321,14 @@ def compose_with_model(kind: str, context: Dict[str, str]) -> str:
     labels = {
         MOMENT_GREETING: (
             "Greeting: the user's first appearance today. Greet them for the "
-            "time of day given in the context, not by assumption."
+            "time of day given in the context, not by assumption; late night "
+            "is not a morning."
         ),
         MOMENT_WELCOME_BACK: (
             "Welcome back: the user has returned after being away. Mention, "
             "briefly and only if present in the context: the next class or "
-            "event still ahead today; new emails that need the user to do "
+            "event still ahead today (late at night: tomorrow's, said as "
+            "tomorrow); new emails that need the user to do "
             "something (reply, confirm, pay, submit, a deadline) -- ignore "
             "newsletters, promotions and automated notices; alerts or reports "
             "Sage sent while they were away. Never mention what did not "
@@ -1402,9 +1503,14 @@ class MomentEngine:
         except Exception as exc:
             logger.warning("Could not save moments state: %s", exc)
 
+    def _today(self) -> str:
+        """The user's day now (``sage_day``), as stored for "not now"."""
+        local = to_local(self._clock(), self.timezone_name)
+        return sage_day(local, day_start_hour(self._monitor.settings())).isoformat()
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
-            local_day = to_local(self._clock(), self.timezone_name).date().isoformat()
+            local_day = self._today()
             now = self._clock()
             until = self._state.snoozed_until
             return {
@@ -1419,7 +1525,7 @@ class MomentEngine:
 
     def snooze_today(self, snoozed: bool = True) -> bool:
         with self._lock:
-            local_day = to_local(self._clock(), self.timezone_name).date().isoformat()
+            local_day = self._today()
             self._state.snoozed_day = local_day if snoozed else ""
             self._save()
             return snoozed
@@ -1613,6 +1719,7 @@ class MomentEngine:
                     now=now,
                     timezone_name=self.timezone_name,
                     config_dir=self._config_dir,
+                    start_hour=day_start_hour(settings),
                     scheduler=scheduler,
                     state=state,
                 )
@@ -1665,6 +1772,7 @@ class MomentEngine:
                     now=now,
                     timezone_name=self.timezone_name,
                     config_dir=self._config_dir,
+                    start_hour=day_start_hour(settings),
                     scheduler=scheduler,
                     state=state,
                 )
@@ -1818,7 +1926,8 @@ class MomentEngine:
         local = to_local(now, self.timezone_name)
         settings = self._monitor.settings()
         if (
-            state.snoozed_day == local.date().isoformat()
+            state.snoozed_day
+            == sage_day(local, day_start_hour(settings)).isoformat()
             or (state.snoozed_until is not None and state.snoozed_until > now)
             or in_quiet_hours(
                 local.hour,
@@ -2016,4 +2125,6 @@ __all__ = [
     "set_current_engine",
     "speak_aloud",
     "time_of_day",
+    "day_start_hour",
+    "sage_day",
 ]
