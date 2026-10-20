@@ -189,7 +189,7 @@ export default function MemoryOrb({ fail, focusId, onFocused }: {
       </div>
 
       {/* legend */}
-      <div className="absolute left-3 bottom-3 rounded-xl px-3 py-2.5 text-sm" style={{ ...glass, minWidth: 210 }}>
+      <div className="memory-orb-legend absolute left-3 bottom-3 rounded-xl px-3 py-2.5 text-sm" style={{ ...glass, minWidth: 210 }}>
         {(Object.keys(REGIONS) as RegionId[]).map((r) => {
           const off = hidden.has(r);
           return (
@@ -209,14 +209,14 @@ export default function MemoryOrb({ fail, focusId, onFocused }: {
             </div>
           );
         })}
-        <div className="text-[11px] mt-1.5 pt-1.5" style={{ color: faint, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+        <div className="memory-orb-help text-[11px] mt-1.5 pt-1.5" style={{ color: faint, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
           <span style={{ color: '#ffe9b0' }}>◉</span> pinned glows · <span style={{ color: '#22d3ee' }}>●</span> new pings
           <br />Click a region to fly there
         </div>
       </div>
 
       {facts && (
-        <div className="absolute right-3 bottom-3 text-xs text-right" style={{ color: faint }}>
+        <div className="memory-orb-stats absolute right-3 bottom-3 text-xs text-right" style={{ color: faint }}>
           {facts.length} memories · {facts.filter((f) => f.pinned).length} pinned · {facts.filter((f) => f.isNew).length} new today
           <br />drag to turn · scroll to zoom · Esc closes
         </div>

@@ -3862,7 +3862,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       )}
       {attachmentStrip}
       <div
-        className={touch ? 'flex items-end gap-1.5 rounded-3xl p-1.5 transition-shadow' : 'flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow'}
+        className={touch ? 'flex items-center gap-1.5 rounded-3xl p-1.5 transition-shadow' : 'flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow'}
         style={{
           background: 'var(--color-input-bg)',
           border: dragActive

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BREATH_DEPTH,
+  createPlexusState,
   BREATH_PERIOD,
   PLEXUS_LOOK,
   PLEXUS_PATCHES,
@@ -153,5 +154,18 @@ describe('a state change', () => {
     expect(easeIntoSpeaking(1 / SPEAKING_MORPH_FRAMES)).toBeLessThan(0.07);
     expect(easeIntoSpeaking(0)).toBe(0);
     expect(easeIntoSpeaking(1)).toBe(1);
+  });
+});
+
+describe('the phone orb (M29)', () => {
+  it('keeps the PC orb whole and thins only the phone one', () => {
+    const pc = createPlexusState(false);
+    const phone = createPlexusState(true);
+    expect(pc.nodes).toBe(1020);
+    expect(pc.particles.length).toBe(1020 + 640);
+    expect(phone.lowPower).toBe(true);
+    expect(phone.nodes).toBeLessThan(pc.nodes);
+    expect(phone.nodes).toBeGreaterThan(pc.nodes / 2);
+    expect(phone.particles.length - phone.nodes).toBeLessThan(640);
   });
 });

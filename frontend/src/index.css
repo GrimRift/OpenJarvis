@@ -944,3 +944,18 @@ html[data-touch] .touch-fade-in {
     animation: none;
   }
 }
+/* Memory on a phone: the tab row keeps its height in the Brain view's
+   column, and the orb's desktop hints (scroll, Esc) and stats line, which
+   ran into the legend, step aside. */
+html[data-touch] .memory-tabs {
+  flex: none;
+}
+html[data-touch] .memory-orb-stats,
+html[data-touch] .memory-orb-help {
+  display: none;
+}
+html[data-touch] .memory-orb-legend {
+  min-width: 0 !important;
+  font-size: 13px;
+  padding: 6px 10px;
+}

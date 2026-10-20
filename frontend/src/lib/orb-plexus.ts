@@ -101,8 +101,37 @@ const NODE_LAYERS = [
   { count: 260, rMin: 0.7, rMax: 0.82 },
   { count: 200, rMin: 0.42, rMax: 0.58 },
 ];
-const NODES = NODE_LAYERS.reduce((sum, layer) => sum + layer.count, 0);
 const DUST = 640;
+
+/**
+ * The phone's orb (M29): fewer points, and the blur-free glow lifted to the
+ * PC Voice orb's colour (canvas blur filters are drawn on the CPU in Safari,
+ * and the full orb lagged the iPhone's Voice page). Mutable so the orb lab
+ * can tune it live; the numbers here are the tuned ones.
+ */
+export const PLEXUS_LOW_POWER = {
+  /** Share of each node layer kept (the web), and of the dust. */
+  // Tuned in the orb lab (Chrome, 360 px, 200 frames a state) against the
+  // PC orb: disc brightness p90 56/82/129 vs 60/85/143 (idle/listening/
+  // speaking), the same cyan, in about half the draw time (4.2 vs 8 ms).
+  nodes: 0.7,
+  dust: 0.6,
+  /** Gains on the blur-free bloom and glow layers. */
+  bloom: 1.35,
+  glow: 1.35,
+  /** Extra exposure on the marks, for the light the blur layers added. */
+  exposure: 1.4,
+  /** Line alpha scale: fewer, so each line carries a little more. */
+  lines: 1.25,
+  /** Speaking already runs brighter; its share of the lift. */
+  speaking: 0.62,
+};
+
+function layerCounts(lowPower: boolean): number[] {
+  return NODE_LAYERS.map((layer) =>
+    lowPower ? Math.round(layer.count * PLEXUS_LOW_POWER.nodes) : layer.count,
+  );
+}
 
 const LINK_DIST = 0.43;
 /** A floor under a pair's mean radius, so the innermost shell still webs
@@ -514,6 +543,10 @@ export const PLEXUS_MOTION_NEUTRAL: PlexusMotion = { release: 0.035, kick: 1 };
 const lerp = (a: number, b: number, e: number) => a + (b - a) * e;
 
 export interface PlexusState {
+  /** How many of `particles` are web nodes; the rest are dust. */
+  nodes: number;
+  /** The phone's cheaper orb (PLEXUS_LOW_POWER). */
+  lowPower: boolean;
   radius: number; flow: number; bright: number; links: number;
   pulse: number; lastSpeech: number; voiceEnv: number;
   /** What is left of the last sharp onset's throw: see PLEXUS_THORNS. */
@@ -593,7 +626,10 @@ export function breathScale(state: OrbState, t: number, voiceEnv: number): numbe
  */
 export const MIN_DRAW_GAP_MS = 11.8;
 
-function makeParticles(): { particles: Node[]; axes: Array<[number, number, number]> } {
+function makeParticles(lowPower: boolean): { particles: Node[]; axes: Array<[number, number, number]>; nodes: number } {
+  const counts = layerCounts(lowPower);
+  const NODES = counts.reduce((sum, c) => sum + c, 0);
+  const DUST_HERE = lowPower ? Math.round(DUST * PLEXUS_LOW_POWER.dust) : DUST;
   const out: Node[] = [];
   const axes: Array<[number, number, number]> = [];
   for (let k = 0; k < LOBES; k++) {
@@ -602,7 +638,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
     const s = Math.sqrt(Math.max(0, 1 - u * u));
     axes.push([s * Math.cos(phi), u, s * Math.sin(phi)]);
   }
-  for (let i = 0; i < NODES + DUST; i++) {
+  for (let i = 0; i < NODES + DUST_HERE; i++) {
     const u = Math.random() * 2 - 1;
     const phi = Math.random() * Math.PI * 2;
     const s = Math.sqrt(Math.max(0, 1 - u * u));
@@ -614,7 +650,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
       let layer = NODE_LAYERS[0];
       let index: number;
       for (index = 0; index < NODE_LAYERS.length; index++) {
-        seen += NODE_LAYERS[index].count;
+        seen += counts[index];
         if (i < seen) { layer = NODE_LAYERS[index]; break; }
       }
       r = layer.rMin + Math.random() * (layer.rMax - layer.rMin);
@@ -651,7 +687,7 @@ function makeParticles(): { particles: Node[]; axes: Array<[number, number, numb
     p.lobeW = total <= 1e-6 ? 1 : bestW / total;
     out.push(p);
   }
-  return { particles: out, axes };
+  return { particles: out, axes, nodes: NODES };
 }
 
 function nextBeat(): number {
@@ -664,8 +700,8 @@ export function startRipple(S: PlexusState): void {
   S.rippleAt = 0;
 }
 
-export function createPlexusState(): PlexusState {
-  const built = makeParticles();
+export function createPlexusState(lowPower = LOW_POWER): PlexusState {
+  const built = makeParticles(lowPower);
   const axes = built.axes;
   return {
     radius: PLEXUS_STATES.idle.r, flow: PLEXUS_STATES.idle.flow, bright: PLEXUS_STATES.idle.bright,
@@ -693,6 +729,8 @@ export function createPlexusState(): PlexusState {
     listenAt: 0, listenGlow: 0,
     z: 0, zVel: 0, linkAge: 0,
     particles: built.particles,
+    nodes: built.nodes,
+    lowPower,
     pairs: new Int32Array(PAIR_CAP * 2),
     pairCount: 0,
   };
@@ -715,6 +753,7 @@ function rebuildPairs(S: PlexusState): void {
   const cap = S.pairs.length >> 1;
   const P = S.particles;
   let count = 0;
+  const NODES = S.nodes;
   for (let i = 0; i < NODES && count < cap; i++) {
     const a = P[i];
     for (let j = i + 1; j < NODES && count < cap; j++) {
@@ -958,7 +997,7 @@ export function drawPlexus(
       const want = Math.round(SP.count[0] + (SP.count[1] - SP.count[0]) * Math.min(1, (rise - SP.rise) / 0.15));
       // Front-facing nodes of the lit patch, as they were last drawn.
       for (let tries = 0, lit = 0; tries < 600 && lit < want; tries++) {
-        const p = S.particles[(Math.random() * NODES) | 0];
+        const p = S.particles[(Math.random() * S.nodes) | 0];
         if (p.lobeA !== hit || p.pd < 0.45 || p.spark > 0) continue;
         p.spark = 1e-3;
         lit++;
@@ -1028,6 +1067,11 @@ export function drawPlexus(
   const cosX = Math.cos(S.spinX), sinX = Math.sin(S.spinX);
   const P = S.particles;
   const n = P.length;
+  const NODES = S.nodes;
+  const lpExposure = S.lowPower
+    ? PLEXUS_LOW_POWER.exposure * (state === 'speaking' ? PLEXUS_LOW_POWER.speaking : 1)
+    : 1;
+  const lpLines = S.lowPower ? PLEXUS_LOW_POWER.lines : 1;
 
   const fA = tw * 0.011, fB = tw * 0.014, fC = tw * 0.009;
   const flow = FLOW * S.flow;
@@ -1139,7 +1183,7 @@ export function drawPlexus(
       if (p.spark >= 1) p.spark = 0;
       else p.reg += Math.sin(Math.PI * p.spark) * PLEXUS_SPARKS.lines;
     }
-    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * (1 + PLEXUS_THORNS.glow * p.out));
+    p.pa = Math.min(0.95, (PA0 + PA1 * p.pd) * bright * p.reg * S.look.dots * S.look.exposure * lpExposure * (1 + PLEXUS_THORNS.glow * p.out));
   }
 
   const dCosY = Math.cos(S.spinY * DUST_TURN), dSinY = Math.sin(S.spinY * DUST_TURN);
@@ -1176,7 +1220,7 @@ export function drawPlexus(
       const off = Math.hypot(q.px - cx, q.py - cy) / sR - listenRingAt;
       q.reg += listenLift * Math.exp(-(off * off) / (LP.width * LP.width));
     }
-    q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * q.reg * S.look.dots * S.look.exposure);
+    q.pa = Math.min(0.95, (PA0 + PA1 * q.pd) * bright * q.reg * S.look.dots * S.look.exposure * lpExposure);
   }
 
   // Links first, so the particles sit on top of their own wiring.
@@ -1248,7 +1292,7 @@ export function drawPlexus(
       const buf = bandBuffers[b];
       if (!buf.length) continue;
       ctx.strokeStyle = ramp[Math.min(rampTop, 3 + b * 3)];
-      ctx.globalAlpha = Math.min(1, ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha * S.look.exposure);
+      ctx.globalAlpha = Math.min(1, ((b + 0.5) / LINK_BANDS) * LINK_MAX_ALPHA * widthAlpha * S.look.exposure * lpExposure * lpLines);
       ctx.beginPath();
       for (let i = 0; i < buf.length; i += 4) {
         ctx.moveTo(buf[i], buf[i + 1]);
@@ -1353,7 +1397,7 @@ export function drawPlexus(
   // A phone takes the blur-free glow below (M29): Safari draws canvas blur
   // filters on the CPU, and up to five of them a frame made the iPhone's
   // Voice page lag. The scaled-down copy gives a close, cheap softness.
-  const canBlur = !LOW_POWER && blurSupported(target);
+  const canBlur = !S.lowPower && blurSupported(target);
   const softFilter = canBlur && soft > 0.05 ? `blur(${soft.toFixed(2)}px)` : '';
   add(bufs.full, 1, w, h, softFilter);
   if (L.curve > 0.01) {
@@ -1370,8 +1414,9 @@ export function drawPlexus(
     const sw = bufs.small.width, sh = bufs.small.height;
     bufs.sctx.clearRect(0, 0, sw, sh);
     bufs.sctx.drawImage(bufs.half, 0, 0, sw, sh);
-    add(bufs.small, L.bloom, sw, sh, '');
-    add(bufs.glow, L.glow, hw, hh, '');
+    const lp = S.lowPower ? PLEXUS_LOW_POWER : null;
+    add(bufs.small, L.bloom * (lp ? lp.bloom : 1), sw, sh, '');
+    add(bufs.glow, L.glow * (lp ? lp.glow : 1), hw, hh, '');
   }
   target.restore();
 }
