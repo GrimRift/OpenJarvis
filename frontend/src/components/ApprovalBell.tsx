@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, CheckCircle, ChevronDown, ChevronUp, Clock, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { approveAction, denyAction, fetchPendingApprovals } from '../lib/api';
+import { useTouchLayout } from '../lib/touch-layout';
 import type { PendingApproval } from '../lib/api';
 
 const TIER_STYLES: Record<string, { label: string; color: string; bg: string }> = {
@@ -78,9 +79,18 @@ export function ApprovalBell() {
   };
 
   const count = approvals.length;
+  const touch = useTouchLayout();
+
+  // On a phone the top right is the new-chat button: the bell sits beside it,
+  // below the notch, and only when something is waiting.
+  if (touch && count === 0) return null;
 
   return (
-    <div ref={containerRef} className="fixed top-2 right-3 z-40">
+    <div
+      ref={containerRef}
+      className={touch ? 'fixed right-12 z-40' : 'fixed top-2 right-3 z-40'}
+      style={touch ? { top: 'calc(env(safe-area-inset-top) + 6px)' } : undefined}
+    >
       {/* Bell trigger */}
       <button
         onClick={() => setOpen(o => !o)}

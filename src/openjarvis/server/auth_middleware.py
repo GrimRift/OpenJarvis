@@ -92,6 +92,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # and OAuth state instead (see server/oauth_tickets.py).
         if _OAUTH_BROWSER_PATH.match(path):
             return False
+        # A phone being paired has no key yet; the one-time pairing code it
+        # sends is checked by the route itself (server/pairing.py).
+        if path == "/v1/pairing/redeem":
+            return False
         return (
             path.startswith("/v1/")
             or path.startswith("/api/")
@@ -122,7 +126,7 @@ def check_bind_safety(host: str, *, api_key: str) -> None:
     if not is_loop and not api_key:
         logger.error(
             "Binding to %s requires OPENJARVIS_API_KEY to be set. "
-            "Run: jarvis auth generate-key",
+            "Run: jarvis auth create-key",
             host,
         )
         sys.exit(1)

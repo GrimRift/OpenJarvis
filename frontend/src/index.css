@@ -829,3 +829,44 @@ html[data-app-hidden] *::after {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+
+/* ---- Touch layout: phone and iPad (M29, lib/touch-layout.ts) ---- */
+
+/* The notch and the home bar: the page runs under both (viewport-fit=cover). */
+html[data-touch] .touch-shell {
+  padding-top: env(safe-area-inset-top);
+}
+html[data-touch] .touch-tabbar {
+  padding-bottom: max(6px, env(safe-area-inset-bottom));
+}
+html[data-touch] .touch-drawer {
+  padding-top: max(14px, env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* iOS zooms into any field with text under 16px when it is tapped. */
+html[data-touch] textarea,
+html[data-touch] input[type='text'],
+html[data-touch] input[type='search'],
+html[data-touch] input:not([type]) {
+  font-size: 16px;
+}
+
+html[data-touch] body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The chat list's pin and delete appear on hover, which a finger never
+   does: unseen, they would still take a tap -- a stray one deleted a chat. */
+html[data-touch] .touch-drawer [data-row-action] {
+  display: none;
+}
+
+/* A held talk button: no text selection or iOS callout under the thumb. */
+.talk-button {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+}

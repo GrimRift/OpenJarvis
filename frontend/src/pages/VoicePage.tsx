@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { PanelRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlignLeft, PanelRight } from 'lucide-react';
 import { ComposerSlot } from '../components/Chat/ComposerSlot';
 import { OrbVisual, useOrbGenerating, useOrbState } from '../components/Chat/OrbVisual';
 import { VoiceTranscript } from '../components/Chat/VoiceTranscript';
 import { useAppStore } from '../lib/store';
+import { touchOrbSize, useTouchLayout } from '../lib/touch-layout';
 
 /** 30% over the old 588. */
 const ORB_SIZE = 764;
@@ -34,6 +35,19 @@ export function VoicePage() {
   // Closed on arrival: this surface is for speaking, and the transcript is
   // something you reach for when reading is easier than listening.
   const [showTranscript, setShowTranscript] = useState(false);
+  const touch = useTouchLayout();
+
+  if (touch) {
+    return (
+      <TouchVoice
+        status={generating ? 'GENERATING' : STATUS[orbState]}
+        orbState={orbState}
+        messages={messages}
+        showTranscript={showTranscript}
+        setShowTranscript={setShowTranscript}
+      />
+    );
+  }
 
   return (
     <div className="relative h-full w-full overflow-hidden">
@@ -84,6 +98,85 @@ export function VoicePage() {
       </div>
 
       {showTranscript && <VoiceTranscript messages={messages} />}
+    </div>
+  );
+}
+
+function useTouchOrbSize(): number {
+  const read = () => touchOrbSize(window.innerWidth, window.innerHeight);
+  const [size, setSize] = useState(read);
+  useEffect(() => {
+    const onResize = () => setSize(read());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return size;
+}
+
+/** Voice on a phone or iPad (M29, mockup "picks-v2", take A). */
+function TouchVoice({
+  status,
+  orbState,
+  messages,
+  showTranscript,
+  setShowTranscript,
+}: {
+  status: string;
+  orbState: ReturnType<typeof useOrbState>;
+  messages: ReturnType<typeof useAppStore.getState>['messages'];
+  showTranscript: boolean;
+  setShowTranscript: (show: boolean | ((v: boolean) => boolean)) => void;
+}) {
+  const size = useTouchOrbSize();
+  const wakeWord = useAppStore((s) => s.settings.wakeWordEnabled);
+  const live = orbState === 'listening' || orbState === 'speaking';
+  return (
+    <div className="relative h-full w-full overflow-hidden flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4">
+        <div
+          className="text-[11px] tracking-[0.28em] select-none"
+          style={{ color: live ? 'var(--color-accent)' : 'var(--color-text-tertiary)' }}
+        >
+          {status}
+        </div>
+        <OrbVisual state={orbState} size={size} />
+      </div>
+      <div className="shrink-0 flex items-start justify-center gap-6 pb-2">
+        <ComposerSlot voice />
+        <div className="flex flex-col items-center">
+          <button
+            type="button"
+            onClick={() => setShowTranscript((v) => !v)}
+            aria-pressed={showTranscript}
+            aria-label={showTranscript ? 'Hide transcript' : 'Show transcript'}
+            className="grid place-items-center rounded-full cursor-pointer"
+            style={{
+              width: 54,
+              height: 54,
+              background: 'color-mix(in srgb, var(--color-bg-secondary) 70%, transparent)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-secondary)',
+            }}
+          >
+            <AlignLeft size={21} />
+          </button>
+          <div className="mt-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>transcript</div>
+        </div>
+      </div>
+      {wakeWord && (
+        <div className="shrink-0 flex justify-center pb-3">
+          <span
+            className="inline-flex items-center gap-1.5 text-[11.5px] rounded-full px-2.5 py-1"
+            style={{ color: 'var(--color-text-secondary)', border: '1px solid var(--color-border)' }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-success)' }} />
+            Hey Sage on · while this screen is open
+          </span>
+        </div>
+      )}
+      {showTranscript && (
+        <VoiceTranscript messages={messages} onClose={() => setShowTranscript(false)} />
+      )}
     </div>
   );
 }

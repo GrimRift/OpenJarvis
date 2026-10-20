@@ -61,6 +61,7 @@ import type {
 } from '../types';
 import type { ManagedAgent } from './api';
 import { inDesktopShell } from './api';
+import { touchLayoutNow } from './touch-layout';
 import { isEmbedOnlyModel } from './model-capabilities';
 import { serializeToolCallArguments } from './tool-call';
 
@@ -908,7 +909,9 @@ export const useAppStore = create<AppState>((set, get) => {
     commandPaletteOpen: false,
     // The Windows app opens with the chat list tucked away (the user's
     // choice); the browser keeps it open. Either way it is one click to toggle.
-    sidebarOpen: !inDesktopShell(),
+    // Closed in the desktop app and on a phone or iPad, which has the
+    // chats drawer instead (M29).
+    sidebarOpen: !inDesktopShell() && !touchLayoutNow(),
     voiceState: 'idle',
     audioPlaying: false,
     presenceState: 'unknown',

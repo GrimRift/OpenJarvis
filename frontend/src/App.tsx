@@ -31,6 +31,7 @@ import { track, hashId } from './lib/analytics';
 import { fetchVolumes } from './lib/volume';
 import { apiFetch, fetchSpeechVoices } from './lib/api';
 import { ORB_NEUTRAL, setOrbShaping } from './lib/audio-level';
+import { MorePage } from './components/Touch/TouchChrome';
 import { retryUntilAnswered } from './lib/retry';
 
 export default function App() {
@@ -244,6 +245,7 @@ export default function App() {
           <Route path="data-sources" element={<DataSourcesPage />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="logs" element={<LogsPage />} />
+          <Route path="more" element={<MorePage />} />
         </Route>
       </Routes>
       <Toaster position="bottom-right" />

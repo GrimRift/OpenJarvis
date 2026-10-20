@@ -41,6 +41,7 @@ import {
   type LocalModelSettings,
 } from '../lib/local-models-api';
 import { formatShortcut, getStartupSettings, setStartupSettings, shortcutFromKey, type StartupSettings } from '../lib/desktop-app';
+import { cancelPairingCode, countdown, newPairingCode, spacedCode } from '../lib/pairing';
 import {
   checkHealth,
   inDesktopShell,
@@ -204,6 +205,69 @@ function CloudProviderStatus({ label, keyName }: { label: string; keyName: strin
       }} />
       {label}
     </span>
+  );
+}
+
+/** Settings > Connection: a one-time code for a phone or iPad (M29). */
+function PairDeviceButton() {
+  const [pair, setPair] = useState<{ code: string; address: string; until: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!pair) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [pair]);
+
+  const left = pair ? (pair.until - now) / 1000 : 0;
+  useEffect(() => {
+    if (pair && left <= 0) setPair(null);
+  }, [pair, left]);
+
+  if (!pair) {
+    return (
+      <div className="flex flex-col items-end gap-1">
+        <button
+          type="button"
+          onClick={async () => {
+            setError('');
+            try {
+              const made = await newPairingCode();
+              setNow(Date.now());
+              setPair({ code: made.code, address: made.address, until: Date.now() + made.expiresIn * 1000 });
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Could not make a code');
+            }
+          }}
+          className="text-sm px-3 py-1.5 rounded-lg cursor-pointer"
+          style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)', border: '1px solid var(--color-accent)' }}
+        >
+          Pair a phone or iPad
+        </button>
+        {error && <span className="text-xs" style={{ color: 'var(--color-error)' }}>{error}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col items-end gap-1 text-right">
+      <span className="font-mono text-2xl tracking-[0.2em]" style={{ color: 'var(--color-accent)' }}>
+        {spacedCode(pair.code)}
+      </span>
+      <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+        {pair.address ? <>Open <b style={{ color: 'var(--color-text)' }}>{pair.address}</b> on it, then type the code.</> : 'Tailscale is not running on this PC.'}
+      </span>
+      <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+        Works once, for {countdown(left)}.{' '}
+        <button
+          type="button"
+          className="underline cursor-pointer"
+          onClick={() => { void cancelPairingCode(); setPair(null); }}
+        >
+          Cancel
+        </button>
+      </span>
+    </div>
   );
 }
 
@@ -1117,6 +1181,9 @@ export function SettingsPage() {
                   border: '1px solid var(--color-border)',
                 }}
               />
+            </SettingRow>
+            <SettingRow label="Phone or iPad" description="Use Sage on a phone or iPad through Tailscale. Shows a one-time code to type on it.">
+              <PairDeviceButton />
             </SettingRow>
             <SettingRow label="API key" description="Required only if the server was started with an API key">
               <input

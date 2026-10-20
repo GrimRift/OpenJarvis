@@ -142,6 +142,7 @@ function ConversationRow({ conv }: { conv: Conversation }) {
           selectConversation(conv.id);
           navigate('/');
         }}
+        data-conversation-open=""
         className="flex-1 text-left px-3 py-2 min-w-0 cursor-pointer"
       >
         <div
@@ -163,6 +164,7 @@ function ConversationRow({ conv }: { conv: Conversation }) {
           e.stopPropagation();
           togglePin(conv.id);
         }}
+        data-row-action=""
         className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
         style={{ color: 'var(--color-text-tertiary)' }}
         onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-accent)')}
@@ -178,6 +180,7 @@ function ConversationRow({ conv }: { conv: Conversation }) {
           deleteConversation(conv.id);
         }}
         disabled={isStreaming}
+        data-row-action=""
         className="p-1.5 mr-1 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
         style={{ color: 'var(--color-text-tertiary)' }}
         onMouseEnter={(e) => {

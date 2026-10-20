@@ -6,6 +6,7 @@ import { initApiBase } from './lib/api';
 import { preloadChats } from './lib/chat-db';
 import { initAnalytics } from './lib/analytics';
 import { landOnChat } from './lib/landing';
+import { applyTouchLayout, touchLayoutNow } from './lib/touch-layout';
 import './index.css';
 
 function applyTheme() {
@@ -24,6 +25,8 @@ function applyTheme() {
 }
 
 applyTheme();
+// Before landOnChat, which drops the address's query (`?layout=` is read here).
+if (touchLayoutNow()) applyTouchLayout();
 landOnChat();
 
 // Fetch the API base URL from the Tauri backend before rendering.

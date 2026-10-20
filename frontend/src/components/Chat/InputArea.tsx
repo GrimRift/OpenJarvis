@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { Send, Square, Paperclip, Search, VolumeX, Volume2, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Send, Square, Paperclip, Search, VolumeX, Volume2, X, Plus, Camera, Image as ImageIcon, Cpu, BookmarkPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAppStore, generateId, documentsFor } from '../../lib/store';
 import {
@@ -106,6 +107,9 @@ import {
   mergeTurns,
 } from '../../lib/turn-continuation';
 import { setVoiceTraceSink, voiceTrace } from '../../lib/voice-trace';
+import { joinHeld, RELEASE_GRACE_MS } from '../../lib/hold-to-talk';
+import { useTouchLayout } from '../../lib/touch-layout';
+import { TalkButton } from './TalkButton';
 import { holdMedia, MEDIA_RELEASE_IDLE_MS } from '../../lib/media-hold';
 import { replayedToolResult } from '../../lib/link-preview';
 import type {
@@ -300,6 +304,11 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   const [docBusy, setDocBusy] = useState<string>('');
   const [docIndexed, setDocIndexed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The touch layout's camera and photo-library pickers (M29).
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const touch = useTouchLayout();
   const [dragActive, setDragActive] = useState(false);
   // Read inside a stable callback, so attaching a second image sees the first
   // instead of a closure captured when the component mounted.
@@ -561,6 +570,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   }, [effectiveSpeechState]);
 
   const settleAfterStopRef = useRef<(() => void) | null>(null);
+
+  // Hold to talk (M29): what a held talk button has heard so far, and the
+  // grace timer that sends it after release (lib/hold-to-talk.ts).
+  const holdRef = useRef<{
+    active: boolean;
+    parts: string[];
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ active: false, parts: [], timer: null });
 
   const handleMicClick = useCallback(async () => {
     // A Flux turn leaves speechState 'idle', so checking it directly sent
@@ -1967,6 +1984,23 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       // Deepgram can repeat a final event; one confirmed turn sends once.
       if (lastFluxTurnRef.current === turnIndex) return;
       lastFluxTurnRef.current = turnIndex;
+      // Hold to talk (M29): while the button is down a pause is not the end.
+      // Each finished piece is kept, and the whole goes out on release --
+      // with this turn, if Deepgram finishes it inside the release grace.
+      const hold = holdRef.current;
+      if (hold.active) {
+        hold.parts.push(transcript);
+        voiceTrace('mic.holdPiece', { turn: turnIndex, chars: transcript.length });
+        flux.beginTurn();
+        return;
+      }
+      if (hold.timer) {
+        clearTimeout(hold.timer);
+        hold.timer = null;
+        transcript = joinHeld(hold.parts, transcript);
+        hold.parts = [];
+        voiceTrace('mic.holdSent', { turn: turnIndex, chars: transcript.length });
+      }
       // The user has finished: Sage comes back up now, not while their
       // words are being judged (15 October, the user's choice).
       if (releaseSpeechDuck()) voiceTrace('barge.duckRelease', { turn: turnIndex });
@@ -2739,6 +2773,80 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     onUnavailable: handleFluxUnavailable,
   });
 
+  // Hold to talk (M29). The press is held past HOLD_AFTER_MS: listen, and
+  // keep listening through pauses until the finger lifts.
+  const beginHold = useCallback(() => {
+    const hold = holdRef.current;
+    if (hold.timer) clearTimeout(hold.timer);
+    holdRef.current = { active: true, parts: [], timer: null };
+    voiceTrace('mic.holdStart', { flux: fluxActive, turn: fluxTurnActive });
+    if (fluxActive) {
+      if (!fluxTurnActive) {
+        clearContinuationWindow();
+        setFluxTurnActive(true);
+        listenKindRef.current = 'mic';
+        flux.beginTurn();
+      }
+      clearFluxSilenceTimer();
+      return;
+    }
+    if (speechState !== 'recording') void startRecording();
+    // flux is stable across renders; fluxActive/fluxTurnActive drive it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fluxActive, fluxTurnActive, speechState, startRecording, clearContinuationWindow]);
+
+  // The finger lifted: send what was heard, or drop it when slid away.
+  const endHold = useCallback(
+    async (cancel: boolean) => {
+      const hold = holdRef.current;
+      hold.active = false;
+      voiceTrace('mic.holdEnd', { cancel, pieces: hold.parts.length });
+      if (fluxActive) {
+        if (cancel) {
+          hold.parts = [];
+          flux.endTurn();
+          clearFluxSilenceTimer();
+          setFluxTurnActive(false);
+          toast('Cancelled.', { duration: 1500 });
+          return;
+        }
+        // Deepgram may still be finishing the last words: its end of turn
+        // gets a moment to land (the handler joins it to the pieces), then
+        // what was heard goes out without it.
+        hold.timer = setTimeout(() => {
+          hold.timer = null;
+          const text = joinHeld(hold.parts);
+          hold.parts = [];
+          flux.endTurn();
+          clearFluxSilenceTimer();
+          setFluxTurnActive(false);
+          if (!text) {
+            voiceTrace('mic.holdEmpty');
+            return;
+          }
+          voiceTrace('mic.holdSent', { chars: text.length, graceOnly: true });
+          voiceOriginatedRef.current = true;
+          listenKindRef.current = 'followUp';
+          void sendMessageRef.current(text).catch(() => {});
+          openContinuationWindow(text);
+        }, RELEASE_GRACE_MS);
+        return;
+      }
+      if (speechState !== 'recording') return;
+      try {
+        const text = await stopRecording();
+        if (cancel || !text) return;
+        voiceOriginatedRef.current = true;
+        void sendMessageRef.current(text).catch(() => {});
+      } catch {
+        // Error is captured in useSpeech
+      }
+    },
+    // flux is stable across renders; fluxActive drives it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fluxActive, speechState, stopRecording, openContinuationWindow],
+  );
+
   // A turn cannot outlive the socket that owns it.
   //
   // `fluxTurnActive` is cleared by EndOfTurn, and by onUnavailable when a
@@ -3298,7 +3406,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
   }, [audioPlaying, continuousConversationEnabled, micDisabled, speechState, beginAutoRecording]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !touch) {
       e.preventDefault();
       sendMessage();
     }
@@ -3362,6 +3470,72 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       </button>
     );
 
+    if (touch) {
+      // Voice on a phone or iPad (M29, mockup "picks-v2"): replies on/off,
+      // the big talk button -- Stop while Sage speaks -- and the transcript
+      // button the page adds beside it.
+      const toggleReplies = () =>
+        useAppStore.getState().updateSettings({ voiceRepliesEnabled: !voiceRepliesEnabled });
+      const round = (on: boolean): React.CSSProperties => ({
+        width: 54,
+        height: 54,
+        border: `1px solid ${on ? 'var(--color-accent)' : 'var(--color-border)'}`,
+        background: on ? 'var(--color-accent-subtle)' : 'color-mix(in srgb, var(--color-bg-secondary) 70%, transparent)',
+        color: on ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+      });
+      return (
+        <div className="relative">
+          {attachmentStrip ? (
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max">{attachmentStrip}</div>
+          ) : null}
+          <div className="flex items-start justify-center gap-6">
+            <div className="flex flex-col items-center">
+              <button
+                type="button"
+                onClick={toggleReplies}
+                aria-pressed={voiceRepliesEnabled}
+                aria-label={voiceRepliesEnabled ? 'Spoken replies: on' : 'Spoken replies: off'}
+                className="grid place-items-center rounded-full cursor-pointer"
+                style={round(false)}
+              >
+                {voiceRepliesEnabled ? <Volume2 size={21} /> : <VolumeX size={21} />}
+              </button>
+              <div className="mt-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
+                {voiceRepliesEnabled ? 'replies on' : 'muted'}
+              </div>
+            </div>
+            {audioPlaying || isCurrentChatStreaming ? (
+              <div className="flex flex-col items-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopSpeaking();
+                    if (isCurrentChatStreaming) stopStreaming();
+                  }}
+                  aria-label="Stop"
+                  className="grid place-items-center rounded-full cursor-pointer"
+                  style={{ width: 76, height: 76, background: '#f0f0f2', color: '#111' }}
+                >
+                  <Square size={26} fill="currentColor" />
+                </button>
+                <div className="mt-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>stop</div>
+              </div>
+            ) : (
+              <TalkButton
+                variant="big"
+                listening={effectiveSpeechState === 'recording'}
+                disabled={micDisabled}
+                onTap={handleMicClick}
+                onHoldStart={beginHold}
+                onHoldEnd={(cancel) => void endHold(cancel)}
+                hint="tap or hold"
+              />
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="relative">
       {/* Floats above the controls: in the flow it made this row taller and
@@ -3413,7 +3587,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             onClick={() => setDeepResearch(!deepResearch)}
             disabled={streamState.isStreaming}
             aria-pressed={deepResearch}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-colors cursor-pointer disabled:cursor-default disabled:opacity-50"
+            className={`inline-flex items-center gap-1.5 rounded-full transition-colors cursor-pointer disabled:cursor-default disabled:opacity-50 ${touch ? 'px-3 py-1.5 text-[13px]' : 'px-2.5 py-1 text-xs'}`}
             style={{
               background: deepResearch ? 'var(--color-accent-subtle)' : 'transparent',
               border: `1px solid ${deepResearch ? 'var(--color-accent)' : 'var(--color-border)'}`,
@@ -3441,7 +3615,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={streamState.isStreaming || Boolean(docBusy)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-colors cursor-pointer disabled:cursor-default disabled:opacity-50"
+            className={`inline-flex items-center gap-1.5 rounded-full transition-colors cursor-pointer disabled:cursor-default disabled:opacity-50 ${touch ? 'px-3 py-1.5 text-[13px]' : 'px-2.5 py-1 text-xs'}`}
             style={{
               background: 'transparent',
               border: '1px solid var(--color-border)',
@@ -3454,6 +3628,51 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
             Attach
           </button>
 
+          {touch && (
+            // The phone's camera, straight into the message (M29).
+            <>
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || []);
+                  if (files.length) void attachFiles(files);
+                  e.target.value = '';
+                }}
+              />
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || []);
+                  if (files.length) void attachFiles(files);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => cameraInputRef.current?.click()}
+                disabled={streamState.isStreaming}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] transition-colors cursor-pointer disabled:cursor-default disabled:opacity-50"
+                style={{
+              background: 'transparent',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-tertiary)',
+            }}
+                aria-label="Take a photo"
+              >
+                <Camera size={14} />
+                Photo
+              </button>
+            </>
+          )}
+          {!touch && (
           <button
             type="button"
             onClick={() => setDocIndexed((v) => !v)}
@@ -3472,6 +3691,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           >
             {docIndexed ? 'Save to knowledge' : 'This chat only'}
           </button>
+          )}
         </div>
         {deepResearch && corpusSync.syncing && corpusSync.itemsSynced > 0 && (
           <div
@@ -3524,7 +3744,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
       )}
       {attachmentStrip}
       <div
-        className="flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow"
+        className={touch ? 'flex items-end gap-1.5 rounded-3xl p-1.5 transition-shadow' : 'flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow'}
         style={{
           background: 'var(--color-input-bg)',
           border: dragActive
@@ -3533,6 +3753,17 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           boxShadow: 'var(--shadow-sm)',
         }}
       >
+        {touch && (
+          <button
+            type="button"
+            onClick={() => setPlusOpen(true)}
+            aria-label="More: photos, model, spoken replies"
+            className="w-[38px] h-[38px] grid place-items-center rounded-full shrink-0 cursor-pointer"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            <Plus size={21} />
+          </button>
+        )}
         <textarea
           ref={textareaRef}
           value={input}
@@ -3543,12 +3774,14 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={
-            selectedModel
-              ? 'Message Sage — paste/drop image'
-              : 'Pick a model first (⌘K)...'
+            touch
+              ? 'Message Sage'
+              : selectedModel
+                ? 'Message Sage — paste/drop image'
+                : 'Pick a model first (⌘K)...'
           }
           rows={1}
-          className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed"
+          className={`flex-1 bg-transparent outline-none resize-none leading-relaxed ${touch ? 'py-2 self-center' : 'text-sm'}`}
           style={{ color: 'var(--color-text)', maxHeight: '200px' }}
           disabled={streamState.isStreaming || modelLoading}
         />
@@ -3577,13 +3810,25 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
               <Square size={16} />
             </button>
           ) : (
+            touch && !input.trim() ? (
+              <TalkButton
+                variant="inline"
+                listening={effectiveSpeechState === 'recording'}
+                disabled={micDisabled}
+                onTap={handleMicClick}
+                onHoldStart={beginHold}
+                onHoldEnd={(cancel) => void endHold(cancel)}
+              />
+            ) : (
             <>
+              {!touch && (
               <MicButton
                 state={effectiveSpeechState}
                 onClick={handleMicClick}
                 disabled={micDisabled}
                 reason={micReason}
               />
+              )}
               <button
                 onClick={() => sendMessage()}
                 disabled={streamState.isStreaming || !input.trim() || modelLoading || !selectedModel}
@@ -3597,15 +3842,99 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
                 <Send size={16} />
               </button>
             </>
+            )
           )}
         </div>
       </div>
+      {touch ? (
+        <PlusSheet
+          open={plusOpen}
+          onClose={() => setPlusOpen(false)}
+          onPhotos={() => photoInputRef.current?.click()}
+          docIndexed={docIndexed}
+          onToggleDocIndexed={() => setDocIndexed((v) => !v)}
+        />
+      ) : (
       <div className="flex items-center justify-center mt-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
         <span>
           <kbd className="font-mono">Enter</kbd> to send &middot;{' '}
           <kbd className="font-mono">Shift+Enter</kbd> for new line
         </span>
       </div>
+      )}
     </div>
+  );
+}
+
+/** The "+" in the phone's message box (M29): what has no chip of its own. */
+function PlusSheet({
+  open,
+  onClose,
+  onPhotos,
+  docIndexed,
+  onToggleDocIndexed,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onPhotos: () => void;
+  docIndexed: boolean;
+  onToggleDocIndexed: () => void;
+}) {
+  const selectedModel = useAppStore((s) => s.selectedModel);
+  const voiceRepliesEnabled = useAppStore((s) => s.settings.voiceRepliesEnabled);
+  if (!open) return null;
+  const row = 'w-full flex items-center gap-3 px-1 py-3 text-[15px] cursor-pointer';
+  const line = { borderBottom: '1px solid var(--color-border-subtle)', color: 'var(--color-text)' };
+  const toggle = (on: boolean) => (
+    <span
+      className="ml-auto relative inline-block w-[42px] h-[25px] rounded-full transition-colors"
+      style={{ background: on ? 'var(--color-accent)' : 'var(--color-bg-tertiary)' }}
+    >
+      <span
+        className="absolute top-[2px] w-[21px] h-[21px] rounded-full bg-white transition-all"
+        style={{ left: on ? 19 : 2 }}
+      />
+    </span>
+  );
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.45)' }} onClick={onClose} />
+      <div
+        className="touch-sheet fixed left-0 right-0 bottom-0 z-50 rounded-t-[22px] px-4 pt-2"
+        style={{
+          background: 'var(--color-bg-secondary)',
+          borderTop: '1px solid var(--color-border)',
+          paddingBottom: 'max(18px, env(safe-area-inset-bottom))',
+        }}
+      >
+        <div className="w-9 h-[5px] rounded-full mx-auto mb-2" style={{ background: 'var(--color-border)' }} />
+        <button type="button" className={row} style={line} onClick={() => { onPhotos(); onClose(); }}>
+          <ImageIcon size={19} style={{ color: 'var(--color-accent)' }} /> Photo library
+        </button>
+        <button
+          type="button"
+          className={row}
+          style={line}
+          onClick={() => { onClose(); useAppStore.getState().setCommandPaletteOpen(true); }}
+        >
+          <Cpu size={19} style={{ color: 'var(--color-accent)' }} /> Model
+          <span className="ml-auto text-[13px] truncate max-w-[45%]" style={{ color: 'var(--color-text-tertiary)' }}>
+            {selectedModel || 'Pick one'} ›
+          </span>
+        </button>
+        <button
+          type="button"
+          className={row}
+          style={line}
+          onClick={() => useAppStore.getState().updateSettings({ voiceRepliesEnabled: !voiceRepliesEnabled })}
+        >
+          <Volume2 size={19} style={{ color: 'var(--color-accent)' }} /> Speak replies {toggle(voiceRepliesEnabled)}
+        </button>
+        <button type="button" className={row} style={{ color: 'var(--color-text)' }} onClick={onToggleDocIndexed}>
+          <BookmarkPlus size={19} style={{ color: 'var(--color-accent)' }} /> Save attachments to knowledge {toggle(docIndexed)}
+        </button>
+      </div>
+    </>,
+    document.body,
   );
 }

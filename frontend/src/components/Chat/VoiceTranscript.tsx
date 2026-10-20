@@ -18,7 +18,15 @@ function withoutDiagram(content: string): string {
     .trim();
 }
 
-export function VoiceTranscript({ messages }: { messages: ChatMessage[] }) {
+export function VoiceTranscript({
+  messages,
+  onClose,
+}: {
+  messages: ChatMessage[];
+  /** Given on a phone or iPad (M29): a bottom sheet, closed by its handle. */
+  onClose?: () => void;
+}) {
+  const sheet = Boolean(onClose);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -28,13 +36,27 @@ export function VoiceTranscript({ messages }: { messages: ChatMessage[] }) {
   return (
     <aside
       aria-label="Conversation transcript"
-      className="absolute right-4 top-4 bottom-4 z-20 flex w-[340px] flex-col rounded-xl overflow-hidden"
+      className={
+        sheet
+          ? 'absolute left-0 right-0 bottom-0 top-[34%] z-20 flex flex-col rounded-t-[22px] overflow-hidden'
+          : 'absolute right-4 top-4 bottom-4 z-20 flex w-[340px] flex-col rounded-xl overflow-hidden'
+      }
       style={{
         background: 'var(--color-surface)',
         border: '1px solid var(--color-border)',
         boxShadow: 'var(--shadow-sm)',
       }}
     >
+      {sheet && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close transcript"
+          className="shrink-0 pt-2 pb-1 cursor-pointer"
+        >
+          <span className="block w-9 h-[5px] rounded-full mx-auto" style={{ background: 'var(--color-border)' }} />
+        </button>
+      )}
       {/* No close control here. The panel toggle beside the mic already opens
           and closes this and shows its state while open, so a second control
           for the same thing was only clutter on a surface meant to be glanced
@@ -66,7 +88,7 @@ export function VoiceTranscript({ messages }: { messages: ChatMessage[] }) {
               {m.role === 'user' ? 'YOU' : 'SAGE'}
             </div>
             <p
-              className="text-[13px] leading-relaxed whitespace-pre-wrap break-words"
+              className={`${sheet ? 'text-[15px]' : 'text-[13px]'} leading-relaxed whitespace-pre-wrap break-words`}
               style={{
                 color:
                   m.role === 'user'
