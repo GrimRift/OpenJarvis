@@ -296,9 +296,13 @@ def _reasoning_effort_for(create_kwargs: Dict[str, Any]) -> str:
     orchestrator agent always attaches tools, so "high" by default would
     break every agent-routed call to one of these models. "none" still
     lets Chat Completions accept the call; a tool-free direct chat gets
-    the real "high" effort instead.
+    the real "high" effort instead -- unless the caller asked for less: a
+    research turn's forced last round asks for "low" (server/routes.py).
     """
-    return "none" if create_kwargs.get("tools") else "high"
+    if create_kwargs.get("tools"):
+        return "none"
+    asked = create_kwargs.get("reasoning_effort")
+    return asked if asked in {"none", "minimal", "low", "medium"} else "high"
 
 
 def _is_unsupported_temperature_error(exc: Exception) -> bool:

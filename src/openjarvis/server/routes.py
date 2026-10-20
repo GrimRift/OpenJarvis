@@ -1402,6 +1402,50 @@ _SEARCH_TOOL_NAMES = frozenset({"web_search"})
 RESEARCH_ANSWER_BY_SECONDS = 18.0
 _RESEARCH_TOOL_NAMES = frozenset({"web_search", "web_read"})
 
+#: Said when the tools are cut at RESEARCH_ANSWER_BY_SECONDS. With the tools
+#: simply gone and nothing said, the last round of the 20 October lab
+#: question spent 59 s and reported a notification it had sent instead of
+#: the leads the search had found.
+RESEARCH_ANSWER_NOW = (
+    "(Time is up for looking things up. Answer my question now from what the "
+    "searches and pages above found: name the places or facts they gave, "
+    "with where each came from, and say plainly what is still unconfirmed. "
+    "Do not describe your own steps or any notification.)"
+)
+
+def _is_openai_reasoning(model: str) -> bool:
+    """Whether *model* takes ``reasoning_effort`` (engine/cloud.py)."""
+    try:
+        from openjarvis.engine.cloud import _is_openai_reasoning_model
+    except Exception:  # noqa: BLE001 -- no cloud engine, no effort to set
+        return False
+    return bool(model) and _is_openai_reasoning_model(str(model))
+
+
+#: A research turn may still notify when the user asked for it.
+_ASKS_TO_NOTIFY = re.compile(
+    r"\b(?:notif\w*|remind\w*|alert\w*|let\s+me\s+know|tell\s+me\s+when|"
+    r"ping\s+me|abisuhan|paalala\w*|ipaalala\w*)\b",
+    re.IGNORECASE,
+)
+#: Words that ask for something besides finding out ("search X, then play
+#: it"). Without them, a turn whose search and page reads are both spent
+#: answers at once: on the staging probe of 20 October the model filled the
+#: rounds after its reads with list_windows, audiobook_status six times,
+#: calculator "1+1" and a Gmail/Outlook search, up to the 18 s cut.
+_ASKS_FOR_ACTION = re.compile(
+    r"\b(?:play|open|send|email|e-mail|message|text|call|remind\w*|notif\w*|"
+    r"alert|save|write|create|make|add|schedule|book|set|turn|start|stop|"
+    r"download|share|post|let\s+me\s+know|tell\s+me\s+when|"
+    r"i-?play|buksan|ipadala|isulat|gawa\w*)\b",
+    re.IGNORECASE,
+)
+
+#: Retired once a turn has searched or read the web, unless asked for: on 20
+#: October the model sent a desktop "still checking" notification in place
+#: of a next step, then answered by describing it.
+_PROGRESS_PING_TOOL_NAMES = frozenset({"notify_windows"})
+
 #: Words that make a message a weather question (English and Tagalog). The
 #: card and panel show only then: on 2 October a research answer about an AI
 #: model came with a Calamba forecast card the user never asked for.
@@ -1639,6 +1683,8 @@ async def _handle_streaming_orchestrator(
         preamble = ""
         asked_again = False
         leak_retried = False
+        #: Whether the research clock has cut the tools and said so.
+        research_cut = False
         #: Every tool call of the turn, for its trace (Dashboard debugger).
         tool_log: list[dict] = []
         tool_seconds: dict[str, tuple[float, float]] = {}
@@ -1713,6 +1759,10 @@ async def _handle_streaming_orchestrator(
                 stream_kwargs: dict[str, Any] = {}
                 if active_tools:
                     stream_kwargs["tools"] = active_tools
+                elif research_cut and _is_openai_reasoning(model or agent._model):
+                    # A tool-free round otherwise thinks at "high": the lab
+                    # answer's last round took 59 s, 4,388 tokens (20 October).
+                    stream_kwargs["reasoning_effort"] = "low"
 
                 round_start = time.perf_counter()
                 async for stream_chunk in agent._engine.stream_full(
@@ -2021,6 +2071,18 @@ async def _handle_streaming_orchestrator(
                             if (tool.get("function") or {}).get("name")
                             not in _BROWSER_OPEN_TOOL_NAMES
                         ]
+                    if any(
+                        getattr(result, "tool_name", "") in _RESEARCH_TOOL_NAMES
+                        for result in all_tool_results
+                    ) and not _ASKS_TO_NOTIFY.search(
+                        query_text if isinstance(query_text, str) else ""
+                    ):
+                        active_tools = [
+                            tool
+                            for tool in active_tools
+                            if (tool.get("function") or {}).get("name")
+                            not in _PROGRESS_PING_TOOL_NAMES
+                        ]
                     active_tools = _memory_budget.available_tools(active_tools)
                     read_this_round = any(
                         getattr(result, "tool_name", "") == "web_read"
@@ -2055,17 +2117,34 @@ async def _handle_streaming_orchestrator(
                         yield f"data: {direct_chunk.model_dump_json()}\n\n"
                         full_content += direct
                         break
-                    if (
-                        any(
-                            getattr(result, "tool_name", "") in _RESEARCH_TOOL_NAMES
-                            for result in all_tool_results
+                    researched = any(
+                        getattr(result, "tool_name", "") in _RESEARCH_TOOL_NAMES
+                        for result in all_tool_results
+                    )
+                    research_spent = (
+                        researched
+                        and not any(
+                            (tool.get("function") or {}).get("name")
+                            in _RESEARCH_TOOL_NAMES
+                            for tool in active_tools
                         )
+                        and not _ASKS_FOR_ACTION.search(
+                            query_text if isinstance(query_text, str) else ""
+                        )
+                    )
+                    if research_spent or (
+                        researched
                         and time.perf_counter() - clock["start"]
                         >= RESEARCH_ANSWER_BY_SECONDS
                     ):
                         # Answer with what is in hand: the user allows a
                         # research turn about 25 s (6 October).
                         active_tools = []
+                        if not research_cut:
+                            research_cut = True
+                            messages.append(
+                                Message(role=Role.USER, content=RESEARCH_ANSWER_NOW)
+                            )
                     continue
 
                 # Nothing after the tools. On 23 September "remind me in one

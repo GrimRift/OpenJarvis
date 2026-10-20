@@ -1611,3 +1611,223 @@ def test_a_site_web_read_cannot_open_is_flagged_in_the_results():
     gma = next(b for b in blocks if "gmanetwork" in b)
     assert "Cannot be opened with web_read: bot check" in mb
     assert "Cannot be opened" not in gma
+
+
+class TestRetryKeepsTheFirstResults:
+    """20 October: the retry's results replaced the first pass's, and two good
+    leads (DOST-ITDI, a microbiology lab) became a LinkedIn profile."""
+
+    def test_a_worse_retry_never_loses_the_first_results(self):
+        from openjarvis.tools.web_search import clear_cache
+
+        clear_cache()
+        first = {
+            "results": [
+                _result(
+                    "Gallium melting point",
+                    "https://chem.example/gallium",
+                    "The melting point of gallium is 29.76 degrees Celsius.",
+                ),
+                _result(
+                    "Gallium facts",
+                    "https://facts.example/gallium",
+                    "Gallium melts at 29.76 C.",
+                ),
+            ]
+        }
+        worse = {
+            "results": [
+                _result(
+                    "Gallium researcher profile",
+                    "https://linkedin.example/in/gallium",
+                    "Works on gallium.",
+                ),
+                # The same page again is listed once.
+                _result(
+                    "Gallium melting point",
+                    "https://chem.example/gallium?ref=retry",
+                    "The melting point of gallium is 29.76 degrees Celsius.",
+                ),
+            ]
+        }
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_side_effect=[first, worse]
+        )
+        with patch.dict(sys.modules, {"tavily": fake_module}):
+            result = WebSearchTool(api_key="key").execute(
+                query="what is the melting point of gallium"
+            )
+        assert mock_client_cls.return_value.search.call_count == 2
+        urls = [source["url"] for source in result.metadata["sources"]]
+        assert urls == [
+            "https://chem.example/gallium",
+            "https://facts.example/gallium",
+            "https://linkedin.example/in/gallium",
+        ]
+        assert result.metadata["escalated"] is True
+
+
+class TestExclusions:
+    """'Exclude pncm uplb' was searched for, and UPLB pages were all that
+    came back (20 October)."""
+
+    def test_names_are_read_from_the_usual_wordings(self):
+        from openjarvis.tools.web_search import _excluded_terms
+
+        assert _excluded_terms("labs near Calamba. Exclude pncm uplb") == [
+            "pncm",
+            "uplb",
+        ]
+        assert _excluded_terms("labs other than UPLB and PNCM near Calamba") == [
+            "uplb",
+            "pncm",
+        ]
+        assert _excluded_terms("microbiology lab Philippines -uplb") == ["uplb"]
+        assert _excluded_terms("hotels, excluding: Hilton, Marriott.") == [
+            "hilton",
+            "marriott",
+        ]
+        # A long name stays whole: "philippines" alone would strike everything.
+        assert _excluded_terms(
+            "labs except the University of the Philippines Los Banos in Laguna"
+        ) == ["university of the philippines los banos"]
+        assert _excluded_terms("what is the melting point of gallium") == []
+        assert _excluded_terms("not working, what now") == []
+
+    def test_the_query_loses_the_clause_and_the_names(self):
+        from openjarvis.tools.web_search import _excluded_terms, _without_exclusions
+
+        query = "bacteria culture service lab Calamba Laguna exclude PNCM UPLB"
+        assert (
+            _without_exclusions(query, _excluded_terms(query))
+            == "bacteria culture service lab Calamba Laguna"
+        )
+        assert (
+            _without_exclusions("Calamba labs, excluding: PNCM, UPLB.", ["pncm"])
+            == "Calamba labs"
+        )
+
+    def _run(self, query, results, user_text=""):
+        from openjarvis.security import page_access
+        from openjarvis.tools.web_search import clear_cache
+
+        clear_cache()
+        fake_module, mock_client_cls = _fake_tavily_module(
+            search_return={"results": results}
+        )
+        page_access.clear()
+        token = page_access.set_turn(user_text)
+        try:
+            with (
+                patch.dict(sys.modules, {"tavily": fake_module}),
+                patch("openjarvis.tools.web_search._wants_recent", return_value=False),
+            ):
+                result = WebSearchTool(api_key="key").execute(query=query)
+        finally:
+            page_access._current.reset(token)
+            page_access.clear()
+        return result, mock_client_cls.return_value.search
+
+    _LABS = [
+        _result(
+            "UPLB Office of the Vice Chancellor for Research",
+            "https://ovcre.uplb.edu.ph/labs",
+            "Bacteria culture services in Laguna.",
+        ),
+        _result(
+            "Philippine National Collection of Microorganisms (PNCM)",
+            "https://biotech.example/pncm",
+            "Bacteria culture collection, Laguna.",
+        ),
+        _result(
+            "ITDI bio facilities",
+            "https://itdi.dost.gov.ph/bio",
+            "Microbiology and bacteria culture testing services, Laguna.",
+        ),
+        _result(
+            "Scharlab Filipinas microbiology",
+            "https://scharlab.example.ph/micro",
+            "Culture media and bacteria culture support in Laguna.",
+        ),
+    ]
+
+    def test_excluded_places_are_neither_searched_nor_shown(self):
+        result, search = self._run(
+            "bacteria culture service lab Laguna exclude PNCM UPLB", self._LABS
+        )
+        sent = search.call_args_list[0].args[0]
+        assert "pncm" not in sent.lower() and "uplb" not in sent.lower()
+        urls = [source["url"] for source in result.metadata["sources"]]
+        assert urls == [
+            "https://itdi.dost.gov.ph/bio",
+            "https://scharlab.example.ph/micro",
+        ]
+        # Said to the model too: it named "UPLB BIOTECH" from memory once.
+        assert "leave out: pncm, uplb" in result.content
+
+    def test_the_users_own_message_can_exclude(self):
+        result, _search = self._run(
+            "bacteria culture service lab Laguna",
+            self._LABS,
+            user_text="labs near Calamba that culture bacteria. Exclude pncm uplb",
+        )
+        urls = [source["url"] for source in result.metadata["sources"]]
+        assert "https://ovcre.uplb.edu.ph/labs" not in urls
+        assert "https://biotech.example/pncm" not in urls
+        assert "https://itdi.dost.gov.ph/bio" in urls
+
+
+class TestExaRetry:
+    """Exa reads the query as a description of the page: quoted names and
+    'authoritative source' found worse pages (20 October)."""
+
+    def test_the_exa_retry_is_plain_words(self):
+        from openjarvis.tools.web_search import _retry_query
+
+        retry = _retry_query("Calamba microbiology lab services", "exa")
+        assert '"' not in retry
+        assert "authoritative" not in retry
+        assert '"' in _retry_query("Calamba microbiology lab services")
+
+    def _client(self, responses):
+        client = MagicMock()
+        client.names = ["exa"]
+        client.search.side_effect = responses
+        return client
+
+    def test_exa_with_results_does_not_retry(self):
+        from openjarvis.tools.web_search import clear_cache
+
+        clear_cache()
+        client = self._client(
+            [
+                {
+                    "engine": "exa",
+                    "results": [
+                        _result(
+                            "Gallium melting point",
+                            "https://chem.example/gallium",
+                            "The melting point of gallium is 29.76 C.",
+                        )
+                    ],
+                }
+            ]
+        )
+        with patch.object(search_engines, "chain", return_value=client):
+            result = WebSearchTool(api_key="key").execute(
+                query="what is the melting point of gallium"
+            )
+        assert client.search.call_count == 1
+        assert result.metadata["sources"][0]["url"] == "https://chem.example/gallium"
+
+    def test_exa_with_nothing_retries_plainly(self):
+        from openjarvis.tools.web_search import clear_cache
+
+        clear_cache()
+        client = self._client([{"engine": "exa", "results": []}, {"results": []}])
+        with patch.object(search_engines, "chain", return_value=client):
+            WebSearchTool(api_key="key").execute(
+                query="what is the melting point of gallium"
+            )
+        assert client.search.call_count == 2
+        assert '"' not in client.search.call_args_list[1].args[0]

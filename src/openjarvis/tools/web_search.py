@@ -699,7 +699,121 @@ def _results_are_sufficient(
     return _query_names_the_only_domain(results, query)
 
 
-def _retry_query(query: str) -> str:
+#: "Exclude PNCM UPLB", "except UPLB", "other than X and Y": what the user
+#: does not want. Left in the query, the names were searched for and won: on
+#: 20 October "labs near Calamba ... Exclude pncm uplb" came back as UPLB
+#: pages and nothing else.
+_EXCLUDE_RE = re.compile(
+    r"\b(?:exclud(?:e|ing)|except(?:\s+for)?|other\s+than|apart\s+from|"
+    r"aside\s+from|not\s+including|(?:but|and)\s+not)\s*:?\s+"
+    r"(?P<names>[^.;!?\n()]+)",
+    re.IGNORECASE,
+)
+#: "-uplb" in a query, the search-engine way of saying the same.
+_MINUS_TERM_RE = re.compile(r"(?<!\S)-(?P<name>[A-Za-z][\w.]+)")
+#: A word that ends the list of names ("except UPLB in Laguna").
+_EXCLUDE_LIST_END = frozenset(
+    {"in", "near", "for", "that", "which", "who", "where", "with", "from", "please"}
+)
+_EXCLUDE_SPLIT_RE = re.compile(r"\s*(?:,|/|&|\band\b|\bor\b|\bnor\b)\s*", re.I)
+#: At most this many words of names follow one "exclude".
+_EXCLUDE_MAX_WORDS = 8
+
+
+def _exclusion_clauses(text: str) -> list[tuple[str, str]]:
+    """(clause as written, its names) for each exclusion in *text*."""
+    found = []
+    for match in _EXCLUDE_RE.finditer(text or ""):
+        words = match.group("names").split()
+        kept: list[str] = []
+        for word in words[:_EXCLUDE_MAX_WORDS]:
+            if word.lower().strip(",") in _EXCLUDE_LIST_END:
+                break
+            kept.append(word)
+        if not kept:
+            continue
+        names = " ".join(kept)
+        start = match.start()
+        end = match.start("names") + len(names)
+        found.append((text[start:end], names))
+    return found
+
+
+def _excluded_terms(*texts: str) -> list[str]:
+    """The names *texts* ask to leave out, lower case.
+
+    "pncm uplb" is two names: a run of short words with no "of" or "the" is
+    a list of acronyms. "University of the Philippines" stays one name, so
+    "philippines" alone never strikes every Philippine result.
+    """
+    terms: list[str] = []
+    for text in texts:
+        names = [names for _clause, names in _exclusion_clauses(text)]
+        names += [m.group("name") for m in _MINUS_TERM_RE.finditer(text or "")]
+        for chunk in names:
+            for part in _EXCLUDE_SPLIT_RE.split(chunk):
+                part = re.sub(r"^(?:the|a|an)\s+", "", part.strip(" '\"-"), flags=re.I)
+                if not part:
+                    continue
+                words = part.split()
+                if len(words) > 1 and all(
+                    len(w) <= 5 and w.isalpha() and w.lower() not in {"of", "the"}
+                    for w in words
+                ):
+                    terms.extend(w.lower() for w in words)
+                elif len(part) >= 2:
+                    terms.append(part.lower())
+    return list(dict.fromkeys(terms))
+
+
+def _without_exclusions(query: str, excluded: list[str]) -> str:
+    """*query* with its exclusion clauses and the excluded names taken out."""
+    for clause, _names in _exclusion_clauses(query):
+        query = query.replace(clause, " ")
+    query = _MINUS_TERM_RE.sub(" ", query)
+    for term in excluded:
+        query = re.sub(rf"(?<!\w){re.escape(term)}(?!\w)", " ", query, flags=re.I)
+    cleaned = re.sub(r"\s+(?=[,.;:])", "", re.sub(r"\s+", " ", query))
+    cleaned = re.sub(r"[,;:]+(?=[.,;:]|$)", "", cleaned)
+    return cleaned.strip(" ,;:-.")
+
+
+def _names_excluded(result: dict[str, Any], excluded: list[str]) -> bool:
+    """Whether *result*'s title or address names something left out."""
+    if not excluded:
+        return False
+    url = str(result.get("url") or "").lower()
+    text = f"{_clean_text(result.get('title')).lower()} {url}"
+    squashed_host = re.sub(r"[^a-z0-9]", "", urlparse(url).hostname or "")
+    for term in excluded:
+        if re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text):
+            return True
+        squashed = re.sub(r"[^a-z0-9]", "", term)
+        if len(squashed) >= 6 and squashed in squashed_host:
+            return True
+    return False
+
+
+def _merge_results(
+    first: list[dict[str, Any]], more: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """*first* in its order, then whatever of *more* is new."""
+    seen = {_url_key(str(r.get("url") or "")) for r in first}
+    merged = list(first)
+    for result in more:
+        key = _url_key(str(result.get("url") or ""))
+        if key not in seen:
+            seen.add(key)
+            merged.append(result)
+    return merged
+
+
+def _retry_query(query: str, engine: str = "tavily") -> str:
+    if engine == "exa":
+        # Exa reads a query as a description of the page wanted. Quoted
+        # names and "authoritative source" steered it to a LinkedIn profile
+        # and papers (20 October); the plain words describe the page.
+        return _fallback_query(query)
     named_match = re.search(
         r"\b(?:called|named|titled)\s+([A-Za-z0-9][A-Za-z0-9 .+'-]{1,80})",
         query,
@@ -1174,6 +1288,13 @@ class WebSearchTool(BaseTool):
             except Exception as exc:
                 return self._error(f"Failed to fetch URL: {exc}")
 
+        # What the user left out is neither searched for nor shown: the
+        # model's query keeps "exclude X" more often than not, and the
+        # user's own message may say it when the query does not.
+        excluded = _excluded_terms(query, page_access.turn_text())
+        if excluded:
+            query = _without_exclusions(query, excluded) or query
+
         try:
             max_results = int(params.get("max_results", self._max_results))
         except (TypeError, ValueError):
@@ -1204,7 +1325,15 @@ class WebSearchTool(BaseTool):
                 "No web search key is configured (TAVILY_API_KEY, SERPER_API_KEY "
                 "or EXA_API_KEY). Tell the user web search is not set up."
             )
-        engine_label = search_engines.LABELS[client.names[0]]
+        engine = client.names[0]
+        engine_label = search_engines.LABELS[engine]
+
+        def relevant(found: list[Any]) -> list[dict[str, Any]]:
+            return [
+                result
+                for result in _filter_relevant_results(found, query, news=plan.news)
+                if not _names_excluded(result, excluded)
+            ]
 
         # The one retry is the chance to do better, so it asks for more than
         # the first attempt did -- and never fewer than the caller wanted.
@@ -1266,7 +1395,7 @@ class WebSearchTool(BaseTool):
                 try:
                     provider_calls += 1
                     response = client.search(
-                        _retry_query(query),
+                        _retry_query(query, engine),
                         timeout=left(),
                         **self._search_kwargs(plan, "advanced", retry_max_results),
                     )
@@ -1299,6 +1428,9 @@ class WebSearchTool(BaseTool):
         recent_results, recent_credits = self._recent_results(
             recent_future, query, left
         )
+        recent_results = [
+            r for r in recent_results if not _names_excluded(r, excluded)
+        ]
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
         if response is None:
@@ -1316,7 +1448,7 @@ class WebSearchTool(BaseTool):
 
         credits += _credits(response) + recent_credits
         raw_results = list(response.get("results") or [])
-        results = _filter_relevant_results(raw_results, query, news=plan.news)
+        results = relevant(raw_results)
         images = _gallery_images(response) if plan.explicit_images else []
         quality_passed = _results_are_sufficient(results, query, plan, images=images)
 
@@ -1331,6 +1463,10 @@ class WebSearchTool(BaseTool):
             and not escalated
             and not fell_back
             and not quality_passed
+            # Exa's first answer to the model's own words is its best: a
+            # reworded second pass found worse pages, never new ones
+            # (20 October). It retries only when nothing came back.
+            and not (engine == "exa" and results)
             and left() >= _MIN_RETRY_SECONDS
             and not (member is not None and member.batch.cutoff.is_set())
         ):
@@ -1340,13 +1476,13 @@ class WebSearchTool(BaseTool):
                 retry_kwargs = self._search_kwargs(plan, "advanced", retry_max_results)
                 if member is None:
                     retry = client.search(
-                        _retry_query(query), timeout=left(), **retry_kwargs
+                        _retry_query(query, engine), timeout=left(), **retry_kwargs
                     )
                 else:
                     retry = _search_until_cut(
                         client,
                         member.batch.cutoff,
-                        _retry_query(query),
+                        _retry_query(query, engine),
                         timeout=left(),
                         **retry_kwargs,
                     )
@@ -1365,12 +1501,25 @@ class WebSearchTool(BaseTool):
             if retry is not None:
                 escalated = True
                 final_depth = "advanced"
-                response = retry
-                credits += _credits(response)
-                results = _filter_relevant_results(
-                    list(response.get("results") or []), query, news=plan.news
+                credits += _credits(retry)
+                # Added to the first results, never in place of them: on 20
+                # October the retry swapped two good leads (DOST-ITDI, a
+                # microbiology lab) for a LinkedIn profile and papers.
+                results = _merge_results(
+                    results, relevant(list(retry.get("results") or []))
                 )
-                images = _gallery_images(response) if plan.explicit_images else []
+                if plan.explicit_images:
+                    images = images + [
+                        image
+                        for image in _gallery_images(retry)
+                        if image not in images
+                    ]
+                response = {
+                    **retry,
+                    "engine": retry.get("engine") or response.get("engine"),
+                    "passed_over": list(response.get("passed_over") or [])
+                    or list(retry.get("passed_over") or []),
+                }
                 quality_passed = _results_are_sufficient(
                     results, query, plan, images=images
                 )
@@ -1473,6 +1622,14 @@ class WebSearchTool(BaseTool):
                 "and do not invent missing details."
             )
             formatted = f"{warning}\n\n{formatted}" if formatted else warning
+        if excluded:
+            # Filtered from the results, the model still named "UPLB
+            # BIOTECH" from memory (staging probe, 20 October).
+            formatted = (
+                f"The user asked to leave out: {', '.join(excluded)}. Do not "
+                "suggest them, not even from memory.\n\n"
+                f"{formatted}"
+            )
         if recent_keys & seen_urls:
             formatted = (
                 "Results marked 'From the past week's news: yes' are the newest "

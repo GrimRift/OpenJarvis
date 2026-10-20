@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List
+from urllib.parse import urlparse
 
 import httpx
 
@@ -465,6 +466,11 @@ class ExaEngine:
         for item in data.get("results") or []:
             url = _text(item.get("url"))
             if not url:
+                continue
+            # Exa lists its own library pages (exa.ai/library/...) among
+            # the results; they are never what was asked about.
+            host = (urlparse(url).hostname or "").lower()
+            if host == "exa.ai" or host.endswith(".exa.ai"):
                 continue
             text = _text(item.get("text"))
             highlights = " ".join(

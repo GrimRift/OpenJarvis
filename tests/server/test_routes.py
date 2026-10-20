@@ -2238,6 +2238,26 @@ class TestResearchTurnAnswersInTime:
     mark, the next round gets no tools, so it answers from what it has."""
 
     def _tools_after_search(self, monkeypatch, answer_by):
+        kwargs, _messages = self._run(monkeypatch, answer_by)
+        return self._names(kwargs[1])
+
+    @staticmethod
+    def _names(kwargs):
+        return {
+            (tool.get("function") or {}).get("name")
+            for tool in kwargs.get("tools", [])
+        }
+
+    def _run(
+        self,
+        monkeypatch,
+        answer_by,
+        *,
+        user_text="news about Pasig",
+        model="test-model",
+        extra_tools=("calculator",),
+        with_read=True,
+    ):
         import openjarvis.server.routes as routes
         from openjarvis.agents.orchestrator import OrchestratorAgent
         from openjarvis.core.types import ToolResult
@@ -2246,6 +2266,7 @@ class TestResearchTurnAnswersInTime:
 
         monkeypatch.setattr(routes, "RESEARCH_ANSWER_BY_SECONDS", answer_by)
         stream_kwargs: list[dict] = []
+        seen_messages: list[list] = []
 
         def _tool(name):
             class _Tool(BaseTool):
@@ -2271,6 +2292,7 @@ class TestResearchTurnAnswersInTime:
 
         async def mock_stream_full(messages, *, model, **kwargs):
             stream_kwargs.append(kwargs)
+            seen_messages.append(list(messages))
             if len(stream_kwargs) == 1:
                 yield StreamChunk(
                     tool_calls=[
@@ -2289,35 +2311,97 @@ class TestResearchTurnAnswersInTime:
         engine.stream_full = mock_stream_full
         agent = OrchestratorAgent(
             engine,
-            "test-model",
-            tools=[_tool("web_search"), _tool("web_read"), _tool("calculator")],
+            model,
+            tools=[
+                _tool("web_search"),
+                *([_tool("web_read")] if with_read else []),
+                *[_tool(name) for name in extra_tools],
+            ],
             bus=EventBus(),
             max_turns=3,
             system_prompt="Use the configured tools.",
         )
         app = create_app(
-            engine, "test-model", agent=agent, bus=EventBus(), config=_test_config()
+            engine, model, agent=agent, bus=EventBus(), config=_test_config()
         )
         resp = TestClient(app).post(
             "/v1/chat/completions",
             json={
-                "model": "test-model",
-                "messages": [{"role": "user", "content": "news about Pasig"}],
+                "model": model,
+                "messages": [{"role": "user", "content": user_text}],
                 "stream": True,
             },
         )
         assert resp.status_code == 200
         assert len(stream_kwargs) == 2
-        return {
-            (tool.get("function") or {}).get("name")
-            for tool in stream_kwargs[1].get("tools", [])
-        }
+        return stream_kwargs, seen_messages
 
     def test_in_time_the_page_reader_stays(self, monkeypatch):
         assert "web_read" in self._tools_after_search(monkeypatch, 18.0)
 
     def test_past_the_mark_the_next_round_must_answer(self, monkeypatch):
         assert self._tools_after_search(monkeypatch, 0.0) == set()
+
+    def test_past_the_mark_it_is_told_to_answer_now(self, monkeypatch):
+        """20 October: tools cut with nothing said, the last round reported
+        a notification it had sent instead of the leads it had found."""
+        from openjarvis.server.routes import RESEARCH_ANSWER_NOW
+
+        _kwargs, messages = self._run(monkeypatch, 0.0)
+        assert messages[1][-1].content == RESEARCH_ANSWER_NOW
+        assert all(m.content != RESEARCH_ANSWER_NOW for m in messages[0])
+
+    def test_in_time_no_answer_now_note(self, monkeypatch):
+        from openjarvis.server.routes import RESEARCH_ANSWER_NOW
+
+        _kwargs, messages = self._run(monkeypatch, 18.0)
+        assert all(m.content != RESEARCH_ANSWER_NOW for m in messages[1])
+
+    def test_the_forced_answer_thinks_low_on_a_reasoning_model(self, monkeypatch):
+        """A tool-free round would otherwise think at "high": 59 s."""
+        kwargs, _messages = self._run(monkeypatch, 0.0, model="gpt-6-luna")
+        assert kwargs[1].get("reasoning_effort") == "low"
+        assert "reasoning_effort" not in kwargs[0]
+
+    def test_no_effort_is_sent_to_other_models(self, monkeypatch):
+        kwargs, _messages = self._run(monkeypatch, 0.0)
+        assert "reasoning_effort" not in kwargs[1]
+
+    def test_a_research_turn_drops_the_progress_notification(self, monkeypatch):
+        kwargs, _messages = self._run(
+            monkeypatch, 18.0, extra_tools=("notify_windows", "calculator")
+        )
+        assert "notify_windows" in self._names(kwargs[0])
+        assert "notify_windows" not in self._names(kwargs[1])
+        assert "calculator" in self._names(kwargs[1])
+
+    def test_spent_research_answers_at_once(self, monkeypatch):
+        """Staging, 20 October: with search and reads spent, the model filled
+        rounds with list_windows, audiobook_status and a Gmail search."""
+        from openjarvis.server.routes import RESEARCH_ANSWER_NOW
+
+        kwargs, messages = self._run(monkeypatch, 18.0, with_read=False)
+        assert self._names(kwargs[1]) == set()
+        assert messages[1][-1].content == RESEARCH_ANSWER_NOW
+
+    def test_spent_research_keeps_tools_for_an_asked_action(self, monkeypatch):
+        """'Search for X, then play it' still gets its second tool."""
+        kwargs, _messages = self._run(
+            monkeypatch,
+            18.0,
+            with_read=False,
+            user_text="find the Pasig news song and play it",
+        )
+        assert "calculator" in self._names(kwargs[1])
+
+    def test_notifying_stays_when_the_user_asks_for_it(self, monkeypatch):
+        kwargs, _messages = self._run(
+            monkeypatch,
+            18.0,
+            user_text="look up the Pasig news and let me know on my desktop",
+            extra_tools=("notify_windows",),
+        )
+        assert "notify_windows" in self._names(kwargs[1])
 
 
 class TestExtractionFollowsTheModelThatAnswered:

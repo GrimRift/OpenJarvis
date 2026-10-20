@@ -346,3 +346,15 @@ class TestWebSearchWithOtherEngines:
         assert result.metadata["engine"] == "serper"
         assert "Search engine note" in result.content
         assert "Serper" in result.content.split("\n\n")[0]
+
+
+def test_exa_drops_its_own_library_pages():
+    data = {
+        "results": [
+            {"title": "Exa library", "url": "https://exa.ai/library/x", "text": "x"},
+            {"title": "Lab", "url": "https://lab.example/a", "text": "culture"},
+        ]
+    }
+    with patch("httpx.post", return_value=_http(200, data)):
+        out = search_engines.ExaEngine("k").search("labs")
+    assert [r["url"] for r in out["results"]] == ["https://lab.example/a"]
