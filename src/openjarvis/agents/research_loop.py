@@ -134,6 +134,8 @@ SEARCH_TOOL_SPEC: Dict[str, Any] = {
 WEB_SEARCH_TOOL_SPEC: Dict[str, Any] = WebSearchTool(
     force_advanced=True
 ).to_openai_function()
+# Research offers its own `queries` (``_with_queries``), run by its own batch.
+WEB_SEARCH_TOOL_SPEC["function"]["parameters"]["properties"].pop("queries", None)
 
 # Appended into SYSTEM_PROMPT only when a WebSearchTool was actually passed to
 # ResearchAgent — otherwise the model isn't told about a tool it can't call.
@@ -763,20 +765,22 @@ class ResearchAgent:
             finally:
                 member.first_results_in()
 
-        def one(job: Tuple[str, int]) -> ToolInvocation:
-            query, max_results = job
-            # Each search runs in this question's context: page_access keeps
-            # what it returned readable for web_read.
-            return contextvars.copy_context().run(
-                search, {"query": query, "max_results": max_results}
-            )
+        # Each search runs in a copy of this question's context, taken HERE:
+        # copied inside the worker it was the worker's own, empty one, so the
+        # searches did not see the user's message and what they returned was
+        # not readable for web_read (20 October).
+        contexts = [contextvars.copy_context() for _ in jobs]
+
+        def one(job: Tuple[contextvars.Context, Tuple[str, int]]) -> ToolInvocation:
+            context, (query, max_results) = job
+            return context.run(search, {"query": query, "max_results": max_results})
 
         if batch is None:
-            results = [one(jobs[0])]
+            results = [one((contexts[0], jobs[0]))]
         else:
             try:
                 with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-                    results = list(pool.map(one, jobs))
+                    results = list(pool.map(one, zip(contexts, jobs)))
             finally:
                 batch.close()
         out: Dict[str, ToolInvocation] = {}

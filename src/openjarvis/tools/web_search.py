@@ -740,11 +740,12 @@ def _exclusion_clauses(text: str) -> list[tuple[str, str]]:
 
 
 def _excluded_terms(*texts: str) -> list[str]:
-    """The names *texts* ask to leave out, lower case.
+    """The names *texts* ask to leave out, lower case, one entry per place.
 
-    "pncm uplb" is two names: a run of short words with no "of" or "the" is
-    a list of acronyms. "University of the Philippines" stays one name, so
-    "philippines" alone never strikes every Philippine result.
+    "University of the Philippines" stays one name, so "philippines" alone
+    never strikes every Philippine result. "pncm uplb" is one place too: the
+    user's answer (20 October) -- PNCM, which is at UPLB, and not the rest of
+    UPLB (see ``_name_keys``).
     """
     terms: list[str] = []
     for text in texts:
@@ -753,17 +754,35 @@ def _excluded_terms(*texts: str) -> list[str]:
         for chunk in names:
             for part in _EXCLUDE_SPLIT_RE.split(chunk):
                 part = re.sub(r"^(?:the|a|an)\s+", "", part.strip(" '\"-"), flags=re.I)
-                if not part:
-                    continue
-                words = part.split()
-                if len(words) > 1 and all(
-                    len(w) <= 5 and w.isalpha() and w.lower() not in {"of", "the"}
-                    for w in words
-                ):
-                    terms.extend(w.lower() for w in words)
-                elif len(part) >= 2:
-                    terms.append(part.lower())
+                if len(part) >= 2:
+                    terms.append(" ".join(part.lower().split()))
     return list(dict.fromkeys(terms))
+
+
+def _name_keys(term: str) -> list[str]:
+    """What, written in a title or address, names the excluded *term*.
+
+    A run of short names ("pncm uplb") is a place and where it is: the first
+    word names it, the rest alone does not. Anything else is matched whole.
+    """
+    words = term.split()
+    if len(words) > 1 and all(len(w) <= 6 and w.isalpha() for w in words):
+        if not {"of", "the", "and", "de", "la"} & set(words):
+            return [term, words[0]]
+    return [term]
+
+
+#: A follow-up that goes on with the last request ("search more", "give me
+#: 5 more", "other labs like that"): the exclusions said then still hold.
+_FOLLOW_UP_RE = re.compile(
+    r"\b(?:more|that|those|them|these|again|else|other|others|another|same)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_follow_up(text: str) -> bool:
+    text = text or ""
+    return len(text.split()) <= 15 and bool(_FOLLOW_UP_RE.search(text))
 
 
 def _without_exclusions(query: str, excluded: list[str]) -> str:
@@ -772,7 +791,8 @@ def _without_exclusions(query: str, excluded: list[str]) -> str:
         query = query.replace(clause, " ")
     query = _MINUS_TERM_RE.sub(" ", query)
     for term in excluded:
-        query = re.sub(rf"(?<!\w){re.escape(term)}(?!\w)", " ", query, flags=re.I)
+        for key in _name_keys(term):
+            query = re.sub(rf"(?<!\w){re.escape(key)}(?!\w)", " ", query, flags=re.I)
     cleaned = re.sub(r"\s+(?=[,.;:])", "", re.sub(r"\s+", " ", query))
     cleaned = re.sub(r"[,;:]+(?=[.,;:]|$)", "", cleaned)
     return cleaned.strip(" ,;:-.")
@@ -786,8 +806,9 @@ def _names_excluded(result: dict[str, Any], excluded: list[str]) -> bool:
     text = f"{_clean_text(result.get('title')).lower()} {url}"
     squashed_host = re.sub(r"[^a-z0-9]", "", urlparse(url).hostname or "")
     for term in excluded:
-        if re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text):
-            return True
+        for key in _name_keys(term):
+            if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", text):
+                return True
         squashed = re.sub(r"[^a-z0-9]", "", term)
         if len(squashed) >= 6 and squashed in squashed_host:
             return True
@@ -806,6 +827,137 @@ def _merge_results(
             seen.add(key)
             merged.append(result)
     return merged
+
+
+#: At most this many searches in one call: `query` and 3 more.
+MAX_QUERIES = 4
+
+#: A message that wants a list of places or options to choose from.
+_WANTS_PLACES_RE = re.compile(
+    r"\b(?:places?|labs?|laborator(?:y|ies)|shops?|stores?|clinics?|"
+    r"hospitals?|schools?|companies|company|providers?|suppliers?|sellers?|"
+    r"options|alternatives|where\s+(?:can|to|do|could)|saan|"
+    r"give\s+me\s+(?:\d+|a\s+few|some|several)|\d+\s+(?:possible|more)|"
+    r"search\s+more|look\s+(?:for\s+)?more)\b",
+    re.IGNORECASE,
+)
+
+#: Said with a search for a list of places. The user's choice (20 October):
+#: links and contacts so they can check each place themselves, and places
+#: Sage knows of, marked as such, when the search confirms only a few.
+LIST_ANSWER_NOTE = (
+    "For each place, give its website link and any contact details (phone, "
+    "email, address) the results show, so the user can check it themselves. "
+    "If the searches confirm only a few, you may add places you know of "
+    "yourself, under a separate heading that says they are from your own "
+    "knowledge and not confirmed by this search; give a website for those "
+    "only if you are sure it is theirs."
+)
+
+
+def _wants_places(query: str) -> bool:
+    """Whether the user's message (or, with none, the query) wants a list."""
+    return bool(_WANTS_PLACES_RE.search(page_access.turn_text() or query))
+
+
+def _extra_queries(params: Dict[str, Any]) -> list[str]:
+    """The call's further searches, without repeats, at most 3."""
+    raw = params.get("queries")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    seen = {" ".join(str(params.get("query") or "").lower().split())}
+    extra: list[str] = []
+    for item in raw:
+        text = str(item or "").strip()
+        key = " ".join(text.lower().split())
+        if text and key not in seen:
+            seen.add(key)
+            extra.append(text)
+    return extra[: MAX_QUERIES - 1]
+
+
+_BLOCK_SEP = "\n\n---\n\n"
+
+
+def _combine_results(queries: list[str], results: list[ToolResult]) -> ToolResult:
+    """One result from several searches: each page once, notes once."""
+    if not any(result.success for result in results):
+        return results[0]
+    seen_pages: set[str] = set()
+    seen_notes: set[str] = set()
+    sections: list[str] = []
+    for number, (query, result) in enumerate(zip(queries, results), 1):
+        if not result.success:
+            sections.append(f"## Search {number}: {query}\n\n{result.content}")
+            continue
+        kept_blocks: list[str] = []
+        for block in str(result.content or "").split(_BLOCK_SEP):
+            source = re.search(r"^Source: (\S+)", block, re.MULTILINE)
+            if source:
+                key = _url_key(source.group(1))
+                if key in seen_pages:
+                    # The page was given already; keep any note before it.
+                    block = block[: block.find("### ")] if "### " in block else ""
+                else:
+                    seen_pages.add(key)
+            paragraphs = []
+            for paragraph in block.split("\n\n"):
+                if not paragraph.strip():
+                    continue
+                if not paragraph.startswith("### "):
+                    if paragraph in seen_notes:
+                        continue
+                    seen_notes.add(paragraph)
+                paragraphs.append(paragraph)
+            if paragraphs:
+                kept_blocks.append("\n\n".join(paragraphs))
+        body = _BLOCK_SEP.join(kept_blocks) or "Nothing new beyond the searches above."
+        sections.append(f"## Search {number}: {query}\n\n{body}")
+    content = "\n\n".join(sections)
+    if LIST_ANSWER_NOTE not in content and any(_wants_places(q) for q in queries):
+        content = f"{content}\n\n{LIST_ANSWER_NOTE}"
+
+    # Cards: the first result of each search, then the second of each, and
+    # so on, so every kind of source is near the top.
+    columns = [list((r.metadata or {}).get("sources") or []) for r in results]
+    sources: list[dict[str, Any]] = []
+    seen_cards: set[str] = set()
+    for row in range(max((len(c) for c in columns), default=0)):
+        for column in columns:
+            if row < len(column):
+                key = _url_key(str(column[row].get("url") or ""))
+                if key not in seen_cards:
+                    seen_cards.add(key)
+                    sources.append(column[row])
+    metas = [r.metadata or {} for r in results]
+    images: list[Any] = []
+    for meta in metas:
+        images.extend(i for i in meta.get("images") or [] if i not in images)
+    first = metas[0]
+    return ToolResult(
+        tool_name="web_search",
+        content=content,
+        success=True,
+        metadata={
+            **first,
+            "queries": queries,
+            "num_results": len(sources),
+            "sources": sources,
+            "images": images,
+            "provider_calls": sum(m.get("provider_calls") or 0 for m in metas),
+            "credits": sum(m.get("credits") or 0 for m in metas) or None,
+            "escalated": any(m.get("escalated") for m in metas),
+            "quality_passed": any(m.get("quality_passed") for m in metas),
+            "terminal_search": any(m.get("quality_passed") for m in metas),
+            "explicit_image_search": any(
+                m.get("explicit_image_search") for m in metas
+            ),
+            "cached": all(m.get("cached") for m in metas),
+            "bounded_search_complete": True,
+        },
+    )
 
 
 def _retry_query(query: str, engine: str = "tavily") -> str:
@@ -1068,7 +1220,14 @@ class WebSearchTool(BaseTool):
                 "news, release date, official, or image intent unless the user asked "
                 "for it. The tool selects search depth, checks relevance, retries "
                 "on its own when the provider is slow or thin, and adds the past "
-                "week's news for an ongoing story, so one call is enough."
+                "week's news for an ongoing story, so one call is enough. Keep "
+                "each query short and plain (4-8 words): a long query of "
+                "technical terms finds less. When the user wants several "
+                "places, providers, products or options, or asks to search "
+                "more, also pass `queries`: up to 3 more short searches, each "
+                "for a different kind of source (for example companies, "
+                "government institutes, universities, directories). They run "
+                "together, in the same time as one."
             ),
             parameters={
                 "type": "object",
@@ -1077,6 +1236,16 @@ class WebSearchTool(BaseTool):
                         "type": "string",
                         "description": (
                             "Complete search query with exact named entities."
+                        ),
+                    },
+                    "queries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Up to 3 more short searches run alongside "
+                            "`query`, each worded for a different kind of "
+                            "source. Only for lists of places or options, or "
+                            "'search more'."
                         ),
                     },
                     "max_results": {
@@ -1220,6 +1389,9 @@ class WebSearchTool(BaseTool):
         (``cache_seconds``). A cached result still makes its pages readable
         and starts their read-ahead, exactly as a fresh one does.
         """
+        extra = _extra_queries(params)
+        if extra:
+            return self._execute_many([str(params.get("query") or ""), *extra], params)
         key = _cache_key(params, self._force_advanced, page_access.turn_text())
         with _cache_lock:
             entry = _cache.get(key) if key else None
@@ -1262,6 +1434,42 @@ class WebSearchTool(BaseTool):
                 )
         return result
 
+    def _execute_many(self, queries: list[str], params: Dict[str, Any]) -> ToolResult:
+        """Several searches at once, as one result.
+
+        The user's choice (20 October): asked for labs near Calamba, one long
+        query of technical terms found one or two places on every engine,
+        while four short ones by kind of source (labs in the town,
+        government institutes, culture collections, universities) found a
+        dozen in the same time.
+        """
+        batch = SearchBatch(len(queries))
+        max_results = params.get("max_results", self._max_results)
+
+        def search(query: str) -> ToolResult:
+            member = join_batch(batch)
+            try:
+                return self.execute(query=query, max_results=max_results)
+            finally:
+                member.first_results_in()
+
+        # Each runs in a copy of THIS thread's context, taken here: copied
+        # inside the worker it was the worker's own, empty one, so the
+        # searches did not see the user's message (its exclusions) and their
+        # pages were not readable for web_read (staging, 20 October).
+        jobs = [(contextvars.copy_context(), query) for query in queries]
+
+        def one(job: tuple[contextvars.Context, str]) -> ToolResult:
+            context, query = job
+            return context.run(search, query)
+
+        try:
+            with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+                results = list(pool.map(one, jobs))
+        finally:
+            batch.close()
+        return _combine_results(queries, results)
+
     def _execute_fresh(self, **params: Any) -> ToolResult:
         query = str(params.get("query", "") or "").strip()
         if not query:
@@ -1291,7 +1499,12 @@ class WebSearchTool(BaseTool):
         # What the user left out is neither searched for nor shown: the
         # model's query keeps "exclude X" more often than not, and the
         # user's own message may say it when the query does not.
-        excluded = _excluded_terms(query, page_access.turn_text())
+        said = page_access.turn_text()
+        excluded = _excluded_terms(
+            query,
+            said,
+            *([page_access.previous_turn_text()] if _is_follow_up(said) else []),
+        )
         if excluded:
             query = _without_exclusions(query, excluded) or query
 
@@ -1646,6 +1859,10 @@ class WebSearchTool(BaseTool):
         hint = _read_hint(sources, quality_passed, query)
         if hint:
             formatted = f"{formatted}\n\n{hint}" if formatted else hint
+        if _wants_places(query):
+            formatted = (
+                f"{formatted}\n\n{LIST_ANSWER_NOTE}" if formatted else LIST_ANSWER_NOTE
+            )
 
         # The user's choice (20 October): when the chosen engine failed and
         # another answered, say so, so a used-up key is noticed.

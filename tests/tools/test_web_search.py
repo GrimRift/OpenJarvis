@@ -56,7 +56,11 @@ class TestWebSearchTool:
             "requires_api_key": "TAVILY_API_KEY, SERPER_API_KEY or EXA_API_KEY",
             "credentials_any": True,
         }
-        assert set(tool.spec.parameters["properties"]) == {"query", "max_results"}
+        assert set(tool.spec.parameters["properties"]) == {
+            "query",
+            "queries",
+            "max_results",
+        }
         assert tool.spec.parameters["required"] == ["query"]
         assert "one call is enough" in tool.spec.description
 
@@ -105,6 +109,7 @@ class TestWebSearchTool:
         assert function["function"]["name"] == "web_search"
         assert set(function["function"]["parameters"]["properties"]) == {
             "query",
+            "queries",
             "max_results",
         }
 
@@ -1669,14 +1674,14 @@ class TestRetryKeepsTheFirstResults:
 
 class TestExclusions:
     """'Exclude pncm uplb' was searched for, and UPLB pages were all that
-    came back (20 October)."""
+    came back (20 October). The user meant PNCM, which is at UPLB: other UPLB
+    labs are fine."""
 
     def test_names_are_read_from_the_usual_wordings(self):
         from openjarvis.tools.web_search import _excluded_terms
 
         assert _excluded_terms("labs near Calamba. Exclude pncm uplb") == [
-            "pncm",
-            "uplb",
+            "pncm uplb"
         ]
         assert _excluded_terms("labs other than UPLB and PNCM near Calamba") == [
             "uplb",
@@ -1694,6 +1699,20 @@ class TestExclusions:
         assert _excluded_terms("what is the melting point of gallium") == []
         assert _excluded_terms("not working, what now") == []
 
+    def test_a_run_of_short_names_is_one_place_named_by_its_first(self):
+        from openjarvis.tools.web_search import _names_excluded
+
+        excluded = ["pncm uplb"]
+        pncm = {"title": "PNCM", "url": "https://biotech.uplb.edu.ph/pncm"}
+        rates = {"title": "PNCM culture rates", "url": "https://docs.example/x"}
+        museum = {
+            "title": "UPLB Museum of Natural History",
+            "url": "https://ovcre.uplb.edu.ph/365-uplb-mnh-museum-services",
+        }
+        assert _names_excluded(pncm, excluded)
+        assert _names_excluded(rates, excluded)
+        assert not _names_excluded(museum, excluded)
+
     def test_the_query_loses_the_clause_and_the_names(self):
         from openjarvis.tools.web_search import _excluded_terms, _without_exclusions
 
@@ -1703,11 +1722,15 @@ class TestExclusions:
             == "bacteria culture service lab Calamba Laguna"
         )
         assert (
+            _without_exclusions("UPLB BIOTECH PNCM microbiology", ["pncm uplb"])
+            == "UPLB BIOTECH microbiology"
+        )
+        assert (
             _without_exclusions("Calamba labs, excluding: PNCM, UPLB.", ["pncm"])
             == "Calamba labs"
         )
 
-    def _run(self, query, results, user_text=""):
+    def _run(self, query, results, user_text="", previous="", queries=None):
         from openjarvis.security import page_access
         from openjarvis.tools.web_search import clear_cache
 
@@ -1716,13 +1739,16 @@ class TestExclusions:
             search_return={"results": results}
         )
         page_access.clear()
-        token = page_access.set_turn(user_text)
+        token = page_access.set_turn(user_text, previous)
         try:
             with (
                 patch.dict(sys.modules, {"tavily": fake_module}),
                 patch("openjarvis.tools.web_search._wants_recent", return_value=False),
             ):
-                result = WebSearchTool(api_key="key").execute(query=query)
+                params = {"query": query}
+                if queries:
+                    params["queries"] = queries
+                result = WebSearchTool(api_key="key").execute(**params)
         finally:
             page_access._current.reset(token)
             page_access.clear()
@@ -1759,11 +1785,12 @@ class TestExclusions:
         assert "pncm" not in sent.lower() and "uplb" not in sent.lower()
         urls = [source["url"] for source in result.metadata["sources"]]
         assert urls == [
+            "https://ovcre.uplb.edu.ph/labs",
             "https://itdi.dost.gov.ph/bio",
             "https://scharlab.example.ph/micro",
         ]
         # Said to the model too: it named "UPLB BIOTECH" from memory once.
-        assert "leave out: pncm, uplb" in result.content
+        assert "leave out: pncm uplb" in result.content
 
     def test_the_users_own_message_can_exclude(self):
         result, _search = self._run(
@@ -1772,9 +1799,42 @@ class TestExclusions:
             user_text="labs near Calamba that culture bacteria. Exclude pncm uplb",
         )
         urls = [source["url"] for source in result.metadata["sources"]]
-        assert "https://ovcre.uplb.edu.ph/labs" not in urls
         assert "https://biotech.example/pncm" not in urls
         assert "https://itdi.dost.gov.ph/bio" in urls
+
+    def test_parallel_searches_see_the_users_message(self):
+        """Each search ran in its worker's own empty context: the user's
+        exclusion went unseen and UPLB/PNCM pages came back (staging)."""
+        result, _search = self._run(
+            "bacteria culture service lab Laguna",
+            self._LABS,
+            user_text="labs near Calamba that culture bacteria. Exclude pncm uplb",
+            queries=["microbiology culture Laguna", "bacteria culture lab Laguna"],
+        )
+        urls = [source["url"] for source in result.metadata["sources"]]
+        assert "https://biotech.example/pncm" not in urls
+        assert "https://itdi.dost.gov.ph/bio" in urls
+        assert "leave out: pncm uplb" in result.content
+
+    def test_search_more_keeps_the_last_messages_exclusions(self):
+        result, _search = self._run(
+            "bacteria culture service lab Laguna",
+            self._LABS,
+            user_text="Search more give me 5 possible lab that offers that",
+            previous="labs near Calamba that culture bacteria. Exclude pncm uplb",
+        )
+        urls = [source["url"] for source in result.metadata["sources"]]
+        assert "https://biotech.example/pncm" not in urls
+
+    def test_a_new_question_does_not_inherit_exclusions(self):
+        result, _search = self._run(
+            "bacteria culture service lab Laguna",
+            self._LABS,
+            user_text="which labs in Laguna culture bacteria for research projects now",
+            previous="labs near Calamba that culture bacteria. Exclude pncm uplb",
+        )
+        urls = [source["url"] for source in result.metadata["sources"]]
+        assert "https://biotech.example/pncm" in urls
 
 
 class TestExaRetry:
@@ -1831,3 +1891,141 @@ class TestExaRetry:
             )
         assert client.search.call_count == 2
         assert '"' not in client.search.call_args_list[1].args[0]
+
+
+class TestSeveralQueries:
+    """20 October, the user's choice: a list of places is searched several
+    ways at once. One long technical query found 1-2 labs on every engine;
+    four short ones by kind of source found a dozen."""
+
+    def _client(self, by_query):
+        client = MagicMock()
+        client.names = ["exa"]
+
+        def search(query, **_kwargs):
+            return {"engine": "exa", "results": by_query.get(query, [])}
+
+        client.search.side_effect = search
+        return client
+
+    def _run(self, params, by_query, user_text=""):
+        from openjarvis.security import page_access
+        from openjarvis.tools.web_search import clear_cache
+
+        clear_cache()
+        client = self._client(by_query)
+        page_access.clear()
+        token = page_access.set_turn(user_text)
+        try:
+            with (
+                patch.object(search_engines, "chain", return_value=client),
+                patch("openjarvis.tools.web_search._wants_recent", return_value=False),
+            ):
+                result = WebSearchTool(api_key="key").execute(**params)
+        finally:
+            page_access._current.reset(token)
+            page_access.clear()
+        return result, client
+
+    _BY_QUERY = {
+        "microbiology lab Calamba": [
+            _result(
+                "Accudata labs",
+                "https://accudata.example/a",
+                "Microbiology lab Calamba.",
+            ),
+            _result(
+                "RITM labs",
+                "https://ritm.example/labs",
+                "Microbiology lab, near Calamba.",
+            ),
+        ],
+        "microbial culture collection Philippines": [
+            _result(
+                "RITM labs",
+                "https://ritm.example/labs",
+                "Microbiology culture collection, Philippines.",
+            ),
+            _result(
+                "UST strains",
+                "https://ust.example/cms",
+                "Microbial culture collection Philippines.",
+            ),
+        ],
+        "university microbiology lab services": [
+            _result(
+                "UP NSRI MRSL",
+                "https://upd.example/mrsl",
+                "University microbiology lab services.",
+            ),
+        ],
+    }
+
+    def test_all_queries_run_and_each_page_comes_once(self):
+        result, client = self._run(
+            {
+                "query": "microbiology lab Calamba",
+                "queries": [
+                    "microbial culture collection Philippines",
+                    "university microbiology lab services",
+                    "microbiology lab Calamba",  # a repeat of `query`: dropped
+                ],
+            },
+            self._BY_QUERY,
+            user_text="give me 5 possible labs near Calamba",
+        )
+        asked = sorted(call.args[0] for call in client.search.call_args_list)
+        assert asked == sorted(self._BY_QUERY)
+        urls = [s["url"] for s in result.metadata["sources"]]
+        # First of each search, then the second of each.
+        assert urls == [
+            "https://accudata.example/a",
+            "https://ritm.example/labs",
+            "https://upd.example/mrsl",
+            "https://ust.example/cms",
+        ]
+        assert result.content.count("Source: https://ritm.example/labs") == 1
+        assert "## Search 3: university microbiology lab services" in result.content
+        assert result.metadata["queries"][0] == "microbiology lab Calamba"
+        assert result.metadata["bounded_search_complete"] is True
+
+    def test_a_list_question_asks_for_links_and_allows_marked_own_knowledge(self):
+        from openjarvis.tools.web_search import LIST_ANSWER_NOTE
+
+        result, _client = self._run(
+            {
+                "query": "microbiology lab Calamba",
+                "queries": ["microbial culture collection Philippines"],
+            },
+            self._BY_QUERY,
+            user_text="search more give me 5 possible lab that offers that",
+        )
+        assert result.content.count(LIST_ANSWER_NOTE) == 1
+
+    def test_at_most_four_searches(self):
+        _result_, client = self._run(
+            {"query": "a labs", "queries": ["b labs", "c labs", "d labs", "e labs"]},
+            {},
+        )
+        assert {call.args[0] for call in client.search.call_args_list} == {
+            "a labs",
+            "b labs",
+            "c labs",
+            "d labs",
+        }
+
+    def test_no_queries_is_one_search(self):
+        _result_, client = self._run(
+            {"query": "microbiology lab Calamba"}, self._BY_QUERY
+        )
+        assert client.search.call_count == 1
+
+    def test_an_ordinary_question_gets_no_list_note(self):
+        from openjarvis.tools.web_search import LIST_ANSWER_NOTE
+
+        result, _client = self._run(
+            {"query": "microbiology lab Calamba"},
+            self._BY_QUERY,
+            user_text="what is the melting point of gallium",
+        )
+        assert LIST_ANSWER_NOTE not in result.content

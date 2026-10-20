@@ -1272,3 +1272,39 @@ def test_a_budget_in_the_question_asks_for_local_prices(stub_search: MagicMock) 
     agent.run("best rtx gpu with 16gb under 50000 pesos")
     sent = engine.calls[0]["messages"][-1].content
     assert "current prices in the Philippines" in sent
+
+
+def test_parallel_web_searches_run_in_the_questions_context(stub_search) -> None:
+    """Each batched search copied its WORKER's context, which is empty: the
+    searches never saw the user's message, and the pages they found were not
+    registered as readable for web_read (20 October)."""
+    from openjarvis.security import page_access
+
+    seen: List[str] = []
+
+    def execute(**params: Any) -> ToolResult:
+        seen.append(page_access.turn_text())
+        url = f"https://found.example/{params['query'].replace(' ', '-')}"
+        page_access.allow_search_results([url])
+        return ToolResult(
+            tool_name="web_search",
+            content=f"### Found\nSource: {url}\nSummary: x",
+            success=True,
+            metadata={"num_results": 1, "sources": [{"url": url}]},
+        )
+
+    web = MagicMock()
+    web.execute.side_effect = execute
+    agent = ResearchAgent(
+        _MockEngine([]), stub_search, web_search=web, model="mock", max_iterations=1
+    )
+    page_access.clear()
+    token = page_access.set_turn("labs near Calamba. Exclude pncm uplb")
+    try:
+        agent._run_web_searches([("labs one", 4), ("labs two", 4)])
+        assert seen == ["labs near Calamba. Exclude pncm uplb"] * 2
+        assert page_access.is_allowed("https://found.example/labs-one")
+        assert page_access.is_allowed("https://found.example/labs-two")
+    finally:
+        page_access._current.reset(token)
+        page_access.clear()

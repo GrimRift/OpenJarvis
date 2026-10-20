@@ -1903,9 +1903,12 @@ async def _handle_streaming_orchestrator(
 
                             index, call = searches[0]
                             try:
-                                asked = str(
-                                    _json.loads(call.arguments or "{}").get("query", "")
-                                )
+                                call_args = _json.loads(call.arguments or "{}")
+                                asked = str(call_args.get("query", ""))
+                                # Several searches asked for: the early one
+                                # alone would answer for all of them.
+                                if call_args.get("queries"):
+                                    asked = ""
                             except (ValueError, AttributeError):
                                 asked = ""
                             if not matches_model_query(early_query, asked):
