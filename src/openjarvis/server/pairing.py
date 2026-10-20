@@ -88,7 +88,10 @@ def tailnet_address(run: Optional[Callable[[], str]] = None) -> str:
         out = subprocess.run(
             [exe, "status", "--json"],
             capture_output=True,
-            text=True,
+            # UTF-8, not the Windows code page: device names in the status
+            # broke the cp1252 decode and the address came back empty.
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
