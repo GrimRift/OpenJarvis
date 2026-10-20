@@ -280,6 +280,9 @@ async function decideInterjection(
 /** Sage has said this much of the answer aloud: what the user heard counts. */
 const SAGE_HAS_SPOKEN_S = 0.3;
 
+/** How long a phone's mic stays open after its turn with nothing playing. */
+const TOUCH_MIC_LINGER_MS = 6000;
+
 /** A turn ending this soon after Sage's reply finished may be Sage's tail. */
 const HANDOFF_ECHO_MS = 5000;
 /** Sage's words are cut out of a turn after the reply only when Deepgram
@@ -2944,7 +2947,10 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // came back on Voice, where "Hey Sage" keeps the mic open). It closes
     // once she has finished.
     if (streamState.isStreaming || audioPlayingNow) return;
-    const linger = touchFollowUp ? continuousListenSeconds * 1000 : RELEASE_GRACE_MS + 500;
+    // Long enough to cover the gap between the end of the turn and the
+    // reply starting: the mic closed in it, and iOS interrupted the reply's
+    // audio as it began (17:37 trace, tts.ctxState interrupted).
+    const linger = touchFollowUp ? continuousListenSeconds * 1000 : TOUCH_MIC_LINGER_MS;
     const timer = setTimeout(() => {
       voiceTrace('mic.touchClose', { followUp: touchFollowUp });
       setTouchTurnWanted(false);
@@ -3335,6 +3341,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     lastGateRef.current = wakeGate;
     voiceTrace(wakeGate ? 'gate.open' : 'gate.closed', {
       wakeWordEnabled,
+      owner: voiceOwner,
+      visible: pageVisible,
       micDisabled,
       streaming: streamState.isStreaming,
       speech: effectiveSpeechState,
@@ -3356,6 +3364,8 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     wakeWordSettled,
     continuousConversationEnabled,
     flux.status,
+    voiceOwner,
+    pageVisible,
   ]);
 
   // The media hold (lib/media-hold.ts): other apps turned down while Sage

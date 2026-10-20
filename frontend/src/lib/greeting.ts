@@ -6,6 +6,10 @@
 
 import { boostedChain, outputContext, outputRoute, setBoostedVolume } from './audio-out';
 import { voiceTrace } from './voice-trace';
+import { touchLayoutNow } from './touch-layout';
+
+/** Decided once: a device does not stop being a phone (lib/touch-layout.ts). */
+const TOUCH = touchLayoutNow();
 
 const MANIFEST_URL = 'greetings/manifest.json';
 const FALLBACK_CLIPS = ['greetings/jarvis/hello-sir-sonic36.mp3'];
@@ -77,6 +81,12 @@ export function preloadGreetings(): void {
         )
       : FALLBACK_CLIPS;
     for (const clip of clips) {
+      // A phone plays clips through Web Audio (below): decode them now so
+      // the greeting is instant, not a second late.
+      if (TOUCH) {
+        void decodeClip(clip).catch(() => decoded.delete(clip));
+        continue;
+      }
       const audio = new Audio(clip);
       audio.preload = 'auto';
       // Referenced only to keep the fetch alive; the browser caches the
@@ -134,6 +144,18 @@ function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
         const choices = clips.length > 1 ? clips.filter((c) => c !== previous) : clips;
         const clip = choices[Math.floor(Math.random() * choices.length)];
         lastPlayed[kind] = clip;
+
+        // A phone goes straight to Web Audio: iOS refuses every <audio>
+        // not started by a tap, and trying it first cost a second (M29).
+        if (TOUCH) {
+          voiceTrace('clip.play', { kind, clip, route: 'webAudio' });
+          void playThroughWebAudio(clip).then((played) => {
+            voiceTrace('clip.webAudio', { kind, played });
+            if (!played) options.onFailure?.(`${clip} could not play (audio locked until a tap)`);
+            resolve();
+          });
+          return;
+        }
 
         const audio = new Audio(clip);
         setBoostedVolume(audio, 'ack');
@@ -207,6 +229,19 @@ function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
 
 const decoded = new Map<string, Promise<AudioBuffer>>();
 
+function decodeClip(clip: string): Promise<AudioBuffer> {
+  let buffer = decoded.get(clip);
+  if (!buffer) {
+    const ctx = outputContext();
+    if (!ctx) return Promise.reject(new Error('no Web Audio'));
+    buffer = fetch(clip)
+      .then((res) => res.arrayBuffer())
+      .then((bytes) => ctx.decodeAudioData(bytes));
+    decoded.set(clip, buffer);
+  }
+  return buffer;
+}
+
 /** Plays a clip through the page's shared Web Audio output; resolves true
  * when it played to the end, false when the output is locked or fails. */
 async function playThroughWebAudio(clip: string): Promise<boolean> {
@@ -215,15 +250,8 @@ async function playThroughWebAudio(clip: string): Promise<boolean> {
   try {
     if (ctx.state !== 'running') await ctx.resume();
     if (ctx.state !== 'running') return false;
-    let buffer = decoded.get(clip);
-    if (!buffer) {
-      buffer = fetch(clip)
-        .then((res) => res.arrayBuffer())
-        .then((bytes) => ctx.decodeAudioData(bytes));
-      decoded.set(clip, buffer);
-    }
     const source = ctx.createBufferSource();
-    source.buffer = await buffer;
+    source.buffer = await decodeClip(clip);
     source.connect(boostedChain(ctx, 'ack'));
     await new Promise<void>((resolve) => {
       source.onended = () => resolve();

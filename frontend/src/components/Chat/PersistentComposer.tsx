@@ -100,7 +100,10 @@ export function PersistentComposer() {
           position: TOUCH ? 'absolute' : 'fixed',
           left: box.left,
           top: box.top,
-          width: voice ? undefined : box.width,
+          // Voice's controls take their own width. Left to shrink-to-fit
+          // inside the page, they took the width the Chat box had left and
+          // settled off-centre, the replies button cut off (M29).
+          width: voice ? (TOUCH ? 'max-content' : undefined) : box.width,
           zIndex: 3,
         }
       : // No slot on this page: out of sight, still mounted and listening.

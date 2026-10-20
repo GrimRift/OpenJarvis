@@ -1,3 +1,4 @@
+import { touchLayoutNow } from './touch-layout';
 /**
  * Which open Sage page may listen: the one the user used last.
  *
@@ -19,6 +20,9 @@
  */
 
 type Listener = (owner: boolean) => void;
+
+/** Decided once: a device does not stop being a phone (lib/touch-layout.ts). */
+const TOUCH = touchLayoutNow();
 
 const LOCK = 'sage-voice-listener';
 
@@ -94,12 +98,24 @@ export function startVoiceOwnership(): () => void {
   started = true;
   const claimIfFocused = () => {
     if (document.visibilityState === 'visible' && document.hasFocus()) claimVoice();
+    // A phone (M29): a page out of sight lets go. Safari reloads background
+    // tabs on its own, and a second Sage tab reopening took the voice from
+    // the one on screen every 15 s or so -- the wake word disarmed, reopened
+    // the mic and re-armed each time, and the Voice page lagged.
+    if (TOUCH && document.visibilityState === 'hidden' && releaseHeld) {
+      releaseHeld();
+      releaseHeld = null;
+      setOwner(false);
+      hold(false);
+    }
   };
   window.addEventListener('focus', claimVoice);
   window.addEventListener('pointerdown', claimVoice);
   window.addEventListener('keydown', claimVoice);
   document.addEventListener('visibilitychange', claimIfFocused);
-  hold(true);
+  // On a phone only a page on screen claims the voice when it opens; one
+  // reloaded in the background waits its turn.
+  hold(!TOUCH || document.visibilityState !== 'hidden');
   return () => {
     started = false;
     generation += 1;

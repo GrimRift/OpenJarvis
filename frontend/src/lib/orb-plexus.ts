@@ -27,6 +27,7 @@
  */
 
 import { approach } from './orb-motion';
+import { touchLayoutNow } from './touch-layout';
 import type { OrbState } from './orb-state';
 
 /** Per state: radius, how hard the flow stirs, spin, brightness, wiring,
@@ -789,6 +790,9 @@ function edgeMask(w: number, h: number, hold: number): HTMLCanvasElement {
   return canvas;
 }
 
+/** Decided once: a device does not stop being a phone (lib/touch-layout.ts). */
+const LOW_POWER = touchLayoutNow();
+
 let blurOk: boolean | null = null;
 function blurSupported(ctx: CanvasRenderingContext2D): boolean {
   if (blurOk === null) {
@@ -1346,7 +1350,10 @@ export function drawPlexus(
     target.filter = 'none';
   };
   const soft = L.soft * (w / 764);
-  const canBlur = blurSupported(target);
+  // A phone takes the blur-free glow below (M29): Safari draws canvas blur
+  // filters on the CPU, and up to five of them a frame made the iPhone's
+  // Voice page lag. The scaled-down copy gives a close, cheap softness.
+  const canBlur = !LOW_POWER && blurSupported(target);
   const softFilter = canBlur && soft > 0.05 ? `blur(${soft.toFixed(2)}px)` : '';
   add(bufs.full, 1, w, h, softFilter);
   if (L.curve > 0.01) {

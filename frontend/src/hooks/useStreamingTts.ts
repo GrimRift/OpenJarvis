@@ -23,6 +23,10 @@ import {
 import { analyseInto } from '../lib/speech-analyser';
 import { openTtsSocket } from '../lib/speech-transport';
 import { useAppStore } from '../lib/store';
+import { touchLayoutNow } from '../lib/touch-layout';
+
+/** Decided once: a device does not stop being a phone (lib/touch-layout.ts). */
+const TOUCH = touchLayoutNow();
 import type { VoiceProfile } from '../lib/voice-profiles';
 
 let nextPlaybackOwner = 0;
@@ -75,6 +79,8 @@ function createStreamingTtsPlayer() {
   const outboxRef = ref<IncrementalTtsOutbox | null>(null);
   const resultRef = ref<ActiveResult | null>(null);
   const ctxRef = ref<AudioContext | null>(null);
+  /** The context iOS interrupted and would not resume: replaced on a tap. */
+  const staleRef = ref(false);
   const scheduledUntilRef = ref(0);
   /** Whether this playback has scheduled its first chunk yet. */
   const startedRef = ref(false);
@@ -165,6 +171,14 @@ function createStreamingTtsPlayer() {
       if (state === 'interrupted' || state === 'suspended') {
         voiceTrace('tts.ctxState', { state });
         void created.resume().catch(() => {});
+        // Still not running a moment later: iOS will not resume this one
+        // without a tap. The next tap builds a fresh context (unlock).
+        window.setTimeout(() => {
+          if (ctxRef.current === created && created.state !== 'running') {
+            staleRef.current = true;
+            voiceTrace('tts.ctxStale', { state: created.state });
+          }
+        }, 600);
       }
     });
     ctxRef.current = created;
@@ -180,6 +194,14 @@ function createStreamingTtsPlayer() {
    * listening never re-armed (89 of 560 voice replies, 22-24 September).
    */
   const unlock = () => {
+    // Replaced only between replies: a tap must never cut one short.
+    if (staleRef.current && !useAppStore.getState().audioPlaying) {
+      staleRef.current = false;
+      const old = ctxRef.current;
+      ctxRef.current = null;
+      void old?.close().catch(() => {});
+      voiceTrace('tts.ctxRenewed');
+    }
     try {
       const ctx = ensureContext();
       if (ctx.state !== 'running') void ctx.resume().catch(() => {});
@@ -397,6 +419,8 @@ function createStreamingTtsPlayer() {
               return;
             }
             voiceTrace('tts.blocked', { state: ctx.state });
+            // Said, not silent: the phone needs one tap to play sound again.
+            if (TOUCH) toast('Tap the screen to hear Sage', { duration: 4000 });
             waiting.length = 0;
             settleOutcome('blocked');
             failStream();
