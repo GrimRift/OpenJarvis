@@ -735,6 +735,28 @@ class TestUrlDetection:
             content = WebSearchTool._fetch_url("https://example.com/long", max_chars=20)
         assert content == ("x" * 20) + "\n\n[Content truncated]"
 
+    def test_fetch_url_decodes_hidden_emails_even_past_the_cut(self):
+        """20 October: UST's page was cut before its Cloudflare-hidden
+        contact, and the model made up an address."""
+        response = MagicMock()
+        response.headers = {"content-type": "text/html"}
+        response.text = (
+            "<p>" + ("x" * 200) + '</p><p>Email: <span class="__cf_email__" '
+            'data-cfemail="b7d4dac4f7c2c4c399d2d3c299c7df">[email&#160;protected]'
+            "</span></p>"
+        )
+        response.raise_for_status.return_value = None
+        with (
+            patch("openjarvis.tools.web_search.check_ssrf", return_value=None),
+            patch("httpx.get", return_value=response),
+        ):
+            short = WebSearchTool._fetch_url("https://example.com/a", max_chars=20)
+            whole = WebSearchTool._fetch_url("https://example.com/a", max_chars=900)
+        assert short.endswith("Email addresses on this page: cms@ust.edu.ph")
+        assert "Email: cms@ust.edu.ph" in whole
+        assert "protected" not in whole
+        assert "Email addresses on this page" not in whole
+
 
 class TestImageIntentSurvivesModelRewording:
     """The tool classifies the *model's* query, not the user's words.

@@ -1305,16 +1305,25 @@ class WebSearchTool(BaseTool):
                 "[This URL points to a PDF file which cannot be read directly. "
                 f"URL: {url}]"
             )
+        from openjarvis.tools.web_read import cf_emails, decode_cf_emails
+
+        # Cloudflare-hidden addresses written out, and named after the cut
+        # if they fall past it: given UST's page cut before its contact
+        # line, the model made up "ustcms@ust.edu.ph" (20 October).
+        emails = cf_emails(response.text)
         html = re.sub(
             r"<(script|style)[^>]*>.*?</\1>",
             "",
-            response.text,
+            decode_cf_emails(response.text),
             flags=re.DOTALL | re.IGNORECASE,
         )
         text = _html.unescape(re.sub(r"<[^>]+>", " ", html))
         text = re.sub(r"\s+", " ", text).strip()
         if len(text) > max_chars:
-            return text[:max_chars] + "\n\n[Content truncated]"
+            text = text[:max_chars] + "\n\n[Content truncated]"
+        missing = [email for email in emails if email not in text]
+        if missing:
+            text += "\n\nEmail addresses on this page: " + ", ".join(missing)
         return text
 
     @staticmethod
