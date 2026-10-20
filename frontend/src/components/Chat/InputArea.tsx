@@ -572,6 +572,7 @@ export function InputArea({ voiceOnly = false }: { voiceOnly?: boolean } = {}) {
     // used to suspend the wake word until the mic was pressed again, which
     // left Sage deaf after every stop -- asked on 23 September to re-arm.
     if (fluxTurnActive) {
+      voiceTrace('mic.stopByHand', { listen: listenKindRef.current });
       settleAfterStopRef.current?.();
       toast('Stopped. Say “Hey Sage” when you need me.', { duration: 3000 });
       flux.endTurn();

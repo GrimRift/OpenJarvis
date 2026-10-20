@@ -4,7 +4,8 @@
 // scripts/generate_greetings.py — synthesizing per trigger would put a
 // network call at exactly the moment latency is most obvious.
 
-import { setBoostedVolume } from './audio-out';
+import { outputRoute, setBoostedVolume } from './audio-out';
+import { voiceTrace } from './voice-trace';
 
 const MANIFEST_URL = 'greetings/manifest.json';
 const FALLBACK_CLIPS = ['greetings/jarvis/hello-sir-sonic36.mp3'];
@@ -136,6 +137,22 @@ function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
 
         const audio = new Audio(clip);
         setBoostedVolume(audio, 'ack');
+        // "It never greeted" after a stopped reply (20 October) could not
+        // be told apart from a clip that played: the trace only said it was
+        // asked for. Each clip now records how it was routed and how it ended.
+        const startedAt = Date.now();
+        voiceTrace('clip.play', { kind, clip, route: outputRoute(audio) });
+        const outcome = (how: string, extra: Record<string, unknown> = {}) =>
+          voiceTrace('clip.end', {
+            kind,
+            how,
+            ms: Date.now() - startedAt,
+            played: Math.round(audio.currentTime * 1000),
+            route: outputRoute(audio),
+            ...extra,
+          });
+        audio.onplaying = () =>
+          voiceTrace('clip.playing', { kind, ms: Date.now() - startedAt, route: outputRoute(audio) });
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const finish = () => {
@@ -151,18 +168,24 @@ function playClip(kind: ClipKind, options: GreetingOptions): Promise<void> {
         // reload brought it back. The clips are a second or two; anything
         // past this cap is not going to arrive.
         timer = setTimeout(() => {
+          outcome('stalled');
           options.onFailure?.(`${clip} stalled during playback`);
           finish();
         }, GREETING_TIMEOUT_MS);
-        audio.onended = finish;
+        audio.onended = () => {
+          if (!settled) outcome('ended');
+          finish();
+        };
         // Never leave the caller waiting on a clip that can't play (missing
         // file, autoplay policy, decode error) — listening must still start.
         audio.onerror = () => {
+          if (!settled) outcome('error', { code: audio.error?.code ?? 'none' });
           options.onFailure?.(`could not load ${clip}`);
           finish();
         };
         audio.play().catch((err: unknown) => {
           const reason = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+          if (!settled) outcome('refused', { reason });
           options.onFailure?.(reason);
           finish();
         });

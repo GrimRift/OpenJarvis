@@ -26,6 +26,13 @@ export function outputContext(): AudioContext | null {
   return shared;
 }
 
+/** How `el` reaches the speakers, for the voice trace. */
+export function outputRoute(el: HTMLMediaElement): string {
+  const gain = attached.get(el);
+  if (!gain) return `plain volume=${el.volume.toFixed(2)} muted=${el.muted}`;
+  return `boosted ctx=${shared?.state ?? 'none'} gain=${gain.gain.value.toFixed(2)} muted=${el.muted}`;
+}
+
 /** gain → limiter → destination; returns the gain to feed. */
 export function boostedChain(ctx: AudioContext, channel: VolumeChannel): GainNode {
   const gain = ctx.createGain();
