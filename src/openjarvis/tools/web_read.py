@@ -385,6 +385,11 @@ class WebReadTool(BaseTool):
                 "be built entirely from images or an embedded viewer."
             )
 
+        if mode != "direct" and _CF_PLACEHOLDER.search(text):
+            # The reader's text kept Cloudflare's "[email protected]"; the
+            # served HTML still holds the encoded address.
+            text = restore_cf_emails(text, cf_emails(self._raw_markup(url)))
+
         if mode == "browser":
             unreadable_hosts.clear(url)
         truncated = len(text) > MAX_CHARS
@@ -460,6 +465,30 @@ class WebReadTool(BaseTool):
         if wait_for and wait_for.lower() not in text.lower():
             return None
         return text, title
+
+    @staticmethod
+    def _raw_markup(url: str) -> str:
+        """The served HTML of *url*, or "" -- a short plain request, only
+        for what text alone has lost (hidden email addresses)."""
+        import httpx
+
+        if check_ssrf(url):
+            return ""
+        try:
+            with httpx.Client(
+                follow_redirects=True,
+                timeout=httpx.Timeout(STATIC_TIMEOUT_SECONDS, connect=2.0),
+                headers={"User-Agent": _STATIC_UA, "Accept": "text/html"},
+            ) as client:
+                response = client.get(url)
+                if response.status_code >= 400 or check_ssrf(str(response.url)):
+                    return ""
+                if "html" not in response.headers.get("content-type", "").lower():
+                    return ""
+                return response.text[: STATIC_MAX_BYTES]
+        except Exception:  # noqa: BLE001
+            logger.debug("raw markup read failed for %s", url, exc_info=True)
+            return ""
 
     def _extract(self, url: str, wait_for: str) -> Optional[Tuple[str, str]]:
         """The page's text from the search provider's own reader, or None.
@@ -734,6 +763,72 @@ def source_summary(description: str, body: str, limit: int = 300) -> str:
     return " ".join(text.split())[:limit]
 
 
+#: Cloudflare's email protection: the address XOR-encoded in an attribute,
+#: "[email protected]" shown until its script runs. Read as text, UST's
+#: culture-collection contact came out as that placeholder (20 October).
+_CF_EMAIL_TAG = re.compile(
+    r"<(\w+)[^>]*\bdata-cfemail=\"([0-9a-fA-F]+)\"[^>]*>.*?</\1\s*>", re.S
+)
+_CF_EMAIL_HREF = re.compile(r"/cdn-cgi/l/email-protection#([0-9a-fA-F]+)")
+_CF_PLACEHOLDER = re.compile(r"\[email(?:\s|&#160;|&nbsp;| )*protected\]", re.I)
+
+
+def _cf_decode(encoded: str) -> str:
+    """The address in a Cloudflare-encoded hex string, or "" if it is not one:
+    the first byte is the key, every other byte XOR the key is a character."""
+    try:
+        data = bytes.fromhex(encoded)
+    except ValueError:
+        return ""
+    if len(data) < 2:
+        return ""
+    text = "".join(chr(byte ^ data[0]) for byte in data[1:])
+    return text if re.fullmatch(r"[^@\s<>\"]+@[^@\s<>\"]+\.[^@\s<>\"]+", text) else ""
+
+
+def decode_cf_emails(markup: str) -> str:
+    """*markup* with Cloudflare-hidden email addresses written out."""
+
+    def tag(match: re.Match[str]) -> str:
+        return _cf_decode(match.group(2)) or match.group(0)
+
+    def href(match: re.Match[str]) -> str:
+        address = _cf_decode(match.group(1))
+        return f"mailto:{address}" if address else match.group(0)
+
+    return _CF_EMAIL_HREF.sub(href, _CF_EMAIL_TAG.sub(tag, markup or ""))
+
+
+def cf_emails(markup: str) -> List[str]:
+    """Every Cloudflare-hidden address in *markup*, in page order, once."""
+    found = [_cf_decode(m.group(2)) for m in _CF_EMAIL_TAG.finditer(markup or "")]
+    found += [_cf_decode(m.group(1)) for m in _CF_EMAIL_HREF.finditer(markup or "")]
+    return list(dict.fromkeys(address for address in found if address))
+
+
+def restore_cf_emails(text: str, addresses: List[str]) -> str:
+    """*text* with its "[email protected]" placeholders filled in.
+
+    In order when there is one address per placeholder (or one address for
+    them all); otherwise the addresses are listed after the text, since
+    which placeholder is which cannot be told.
+    """
+    if not addresses or not _CF_PLACEHOLDER.search(text):
+        return text
+    placeholders = len(_CF_PLACEHOLDER.findall(text))
+    if len(addresses) == 1 or len(addresses) == placeholders:
+        queue = list(addresses)
+
+        def fill(_match: re.Match[str]) -> str:
+            return queue.pop(0) if len(queue) > 1 else queue[0]
+
+        return _CF_PLACEHOLDER.sub(fill, text)
+    return (
+        f"{text}\n\nEmail addresses on this page (hidden by the site, decoded): "
+        + ", ".join(addresses)
+    )
+
+
 def page_text(markup: str) -> Tuple[str, str]:
     """Readable text and title of served HTML, roughly as ``innerText`` would
     give it: the ``main``/``article`` part when there is one, without
@@ -741,7 +836,7 @@ def page_text(markup: str) -> Tuple[str, str]:
     title_match = re.search(r"<title[^>]*>(.*?)</title>", markup, re.I | re.S)
     title = _html.unescape(title_match.group(1)) if title_match else ""
     title = " ".join(title.split())
-    body = _NOISE.sub(" ", markup)
+    body = _NOISE.sub(" ", decode_cf_emails(markup))
     for tag in ("main", "article"):
         part = re.search(rf"<{tag}\b[^>]*>(.*)</{tag}\s*>", body, re.I | re.S)
         if part and len(part.group(1)) > 500:

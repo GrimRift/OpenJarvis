@@ -629,3 +629,82 @@ class TestUnreadableSites:
         assert _is_bot_wall(Response({"cf-mitigated": "challenge"}, b""))
         assert _is_bot_wall(Response({}, b"<title>Just a moment...</title>"))
         assert not _is_bot_wall(Response({}, b"<title>403 Forbidden</title>"))
+
+
+class TestCloudflareEmails:
+    """20 October: UST's culture collection gave its email as "[email
+    protected]" -- Cloudflare hides addresses until its script runs."""
+
+    # From the UST-CMS page: both encode cms@ust.edu.ph.
+    TAG = (
+        '<a href="/cdn-cgi/l/email-protection#4b2826380b3e383f652e2f3e653b23">'
+        '<span class="__cf_email__" data-cfemail="b7d4dac4f7c2c4c399d2d3c299c7df">'
+        "[email&#160;protected]</span></a>"
+    )
+
+    def test_the_hidden_address_is_decoded(self):
+        from openjarvis.tools.web_read import _cf_decode, cf_emails
+
+        assert _cf_decode("b7d4dac4f7c2c4c399d2d3c299c7df") == "cms@ust.edu.ph"
+        assert _cf_decode("zz") == ""
+        assert _cf_decode("b7d4dac4") == ""  # not an address
+        assert cf_emails(self.TAG) == ["cms@ust.edu.ph"]
+
+    def test_page_text_shows_the_address(self):
+        markup = (
+            "<html><head><title>UST-CMS</title></head><body><p>Contact us: "
+            f"{self.TAG}</p></body></html>"
+        )
+        text, _title = page_text(markup)
+        assert "cms@ust.edu.ph" in text
+        assert "protected" not in text
+
+    def test_placeholders_are_filled_in_order(self):
+        from openjarvis.tools.web_read import restore_cf_emails
+
+        text = "Lab: [email protected]\nOffice: [email protected]"
+        assert restore_cf_emails(text, ["lab@x.ph", "office@x.ph"]) == (
+            "Lab: lab@x.ph\nOffice: office@x.ph"
+        )
+        assert restore_cf_emails(text, ["one@x.ph"]) == (
+            "Lab: one@x.ph\nOffice: one@x.ph"
+        )
+        # Which is which cannot be told: listed after the text instead.
+        listed = restore_cf_emails(text, ["a@x.ph", "b@x.ph", "c@x.ph"])
+        assert listed.startswith(text)
+        assert listed.endswith("decoded): a@x.ph, b@x.ph, c@x.ph")
+        assert restore_cf_emails("no placeholder", ["a@x.ph"]) == "no placeholder"
+
+    def test_a_reader_text_with_the_placeholder_gets_the_address(self):
+        """The search engine's reader returns text only; the served HTML
+        still has the encoded address."""
+        article = "UST Collection of Microbial Strains. " * 40
+        page_access.set_turn("labs that culture bacteria")
+        page_access.allow_search_results([PAGE])
+        with (
+            patch.object(WebReadTool, "_fetch_static", return_value=None),
+            patch.object(
+                WebReadTool,
+                "_extract",
+                return_value=(f"{article}\nEmail: [email protected]", "UST-CMS"),
+            ),
+            patch.object(
+                WebReadTool, "_raw_markup", return_value=f"<p>{self.TAG}</p>"
+            ) as raw,
+        ):
+            result = _tool().execute(url=PAGE)
+        assert result.metadata["mode"] == "extract"
+        assert "Email: cms@ust.edu.ph" in result.content
+        raw.assert_called_once()
+
+    def test_no_placeholder_no_extra_request(self):
+        article = "UST Collection of Microbial Strains. " * 40
+        page_access.set_turn("labs that culture bacteria")
+        page_access.allow_search_results([PAGE])
+        with (
+            patch.object(WebReadTool, "_fetch_static", return_value=None),
+            patch.object(WebReadTool, "_extract", return_value=(article, "UST")),
+            patch.object(WebReadTool, "_raw_markup") as raw,
+        ):
+            _tool().execute(url=PAGE)
+        raw.assert_not_called()
